@@ -96,14 +96,14 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 - 权威状态仍由持久化私有会话快照、命令账本和会话协调共同构成，不复制第二份内存权威状态。
 - 提供：
   - Player 座位级观察投影。
-  - Coach 已结束手牌复盘投影。
+  - Coach `completed` 手牌复盘投影。
   - Commit Gate 使用的当前版本复验。
 - 所有投影均携带来源 `stateVersion` 或 `eventSeq`。
 
 验证：
 
 - Player 投影不包含其他未公开底牌、牌堆顺序和未来公共牌。
-- Coach 投影只能读取已结束手牌。
+- Coach 投影只能读取 `completed` 手牌，`aborted` 明确拒绝。
 - 旧版本投影不能提交新动作。
 
 完成标准：
@@ -151,12 +151,15 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
   - 单用户并发和系统并发。
   - Coach 单次成本上限。
 - Coordinator、CapabilityExecutor 和 ModelGateway 共同消费同一预算快照。
+- Player 固化单次尝试超时（默认 15 秒，5–30 秒）和完整决策 deadline（默认 45 秒，15–120 秒且不小于单次超时）；初始请求、纠错和降级共享剩余时间，少于 5 秒不再启动 Attempt。
+- Player/Coach 使用独立并发预算，首版各保留一个互不占用的 Worker 槽位。
 
 验证：
 
 - 任一预算耗尽后不再启动新调用。
 - 已超时或被取消运行的迟到结果不能提交。
 - Player 和 Coach 使用不同预算。
+- Coach 长运行不能耗尽 Player 保留容量；Player deadline 耗尽稳定返回 `player_deadline_exhausted`。
 
 完成标准：
 
@@ -232,7 +235,7 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 
 - `owner_id`
 - Runtime、Context、Prompt、能力、Route Policy 与数据依赖版本
-- 状态、幂等键、预算快照、检查点
+- 状态、幂等键、预算快照、检查点和 `supersedes_run_id`
 - 租约、fencing token、取消和 stale 原因
 - 创建、开始、结束时间
 
@@ -353,6 +356,7 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 - Worker 原子领取 queued 或可恢复运行。
 - 每次领取生成更大的 fencing token 和租约期限。
 - 检查点、最终结果和 Commit Gate 都复验 token。
+- 可恢复运行必须先经过 Runtime Recovery Policy；Player 进程重启不在旧 AgentRun 上续租。
 
 验证：
 
@@ -370,14 +374,16 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 
 - 轮询持久化待运行记录。
 - 通过静态 Registry 分派到 Runtime。
+- 使用独立 Player/Coach 队列和配额，首版各保留一个 Worker 槽位，Coach 不得借用 Player 槽位。
 - 支持优雅关闭、租约续期、预算检查和结构化错误归类。
 - 暂不引入 Redis 或外部消息队列。
 
 验证：
 
-- 进程重启后未完成运行可继续。
+- 进程重启后 Coach 等允许恢复的运行可按版本检查继续；Player 按 A3.4 取消旧运行并新建。
 - Worker 停止不会丢失任务。
 - 单用户和系统并发限制有效。
+- 长 Coach 运行期间 Player 仍能立即领取其保留槽位。
 
 完成标准：
 
@@ -387,6 +393,8 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 
 实现：
 
+- 进程重启时把原 `thinking` Player AgentRun 标记为 `cancelled(process_restart)`，使旧请求、attempts、租约和 fencing 失效；状态仍需同一 AI 行动时创建带 `supersedesRunId` 的新运行、新请求和 attempts，并从 DeepSeek 开始。
+- 新运行沿用本场固化的人物、Runtime、Prompt、策略和路由版本，不继承旧供应商位置、纠错次数、输出或检查点；原 `paused` 状态不自动新建。
 - stale 触发条件为旧 Worker 租约失效并且权威状态版本变化，或 Commit 前版本复验失败。
 - `SessionAgentCoordinator` 重新读取当前权威状态：
   - 若已不需要 AI 行动，不创建替代运行。
@@ -399,10 +407,11 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 - 旧运行不能提交动作。
 - 新运行使用当前 `stateVersion` 和新 fencing token。
 - 任一决策点只有一个可提交运行。
+- 服务重启的新运行第一次 Attempt 为 DeepSeek，且可以通过 `supersedesRunId` 查询旧审计。
 
 完成标准：
 
-- stale 不会导致双重行动或默认弃牌。
+- stale 或服务重启不会导致双重行动、复用旧输出或默认弃牌。
 
 ## 7. A4：Context、能力与模型网关
 
@@ -470,12 +479,14 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 - Runtime 执行业务语义校验。
 - 每个供应商的纠错次数受预算限制。
 - 降级供应商从原始 Context 开始，不接收前一供应商错误输出。
+- Player 每个新 Attempt 先计算完整决策剩余时间，实际超时取单次上限与剩余时间的较小值；不足 5 秒时不调用供应商。
 
 验证：
 
 - 非法 JSON、未知枚举、额外字段和越界值被拒绝。
 - 内容仍非法达到上限后按 Runtime 失败策略结束。
 - 迟到、取消或旧 fencing 响应不能提交。
+- Player 初始请求、两次纠错和 Kimi 降级不会各自重置总 deadline。
 
 完成标准：
 
@@ -700,7 +711,7 @@ Coach 投影：
 实现：
 
 - `PlayerDecisionValidator` 复验候选存在、来源版本、金额和状态版本。
-- Commit Gate 复验 OwnerScope、租约、fencing、actorSeat 和当前权威状态。
+- Commit Gate 在同一事务复验场次存在、OwnerScope、`lifecycleStatus = active`、当前仍需该 AI 行动、有效 `decisionRequestId`、AgentRun 非终态、租约、fencing、actorSeat 和当前权威状态。
 - 从候选快照生成标准扑克命令，并使用现有命令事务提交。
 
 验证：
@@ -708,6 +719,7 @@ Coach 投影：
 - stale、迟到、重复提交、错误行动位和越界金额全部失败。
 - 成功提交只产生一条扑克命令。
 - 历史 audit replay 和 re-execution 均不能提交。
+- 场次已结束、中止、正在删除或已不存在时不能写快照/事件/命令，也不能触发替代运行。
 
 完成标准：
 
@@ -719,13 +731,15 @@ Coach 投影：
 
 - 串联 Player 有限状态机、模型路由、纠错、记忆修订和提交。
 - 前端状态区分 thinking、paused、completed。
-- 最终失败暂停手牌并允许用户重试或离开场次，不自动 fold。
+- 最终失败暂停手牌并允许用户重试，或通过会话服务执行 `active + inHand + paused` 的“中止本手并结束场次”；不自动 fold。
+- 中止由会话服务恢复开手前检查点并写入 `handAborted`、`sessionEnded`，Player Runtime 只保留失败运行审计，不生成扑克命令。
 
 验证：
 
 - DeepSeek 可降级故障进入 Kimi。
 - 内容非法达到预算后 paused。
 - stale 接替使用 A3.4 路径。
+- 中止手不进入普通历史、统计或 Coach，迟到 Player 结果不能提交或重建运行。
 
 完成标准：
 
@@ -737,7 +751,7 @@ Coach 投影：
 
 实现：
 
-- `HandReviewCaseBuilder` 只接受已结束手牌。
+- `HandReviewCaseBuilder` 只接受 `completed` 手牌，`aborted` 明确拒绝。
 - 为每个 Hero 决策构建稳定 `decisionId`、当时可见信息和合法动作。
 - 将 `auditTruth` 与决策时信息分区保存。
 
@@ -872,6 +886,7 @@ Coach 投影：
 实现：
 
 - Commit Gate 只保存通过校验的复盘、assessments 和 AgentRun 关联。
+- Commit Gate 在同一事务复验场次存在、OwnerScope、未进入删除流程、目标手牌为 `completed`、AgentRun 非终态、租约和 fencing；不要求所属场次仍为 `active`。
 - 提供创建、查询、失败重试和按手牌列出历史复盘 API。
 - 重新执行总是新建 review，历史永不覆盖。
 
@@ -880,6 +895,7 @@ Coach 投影：
 - Coach 不能写扑克状态或 Player 记忆。
 - `(coachReviewId, decisionId)` 唯一键生效。
 - OwnerScope 隔离和级联删除生效。
+- `aborted` 手牌、删除后的迟到响应和已删除 AgentRun 均不能保存报告或重建任务。
 
 完成标准：
 
@@ -909,13 +925,14 @@ Coach 投影：
 实现：
 
 - 为原始 Prompt、结构化业务事实、调用元数据、报告和日志定义不同保留期。
-- 删除用户或 Session 时执行受测级联。
+- 删除用户或 Session 时先取消在途运行、使租约/请求/fencing 失效，再执行受测级联。
 - Eval 固定集只使用合成或去标识化数据。
 
 验证：
 
 - 到期任务可重复执行且幂等。
 - 删除后不存在跨表孤儿和可恢复敏感副本。
+- 删除/清空与迟到 Player/Coach Commit 竞争时没有业务回写、事件或替代运行。
 
 完成标准：
 
@@ -974,13 +991,14 @@ Coach 投影：
 实现：
 
 - AI 行动位由 Session Coordinator 创建 Player AgentRun。
-- 已结束手牌由 Coach API 创建 Coach AgentRun。
+- 只有 `completed` 手牌由 Coach API 创建 Coach AgentRun；`aborted` 明确拒绝。
 - SSE 或查询接口只投影公开运行状态，不暴露 Prompt 和私有证据。
+- Player 协调事件进入扑克 SSE；Coach 使用独立查询生命周期，不占用场次 `eventSeq`。
 
 验证：
 
 - Session 状态、AgentRun 状态和前端状态转换一致。
-- 刷新页面后可恢复 thinking、paused 和 Coach 生成状态。
+- 刷新页面后可恢复 thinking、paused 和 Coach 生成状态；进程重启的 Player 显示新运行而不是续跑旧请求。
 
 完成标准：
 
@@ -992,6 +1010,7 @@ Coach 投影：
 
 - Player：
   - 显示思考、暂停、重试。
+  - 暂停时提供“中止本手并结束场次”，并明确回退与历史排除语义。
   - 不展示虚构自由推理链。
 - Coach：
   - 展示策略基准、局面约束、剥削证据和事后解释。
@@ -1014,14 +1033,16 @@ Coach 投影：
 - Contracts、数据库迁移和 Repository 合约。
 - 权威状态投影和三道 Player/Coach Guard。
 - Player 成功、降级、纠错、暂停、stale 接替和唯一提交。
+- Player 服务重启新运行、完整决策 deadline、保留 Worker 槽位和暂停中止。
 - Coach 分类、两阶段解释、版本恢复、重新复盘和历史不覆盖。
-- OwnerScope、CapabilityManifest、级联删除和敏感信息扫描。
+- OwnerScope、CapabilityManifest、单活动场次唯一索引、删除提交屏障、级联删除和敏感信息扫描。
 - Audit Replay 与 Re-execution。
 
 人工：
 
 - 6、7、8、9 人各完成至少一手包含 AI 行动的牌局。
-- 选择已结束手牌生成 Coach 报告。
+- 选择 `completed` 手牌生成 Coach 报告。
+- 暂停中止一手并确认普通历史、统计和 Coach 均停留在上一手。
 - 检查频率与尺度无歧义。
 - 检查策略不支持、样本不足和 EV unavailable 的降级表达。
 

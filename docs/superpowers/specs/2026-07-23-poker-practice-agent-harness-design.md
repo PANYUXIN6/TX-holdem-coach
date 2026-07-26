@@ -351,6 +351,7 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 - 候选目标金额是否仍在最小和最大边界内。
 - 候选是否满足人物与剥削调整的硬边界。
 - 决策创建时的状态版本和有效请求是否仍是当前版本。
+- Commit Gate 是否仍能在同一事务中读取到匹配 OwnerScope 的 `active` 场次、有效 AgentRun、当前 `decisionRequestId`、同一行动者、有效租约和 fencing token。场次已结束、正在删除或已经不存在时必须拒绝，且不得触发替代运行。
 
 ### 11.3 归一化
 
@@ -383,15 +384,19 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 
 ## 13. 超时、迟到响应与取消
 
-- 单次供应商请求超时是 SQLite 中的全局设置，默认 15 秒，合法范围 5–120 秒。
-- 每个尝试在开始时固化实际超时值；设置修改只影响之后开始的尝试。
+- Player 使用独立于 Coach 的保留 Worker 槽位；首版 Player 和 Coach 各一个进程内槽位，Coach 不能占用 Player 槽位。
+- 单次供应商请求超时是 SQLite 中的 Player 设置，默认 15 秒，合法范围 5–30 秒。
+- 每个 Player AgentRun 固化完整决策 deadline，默认 45 秒，合法范围 15–120 秒且不得小于单次超时。
+- 初始请求、同厂商纠错和供应商降级共享该运行的剩余总时间。每个尝试的实际超时取单次设置与剩余时间的较小值；新尝试开始前剩余不足 5 秒时直接以 `player_deadline_exhausted` 暂停。
+- 每个尝试在开始时固化实际超时与剩余总时间；设置修改只影响之后创建的 Player 运行。
 - 超时后该请求尝试被关闭并标记为超时。
 - DeepSeek 超时触发 Kimi 降级。
 - Kimi 超时触发牌局暂停。
 - 超时后迟到的响应只保存为过期结果，不得提交。
 - 页面刷新不直接取消服务端有效请求。
-- 服务重启时，`thinking` 状态的未完成 AgentRun 保留在 SQLite；旧租约到期后由新 Worker 领取新租约和 fencing token，并重新读取权威状态。
-- 权威状态仍匹配时按该运行固定版本重建决策包并继续；状态已经变化时旧运行标记为 `stale`，由 SessionAgentCoordinator 判断是否仍需创建替代运行。
+- 服务重启时，`thinking` 状态的旧 Player AgentRun 标记为 `cancelled(process_restart)`，旧 `decisionRequestId`、租约、fencing token 和 attempts 全部失效，不在同一运行上续跑。
+- 权威状态仍为 `active + inHand`、仍轮到同一 AI 且不存在其他有效运行时，创建带 `supersedesRunId` 的新 AgentRun、新请求和新 attempts，从 DeepSeek 首次尝试重新开始。
+- 新运行沿用本场已经固化的人物、Runtime、Prompt、策略和路由版本，但不继承旧供应商位置、纠错计数、模型输出或临时检查点。权威状态已变化或不再需要 AI 行动时不创建替代运行。
 - 已经 `paused` 的运行保持暂停。
 
 ## 14. 暂停与人工重试
@@ -414,6 +419,8 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 4. 保留旧运行和调用链为只读审计记录。
 
 人工重试本身使用持久化命令账本和 AgentRun 幂等键保证幂等。创建新运行前使旧运行失效；同一 `(sessionId, stateVersion, actorSeat)` 只允许一个有效 Player AgentRun。
+
+用户也可以选择“中止本手并结束场次”，但只在 `active + inHand + paused` 时允许。中止事务不让 Player Runtime 伪造 fold 或结算；它由会话服务恢复开手前检查点、递增 `stateVersion`、标记当前手为 `aborted` 并写入 `handAborted`、`sessionEnded`。失败运行和调用链保留审计，普通历史、统计和 Coach 排除该手。
 
 不提供：
 
@@ -466,6 +473,7 @@ Player Runtime 使用稳定的内部错误类别：
 - `provider_auth_error`
 - `provider_rate_limited`
 - `provider_fallback_unavailable`
+- `player_deadline_exhausted`
 - `response_parse_error`
 - `response_schema_error`
 - `decision_illegal`
@@ -557,12 +565,14 @@ Player Runtime 使用稳定的内部错误类别：
 
 - 重复 AI 命令只提交一次。
 - 迟到响应不提交。
-- `thinking` 状态服务重启后新 Worker 通过新租约和 fencing 接管，旧 Worker 不能写入。
-- 权威状态已经变化时旧运行变为 stale；仍需 AI 行动才创建带 `supersedesRunId` 的替代运行。
+- `thinking` 状态服务重启后旧运行变为 `cancelled(process_restart)`，新运行使用新的 `decisionRequestId`、attempts、租约和 fencing 并从 DeepSeek 开始；旧 Worker 不能写入。
+- 权威状态仍匹配时新运行保留本场固化版本并通过 `supersedesRunId` 关联旧运行；状态已经变化或不再需要 AI 行动时不创建替代运行。
 - `paused` 状态服务重启后保持暂停。
 - 人工重试生成新请求标识。
 - 暂停前后扑克状态和筹码不变。
 - 同一 `(sessionId, stateVersion, actorSeat)` 不会同时存在两个有效 AgentRun。
+- 暂停中止后所有旧请求和迟到结果都被场次生命周期、有效请求标识和 fencing 屏障拒绝，不创建替代运行。
+- 初始请求、纠错和降级共享总 deadline，剩余不足 5 秒时不再创建尝试。
 
 ### 18.7 敏感信息脱敏
 
@@ -604,3 +614,6 @@ Player Runtime 完成的最低标准：
 11. 模型不承担数学、范围构造或对手样本判断。
 12. 策略未覆盖时使用受限 heuristic 候选，模型仍不能自由扩展动作。
 13. 三道信息防火墙阻止隐藏牌、未来牌和跨用户数据进入供应商请求。
+14. Player 拥有不被 Coach 占用的执行槽位，所有尝试受同一完整决策 deadline 约束。
+15. 服务重启不续跑旧 Player AgentRun；新运行从 DeepSeek 开始且旧结果不能提交。
+16. 暂停中的手牌可以由会话服务原子中止并结束场次，不生成伪动作或可统计的伪手牌。

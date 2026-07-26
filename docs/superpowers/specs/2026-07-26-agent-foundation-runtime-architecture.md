@@ -134,7 +134,8 @@ queued → leased → running → completed | failed | cancelled | stale
 
 - Worker 领取时获得过期时间和单调递增的 fencing token。
 - 旧租约的迟到响应不能写入检查点或通过 Commit Gate。
-- 服务重启后可以重新领取未完成运行。
+- Player 与 Coach 使用独立持久化队列和并发配额。首版在同一 Node.js 进程中分别保留一个 Player Worker 槽位和一个 Coach Worker 槽位，Coach 不能占用 Player 槽位。
+- 服务重启后的处理由 Runtime Recovery Policy 决定：Coach 等允许恢复的运行可以在版本检查后重新领取；`thinking` Player 必须取消旧运行并创建新运行，不能在原 AgentRun 上续跑。
 - 未来消息队列只通知 Worker 存在待执行任务；数据库中的 `AgentRun` 仍是权威事实。
 
 ### 4.4 `ContextEnvelope`
@@ -183,7 +184,9 @@ Foundation 提供：
 - 所有副作用必须通过 Runtime 专属 Commit Gate。
 - Foundation 不提供“工具成功即自动提交”的通用能力。
 
-Player Commit Gate 只允许合法、未过期的候选扑克决策进入标准命令事务。Coach Commit Gate 只允许通过事实校验的报告写入 Coach Repository。
+Player Commit Gate 只允许合法、未过期的候选扑克决策进入标准命令事务，并在同一事务验证场次存在、OwnerScope、`active` 生命周期、有效请求标识、行动者、租约和 fencing。Coach Commit Gate 只允许通过事实校验的报告写入 Coach Repository，并验证场次存在、OwnerScope、目标手牌正常完成且未进入删除流程；Coach 不要求所属场次仍为 `active`。
+
+删除或清空后的场次/运行不存在时，两种 Commit Gate 都必须无副作用拒绝。失败结果不能写入业务表、快照或 `session_events`，也不能触发替代运行。fencing token 只解决旧租约问题，不能代替场次存在性、OwnerScope 和删除屏障。
 
 ### 4.8 类型化 Channel
 
@@ -192,7 +195,7 @@ Foundation 只提供两类端口：
 - `AgentRunEventPort`：发布 queued、leased、running、completed、failed、cancelled 和 stale 等已持久化运行事件。
 - `RuntimeResultPort`：把 Player 候选决策结果或 Coach 报告结果返回确定性调用方。
 
-事件必须先落数据库再发布。当前模块化单体可以在事务提交后直接投影到 SSE；若未来需要可靠跨进程投递，可增加 Outbox 适配器。Agent 不能订阅任意 Topic、向其他 Agent 发消息或把 Channel 当作协商机制。
+事件必须先落数据库再发布。只有与活动扑克决策关联的 Player 协调事件可以由会话服务投影到 `session_events` 和扑克 SSE `eventSeq`；Coach 运行事件保留在独立复盘生命周期，通过查询接口读取，不占用扑克序号。若未来需要可靠跨进程投递，可增加 Outbox 适配器。Agent 不能订阅任意 Topic、向其他 Agent 发消息或把 Channel 当作协商机制。
 
 ### 4.9 静态 Prompt Module
 
@@ -219,7 +222,7 @@ Foundation 只提供两类端口：
 - 默认拒绝未声明能力。
 - Player 可以读取本座位安全观察、执行固定预处理并产生候选扑克决策。
 - Player 不能读取其他未公开底牌、Coach 事后事实或用户画像。
-- Coach 可以读取已结束手牌的受控复盘投影、执行固定只读能力并保存报告。
+- Coach 可以读取 `completed` 手牌的受控复盘投影、执行固定只读能力并保存报告；`aborted` 手牌拒绝。
 - Coach 不能提交扑克动作、修改牌局状态或写入 Player 记忆。
 - Foundation 只能按 Runtime 清单执行能力。
 
@@ -317,7 +320,9 @@ Player 使用三道运行时边界：
 
 ### 6.5 stale 与接替
 
-租约过期本身不把运行标记为 stale：新 Worker 可以领取同一 AgentRun 的新租约和 fencing token，但必须先重新读取权威状态。只有权威 `stateVersion`、行动者或有效请求已经不再匹配原决策点，或 Commit Gate 发现该决策点已经失效时，旧运行才标记为 stale。
+租约过期本身不把运行标记为 stale：在同一服务进程生命周期内，新 Worker 可以领取同一 AgentRun 的新租约和 fencing token，但必须先重新读取权威状态。只有权威 `stateVersion`、行动者或有效请求已经不再匹配原决策点，或 Commit Gate 发现该决策点已经失效时，旧运行才标记为 stale。该规则不适用于服务进程重启。
+
+进程重启是 Player 的独立恢复分支，不使用上述同运行续租：恢复协调器把原 `thinking` Player AgentRun 标记为 `cancelled(process_restart)`，使旧请求、attempts、租约和 fencing 失效；权威状态仍为 `active + inHand`、仍轮到同一 AI 且无其他有效运行时，新建带 `supersedesRunId` 的 AgentRun 和 `decisionRequestId`，从 DeepSeek 首次尝试开始。新运行沿用本场固化版本，但不继承旧供应商位置、纠错次数、模型输出或检查点。原来已经 `paused` 的决策保持暂停。
 
 stale 后：
 
@@ -335,7 +340,7 @@ stale 后：
 
 ```mermaid
 flowchart TD
-    H["已结束手牌"] --> C["HandReviewCaseBuilder"]
+    H["completed 手牌"] --> C["HandReviewCaseBuilder"]
     C --> DFG["DecisionContextBoundaryGuard"]
     DFG --> E["Metrics / Strategy / Opponent Evidence"]
     E --> A["DecisionAssessmentClassifier"]
@@ -473,6 +478,7 @@ INDEX  (decisionId)
 - 原始模型输入输出使用有限、版本化保留策略。
 - 业务事实、运行元数据和原始调用内容使用不同保留周期。
 - 删除用户或场次时级联删除 AgentRun、尝试、能力调用和 Runtime 业务数据。
+- 删除事务先取消在途运行并使租约、有效请求和 fencing 失效；迟到提交还必须复验场次存在性和 Runtime 专属生命周期，不得在删除后重建替代运行。
 - Eval 夹具使用人工或去标识数据，不默认复制真实用户牌局。
 
 ## 11. 预算、可观测性与 Eval
@@ -489,6 +495,15 @@ INDEX  (decisionId)
 - Coach 单次复盘成本。
 
 预算由服务端固化，模型不能修改。超限返回稳定错误。
+
+首版 Player 固定以下调度保证：
+
+- 独立保留一个 Worker 槽位，不与 Coach 共享容量。
+- 单次供应商尝试默认 15 秒，合法范围 5–30 秒。
+- 完整决策 deadline 默认 45 秒，合法范围 15–120 秒且不得小于单次超时。
+- 初始请求、纠错和降级共享剩余总时间；实际尝试超时取单次上限与剩余时间的较小值，剩余不足 5 秒时不再启动尝试并返回 `player_deadline_exhausted`。
+
+Coach 使用自己的并发、时限与成本预算；Coach 排队或运行不能阻塞 Player 领取。
 
 ### 11.2 可观测性
 
@@ -598,8 +613,10 @@ apps/server/src/
 7. Coach Hindsight 不能覆盖标签、严重度、EV 或过程分析。
 8. `coachReviewId + decisionId` 唯一标识单份复盘中的一个决策评价。
 9. Worker 崩溃、租约过期、迟到响应和 stale 都不会重复提交动作或报告。
-10. Player stale 后由 Session Coordinator 根据当前权威状态决定是否创建替代运行。
+10. Player stale 后由 Session Coordinator 根据当前权威状态决定是否创建替代运行；进程重启则取消旧 Player 运行并从 DeepSeek 创建新运行。
 11. Coach 检查点只在固定版本完全匹配时复用。
 12. 动作执行频率与下注尺度始终使用不同字段。
 13. 隐藏牌、未来牌、其他用户数据和 API Key 泄漏测试通过。
 14. 本地实现不依赖真实认证、PostgreSQL、消息队列或监控平台。
+15. Player 与 Coach 有独立容量，Player 全部供应商尝试共享一个总 deadline。
+16. 删除/清空后的迟到结果在 Runtime 专属 Commit Gate 被拒绝，且不能创建替代运行。

@@ -42,7 +42,7 @@ SQLite 是系统级唯一事实源，但 SQLite 内部仍必须为不同类别�
 
 | 数据类别 | 权威存储 | 典型字段 | 使用规则 |
 | --- | --- | --- | --- |
-| 当前预设人物目录 | 服务端版本控制源码 | `personaId`、`personaVersion`、人物与模型配置 | 只用于列出人物和创建新场次；创建后以 `session_agents` 快照为准 |
+| 当前预设人物目录 | 服务端版本控制源码 | 公开人物摘要与服务端私有 Player Runtime 配置 | 列表接口只投影最小公开摘要；创建场次时在服务端复制私有配置，创建后以 `session_agents` 快照为准 |
 | Agent 策略参考数据 | 服务端版本控制数据集 | `datasetId`、`datasetVersion`、覆盖清单、来源、场景键和动作分布 | Player 与 Coach 共享事实源但使用不同投影；人工模板不得标记为 GTO，也不作为牌局引擎输入 |
 | 可变扑克领域状态 | `session_snapshots.privatePokerState` | 扑克阶段、各座位筹码、按钮、当前手牌状态、街道、行动位、投入、底池、最近结果摘要 | 是牌局引擎和扑克状态恢复的唯一输入 |
 | 会话协调状态 | `sessions` | 生命周期状态、`stateVersion`、下一 `eventSeq`、`agentRunState`、有效 `decisionRequestId`、起止时间 | 只由会话服务用于并发、事件分配和 Agent 生命周期 |
@@ -176,7 +176,7 @@ Player Runtime 负责扑克业务：
 
 职责：
 
-- 只接受已结束内部手牌的用户手动请求，并以独立请求标识保证幂等。
+- 只接受正常完成（`completed`）内部手牌的用户手动请求，明确拒绝 `aborted` 手牌，并以独立请求标识保证幂等。
 - 构建每个用户决策发生时的可见信息集，以及与过程评价隔离的最小事后事实。
 - 固定执行数学指标、策略基准和对手证据查询，不让模型决定是否跳过。
 - 先运行看不到事后事实的决策分析，再冻结结果并运行只能补充事后解释的第二阶段。
@@ -201,7 +201,7 @@ Coach 复盘模块不得：
 - 向 Player 生成座位级观察，向前端生成公开快照。
 - 不建立内存中的第二事实源。
 
-Player 与 Coach 均不得绕过该中枢直接读取活动 `PrivatePokerState`。Coach 对已结束手牌使用历史事实构建 `HandReviewCase`。
+Player 与 Coach 均不得绕过该中枢直接读取活动 `PrivatePokerState`。Coach 只对 `completed` 手牌使用历史事实构建 `HandReviewCase`，`aborted` 明确拒绝。
 
 ## 3. 命令处理流程
 
@@ -224,7 +224,7 @@ Player 与 Coach 均不得绕过该中枢直接读取活动 `PrivatePokerState`�
 ## 4. 并发、幂等与状态版本
 
 - 每个场次具有只随权威扑克状态变化递增的 `stateVersion`。
-- 每个场次另有对全部已持久化事件单调递增的 `eventSeq`。
+- 每个场次另有对全部已持久化扑克事件和 Player 协调运行事件单调递增的 `eventSeq`；Coach 不使用该序列。
 - 每个命令具有客户端生成的 `commandId`。
 - 同一场次一次只处理一个状态变更命令。
 - `(sessionId, commandId)` 具有数据库唯一约束；账本保存命令类型、规范化负载摘要、处理状态、结果版本和原响应。
@@ -248,7 +248,7 @@ Player 与 Coach 均不得绕过该中枢直接读取活动 `PrivatePokerState`�
 - `betweenHands`：两手之间，可补码、继续或结束。
 - `inHand`：一手进行中。
 
-`ended` 不再是扑克阶段。结束场次只把 `sessions.lifecycleStatus` 改为 `ended`，保留最终私有扑克快照，不递增扑克 `stateVersion`；`sessionEnded` 事件递增 `eventSeq`。是否允许继续处理命令先由会话生命周期决定，再由扑克阶段决定。
+`ended` 不再是扑克阶段。两手之间正常结束场次只把 `sessions.lifecycleStatus` 改为 `ended`，保留最终私有扑克快照，不递增扑克 `stateVersion`；`sessionEnded` 事件递增 `eventSeq`。是否允许继续处理命令先由会话生命周期决定，再由扑克阶段决定。
 
 与扑克阶段正交的 `agentRunState`：
 
@@ -270,11 +270,24 @@ Agent 暂停时扑克阶段仍为 `inHand`，当前行动者和街道不变，�
 
 每次 `agentRunState` 或有效请求标识变化，都在同一 SQLite 事务中更新 `sessions` 的协调字段并追加 `session_events`。由于扑克状态未变化，不重写私有扑克快照；事件的公开负载使用未变化的私有扑克状态与事务提交后的会话协调状态组合生成。
 
+唯一允许在手牌进行中结束场次的路径是 `lifecycleStatus = active`、`pokerPhase = inHand` 且 `agentRunState = paused`。该命令执行“中止本手并结束场次”：
+
+1. 读取“开始本手”命令执行前持久化的 `handStartCheckpoint`。
+2. 恢复检查点中的筹码、按钮、累计买入投影、已完成手数和其他扑克内容，但把 `stateVersion` 设置为当前版本加一，不复用旧版本号。
+3. 将当前 `hands` 记录标记为 `aborted`，清空有效 `decisionRequestId`，把 `agentRunState` 设为 `idle`，并把生命周期改为 `ended`。
+4. 在同一事务内提交命令账本、回退后的最新私有快照以及连续的 `handAborted`、`sessionEnded` 事件；两条事件分别占用新的 `eventSeq`。
+5. 不删除已经持久化的本手原始事件或失败 AgentRun；历史和统计投影按 `hands.status = aborted` 排除整手，Coach 也拒绝该手。
+
+任一步失败全部回滚，场次继续保持原来的 `active + inHand + paused`。该能力不是任意弃局：`thinking`、`idle + inHand`、`betweenHands` 以外的组合不得走中止路径。
+
 ## 6. 座位、庄盲和行动顺序
 
 ### 6.1 6–9 人
 
-- 按顺时针方向轮转按钮。
+- 本地用户领域座位固定为 `0`，AI 只能使用 `1..8`；通用领域座位范围仍为 `0..8`。
+- 创建请求不接受 `userSeatNumber`。服务端将用户座位 `0` 与 5–8 个唯一 AI 座位合并后，才执行总人数和座位唯一性校验。
+- 创建场次时，服务端先按座位号升序规范化全部实际入座座位，再使用可注入的安全随机源执行 `nextInt(occupiedSeatNumbers.length)`，均匀选择首手按钮。随机选择和初始私有扑克快照在同一事务内持久化，前端不得提交或覆盖按钮。
+- 第一手直接使用创建时持久化的按钮，不再次轮转；从第二手开始，每次开手前按有效座位顺时针轮转按钮。
 - 按钮左侧第一个有效座位下小盲。
 - 再下一个有效座位下大盲。
 - 翻前由大盲左侧第一个有效座位开始。
@@ -322,7 +335,7 @@ Agent 暂停时扑克阶段仍为 `inHand`，当前行动者和街道不变，�
 - 是否只能全下。
 - 由引擎计算并裁剪到合法边界的 `suggestedTargets`：最小加注、1/2 池、2/3 池和满池。
 
-所有下注和加注统一使用“本街总投入到多少”的语义。
+所有下注和加注统一使用“本街总投入到多少”的语义。进入共享命令与纯领域命令的 `bet`、`raise` 必须使用唯一正整数字段 `targetStreetCommitment`；`fold`、`check`、`call` 与 `allIn` 不携带金额字段。不得用 `target`、`amount`、`delta` 或 `total` 表达可变下注金额。
 
 必须正确处理：
 
@@ -391,10 +404,11 @@ Agent 暂停时扑克阶段仍为 `inHand`，当前行动者和街道不变，�
 
 服务重启后如果存在未完成的请求：
 
-- 过期租约的旧 Worker 结果由 fencing token 拒绝。
-- 原状态为 `thinking` 时，Runtime Recovery Policy 重新读取权威状态。
-- 状态仍匹配时重新构建决策包并创建新尝试。
-- 状态已变化时旧运行标记 `stale`，由 Session Coordinator 判断当前状态是否需要创建替代 Player 运行。
+- 过期租约的旧 Worker 结果由 fencing token 和有效请求标识共同拒绝。
+- 原状态为 `thinking` 时，不在旧 AgentRun 上续跑。恢复事务将旧运行标记为 `cancelled`，原因为 `process_restart`，并使旧 `decisionRequestId` 与旧 attempts 全部失效。
+- 状态仍为 `active + inHand`、仍轮到同一 AI 且不存在其他有效运行时，创建带 `supersedesRunId` 的新 AgentRun 和新 `decisionRequestId`，从 DeepSeek 的首次尝试重新开始。
+- 新运行重新构建观察和决策包，继续使用本场已固化的人物、Runtime、Prompt、策略与路由版本；不继承旧供应商位置、纠错计数、模型输出或临时检查点。
+- 状态已经变化或已经不需要 AI 行动时，只取消旧运行，不创建替代任务。
 - 原状态已经为 `paused` 时保持暂停，等待人工重试。
 
 浏览器刷新或 SSE 重连不取消服务端仍有效的请求。人工重试使用命令账本保证幂等，创建新请求前使旧 `decisionRequestId` 失效；同一 `(sessionId, stateVersion, actorSeat)` 同时只允许一个有效 Player 运行。不实现超时自动 fold。
@@ -411,6 +425,7 @@ SSE 只发布已经持久化的状态和运行事件。
 - `agentProviderFallback`。
 - `agentRepairAttempted`。
 - `agentPaused`。
+- `handAborted`。
 - `handCompleted`。
 - `sessionEnded`。
 
@@ -429,7 +444,7 @@ SSE 只发布已经持久化的状态和运行事件。
 `PublicSessionSnapshot` 不是某张数据库表的直接序列化，也不是新的事实源；它由经过校验的 `privatePokerState`、`sessions` 会话协调状态及可见性规则组合生成。因此它必须足以驱动牌桌，而不只是当前行动的最小状态：
 
 - 进行中的手牌包含按街道分组的公开行动序列，以及每步行动后的公开筹码和底池；不包含完整牌堆、burn card 或未公开底牌。
-- 两手之间保留最新已结束手牌的公开结果摘要，至少包括获胜座位、可见牌型、逐池分配、未跟注投入返还和各座位筹码变化。直接获胜或已弃牌玩家的底牌仍按默认可见性规则隐藏。
+- 两手之间仅保留最新正常 `completed` 手牌的公开结果摘要，至少包括获胜座位、可见牌型、逐池分配、未跟注投入返还和各座位筹码变化。`aborted` 手牌不生成结果摘要；直接获胜或已弃牌玩家的底牌仍按默认可见性规则隐藏。
 - Agent 运行摘要包含当前可安全展示的思考、降级、纠错或暂停信息；不包含原始模型输出、密钥、隐藏推理或敏感错误细节。
 
 共享契约在 M1.9 定义上述摘要的精确字段，并在 M3.6 将其映射到公开快照。任一 SSE 事件均附带该事件提交后固化的公开快照；补发时重放当时固化的公开负载，而重连校准再发送最新公开快照。
@@ -454,14 +469,38 @@ SSE 只发布已经持久化的状态和运行事件。
 - `GET /api/settings/agent`
 - `PATCH /api/settings/agent`
 
-Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒；修改只影响之后开始的请求。
+Agent 设置分别包含：
+
+- Player 单次供应商尝试超时：默认 15 秒，Zod 限制为 5–30 秒。
+- Player 完整决策总 deadline：默认 45 秒，Zod 限制为 15–120 秒，且不得小于单次尝试超时。
+
+两项修改只影响之后创建的 Player AgentRun。每次尝试的实际超时取固化单次超时与剩余总时间的较小值；剩余时间不足 5 秒时不再启动新尝试，直接以 `player_deadline_exhausted` 暂停。Coach 使用独立的 Runtime 预算，不读取 Player 的总 deadline。
+
+Provider Settings/Health 使用 `packages/contracts` 中的严格公开协议：
+
+- `ProviderIdSchema`：`deepseek | kimi`。
+- `ProviderCheckStatusSchema`：`notConfigured | notChecked | available | unavailable`。
+- `ProviderPublicErrorCodeSchema`：`provider_auth_error | provider_billing_unavailable | provider_network_error | provider_timeout | provider_rate_limited | provider_service_unavailable | provider_unknown_error`。
+- `ProviderHealthSummarySchema`：`configured`、`checkStatus`、可空 ISO `lastCheckedAt` 和可空 `errorCode`。
+- `ProviderSettingsResponseSchema`：包含对外 `protocolVersion`；`deepSeek` 在健康摘要之外包含 `canCreateSession`，`kimi` 包含 `canFallback`。GET 与手动检测 POST 返回同一响应形状。
+
+协议必须满足以下不变量：
+
+- 未配置时为 `configured = false`、`checkStatus = notConfigured`、能力值为 `false`，检测时间和错误码均为 `null`。
+- 已配置但从未检测时为 `notChecked`，检测时间和错误码均为 `null`。
+- `available` 必须有检测时间且错误码为 `null`；`unavailable` 必须同时有检测时间和脱敏错误码。
+- `deepSeek.canCreateSession` 当且仅当 DeepSeek Key 已配置；`kimi.canFallback` 当且仅当 Kimi Key 已配置。最近检测失败只提供诊断，不改变这两个能力值。
+
+`GET /api/settings/providers` 只返回进程内缓存的最近检测摘要，不产生供应商网络调用。检测摘要不写入 SQLite；服务重启后，未配置 Provider 仍为 `notConfigured`，已配置 Provider 回到 `notChecked`。`POST /api/settings/providers/:provider/check` 才执行一次有界、脱敏的手动连接检测；供应商不可用属于成功完成的诊断，返回 HTTP 200 和更新后的 `unavailable` 摘要，而不是泄露原始错误。未配置时直接返回 `notConfigured`，不发起网络请求。前端的“检测中”由本地 mutation 状态表达，不增加持久化 `checking` 状态。
+
+任何 Provider 响应都不得包含 API Key、模型标识、路由、请求正文、供应商响应正文或原始错误消息。真正的创建场次和 Player 行动仍在服务端重新校验 Key 与运行时状态，不能把这个公开摘要当作授权事实源。
 
 ### 13.2 AI 预设人物
 
 - `GET /api/agent-personas`
 - `GET /api/agent-personas/:personaId`
 
-人物目录只读，不提供创建、修改、复制或删除端点。响应包含稳定的 `personaId`、`personaVersion`、名称、头像颜色、风格摘要和不敏感的模型配置摘要；自由文本人物提示及完整模型参数只在创建场次时由服务端内部复制，不能通过目录接口泄露不需要的 Player Runtime 私有细节。
+人物目录只读，不提供创建、修改、复制或删除端点。响应严格使用共享 `AgentPersonaSummary`：稳定的 `personaId`、`personaVersion`、名称、头像颜色、背景描述、教学摘要和五个风格刻度。自由文本策略、Prompt、模型标识、路由和模型参数只存在于服务端私有人物/Runtime 配置，不进入目录响应。DeepSeek 开场能力、Kimi 降级能力和连接检测只由 `/api/settings/providers` 及 Provider Health 接口返回。
 
 ### 13.3 场次与牌局
 
@@ -473,7 +512,13 @@ Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒
 
 命令端点承载玩家行动、下一手、补码、结束场次和 Agent 手动重试。
 
-`POST /api/sessions` 必须接收 5–8 个互不重复的预设人物与互不重复的 AI 座位；连同固定的本地用户后，总座位数只能为 6–9。少于 5 个或多于 8 个 AI、座位超出 `0..8`、重复人物及重复座位都在 HTTP 边界拒绝。
+`POST /api/sessions` 必须接收 5–8 个互不重复的预设人物与互不重复的 AI 座位。用户领域座位隐式固定为 `0`，请求不允许携带 `userSeatNumber`；AI 座位只能为 `1..8`。合并用户后总座位数只能为 6–9。少于 5 个或多于 8 个 AI、AI 使用座位 `0`、座位超出 `1..8`、重复人物及重复 AI 座位都在 HTTP 边界拒绝。
+
+创建事务从规范化后的实际入座座位中安全随机并持久化首手按钮。输入数组顺序不得影响相同固定随机源下的结果；创建响应和后续公开快照只返回服务端确定的按钮，忽略或拒绝任何客户端按钮字段。
+
+每个 `OwnerScope` 同时只能有一个 `active` 场次。创建事务可以先查询以返回已有场次提示，但并发正确性由 `sessions(ownerId) WHERE lifecycleStatus = 'active'` 的 SQLite 部分唯一索引保证；竞争插入触发唯一约束时统一映射为 HTTP `409` 和稳定错误码 `ACTIVE_SESSION_EXISTS`，不得通过“先查再插”替代数据库约束。
+
+`endSession` 在 `betweenHands` 时执行普通结束；在 `active + inHand + paused` 时执行 §5 的原子中止回退；其他进行中组合返回状态冲突和最新公开快照。
 
 ### 13.4 历史与统计
 
@@ -485,7 +530,7 @@ Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒
 - `DELETE /api/sessions/:id`
 - `DELETE /api/data`
 
-历史列表查询使用 Zod 校验日期范围、场次、用户逻辑位置、单手盈亏、标准起手牌类别、AI 人物配置快照、分页和排序。`public` 是默认视图：用户底牌及进入摊牌的未弃牌玩家底牌可见；弃牌或直接获胜者底牌掩码。`auditReveal` 只允许已结束手牌，并由服务端返回完整底牌，不能依赖前端隐藏。
+历史列表查询使用 Zod 校验日期范围、场次、用户逻辑位置、单手盈亏、标准起手牌类别、AI 人物配置快照、分页和排序，并且只返回 `hands.status = completed`。`aborted` 手牌不出现在普通历史、统计或 Coach 列表，只能通过内部调试关联读取最小中止原因和失败 AgentRun。`public` 是默认视图：用户底牌及进入摊牌的未弃牌玩家底牌可见；弃牌或直接获胜者底牌掩码。`auditReveal` 只允许正常完成手牌，并由服务端返回完整底牌，不能依赖前端隐藏。
 
 具体 URL 命名可以在实现计划中微调，但资源边界和行为不得改变。
 
@@ -495,7 +540,7 @@ Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒
 - `GET /api/hands/:id/coach-reviews`
 - `GET /api/coach-reviews/:id`
 
-创建接口只接受已结束内部手牌和客户端生成的 `requestId`。相同 `requestId` 与相同手牌返回原复盘请求，不重复调用模型；相同标识关联不同手牌时返回冲突。重新生成使用新的 `requestId` 并创建新的 `coachReviewId`，旧报告保持只读。
+创建接口只接受正常完成（`completed`）内部手牌和客户端生成的 `requestId`，`aborted` 手牌返回领域错误。相同 `requestId` 与相同手牌返回原复盘请求，不重复调用模型；相同标识关联不同手牌时返回冲突。重新生成使用新的 `requestId` 并创建新的 `coachReviewId`，旧报告保持只读。
 
 响应只返回 `pending | running | completed | failed` 状态、结构化报告或脱敏失败摘要。Coach 请求不进入扑克命令账本和 `session_events`；客户端通过轮询或 Query 失效读取状态，首版不为 Coach 占用扑克 SSE `eventSeq`。
 
@@ -517,7 +562,17 @@ Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒
 - 开始和结束时间。
 - 作为可重建关系指针的当前手牌标识。
 
-`sessions` 不保存按钮位置、结果摘要或各座位筹码。扑克阶段也属于私有扑克快照，而不是会话协调行。生命周期结束不改写扑克阶段。`stateVersion` 作为并发协调列必须与私有扑克快照携带的版本严格一致；`currentHandId` 不得作为牌局引擎输入。
+`sessions` 不保存按钮位置、结果摘要或各座位筹码。扑克阶段也属于私有扑克快照，而不是会话协调行。两手之间正常结束不改写扑克阶段；只有 §5 明确的暂停中止会用开手前检查点重写最新私有扑克快照。`stateVersion` 作为并发协调列必须与私有扑克快照携带的版本严格一致；`currentHandId` 不得作为牌局引擎输入。
+
+数据库建立以下部分唯一索引作为并发创建的最终约束：
+
+```sql
+CREATE UNIQUE INDEX sessions_one_active_per_owner
+ON sessions(owner_id)
+WHERE lifecycle_status = 'active';
+```
+
+应用层的活动场次预查只用于改善错误信息，不能代替该索引。
 
 ### 14.3 `session_agents`
 
@@ -540,11 +595,14 @@ Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒
 保存：
 
 - 场次和手牌序号。
+- `completed | aborted` 终态；进行中的内部状态不得被历史查询当作终态。
 - 庄盲座位、各玩家逻辑位置和标准起手牌类别。
 - 各座位开始与结束筹码。
 - 完整牌堆、burn card、底牌和公共牌。
 - 开始和结束时间。
 - 未跟注返还、最终逐池结果、牌型和赢家。
+- “开始本手”命令执行前的版本化 `handStartCheckpoint`。它只用于 `active + inHand + paused` 中止回退，不作为牌局引擎的第二事实源；正常完成后不再参与恢复。
+- 中止原因、时间和关联失败 AgentRun。`aborted` 手不保存伪结算结果、不贡献手数或统计，也不能创建 Coach 复盘。
 
 ### 14.6 `command_ledger`
 
@@ -559,7 +617,7 @@ Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒
 
 ### 14.7 `session_events`
 
-统一保存扑克领域事件、跨手事件和 Agent 运行事件：
+统一保存扑克领域事件、跨手事件和 Player 协调运行事件：
 
 - 场次内唯一 `eventSeq`、全局事件标识、可空 `handId` 和可空 `commandId`。
 - 事件类型。
@@ -567,7 +625,7 @@ Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒
 - 事件前后状态版本。
 - 时间戳。
 
-补码、AI 自动买入、开始下一手、结束场次、Agent 思考、降级、纠错、暂停和未跟注返还都进入该表。`aiAutoRebuy` 使用可空 `handId = null` 并通过 `commandId` 关联触发它的“开始下一手”命令。原 `hand_events` 不再单独存在。
+补码、AI 自动买入、开始下一手、结束场次、Player 思考、降级、纠错、暂停、中止手牌和未跟注返还都进入该表。`aiAutoRebuy` 使用可空 `handId = null` 并通过 `commandId` 关联触发它的“开始下一手”命令。Coach 运行和报告不写入该表，也不占用场次 `eventSeq`。原 `hand_events` 不再单独存在。
 
 ### 14.8 `session_snapshots`
 
@@ -624,7 +682,7 @@ Agent 设置包含全局请求超时，默认 15 秒，Zod 限制为 5–120 秒
 
 ### 14.11 `app_settings`
 
-保存全局 Agent 请求超时等非敏感应用设置。超时默认 15 秒，范围 5–120 秒；API Key 仍只来自环境变量，不能写入该表。
+保存 Player 单次供应商尝试超时、完整决策总 deadline 等非敏感应用设置。单次超时默认 15 秒、范围 5–30 秒；总 deadline 默认 45 秒、范围 15–120 秒且不得小于单次超时。API Key 仍只来自环境变量，不能写入该表。Coach 的执行预算由独立 Runtime 配置固化，不复用 Player deadline。
 
 ### 14.12 `coach_reviews` 与 `coach_decision_assessments`
 
@@ -674,7 +732,14 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 
 不允许只删除单手。
 
-“清空全部数据”需要指定确认文字。它先使活动模型请求失效，再在串行化写入路径中删除全部场次派生数据、活动场次和统计缓存；保留 SQLite Schema、后端预设人物目录、扑克牌静态资源和 `.env`。首版不存在用户人物配置、备注、标签、头像文件或导出文件。
+单场删除事务先把该场仍在途的 Player/Coach AgentRun 标记为 `cancelled` 并使租约、有效请求标识和 fencing 失效，再执行级联删除。“清空全部数据”需要指定确认文字，并对全部运行执行相同失效步骤后，在串行化写入路径中删除全部场次派生数据、活动场次和统计缓存；保留 SQLite Schema、后端预设人物目录、扑克牌静态资源和 `.env`。首版不存在用户人物配置、备注、标签、头像文件或导出文件。
+
+所有迟到结果必须在同一个提交事务内执行运行时专属屏障：
+
+- Player Commit Gate 同时验证场次存在、OwnerScope、`lifecycleStatus = active`、当前仍需该 AI 行动、有效 `decisionRequestId`、AgentRun 非终态、租约和 fencing token。
+- Coach Commit Gate 同时验证场次存在、OwnerScope、场次未进入删除流程、目标手牌为 `completed`、AgentRun 非终态、租约和 fencing token；Coach 不要求场次仍为 `active`。
+- 任一检查失败都不得写入私有快照、`session_events`、命令账本、Player 决策或 Coach 报告，也不得由 Worker 或 Coordinator 重建替代任务。
+- 场次或运行已被级联删除时按不存在处理；fencing token 不能代替场次存在性和删除屏障。
 
 ## 17. 错误处理
 
@@ -683,11 +748,14 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - 重复命令：返回原结果。
 - DeepSeek Key 缺失：阻止创建场次。
 - Kimi Key 缺失：允许创建场次但返回明确警告；需要降级时把 `agentRunState` 设为 `paused`。
+- Provider 手动检测失败：保存脱敏 `unavailable` 摘要并返回 HTTP 200，不改变由 Key 配置决定的开场或降级资格；检测基础设施自身无法完成持久化时才返回服务端错误。
 - 数据库事务失败：回滚并进入可诊断错误，不发布 SSE。
 - 数据库无法启动或迁移：阻止服务接受牌局命令。
 - 玩家 Agent 最终失败：保持扑克状态不变并把 `agentRunState` 设为 `paused`。
 - Coach 最终失败：只把当前 `coachReviewId` 标记为 `failed`，保留脱敏调用链并允许用户以新请求重新生成。
 - 迟到的 AI 响应：记录为过期，不提交。
+- `active + inHand + paused` 中止失败：整笔事务回滚，保留原暂停状态和原私有快照。
+- 并发创建活动场次：部分唯一索引冲突映射为 `409 ACTIVE_SESSION_EXISTS`。
 
 ## 18. 测试策略
 
@@ -695,6 +763,8 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 
 覆盖：
 
+- 私有状态只接受座位 `0` 的唯一用户，AI 只能位于 `1..8`。
+- 首手按钮选择在规范化实际座位集合上均匀取样；固定随机源可复现、输入排列不影响结果、空集合及越界随机源被拒绝。
 - 6–9 人庄盲、逻辑位置和行动顺序。
 - 合法动作和金额边界。
 - 完整加注、单个不足额全下和多个不足额全下累计重新开放。
@@ -727,7 +797,7 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - 上一手结束筹码保持为 0，下一手起始筹码记录为买入后的 2,000，之后再正常扣除盲注。
 - 相同命令标识与不同负载返回冲突。
 - 每个街道刷新恢复。
-- AI `thinking` 期间服务重启后由新 Worker 通过新租约和 fencing 接管；状态已变化时按 stale 接替规则处理，`paused` 状态重启后保持暂停。
+- AI `thinking` 期间服务重启后取消旧 Player AgentRun 和请求；状态仍匹配时创建带 `supersedesRunId` 的新运行、新请求和新 attempts 并从 DeepSeek 开始，旧 Worker、旧请求或旧 fencing 结果不能提交；`paused` 状态重启后保持暂停。
 - SSE 同版本多事件、乱序、重复、`Last-Event-ID` 补发和快照版本校准。
 - 当前、可迁移旧版本、未知版本和损坏快照的恢复。
 - 连续 UPSERT 多个扑克状态后每场仍只有一行快照，且只包含最后一次成功事务提交的状态。
@@ -735,7 +805,7 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - 牌局引擎和恢复流程只从私有扑克快照读取筹码、按钮、阶段和结果摘要，不从 `sessions` 或 `session_agents` 拼装当前状态。
 - Schema 中不存在 `session_agents.currentStack`、`sessions.buttonPosition` 和 `sessions.resultSummary`。
 - `sessions.stateVersion` 与私有快照版本不一致时进入只读诊断；有效快照与 `currentHandId` 指针不一致时可以重建指针并记录诊断。
-- 纯 Agent 运行事件只更新 `sessions` 协调状态和统一事件，不重写未变化的私有扑克快照。
+- 纯 Player 协调运行事件只更新 `sessions` 协调状态和统一事件，不重写未变化的私有扑克快照。
 - 删除场次后统计重建。
 - 修改服务端人物目录后，已有活动及历史人物配置快照仍保持原版本并可读取和筛选。
 - 删除整场会清除命令账本、统一事件、快照、AgentRun、尝试、能力调用、Runtime 业务记录与记忆版本；清空全部数据不删除服务端预设人物目录。
@@ -745,6 +815,11 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - Coach 报告固化指标、策略版本和对手证据截止点，后续手牌和数据集升级不改变旧报告。
 - 决策分析尝试不含事后完整底牌或后续公共牌；事后解释尝试不能返回可覆盖过程评价的字段。
 - 删除整场同步删除 `coach_reviews` 与 `coach_decision_assessments`，Coach 失败或重试不修改扑克快照、协调状态或事件序列。
+- 暂停中止原子恢复开手前内容但使用更高 `stateVersion`，写入连续的 `handAborted`、`sessionEnded`，并从普通历史、统计和 Coach 投影排除该手。
+- 同一 Owner 并发创建两个活动场次时部分唯一索引只允许一个成功，冲突稳定映射为 409。
+- 删除/清空与迟到 Player、Coach 提交竞争时，提交屏障拒绝结果，且不会重建替代运行。
+- 创建场次拒绝 AI 座位 `0` 和客户端 `userSeatNumber`/按钮字段；首手按钮与初始快照原子提交，第一手不二次轮转，第二手开始正常轮转。
+- Provider 查询不触发网络；未配置、未检测、可用和不可用四种摘要满足字段不变量，手动检测失败不泄露 Key、模型、路由或原始供应商错误，也不改变配置能力值。
 
 ### 18.4 集成与端到端测试
 
@@ -753,6 +828,7 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - 正常多手牌局。
 - 全下与边池。
 - Agent 纠错、降级、暂停和重试。
+- 暂停中止、回退快照、普通历史排除和关联失败运行审计。
 - 默认历史投影、审计揭示、筛选、固定统计口径和数据删除。
 - Coach 正常生成、策略不支持、对手样本不足、两阶段信息隔离、纠错、降级、失败和重新生成。
 - 每项统计使用固定事件夹具断言分子、分母和结果。
@@ -764,5 +840,7 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - 排除外部模型等待后，普通本地命令应在 200ms 内完成事务和 SSE 发布。
 - Coach 请求在独立异步生命周期中运行，不阻塞开始下一手、牌局命令或扑克 SSE。
 - 每个 `OwnerScope` 同一时间只允许一个活动场次；不同 Owner 的独立单人牌桌不共享状态或锁。
+- 进程内调度使用独立 Player/Coach 队列，首版各保留一个 Worker 槽位；Coach 不得占用 Player 槽位。
+- Player 初始请求、纠错和降级共享固化的完整决策 deadline；实际单次超时不得超过剩余时间，剩余不足 5 秒时不再创建尝试而进入暂停。
 - 单个 Node.js 进程和单个 SQLite 数据库足以满足首版。
 - 不引入消息队列、缓存服务、微服务或分布式锁。

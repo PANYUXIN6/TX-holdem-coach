@@ -2,11 +2,11 @@ import {
   AgentPersonaIdSchema,
   AgentPersonaStyleSchema,
   AgentPersonaSummarySchema,
-} from '@poker-practice/contracts'
+} from '@tx-holdem-coach/contracts'
 import type {
   AgentPersonaId,
   AgentPersonaSummary,
-} from '@poker-practice/contracts'
+} from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
 
 const catalogEntrySchema = z.strictObject({

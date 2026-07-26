@@ -15,6 +15,7 @@ export const PositiveChipAmountSchema = z.number().int().positive()
 export const StateVersionSchema = z.number().int().nonnegative()
 export const EventSequenceSchema = z.number().int().nonnegative()
 export const SeatNumberSchema = z.number().int().min(0).max(8)
+export const AiSeatNumberSchema = z.number().int().min(1).max(8)
 
 export const AGENT_PERSONA_IDS = Object.freeze([
   'nit_fish',
@@ -49,7 +50,7 @@ export const AgentPersonaSummarySchema = z.strictObject({
 
 export const SessionPersonaSelectionSchema = z.strictObject({
   personaId: AgentPersonaIdSchema,
-  seatNumber: SeatNumberSchema,
+  seatNumber: AiSeatNumberSchema,
 })
 export const CreateSessionPersonaSelectionSchema = z
   .array(SessionPersonaSelectionSchema)
@@ -131,11 +132,11 @@ export const PokerActionSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('call') }),
   z.strictObject({
     type: z.literal('bet'),
-    target: PositiveChipAmountSchema,
+    targetStreetCommitment: PositiveChipAmountSchema,
   }),
   z.strictObject({
     type: z.literal('raise'),
-    target: PositiveChipAmountSchema,
+    targetStreetCommitment: PositiveChipAmountSchema,
   }),
   z.strictObject({ type: z.literal('allIn') }),
 ])
@@ -222,6 +223,133 @@ export const PublicSeatStatusSchema = z.enum([
   'out',
 ])
 
+export const ProviderIdSchema = z.enum(['deepseek', 'kimi'])
+export const ProviderCheckStatusSchema = z.enum([
+  'notConfigured',
+  'notChecked',
+  'available',
+  'unavailable',
+])
+export const ProviderPublicErrorCodeSchema = z.enum([
+  'provider_auth_error',
+  'provider_billing_unavailable',
+  'provider_network_error',
+  'provider_timeout',
+  'provider_rate_limited',
+  'provider_service_unavailable',
+  'provider_unknown_error',
+])
+
+const providerHealthSummaryShape = {
+  configured: z.boolean(),
+  checkStatus: ProviderCheckStatusSchema,
+  lastCheckedAt: z.iso.datetime({ offset: true }).nullable(),
+  errorCode: ProviderPublicErrorCodeSchema.nullable(),
+}
+
+function validateProviderHealthSummary(
+  summary: {
+    configured: boolean
+    checkStatus: z.infer<typeof ProviderCheckStatusSchema>
+    lastCheckedAt: string | null
+    errorCode: z.infer<typeof ProviderPublicErrorCodeSchema> | null
+  },
+  context: z.RefinementCtx,
+): void {
+  const addIssue = (path: string, message: string) => {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message,
+      path: [path],
+    })
+  }
+
+  if (!summary.configured) {
+    if (summary.checkStatus !== 'notConfigured') {
+      addIssue('checkStatus', '未配置的供应商只能处于未配置状态。')
+    }
+    if (summary.lastCheckedAt !== null) {
+      addIssue('lastCheckedAt', '未配置的供应商不得有检测时间。')
+    }
+    if (summary.errorCode !== null) {
+      addIssue('errorCode', '未配置的供应商不得有错误码。')
+    }
+
+    return
+  }
+
+  if (summary.checkStatus === 'notConfigured') {
+    addIssue('checkStatus', '已配置的供应商不得处于未配置状态。')
+  }
+
+  if (summary.checkStatus === 'notChecked') {
+    if (summary.lastCheckedAt !== null) {
+      addIssue('lastCheckedAt', '未检测的供应商不得有检测时间。')
+    }
+    if (summary.errorCode !== null) {
+      addIssue('errorCode', '未检测的供应商不得有错误码。')
+    }
+
+    return
+  }
+
+  if (summary.lastCheckedAt === null) {
+    addIssue('lastCheckedAt', '已检测的供应商必须包含检测时间。')
+  }
+
+  if (summary.checkStatus === 'available' && summary.errorCode !== null) {
+    addIssue('errorCode', '可用供应商不得有错误码。')
+  }
+
+  if (summary.checkStatus === 'unavailable' && summary.errorCode === null) {
+    addIssue('errorCode', '不可用供应商必须包含脱敏错误码。')
+  }
+}
+
+export const ProviderHealthSummarySchema = z
+  .strictObject(providerHealthSummaryShape)
+  .superRefine(validateProviderHealthSummary)
+
+const DeepSeekProviderSettingsSchema = z
+  .strictObject({
+    ...providerHealthSummaryShape,
+    canCreateSession: z.boolean(),
+  })
+  .superRefine((provider, context) => {
+    validateProviderHealthSummary(provider, context)
+
+    if (provider.canCreateSession !== provider.configured) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '创建场次能力必须与 DeepSeek 配置状态一致。',
+        path: ['canCreateSession'],
+      })
+    }
+  })
+
+const KimiProviderSettingsSchema = z
+  .strictObject({
+    ...providerHealthSummaryShape,
+    canFallback: z.boolean(),
+  })
+  .superRefine((provider, context) => {
+    validateProviderHealthSummary(provider, context)
+
+    if (provider.canFallback !== provider.configured) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '自动降级能力必须与 Kimi 配置状态一致。',
+        path: ['canFallback'],
+      })
+    }
+  })
+
+export const ProviderSettingsResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  deepSeek: DeepSeekProviderSettingsSchema,
+  kimi: KimiProviderSettingsSchema,
+})
+
 export const PublicSeatSchema = z.strictObject({
   seatNumber: SeatNumberSchema,
   playerId: PlayerIdSchema,
@@ -247,18 +375,61 @@ export const PublicHandSnapshotSchema = z.strictObject({
   legalActions: z.array(LegalActionSchema),
 })
 
-export const PublicSessionSnapshotSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
-  sessionId: SessionIdSchema,
-  stateVersion: StateVersionSchema,
-  eventSeq: EventSequenceSchema,
-  pokerPhase: PokerPhaseSchema,
-  lifecycleStatus: SessionLifecycleSchema,
-  agentRunState: AgentRunStateSchema,
-  activeDecision: AgentDecisionSummarySchema.nullable(),
-  seats: z.array(PublicSeatSchema).min(6).max(9),
-  hand: PublicHandSnapshotSchema.nullable(),
-})
+export const PublicSessionSnapshotSchema = z
+  .strictObject({
+    protocolVersion: ProtocolVersionSchema,
+    sessionId: SessionIdSchema,
+    stateVersion: StateVersionSchema,
+    eventSeq: EventSequenceSchema,
+    pokerPhase: PokerPhaseSchema,
+    lifecycleStatus: SessionLifecycleSchema,
+    agentRunState: AgentRunStateSchema,
+    activeDecision: AgentDecisionSummarySchema.nullable(),
+    seats: z.array(PublicSeatSchema).min(6).max(9),
+    hand: PublicHandSnapshotSchema.nullable(),
+  })
+  .superRefine((snapshot, context) => {
+    const seatNumbers = new Set<number>()
+    let userCount = 0
+
+    snapshot.seats.forEach((seat, index) => {
+      if (seatNumbers.has(seat.seatNumber)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '公开座位号不得重复。',
+          path: ['seats', index, 'seatNumber'],
+        })
+      }
+
+      seatNumbers.add(seat.seatNumber)
+
+      if (seat.isUser) {
+        userCount += 1
+
+        if (seat.seatNumber !== 0) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '本地用户必须固定在座位 0。',
+            path: ['seats', index, 'seatNumber'],
+          })
+        }
+      } else if (seat.seatNumber === 0) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'AI 不得占用座位 0。',
+          path: ['seats', index, 'seatNumber'],
+        })
+      }
+    })
+
+    if (userCount !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '公开快照必须恰好包含一个本地用户。',
+        path: ['seats'],
+      })
+    }
+  })
 
 export const SseEventTypeSchema = z.enum([
   'snapshot',
@@ -267,6 +438,7 @@ export const SseEventTypeSchema = z.enum([
   'agentProviderFallback',
   'agentRepairAttempted',
   'agentPaused',
+  'handAborted',
   'handCompleted',
   'sessionEnded',
 ])
@@ -305,6 +477,7 @@ export const ErrorResponseSchema = z.strictObject({
 })
 
 export type Card = z.infer<typeof CardSchema>
+export type AiSeatNumber = z.infer<typeof AiSeatNumberSchema>
 export type AgentPersonaStyle = z.infer<typeof AgentPersonaStyleSchema>
 export type AgentPersonaSummary = z.infer<typeof AgentPersonaSummarySchema>
 export type SessionPersonaSelection = z.infer<
@@ -316,6 +489,15 @@ export type CreateSessionPersonaSelection = z.infer<
 export type PersonaSnapshotFilter = z.infer<typeof PersonaSnapshotFilterSchema>
 export type PokerAction = z.infer<typeof PokerActionSchema>
 export type LegalAction = z.infer<typeof LegalActionSchema>
+export type ProviderId = z.infer<typeof ProviderIdSchema>
+export type ProviderCheckStatus = z.infer<typeof ProviderCheckStatusSchema>
+export type ProviderPublicErrorCode = z.infer<
+  typeof ProviderPublicErrorCodeSchema
+>
+export type ProviderHealthSummary = z.infer<typeof ProviderHealthSummarySchema>
+export type ProviderSettingsResponse = z.infer<
+  typeof ProviderSettingsResponseSchema
+>
 export type SessionCommand = z.infer<typeof SessionCommandSchema>
 export type PublicSeat = z.infer<typeof PublicSeatSchema>
 export type PublicHandSnapshot = z.infer<typeof PublicHandSnapshotSchema>

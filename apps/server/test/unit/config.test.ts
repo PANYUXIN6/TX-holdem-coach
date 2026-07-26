@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   getServerCapabilities,
+  getProviderSettingsResponse,
   loadServerConfig,
   ServerConfigurationError,
 } from '../../src/config.js'
@@ -16,6 +17,23 @@ describe('server configuration', () => {
         'DeepSeek API Key 未配置，无法创建场次。',
         'Kimi API Key 未配置，自动降级不可用。',
       ],
+    })
+    expect(getProviderSettingsResponse(config)).toStrictEqual({
+      protocolVersion: 1,
+      deepSeek: {
+        configured: false,
+        checkStatus: 'notConfigured',
+        lastCheckedAt: null,
+        errorCode: null,
+        canCreateSession: false,
+      },
+      kimi: {
+        configured: false,
+        checkStatus: 'notConfigured',
+        lastCheckedAt: null,
+        errorCode: null,
+        canFallback: false,
+      },
     })
   })
 
@@ -33,6 +51,9 @@ describe('server configuration', () => {
         'Kimi API Key 未配置，自动降级不可用。',
       ],
     })
+    expect(getProviderSettingsResponse(config)).toStrictEqual(
+      getProviderSettingsResponse(loadServerConfig({})),
+    )
   })
 
   test('blocks session creation when the DeepSeek key is missing', () => {
@@ -45,6 +66,23 @@ describe('server configuration', () => {
       canCreateSession: false,
       warnings: ['DeepSeek API Key 未配置，无法创建场次。'],
     })
+    expect(getProviderSettingsResponse(config)).toStrictEqual({
+      protocolVersion: 1,
+      deepSeek: {
+        configured: false,
+        checkStatus: 'notConfigured',
+        lastCheckedAt: null,
+        errorCode: null,
+        canCreateSession: false,
+      },
+      kimi: {
+        configured: true,
+        checkStatus: 'notChecked',
+        lastCheckedAt: null,
+        errorCode: null,
+        canFallback: true,
+      },
+    })
   })
 
   test('allows session creation and reports unavailable fallback when the Kimi key is missing', () => {
@@ -56,6 +94,23 @@ describe('server configuration', () => {
       canUseReadOnlyFeatures: true,
       canCreateSession: true,
       warnings: ['Kimi API Key 未配置，自动降级不可用。'],
+    })
+    expect(getProviderSettingsResponse(config)).toStrictEqual({
+      protocolVersion: 1,
+      deepSeek: {
+        configured: true,
+        checkStatus: 'notChecked',
+        lastCheckedAt: null,
+        errorCode: null,
+        canCreateSession: true,
+      },
+      kimi: {
+        configured: false,
+        checkStatus: 'notConfigured',
+        lastCheckedAt: null,
+        errorCode: null,
+        canFallback: false,
+      },
     })
   })
 
@@ -75,8 +130,31 @@ describe('server configuration', () => {
       canCreateSession: true,
       warnings: [],
     })
+    expect(getProviderSettingsResponse(config)).toStrictEqual({
+      protocolVersion: 1,
+      deepSeek: {
+        configured: true,
+        checkStatus: 'notChecked',
+        lastCheckedAt: null,
+        errorCode: null,
+        canCreateSession: true,
+      },
+      kimi: {
+        configured: true,
+        checkStatus: 'notChecked',
+        lastCheckedAt: null,
+        errorCode: null,
+        canFallback: true,
+      },
+    })
+    expect(getServerCapabilities(config).canCreateSession).toBe(
+      getProviderSettingsResponse(config).deepSeek.canCreateSession,
+    )
     expect(JSON.stringify(config)).not.toContain(marker)
     expect(JSON.stringify(getServerCapabilities(config))).not.toContain(marker)
+    expect(JSON.stringify(getProviderSettingsResponse(config))).not.toContain(
+      marker,
+    )
   })
 
   test.each([{ PORT: '0' }, { PORT: 'not-a-port' }, { DATABASE_PATH: '   ' }])(

@@ -1,5 +1,5 @@
-import { CARD_RANKS, CARD_SUITS } from '@poker-practice/contracts'
-import type { Card, CardRank, CardSuit } from '@poker-practice/contracts'
+import { CARD_RANKS, CARD_SUITS } from '@tx-holdem-coach/contracts'
+import type { Card, CardRank, CardSuit } from '@tx-holdem-coach/contracts'
 
 const RESOURCE_SUIT_NAMES = {
   clubs: 'club',

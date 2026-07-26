@@ -100,7 +100,7 @@ export interface TemporarySqliteDatabase {
 }
 
 export function createTemporarySqliteDatabase(): TemporarySqliteDatabase {
-  const directory = mkdtempSync(join(tmpdir(), 'poker-practice-test-'))
+  const directory = mkdtempSync(join(tmpdir(), 'tx-holdem-coach-test-'))
 
   try {
     const database = new Database(join(directory, 'test.sqlite'))

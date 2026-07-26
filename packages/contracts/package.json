@@ -1,5 +1,5 @@
 {
-  "name": "@poker-practice/contracts",
+  "name": "@tx-holdem-coach/contracts",
   "version": "0.0.0",
   "private": true,
   "type": "module",

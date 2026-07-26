@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AiSeatNumberSchema,
   AgentPersonaIdSchema,
   AgentPersonaSummarySchema,
   ChipAmountSchema,
@@ -11,6 +12,11 @@ import {
   LegalActionSchema,
   PersonaSnapshotFilterSchema,
   PokerActionSchema,
+  ProviderCheckStatusSchema,
+  ProviderHealthSummarySchema,
+  ProviderIdSchema,
+  ProviderPublicErrorCodeSchema,
+  ProviderSettingsResponseSchema,
   PublicSessionSnapshotSchema,
   SeatNumberSchema,
   SseEventSchema,
@@ -97,7 +103,9 @@ describe('共享外部协议', () => {
         commandId: ids.command,
         expectedStateVersion: 4,
         type: 'playerAction',
-        payload: { action: { type: 'raise', target: 60 } },
+        payload: {
+          action: { type: 'raise', targetStreetCommitment: 60 },
+        },
       },
     }
     const sseEvent = {
@@ -146,6 +154,37 @@ describe('共享外部协议', () => {
     expect(PokerActionSchema.safeParse({ type: 'bluff' }).success).toBe(false)
   })
 
+  it('以本街目标总投入表达下注和加注，并拒绝金额同义字段', () => {
+    expect(
+      PokerActionSchema.safeParse({
+        type: 'bet',
+        targetStreetCommitment: 40,
+      }).success,
+    ).toBe(true)
+    expect(
+      PokerActionSchema.safeParse({
+        type: 'raise',
+        targetStreetCommitment: 120,
+      }).success,
+    ).toBe(true)
+
+    for (const action of [
+      { type: 'bet', target: 40 },
+      { type: 'raise', target: 120 },
+      { type: 'bet', amount: 40 },
+      { type: 'raise', delta: 100 },
+      { type: 'raise', total: 120 },
+      { type: 'call', targetStreetCommitment: 20 },
+      { type: 'fold', amount: 1 },
+      { type: 'check', delta: 1 },
+      { type: 'allIn', total: 2000 },
+      { type: 'bet', targetStreetCommitment: 0 },
+      { type: 'raise', targetStreetCommitment: 120.5 },
+    ]) {
+      expect(PokerActionSchema.safeParse(action).success).toBe(false)
+    }
+  })
+
   it('保持 Card 协议的点数和花色字面量', () => {
     expect(CardSchema.safeParse({ rank: 'T', suit: 'clubs' }).success).toBe(
       true,
@@ -170,6 +209,31 @@ describe('共享外部协议', () => {
         payload: { snapshot: publicSnapshot },
       }).success,
     ).toBe(false)
+  })
+
+  it('可解析手牌中止事件及回退后的结束快照', () => {
+    const abortedSnapshot = {
+      ...publicSnapshot,
+      stateVersion: 5,
+      eventSeq: 9,
+      pokerPhase: 'betweenHands',
+      lifecycleStatus: 'ended',
+      agentRunState: 'idle',
+      activeDecision: null,
+      hand: null,
+    }
+
+    expect(
+      SseEventSchema.safeParse({
+        protocolVersion: 1,
+        eventId: ids.event,
+        sessionId: ids.session,
+        eventSeq: 9,
+        stateVersion: 5,
+        type: 'handAborted',
+        payload: { snapshot: abortedSnapshot },
+      }).success,
+    ).toBe(true)
   })
 
   it('拒绝快照和 SSE 负载中的敏感额外字段', () => {
@@ -201,11 +265,11 @@ describe('共享外部协议', () => {
     ).toBe(true)
     expect(
       CreateSessionPersonaSelectionSchema.safeParse([
-        { personaId: 'nit_fish', seatNumber: 0 },
-        { personaId: 'tag_pro', seatNumber: 1 },
-        { personaId: 'lag_rec', seatNumber: 2 },
-        { personaId: 'short_shark', seatNumber: 3 },
-        { personaId: 'calling_station', seatNumber: 4 },
+        { personaId: 'nit_fish', seatNumber: 1 },
+        { personaId: 'tag_pro', seatNumber: 2 },
+        { personaId: 'lag_rec', seatNumber: 3 },
+        { personaId: 'short_shark', seatNumber: 4 },
+        { personaId: 'calling_station', seatNumber: 5 },
       ]).success,
     ).toBe(true)
     expect(
@@ -221,14 +285,14 @@ describe('共享外部协议', () => {
 
   it('只接受五到八个不同人物的创建选择', () => {
     const selections = [
-      { personaId: 'nit_fish', seatNumber: 0 },
-      { personaId: 'lag_rec', seatNumber: 1 },
-      { personaId: 'tag_pro', seatNumber: 2 },
-      { personaId: 'short_shark', seatNumber: 3 },
-      { personaId: 'calling_station', seatNumber: 4 },
-      { personaId: 'deep_maniac', seatNumber: 5 },
-      { personaId: 'small_ball_reg', seatNumber: 6 },
-      { personaId: 'trap_specialist', seatNumber: 7 },
+      { personaId: 'nit_fish', seatNumber: 1 },
+      { personaId: 'lag_rec', seatNumber: 2 },
+      { personaId: 'tag_pro', seatNumber: 3 },
+      { personaId: 'short_shark', seatNumber: 4 },
+      { personaId: 'calling_station', seatNumber: 5 },
+      { personaId: 'deep_maniac', seatNumber: 6 },
+      { personaId: 'small_ball_reg', seatNumber: 7 },
+      { personaId: 'trap_specialist', seatNumber: 8 },
     ]
 
     expect(
@@ -247,7 +311,7 @@ describe('共享外部协议', () => {
     ).toBe(false)
     const tooManySelections = CreateSessionPersonaSelectionSchema.safeParse([
       ...selections,
-      { personaId: 'nit_fish', seatNumber: 8 },
+      { personaId: 'nit_fish', seatNumber: 1 },
     ])
 
     expect(tooManySelections.success).toBe(false)
@@ -266,32 +330,164 @@ describe('共享外部协议', () => {
 
   it('拒绝重复人物和重复座位的创建选择', () => {
     const selections = [
-      { personaId: 'nit_fish', seatNumber: 0 },
-      { personaId: 'lag_rec', seatNumber: 1 },
-      { personaId: 'tag_pro', seatNumber: 2 },
-      { personaId: 'short_shark', seatNumber: 3 },
-      { personaId: 'calling_station', seatNumber: 4 },
+      { personaId: 'nit_fish', seatNumber: 1 },
+      { personaId: 'lag_rec', seatNumber: 2 },
+      { personaId: 'tag_pro', seatNumber: 3 },
+      { personaId: 'short_shark', seatNumber: 4 },
+      { personaId: 'calling_station', seatNumber: 5 },
     ]
 
     expect(
       CreateSessionPersonaSelectionSchema.safeParse([
         ...selections,
-        { personaId: 'tag_pro', seatNumber: 5 },
+        { personaId: 'tag_pro', seatNumber: 6 },
       ]).success,
     ).toBe(false)
     expect(
       CreateSessionPersonaSelectionSchema.safeParse([
         ...selections,
-        { personaId: 'deep_maniac', seatNumber: 4 },
+        { personaId: 'deep_maniac', seatNumber: 5 },
       ]).success,
     ).toBe(false)
   })
 
-  it('将座位号限制为零到八', () => {
+  it('将通用座位号限制为零到八，并将 AI 座位限制为一到八', () => {
     expect(SeatNumberSchema.safeParse(0).success).toBe(true)
     expect(SeatNumberSchema.safeParse(8).success).toBe(true)
     expect(SeatNumberSchema.safeParse(-1).success).toBe(false)
     expect(SeatNumberSchema.safeParse(9).success).toBe(false)
+    expect(AiSeatNumberSchema.safeParse(1).success).toBe(true)
+    expect(AiSeatNumberSchema.safeParse(8).success).toBe(true)
+    expect(AiSeatNumberSchema.safeParse(0).success).toBe(false)
+    expect(AiSeatNumberSchema.safeParse(9).success).toBe(false)
+    expect(
+      CreateSessionPersonaSelectionSchema.safeParse([
+        { personaId: 'nit_fish', seatNumber: 0 },
+        { personaId: 'lag_rec', seatNumber: 1 },
+        { personaId: 'tag_pro', seatNumber: 2 },
+        { personaId: 'short_shark', seatNumber: 3 },
+        { personaId: 'calling_station', seatNumber: 4 },
+      ]).success,
+    ).toBe(false)
+  })
+
+  it('要求公开快照的唯一用户固定在座位零，且座位不可重复', () => {
+    const userSwappedWithAi = {
+      ...publicSnapshot,
+      seats: publicSnapshot.seats.map((seat) => ({
+        ...seat,
+        isUser: seat.seatNumber === 1,
+      })),
+    }
+    const duplicateAiSeat = {
+      ...publicSnapshot,
+      seats: publicSnapshot.seats.map((seat) =>
+        seat.seatNumber === 5 ? { ...seat, seatNumber: 1 } : seat,
+      ),
+    }
+
+    expect(PublicSessionSnapshotSchema.safeParse(publicSnapshot).success).toBe(
+      true,
+    )
+    expect(
+      PublicSessionSnapshotSchema.safeParse(userSwappedWithAi).success,
+    ).toBe(false)
+    expect(PublicSessionSnapshotSchema.safeParse(duplicateAiSeat).success).toBe(
+      false,
+    )
+  })
+
+  it('以严格且状态一致的 Provider 设置协议表达健康摘要', () => {
+    const checkedAt = '2026-07-26T00:00:00.000Z'
+    const summaries = [
+      {
+        configured: false,
+        checkStatus: 'notConfigured',
+        lastCheckedAt: null,
+        errorCode: null,
+      },
+      {
+        configured: true,
+        checkStatus: 'notChecked',
+        lastCheckedAt: null,
+        errorCode: null,
+      },
+      {
+        configured: true,
+        checkStatus: 'available',
+        lastCheckedAt: checkedAt,
+        errorCode: null,
+      },
+      {
+        configured: true,
+        checkStatus: 'unavailable',
+        lastCheckedAt: checkedAt,
+        errorCode: 'provider_timeout',
+      },
+    ]
+
+    expect(ProviderIdSchema.safeParse('deepseek').success).toBe(true)
+    expect(ProviderIdSchema.safeParse('kimi').success).toBe(true)
+    expect(ProviderIdSchema.safeParse('other').success).toBe(false)
+    expect(ProviderCheckStatusSchema.safeParse('available').success).toBe(true)
+    expect(ProviderCheckStatusSchema.safeParse('checking').success).toBe(false)
+    expect(
+      ProviderPublicErrorCodeSchema.safeParse('provider_timeout').success,
+    ).toBe(true)
+    expect(
+      ProviderPublicErrorCodeSchema.safeParse('raw_provider_error').success,
+    ).toBe(false)
+    expect(
+      summaries.every(
+        (summary) => ProviderHealthSummarySchema.safeParse(summary).success,
+      ),
+    ).toBe(true)
+    expect(
+      ProviderHealthSummarySchema.safeParse({
+        ...summaries[0],
+        lastCheckedAt: checkedAt,
+      }).success,
+    ).toBe(false)
+    expect(
+      ProviderHealthSummarySchema.safeParse({
+        ...summaries[2],
+        errorCode: 'provider_timeout',
+      }).success,
+    ).toBe(false)
+    expect(
+      ProviderHealthSummarySchema.safeParse({
+        ...summaries[3],
+        errorCode: null,
+      }).success,
+    ).toBe(false)
+
+    const response = {
+      protocolVersion: 1,
+      deepSeek: { ...summaries[1], canCreateSession: true },
+      kimi: { ...summaries[0], canFallback: false },
+    }
+
+    expect(ProviderSettingsResponseSchema.safeParse(response).success).toBe(
+      true,
+    )
+    expect(
+      ProviderSettingsResponseSchema.safeParse({
+        ...response,
+        deepSeek: { ...response.deepSeek, canCreateSession: false },
+      }).success,
+    ).toBe(false)
+    expect(
+      ProviderSettingsResponseSchema.safeParse({
+        ...response,
+        deepSeek: { ...response.deepSeek, apiKey: 'must-not-be-public' },
+      }).success,
+    ).toBe(false)
+    expect(
+      ProviderSettingsResponseSchema.safeParse({
+        ...response,
+        kimi: { ...response.kimi, model: 'must-not-be-public' },
+      }).success,
+    ).toBe(false)
   })
 
   it('只接受六到九个公开座位', () => {

@@ -1,7 +1,8 @@
 # 6–9 人桌 M0 返工实施设计
 
-- 状态：已确认
+- 状态：已完成并归档
 - 日期：2026-07-26
+- 阅读说明：本文记录 2–6 人到 6–9 人的历史 M0 返工设计；“旧范围”和“本次”均指改造当时，不代表当前代码现状。
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)、[后端设计](./2026-07-23-poker-practice-backend-design.md)、[人物目录设计](./2026-07-24-persona-catalog-m0-design.md)
 - 实施依据：[6–9 人局代码返工说明](../plans/2026-07-26-six-to-nine-player-code-refactor.md)
 
@@ -13,27 +14,31 @@
 
 ## 2. 契约变更
 
-`packages/contracts/src/index.ts` 继续以唯一的 `SeatNumberSchema` 表示所有公开座位号，并将其范围改为整数 `0..8`。`AGENT_PERSONA_IDS` 按目录顺序追加 `small_ball_reg` 和 `trap_specialist`。
+历史返工把 `packages/contracts/src/index.ts` 的通用 `SeatNumberSchema` 扩展为整数 `0..8`，并按目录顺序向 `AGENT_PERSONA_IDS` 追加了 `small_ball_reg` 和 `trap_specialist`。
 
-`CreateSessionPersonaSelectionSchema` 仅接受 5–8 项选择，且保留人物标识与 AI 座位号各自唯一的约束。`PublicSessionSnapshotSchema.seats` 仅接受 6–9 个公开座位。项目尚未发布且不存在外部客户端，本次继续使用 `protocolVersion = 1`，不增加兼容协议。
+历史目标中的 `CreateSessionPersonaSelectionSchema` 接受 5–8 项选择，并只要求人物标识与 `0..8` 内的 AI 座位号各自唯一；`PublicSessionSnapshotSchema.seats` 接受 6–9 个公开座位。改造时项目尚未发布且不存在外部客户端，因此继续使用 `protocolVersion = 1`，未增加兼容协议。
+
+归档后确认的新规则已经取代上述座位选择边界：本地用户领域座位固定为 `0`，创建场次使用 `AiSeatNumberSchema = 1..8`，请求不包含 `userSeatNumber`，公开快照的唯一用户必须位于座位 `0`。该后续变更尚未包含在本历史返工的“已完成”结论中，实施任务以当前主开发计划为准。
 
 ## 3. 人物目录
 
-`apps/server/src/personas/catalog.ts` 在既有私有 Zod 校验、冻结和公开摘要投影中追加两个 `personaVersion = 1` 的固定目录项：
+`apps/server/src/personas/catalog.ts` 在既有私有 Zod 校验、冻结和公开摘要投影中追加了两个 `personaVersion = 1` 的固定目录项：
 
 | personaId | 名称 | 头像色 | 五个风格刻度 |
 | --- | --- | --- | --- |
 | `small_ball_reg` | 小球常客 | `#0E7490` | 55、55、35、55、30 |
 | `trap_specialist` | 慢打猎手 | `#BE185D` | 75、40、20、60、40 |
 
-两项均使用非空中文背景描述和教学摘要。目录仍不包含 Prompt、范围表、模型配置、密钥或运行时决策逻辑。
+两项及其余六个人物的完整 V1 公开字段现统一以 [人物目录设计 §2](./2026-07-24-persona-catalog-m0-design.md) 为规范事实源。目录仍不包含 Prompt、范围表、模型配置、密钥或运行时决策逻辑。
 
 ## 4. 测试与构建
 
-Contracts 测试覆盖选择数 5/8 成功、0–4/9 失败、座位 0/8 成功和 -1/9 失败、重复人物/座位拒绝、公开座位 6/9 成功和 5/10 失败，以及新增人物可解析、未知人物失败。服务端人物测试断言目录正好八项、顺序与共享 ID 一致、公开投影通过 Schema 且仍被冻结和不泄露私有字段。
+历史 Contracts 测试覆盖选择数 5/8 成功、0–4/9 失败、座位 0/8 成功和 -1/9 失败、重复人物/座位拒绝、公开座位 6/9 成功和 5/10 失败，以及新增人物可解析、未知人物失败。服务端人物测试断言目录正好八项、顺序与共享 ID 一致、公开投影通过 Schema 且仍被冻结和不泄露私有字段。
+
+当前主开发计划另要求把创建选择测试收紧为 AI 座位 1/8 成功、0/9 失败，校验唯一用户固定座位 `0`，并逐字段锁定八个人物 V1；这些属于归档后的新增工作。
 
 不手工修改 `packages/contracts/dist/`；由 Contracts 构建生成。完成后运行 `pnpm run test:contracts`、Contracts `build`、`pnpm run test:server:unit`、`pnpm run typecheck` 与 `pnpm run verify`。
 
-## 5. 文档同步
+## 5. 已完成的文档同步
 
-实现完成后将返工说明状态改为完成，并把 `REPO_MAP.md` 和 `ARCHITECTURE.md` 的“待同步/旧 2–6 人代码”表述改为实际的 6–9 人边界。模块入口、依赖方向与主调用链不变。
+返工完成时已将返工说明标为完成，并把 `REPO_MAP.md` 和 `ARCHITECTURE.md` 的“待同步/旧 2–6 人代码”表述改为实际的 6–9 人边界。模块入口、依赖方向与主调用链不变。后续新增的固定用户座位和首手按钮规则属于正式规格增补，不改变这份历史返工的完成状态。

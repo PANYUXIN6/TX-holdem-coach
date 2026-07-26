@@ -1,5 +1,5 @@
 {
-  "name": "@poker-practice/server",
+  "name": "@tx-holdem-coach/server",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",
-    "@poker-practice/contracts": "workspace:*",
+    "@tx-holdem-coach/contracts": "workspace:*",
     "dotenv": "^17.4.2",
     "hono": "^4.7.0",
     "zod": "^4.4.3"

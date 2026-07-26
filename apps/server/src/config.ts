@@ -1,3 +1,8 @@
+import {
+  PROTOCOL_VERSION,
+  ProviderSettingsResponseSchema,
+} from '@tx-holdem-coach/contracts'
+import type { ProviderSettingsResponse } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
 
 const DEFAULT_PORT = 8787
@@ -59,6 +64,22 @@ export interface ServerCapabilities {
   readonly warnings: readonly string[]
 }
 
+function createInitialProviderHealthSummary(configured: boolean) {
+  return configured
+    ? {
+        configured: true,
+        checkStatus: 'notChecked' as const,
+        lastCheckedAt: null,
+        errorCode: null,
+      }
+    : {
+        configured: false,
+        checkStatus: 'notConfigured' as const,
+        lastCheckedAt: null,
+        errorCode: null,
+      }
+}
+
 export class ServerConfigurationError extends Error {
   public constructor() {
     super('服务配置无效，请检查后端 .env 文件。')
@@ -96,16 +117,36 @@ export function loadServerConfig(environment: NodeJS.ProcessEnv): ServerConfig {
 export function getServerCapabilities(
   config: ServerConfig,
 ): ServerCapabilities {
-  const canCreateSession = config.hasDeepSeekApiKey()
+  const providerSettings = getProviderSettingsResponse(config)
+  const canCreateSession = providerSettings.deepSeek.canCreateSession
 
   return {
     canUseReadOnlyFeatures: true,
     canCreateSession,
     warnings: [
       ...(canCreateSession ? [] : ['DeepSeek API Key 未配置，无法创建场次。']),
-      ...(config.hasKimiApiKey()
+      ...(providerSettings.kimi.canFallback
         ? []
         : ['Kimi API Key 未配置，自动降级不可用。']),
     ],
   }
+}
+
+export function getProviderSettingsResponse(
+  config: ServerConfig,
+): ProviderSettingsResponse {
+  const deepSeekConfigured = config.hasDeepSeekApiKey()
+  const kimiConfigured = config.hasKimiApiKey()
+
+  return ProviderSettingsResponseSchema.parse({
+    protocolVersion: PROTOCOL_VERSION,
+    deepSeek: {
+      ...createInitialProviderHealthSummary(deepSeekConfigured),
+      canCreateSession: deepSeekConfigured,
+    },
+    kimi: {
+      ...createInitialProviderHealthSummary(kimiConfigured),
+      canFallback: kimiConfigured,
+    },
+  })
 }

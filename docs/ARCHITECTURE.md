@@ -1,18 +1,18 @@
 # 架构概览
 
-更新时间：2026-07-26（M0.2/M0.3 已实现固定用户座位与 Provider 初始配置投影；M1.1/M1.2 已实现私有状态与确定性发牌边界）
+更新时间：2026-07-27（M0.2/M0.3 已实现固定用户座位与 Provider 初始配置投影；M1.1–M1.4 已实现私有状态、确定性发牌、牌型评估、座位拓扑与盲注边界）
 
 ## Workspace 边界
 
 - 根目录通过 pnpm 编排开发、构建、类型检查、格式检查和后端测试命令；`verify` 固定按“格式检查 → 类型检查 → 后端测试”执行，后端测试会先验证并重建 Contracts，再运行 Server 分类测试，不承载运行时业务代码。
 - `apps/web` 是 React/Vite 手机竖屏浏览器客户端，入口为 `src/main.tsx`；目标可玩宽度为 360–430px，宽屏不建立第二套布局。唯一的牌面资源位于 `public/poker/`，由 Vite 作为 `/poker/<filename>` 提供。
-- `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。入口是唯一加载 dotenv 的位置；`src/config.ts` 用 Zod 校验私有环境配置，并通过 Contracts 生成不含密钥的初始 Provider 设置响应（不联网、不检测）；`src/poker/cards.ts` 使用 Contracts 的 Card 词汇生成标准牌与 `apps/web/public/poker/` 文件名映射，`src/poker/dealing.ts` 使用安全默认随机源或测试注入源洗出纯 `Card`，按按钮相对有效座位发两轮底牌，并以完整洗后序列验证逐街 burn/公共牌消费；`src/poker/state.ts` 通过私有 Zod 校验、深拷贝和深冻结构造私有扑克状态，固定用户在座位 `0`、AI 在 `1..8`，并约束街道和当前行动位的对应关系；`src/poker/commands.ts` 定义无会话信封的共用扑克行动，`bet`、`raise` 使用唯一的 `targetStreetCommitment` 目标字段；`src/personas/catalog.ts` 用私有 Zod Schema 校验并冻结八个人物目录，再投影为 Contracts 的公开摘要。目录仍无 API、数据库或 Agent Runtime 行为，后续创建场次时才会固化到 `session_agents`，不建立 `agent_templates` 或 `agent_personas` 表。
+- `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。入口是唯一加载 dotenv 的位置；`src/config.ts` 用 Zod 校验私有环境配置，并通过 Contracts 生成不含密钥的初始 Provider 设置响应（不联网、不检测）；`src/poker/cards.ts` 使用 Contracts 的 Card 词汇生成标准牌与 `apps/web/public/poker/` 文件名映射；`src/poker/random-source.ts` 提供扑克规则共享的安全随机源；`src/poker/positioning.ts` 统一物理座位拓扑、按钮、庄盲、位置和可行动座位；`src/poker/blind-posting.ts` 不可变地提交固定 10/20 盲注；`src/poker/dealing.ts` 复用共享随机与座位拓扑洗出纯 `Card`、发两轮底牌，并以完整洗后序列验证逐街 burn/公共牌消费；`src/poker/hand-evaluator.ts` 用严格输入校验和稳定领域结果隔离 CommonJS `pokersolver`，支持 5–7 张牌、七选五、九类牌型、轮子等级、同花截取和精确平局；`src/poker/state.ts` 通过私有 Zod 校验、深拷贝和深冻结构造私有扑克状态，固定用户在座位 `0`、AI 在 `1..8`，并约束街道和当前行动位的对应关系；`src/poker/commands.ts` 定义无会话信封的共用扑克行动，`bet`、`raise` 使用唯一的 `targetStreetCommitment` 目标字段；`src/personas/catalog.ts` 用私有 Zod Schema 校验并冻结八个人物目录，再投影为 Contracts 的公开摘要。目录仍无 API、数据库或 Agent Runtime 行为，后续创建场次时才会固化到 `session_agents`，不建立 `agent_templates` 或 `agent_personas` 表。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与预留的 `service/` 分类。临时 SQLite 只用于 integration 中验证真实 SQLite 行为，不承载产品数据。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、人物公开摘要与创建选择、Provider 健康/设置、HTTP/SSE 信封和错误响应。它不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card 或未公开底牌；`bet`、`raise` 的命令金额固定为行动后本街总投入的 `targetStreetCommitment`。通用座位为 `0..8`，创建选择的 AI 为 `1..8`，公开快照固定唯一用户在座位 `0` 且总席数为 6–9；人物目录由八个固定标识组成。
 
 ## 依赖方向
 
-共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。Server 已从 Contracts 导入冻结的 Card 点数/花色字面量，保持公开牌张表示和内部标准牌目录一致。M1 的纯规则链路为 `cards.ts → dealing.ts → state.ts`：资源映射专用的 `code` 在 `dealing.ts` 入口被剥离，发牌结果只能作为 `createPokerState()` 的候选输入；行动命令与发牌保持独立。M3 才为它们包装会话命令、事务与 SSE；所有浏览器可见数据必须通过 Contracts 的严格 Schema。数据库、会话服务、Agent Foundation 和两种 Runtime 尚未建立。
+共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。Server 已从 Contracts 导入冻结的 Card 点数/花色字面量，保持公开牌张表示和内部标准牌目录一致。M1 的纯规则链路以 `positioning.ts` 为唯一物理座位拓扑，`dealing.ts` 和 `blind-posting.ts` 均依赖它，安全随机源由 `random-source.ts` 共享；发牌结果经 `state.ts` 验证，牌型评估则走独立的 `CardSchema → hand-evaluator.ts → pokersolver`。资源映射专用的 `code` 在发牌入口被剥离；第三方牌型对象不进入状态、Contracts 或后续结算接口；行动命令与发牌、评估均保持独立。M3 才为这些纯规则包装会话命令、事务与 SSE；所有浏览器可见数据必须通过 Contracts 的严格 Schema。数据库、会话服务、Agent Foundation 和两种 Runtime 尚未建立。
 
 ## 当前运行链路
 

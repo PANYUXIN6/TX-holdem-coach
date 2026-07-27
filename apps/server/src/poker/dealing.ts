@@ -1,11 +1,11 @@
-import { randomInt } from 'node:crypto'
 import { CardSchema } from '@tx-holdem-coach/contracts'
 import type { Card } from '@tx-holdem-coach/contracts'
 import { STANDARD_DECK } from './cards.js'
+import { clockwiseParticipantSeatNumbersAfter } from './positioning.js'
+import { SECURE_RANDOM_SOURCE, type RandomSource } from './random-source.js'
 
-export interface RandomSource {
-  nextInt(maxExclusive: number): number
-}
+export { SECURE_RANDOM_SOURCE } from './random-source.js'
+export type { RandomSource } from './random-source.js'
 
 export interface DealPreflopInput {
   readonly shuffledDeck: readonly Card[]
@@ -27,19 +27,6 @@ export interface DealtHand {
   readonly burnedCards: readonly Card[]
   readonly board: readonly Card[]
 }
-
-function assertPositiveInteger(maxExclusive: number): void {
-  if (!Number.isInteger(maxExclusive) || maxExclusive <= 0) {
-    throw new RangeError('随机上界必须为正整数。')
-  }
-}
-
-export const SECURE_RANDOM_SOURCE: RandomSource = Object.freeze({
-  nextInt(maxExclusive: number): number {
-    assertPositiveInteger(maxExclusive)
-    return randomInt(maxExclusive)
-  },
-})
 
 function copyPureCard(card: Card): Card {
   return { rank: card.rank, suit: card.suit }
@@ -85,6 +72,20 @@ function asRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function assertSeatNumber(
+  seatNumber: unknown,
+  label: string,
+): asserts seatNumber is number {
+  if (
+    typeof seatNumber !== 'number' ||
+    !Number.isInteger(seatNumber) ||
+    seatNumber < 0 ||
+    seatNumber > 8
+  ) {
+    throw new RangeError(`${label}必须是 0 到 8 的整数。`)
+  }
+}
+
 function normalizeCardArray(value: unknown, label: string): Card[] {
   if (!Array.isArray(value)) {
     throw new TypeError(`${label}必须是数组。`)
@@ -106,60 +107,6 @@ function normalizeStandardDeck(deck: unknown): Card[] {
   }
 
   return copyCards(cards)
-}
-
-function assertSeatNumber(
-  seatNumber: unknown,
-  label: string,
-): asserts seatNumber is number {
-  if (
-    !Number.isInteger(seatNumber) ||
-    typeof seatNumber !== 'number' ||
-    seatNumber < 0 ||
-    seatNumber > 8
-  ) {
-    throw new RangeError(`${label}必须是 0 到 8 的整数。`)
-  }
-}
-
-function buttonRelativeSeatOrder(
-  buttonSeatNumber: unknown,
-  participantSeatNumbers: unknown,
-): number[] {
-  assertSeatNumber(buttonSeatNumber, '按钮座位')
-
-  if (
-    !Array.isArray(participantSeatNumbers) ||
-    participantSeatNumbers.length < 6 ||
-    participantSeatNumbers.length > 9
-  ) {
-    throw new RangeError('本手有效座位必须为 6 到 9 个。')
-  }
-
-  const participantSet = new Set<number>()
-  for (const seatNumber of participantSeatNumbers) {
-    assertSeatNumber(seatNumber, '有效座位')
-
-    if (participantSet.has(seatNumber)) {
-      throw new RangeError('本手有效座位不得重复。')
-    }
-
-    participantSet.add(seatNumber)
-  }
-
-  if (!participantSet.has(buttonSeatNumber)) {
-    throw new RangeError('按钮必须属于本手有效座位。')
-  }
-
-  const order: number[] = []
-  for (let offset = 1; offset <= 9; offset += 1) {
-    const seatNumber = (buttonSeatNumber + offset) % 9
-    if (participantSet.has(seatNumber)) {
-      order.push(seatNumber)
-    }
-  }
-
-  return order
 }
 
 function randomIndex(random: RandomSource, maxExclusive: number): number {
@@ -189,7 +136,7 @@ export function shuffleStandardDeck(
 
 export function dealPreflop(input: DealPreflopInput): DealtHand {
   const shuffledDeck = normalizeStandardDeck(input.shuffledDeck)
-  const participantSeatNumbers = buttonRelativeSeatOrder(
+  const participantSeatNumbers = clockwiseParticipantSeatNumbersAfter(
     input.buttonSeatNumber,
     input.participantSeatNumbers,
   )
@@ -313,9 +260,9 @@ function expectedCommunityCards(
 
 function normalizeDealtHand(hand: unknown): DealtHand {
   const record = asRecord(hand, '发牌结果')
-  const participantSeatNumbers = buttonRelativeSeatOrder(
-    record.buttonSeatNumber,
-    record.participantSeatNumbers,
+  const participantSeatNumbers = clockwiseParticipantSeatNumbersAfter(
+    record.buttonSeatNumber as number,
+    record.participantSeatNumbers as readonly number[],
   )
   const suppliedParticipantSeatNumbers =
     record.participantSeatNumbers as number[]

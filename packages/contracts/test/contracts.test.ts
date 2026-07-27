@@ -10,6 +10,7 @@ import {
   CreateSessionPersonaSelectionSchema,
   ErrorResponseSchema,
   LegalActionSchema,
+  LegalActionsSchema,
   PersonaSnapshotFilterSchema,
   PokerActionSchema,
   ProviderCheckStatusSchema,
@@ -19,7 +20,11 @@ import {
   ProviderSettingsResponseSchema,
   PublicSessionSnapshotSchema,
   SeatNumberSchema,
+  SuggestedTargetSchema,
   SseEventSchema,
+  type LegalAction,
+  type LegalActions,
+  type SuggestedTarget,
 } from '../src/index.js'
 
 const agentPersonaSummary = {
@@ -86,8 +91,13 @@ const publicSnapshot = {
       {
         type: 'raise',
         minTarget: 60,
-        maxTarget: 1960,
-        suggestedTargets: [60, 90, 120],
+        maxTarget: 1959,
+        suggestedTargets: [
+          { kind: 'minimum', targetStreetCommitment: 60 },
+          { kind: 'halfPot', targetStreetCommitment: 90 },
+          { kind: 'twoThirdsPot', targetStreetCommitment: 100 },
+          { kind: 'pot', targetStreetCommitment: 120 },
+        ],
       },
       { type: 'allIn', target: 1960 },
     ],
@@ -182,6 +192,133 @@ describe('共享外部协议', () => {
       { type: 'raise', targetStreetCommitment: 120.5 },
     ]) {
       expect(PokerActionSchema.safeParse(action).success).toBe(false)
+    }
+  })
+
+  it('使用结构化快捷目标并导出合法动作类型', () => {
+    const target: SuggestedTarget = {
+      kind: 'halfPot',
+      targetStreetCommitment: 90,
+    }
+    const action: LegalAction = {
+      type: 'raise',
+      minTarget: 60,
+      maxTarget: 1959,
+      suggestedTargets: [
+        { kind: 'minimum', targetStreetCommitment: 60 },
+        target,
+      ],
+    }
+    const actions: LegalActions = [
+      { type: 'fold' },
+      { type: 'call', amount: 20 },
+      action,
+      { type: 'allIn', target: 1960 },
+    ]
+
+    expect(SuggestedTargetSchema.parse(target)).toEqual(target)
+    expect(LegalActionsSchema.parse(actions)).toEqual(actions)
+  })
+
+  it('拒绝违反合法动作数组级不变量的协议数据', () => {
+    const validRaise = {
+      type: 'raise',
+      minTarget: 60,
+      maxTarget: 199,
+      suggestedTargets: [
+        { kind: 'minimum', targetStreetCommitment: 60 },
+        { kind: 'halfPot', targetStreetCommitment: 90 },
+        { kind: 'twoThirdsPot', targetStreetCommitment: 100 },
+        { kind: 'pot', targetStreetCommitment: 120 },
+      ],
+    } as const
+
+    const invalidActions = [
+      [{ type: 'allIn', target: 200 }, { type: 'fold' }],
+      [{ type: 'fold' }, { type: 'fold' }],
+      [{ type: 'check' }, { type: 'call', amount: 20 }],
+      [
+        {
+          type: 'bet',
+          minTarget: 20,
+          maxTarget: 199,
+          suggestedTargets: [{ kind: 'minimum', targetStreetCommitment: 20 }],
+        },
+        validRaise,
+      ],
+      [{ ...validRaise, minTarget: 200 }],
+      [
+        {
+          ...validRaise,
+          suggestedTargets: [{ kind: 'halfPot', targetStreetCommitment: 90 }],
+        },
+      ],
+      [
+        {
+          ...validRaise,
+          suggestedTargets: [{ kind: 'minimum', targetStreetCommitment: 61 }],
+        },
+      ],
+      [
+        {
+          ...validRaise,
+          suggestedTargets: [
+            { kind: 'minimum', targetStreetCommitment: 60 },
+            { kind: 'halfPot', targetStreetCommitment: 90 },
+            { kind: 'halfPot', targetStreetCommitment: 100 },
+          ],
+        },
+      ],
+      [
+        {
+          ...validRaise,
+          suggestedTargets: [
+            { kind: 'minimum', targetStreetCommitment: 60 },
+            { kind: 'pot', targetStreetCommitment: 120 },
+            { kind: 'twoThirdsPot', targetStreetCommitment: 100 },
+          ],
+        },
+      ],
+      [
+        {
+          ...validRaise,
+          suggestedTargets: [
+            { kind: 'minimum', targetStreetCommitment: 60 },
+            { kind: 'halfPot', targetStreetCommitment: 90 },
+            { kind: 'pot', targetStreetCommitment: 90 },
+          ],
+        },
+      ],
+      [
+        {
+          ...validRaise,
+          suggestedTargets: [
+            { kind: 'minimum', targetStreetCommitment: 60 },
+            { kind: 'pot', targetStreetCommitment: 220 },
+          ],
+        },
+      ],
+      [validRaise, { type: 'allIn', target: 250 }],
+      [
+        {
+          ...validRaise,
+          suggestedTargets: [
+            { kind: 'minimum', targetStreetCommitment: 60, label: '最小' },
+          ],
+        },
+      ],
+      [
+        {
+          ...validRaise,
+          suggestedTargets: [
+            { kind: 'quarterPot', targetStreetCommitment: 80 },
+          ],
+        },
+      ],
+    ]
+
+    for (const actions of invalidActions) {
+      expect(LegalActionsSchema.safeParse(actions).success).toBe(false)
     }
   })
 

@@ -281,6 +281,14 @@ describe('dealing input boundaries', () => {
           holeCards: dealt.holeCards,
           currentActorSeatNumber: 0,
           pot: 0,
+          bettingRound: {
+            currentBet: 0,
+            minimumFullRaiseIncrement: 20,
+            seatStates: dealt.holeCards.map(({ seatNumber }) => ({
+              seatNumber,
+              betLevelAfterLastAction: null,
+            })),
+          },
         },
       }),
     ).not.toThrow()

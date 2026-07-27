@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest'
 import { PokerCommandSchema } from '../../src/poker/commands.js'
 import { createPokerState } from '../../src/poker/state.js'
-import { createTestPokerState } from '../poker/create-test-poker-state.js'
+import {
+  createTestBettingPokerState,
+  createTestPokerState,
+} from '../poker/create-test-poker-state.js'
 
 const REPRESENTATIVE_HAND = {
   handId: '10000000-0000-4000-8000-000000000001',
@@ -9,9 +12,20 @@ const REPRESENTATIVE_HAND = {
   remainingDeck: [],
   burnedCards: [],
   board: [],
-  holeCards: [],
+  holeCards: [1, 2, 3, 4, 5, 0].map((seatNumber) => ({
+    seatNumber,
+    cards: [],
+  })),
   currentActorSeatNumber: 0,
   pot: 0,
+  bettingRound: {
+    currentBet: 20,
+    minimumFullRaiseIncrement: 20,
+    seatStates: [1, 2, 3, 4, 5, 0].map((seatNumber) => ({
+      seatNumber,
+      betLevelAfterLastAction: null,
+    })),
+  },
 } as const
 
 describe('private poker state', () => {
@@ -219,8 +233,22 @@ describe('private poker state', () => {
     expect(() => createPokerState(foldedActorState)).toThrow()
   })
 
+  test('constructs a stable betting round from the dedicated test fixture', () => {
+    const state = createTestBettingPokerState()
+
+    expect(state.hand?.bettingRound).toEqual({
+      currentBet: 20,
+      minimumFullRaiseIncrement: 20,
+      seatStates: [1, 2, 3, 4, 5, 0].map((seatNumber) => ({
+        seatNumber,
+        betLevelAfterLastAction: null,
+      })),
+    })
+    expect(state.hand?.pot).toBe(30)
+  })
+
   test('allows no current actor only while posting blinds or resolving a hand', () => {
-    const baseline = createTestPokerState()
+    const baseline = createTestBettingPokerState()
 
     for (const street of ['postingBlinds', 'showdown', 'complete'] as const) {
       expect(() =>
@@ -228,9 +256,10 @@ describe('private poker state', () => {
           ...baseline,
           pokerPhase: 'inHand',
           hand: {
-            ...REPRESENTATIVE_HAND,
+            ...baseline.hand,
             street,
             currentActorSeatNumber: null,
+            bettingRound: null,
           },
         }),
       ).not.toThrow()
@@ -242,7 +271,7 @@ describe('private poker state', () => {
           ...baseline,
           pokerPhase: 'inHand',
           hand: {
-            ...REPRESENTATIVE_HAND,
+            ...baseline.hand,
             street,
             currentActorSeatNumber: null,
           },
@@ -255,10 +284,197 @@ describe('private poker state', () => {
         createPokerState({
           ...baseline,
           pokerPhase: 'inHand',
-          hand: { ...REPRESENTATIVE_HAND, street },
+          hand: { ...baseline.hand, street },
         }),
       ).toThrow()
     }
+  })
+
+  test('requires betting-round presence to agree with the hand street', () => {
+    const baseline = createTestBettingPokerState()
+
+    for (const street of ['preflop', 'flop', 'turn', 'river'] as const) {
+      expect(() =>
+        createPokerState({
+          ...baseline,
+          hand: { ...baseline.hand, street, bettingRound: null },
+        }),
+      ).toThrow()
+    }
+
+    for (const street of ['postingBlinds', 'showdown', 'complete'] as const) {
+      expect(() =>
+        createPokerState({
+          ...baseline,
+          hand: {
+            ...baseline.hand,
+            street,
+            currentActorSeatNumber: null,
+          },
+        }),
+      ).toThrow()
+    }
+  })
+
+  test('requires betting seat records to match hole-card seats and order', () => {
+    const baseline = createTestBettingPokerState()
+    const seatStates = baseline.hand?.bettingRound?.seatStates
+
+    if (seatStates === undefined) {
+      throw new Error('预期下注状态夹具包含下注轮记录。')
+    }
+
+    const invalidSeatStates = [
+      seatStates.slice(0, 5),
+      [...seatStates, { seatNumber: 8, betLevelAfterLastAction: null }],
+      [...seatStates].reverse(),
+      seatStates.map((seatState, index) =>
+        index === 1 ? { ...seatState, seatNumber: 1 } : seatState,
+      ),
+    ]
+
+    for (const invalid of invalidSeatStates) {
+      expect(() =>
+        createPokerState({
+          ...baseline,
+          hand: {
+            ...baseline.hand,
+            bettingRound: {
+              ...baseline.hand?.bettingRound,
+              seatStates: invalid,
+            },
+          },
+        }),
+      ).toThrow()
+    }
+  })
+
+  test('enforces betting-round numeric and pot invariants', () => {
+    const baseline = createTestBettingPokerState()
+    const invalidBettingRounds = [
+      { ...baseline.hand?.bettingRound, currentBet: -1 },
+      { ...baseline.hand?.bettingRound, currentBet: 20.5 },
+      { ...baseline.hand?.bettingRound, minimumFullRaiseIncrement: 19 },
+      {
+        ...baseline.hand?.bettingRound,
+        minimumFullRaiseIncrement: 20.5,
+      },
+      {
+        ...baseline.hand?.bettingRound,
+        seatStates: baseline.hand?.bettingRound?.seatStates.map(
+          (seatState, index) =>
+            index === 0
+              ? { ...seatState, betLevelAfterLastAction: -1 }
+              : seatState,
+        ),
+      },
+      {
+        ...baseline.hand?.bettingRound,
+        seatStates: baseline.hand?.bettingRound?.seatStates.map(
+          (seatState, index) =>
+            index === 0
+              ? { ...seatState, betLevelAfterLastAction: 1.5 }
+              : seatState,
+        ),
+      },
+      {
+        ...baseline.hand?.bettingRound,
+        seatStates: baseline.hand?.bettingRound?.seatStates.map(
+          (seatState, index) =>
+            index === 0
+              ? { ...seatState, betLevelAfterLastAction: 21 }
+              : seatState,
+        ),
+      },
+      { ...baseline.hand?.bettingRound, currentBet: 19 },
+    ]
+
+    for (const bettingRound of invalidBettingRounds) {
+      expect(() =>
+        createPokerState({
+          ...baseline,
+          hand: { ...baseline.hand, bettingRound },
+        }),
+      ).toThrow()
+    }
+
+    expect(() =>
+      createPokerState({
+        ...baseline,
+        hand: { ...baseline.hand, pot: 31 },
+      }),
+    ).toThrow()
+  })
+
+  test('requires the current actor to participate in the current hand', () => {
+    const baseline = createTestBettingPokerState()
+    const holeCards = baseline.hand?.holeCards.filter(
+      ({ seatNumber }) => seatNumber !== 3,
+    )
+    const seatStates = baseline.hand?.bettingRound?.seatStates.filter(
+      ({ seatNumber }) => seatNumber !== 3,
+    )
+
+    expect(() =>
+      createPokerState({
+        ...baseline,
+        hand: {
+          ...baseline.hand,
+          holeCards,
+          bettingRound: {
+            ...baseline.hand?.bettingRound,
+            seatStates,
+          },
+        },
+      }),
+    ).toThrow()
+  })
+
+  test('requires the nominal preflop current bet above short blind posts', () => {
+    const baseline = createTestBettingPokerState()
+    const shortBlindState = {
+      ...baseline,
+      seats: baseline.seats.map((seat) => {
+        if (seat.seatNumber === 1) {
+          return {
+            ...seat,
+            stack: 0,
+            status: 'allIn' as const,
+            streetContribution: 5,
+            totalContribution: 5,
+          }
+        }
+        if (seat.seatNumber === 2) {
+          return {
+            ...seat,
+            stack: 0,
+            status: 'allIn' as const,
+            streetContribution: 7,
+            totalContribution: 7,
+          }
+        }
+
+        return seat
+      }),
+      hand: {
+        ...baseline.hand,
+        pot: 12,
+      },
+    }
+
+    expect(() => createPokerState(shortBlindState)).not.toThrow()
+    expect(() =>
+      createPokerState({
+        ...shortBlindState,
+        hand: {
+          ...shortBlindState.hand,
+          bettingRound: {
+            ...shortBlindState.hand.bettingRound,
+            currentBet: 7,
+          },
+        },
+      }),
+    ).toThrow()
   })
 
   test('rejects folded, all-in, and out seats as the current actor', () => {
@@ -316,12 +532,10 @@ describe('private poker state', () => {
       ...REPRESENTATIVE_HAND,
       remainingDeck: [{ rank: 'A', suit: 'spades' }],
       board: [{ rank: 'K', suit: 'hearts' }],
-      holeCards: [
-        {
-          seatNumber: 0,
-          cards: [{ rank: 'Q', suit: 'clubs' }],
-        },
-      ],
+      holeCards: REPRESENTATIVE_HAND.holeCards.map((holeCards, index) => ({
+        ...holeCards,
+        cards: index === 0 ? [{ rank: 'Q', suit: 'clubs' }] : [],
+      })),
     }
     input.hand = mutableHand
 

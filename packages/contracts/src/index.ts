@@ -141,7 +141,12 @@ export const PokerActionSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('allIn') }),
 ])
 
-export const LegalActionSchema = z.discriminatedUnion('type', [
+export const SuggestedTargetSchema = z.strictObject({
+  kind: z.enum(['minimum', 'halfPot', 'twoThirdsPot', 'pot']),
+  targetStreetCommitment: PositiveChipAmountSchema,
+})
+
+const LegalActionBaseSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('fold') }),
   z.strictObject({ type: z.literal('check') }),
   z.strictObject({
@@ -152,19 +157,163 @@ export const LegalActionSchema = z.discriminatedUnion('type', [
     type: z.literal('bet'),
     minTarget: PositiveChipAmountSchema,
     maxTarget: PositiveChipAmountSchema,
-    suggestedTargets: z.array(PositiveChipAmountSchema),
+    suggestedTargets: z.array(SuggestedTargetSchema).min(1),
   }),
   z.strictObject({
     type: z.literal('raise'),
     minTarget: PositiveChipAmountSchema,
     maxTarget: PositiveChipAmountSchema,
-    suggestedTargets: z.array(PositiveChipAmountSchema),
+    suggestedTargets: z.array(SuggestedTargetSchema).min(1),
   }),
   z.strictObject({
     type: z.literal('allIn'),
     target: PositiveChipAmountSchema,
   }),
 ])
+
+const suggestedTargetKindPriority = {
+  minimum: 0,
+  halfPot: 1,
+  twoThirdsPot: 2,
+  pot: 3,
+} as const
+
+export const LegalActionSchema = LegalActionBaseSchema.superRefine(
+  (action, context) => {
+    if (action.type !== 'bet' && action.type !== 'raise') {
+      return
+    }
+
+    if (action.minTarget > action.maxTarget) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '最小目标不得大于最大目标。',
+        path: ['minTarget'],
+      })
+    }
+
+    const firstTarget = action.suggestedTargets[0]
+    if (
+      firstTarget?.kind !== 'minimum' ||
+      firstTarget.targetStreetCommitment !== action.minTarget
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '第一项快捷目标必须是等于最小目标的 minimum。',
+        path: ['suggestedTargets', 0],
+      })
+    }
+
+    const seenKinds = new Set<string>()
+    const seenTargets = new Set<number>()
+    let previousPriority = -1
+
+    action.suggestedTargets.forEach((target, index) => {
+      const priority = suggestedTargetKindPriority[target.kind]
+
+      if (seenKinds.has(target.kind)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '快捷目标 kind 不得重复。',
+          path: ['suggestedTargets', index, 'kind'],
+        })
+      }
+
+      if (priority <= previousPriority) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '快捷目标必须按规范顺序排列。',
+          path: ['suggestedTargets', index, 'kind'],
+        })
+      }
+
+      if (seenTargets.has(target.targetStreetCommitment)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '快捷目标金额不得重复。',
+          path: ['suggestedTargets', index, 'targetStreetCommitment'],
+        })
+      }
+
+      if (
+        target.targetStreetCommitment < action.minTarget ||
+        target.targetStreetCommitment > action.maxTarget
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '快捷目标金额必须位于普通目标区间。',
+          path: ['suggestedTargets', index, 'targetStreetCommitment'],
+        })
+      }
+
+      seenKinds.add(target.kind)
+      seenTargets.add(target.targetStreetCommitment)
+      previousPriority = priority
+    })
+  },
+)
+
+const legalActionTypePriority = {
+  fold: 0,
+  check: 1,
+  call: 1,
+  bet: 2,
+  raise: 2,
+  allIn: 3,
+} as const
+
+export const LegalActionsSchema = z
+  .array(LegalActionSchema)
+  .superRefine((actions, context) => {
+    const seenTypes = new Set<string>()
+    let previousPriority = -1
+    let bettingAction:
+      Extract<(typeof actions)[number], { type: 'bet' | 'raise' }> | undefined
+    let allInAction:
+      Extract<(typeof actions)[number], { type: 'allIn' }> | undefined
+
+    actions.forEach((action, index) => {
+      const priority = legalActionTypePriority[action.type]
+
+      if (seenTypes.has(action.type)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '同一种合法动作最多出现一次。',
+          path: [index, 'type'],
+        })
+      }
+
+      if (priority <= previousPriority) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '合法动作必须按规范顺序排列且互斥。',
+          path: [index, 'type'],
+        })
+      }
+
+      if (action.type === 'bet' || action.type === 'raise') {
+        bettingAction = action
+      }
+      if (action.type === 'allIn') {
+        allInAction = action
+      }
+
+      seenTypes.add(action.type)
+      previousPriority = priority
+    })
+
+    if (
+      bettingAction !== undefined &&
+      allInAction !== undefined &&
+      bettingAction.maxTarget + 1 !== allInAction.target
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '普通最大目标必须与独立全下目标相邻。',
+        path: [actions.indexOf(allInAction), 'target'],
+      })
+    }
+  })
 
 const commandBaseShape = {
   sessionId: SessionIdSchema,
@@ -372,7 +521,7 @@ export const PublicHandSnapshotSchema = z.strictObject({
   pot: ChipAmountSchema,
   currentActorSeatNumber: SeatNumberSchema.nullable(),
   heroHoleCards: z.array(CardSchema).length(2).nullable(),
-  legalActions: z.array(LegalActionSchema),
+  legalActions: LegalActionsSchema,
 })
 
 export const PublicSessionSnapshotSchema = z
@@ -488,7 +637,9 @@ export type CreateSessionPersonaSelection = z.infer<
 >
 export type PersonaSnapshotFilter = z.infer<typeof PersonaSnapshotFilterSchema>
 export type PokerAction = z.infer<typeof PokerActionSchema>
+export type SuggestedTarget = z.infer<typeof SuggestedTargetSchema>
 export type LegalAction = z.infer<typeof LegalActionSchema>
+export type LegalActions = z.infer<typeof LegalActionsSchema>
 export type ProviderId = z.infer<typeof ProviderIdSchema>
 export type ProviderCheckStatus = z.infer<typeof ProviderCheckStatusSchema>
 export type ProviderPublicErrorCode = z.infer<

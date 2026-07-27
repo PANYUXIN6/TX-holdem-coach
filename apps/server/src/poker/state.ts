@@ -32,6 +32,17 @@ const HoleCardsSchema = z.strictObject({
   cards: z.array(CardSchema),
 })
 
+const BettingRoundSeatSchema = z.strictObject({
+  seatNumber: SeatNumberSchema,
+  betLevelAfterLastAction: ChipAmountSchema.nullable(),
+})
+
+const BettingRoundSchema = z.strictObject({
+  currentBet: ChipAmountSchema,
+  minimumFullRaiseIncrement: z.number().int().min(20),
+  seatStates: z.array(BettingRoundSeatSchema),
+})
+
 const PokerHandSchema = z.strictObject({
   handId: z.uuid(),
   street: HandStreetSchema,
@@ -41,6 +52,7 @@ const PokerHandSchema = z.strictObject({
   holeCards: z.array(HoleCardsSchema),
   currentActorSeatNumber: SeatNumberSchema.nullable(),
   pot: ChipAmountSchema,
+  bettingRound: BettingRoundSchema.nullable(),
 })
 
 const PokerStateSchema = z
@@ -169,6 +181,22 @@ const PokerStateSchema = z
         })
       }
 
+      if (isActionStreet && state.hand.bettingRound === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '下注街道必须包含下注轮状态。',
+          path: ['hand', 'bettingRound'],
+        })
+      }
+
+      if (!isActionStreet && state.hand.bettingRound !== null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '下盲或结算街道不得包含下注轮状态。',
+          path: ['hand', 'bettingRound'],
+        })
+      }
+
       const dealtCards = new Set<string>()
       const holeCardSeats = new Set<number>()
       const validateUniqueCard = (
@@ -227,6 +255,80 @@ const PokerStateSchema = z
         })
       })
 
+      if (state.hand.bettingRound !== null) {
+        const { bettingRound } = state.hand
+
+        if (
+          state.hand.street === 'preflop' &&
+          bettingRound.currentBet < state.blinds.bigBlind
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '翻前当前下注不得低于名义大盲。',
+            path: ['hand', 'bettingRound', 'currentBet'],
+          })
+        }
+
+        if (
+          bettingRound.seatStates.length !== state.hand.holeCards.length ||
+          bettingRound.seatStates.some(
+            (seatState, index) =>
+              seatState.seatNumber !== state.hand?.holeCards[index]?.seatNumber,
+          )
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '下注轮座位必须与底牌座位按稳定顺序一一对应。',
+            path: ['hand', 'bettingRound', 'seatStates'],
+          })
+        }
+
+        bettingRound.seatStates.forEach((seatState, index) => {
+          if (
+            seatState.betLevelAfterLastAction !== null &&
+            seatState.betLevelAfterLastAction > bettingRound.currentBet
+          ) {
+            context.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: '玩家上次行动后的下注层级不得高于当前下注。',
+              path: [
+                'hand',
+                'bettingRound',
+                'seatStates',
+                index,
+                'betLevelAfterLastAction',
+              ],
+            })
+          }
+
+          const participantSeat = state.seats.find(
+            (seat) => seat.seatNumber === seatState.seatNumber,
+          )
+          if (
+            participantSeat !== undefined &&
+            participantSeat.streetContribution > bettingRound.currentBet
+          ) {
+            context.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: '当前下注不得低于参与座位的本街投入。',
+              path: ['hand', 'bettingRound', 'currentBet'],
+            })
+          }
+        })
+
+        const totalContributions = state.seats.reduce(
+          (total, seat) => total + seat.totalContribution,
+          0,
+        )
+        if (state.hand.pot !== totalContributions) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '下注街道底池必须等于全部座位的本手总投入。',
+            path: ['hand', 'pot'],
+          })
+        }
+      }
+
       if (state.hand.currentActorSeatNumber !== null) {
         const currentActor = state.seats.find(
           (seat) => seat.seatNumber === state.hand?.currentActorSeatNumber,
@@ -236,6 +338,14 @@ const PokerStateSchema = z
           context.addIssue({
             code: z.ZodIssueCode.custom,
             message: '当前行动者必须引用已有座位。',
+            path: ['hand', 'currentActorSeatNumber'],
+          })
+        }
+
+        if (!holeCardSeats.has(state.hand.currentActorSeatNumber)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '当前行动者必须参与当前手牌。',
             path: ['hand', 'currentActorSeatNumber'],
           })
         }

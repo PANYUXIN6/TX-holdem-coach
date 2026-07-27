@@ -74,6 +74,95 @@ const SIX_PLAYER_BASELINE: PokerStateInput = {
   hand: null,
 }
 
+const SIX_PLAYER_BETTING_BASELINE = {
+  stateVersion: 0,
+  pokerPhase: 'inHand',
+  seats: SIX_PLAYER_BASELINE.seats.map((seat) => {
+    if (seat.seatNumber === 1) {
+      return {
+        ...seat,
+        stack: 1990,
+        streetContribution: 10,
+        totalContribution: 10,
+      }
+    }
+
+    if (seat.seatNumber === 2) {
+      return {
+        ...seat,
+        stack: 1980,
+        streetContribution: 20,
+        totalContribution: 20,
+      }
+    }
+
+    return { ...seat }
+  }),
+  buttonSeatNumber: 0,
+  blinds: { smallBlind: 10, bigBlind: 20 },
+  hand: {
+    handId: '10000000-0000-4000-8000-000000000001',
+    street: 'preflop',
+    remainingDeck: [],
+    burnedCards: [],
+    board: [],
+    holeCards: [
+      {
+        seatNumber: 1,
+        cards: [
+          { rank: 'Q', suit: 'hearts' },
+          { rank: 'J', suit: 'hearts' },
+        ],
+      },
+      {
+        seatNumber: 2,
+        cards: [
+          { rank: 'T', suit: 'clubs' },
+          { rank: '9', suit: 'clubs' },
+        ],
+      },
+      {
+        seatNumber: 3,
+        cards: [
+          { rank: '8', suit: 'diamonds' },
+          { rank: '7', suit: 'diamonds' },
+        ],
+      },
+      {
+        seatNumber: 4,
+        cards: [
+          { rank: '6', suit: 'spades' },
+          { rank: '5', suit: 'spades' },
+        ],
+      },
+      {
+        seatNumber: 5,
+        cards: [
+          { rank: '4', suit: 'hearts' },
+          { rank: '3', suit: 'hearts' },
+        ],
+      },
+      {
+        seatNumber: 0,
+        cards: [
+          { rank: 'A', suit: 'spades' },
+          { rank: 'K', suit: 'spades' },
+        ],
+      },
+    ],
+    currentActorSeatNumber: 3,
+    pot: 30,
+    bettingRound: {
+      currentBet: 20,
+      minimumFullRaiseIncrement: 20,
+      seatStates: [1, 2, 3, 4, 5, 0].map((seatNumber) => ({
+        seatNumber,
+        betLevelAfterLastAction: null,
+      })),
+    },
+  },
+} satisfies PokerStateInput
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -104,4 +193,12 @@ export function createTestPokerState(
   overrides: DeepPartial<PokerStateInput> = {},
 ): PokerState {
   return createPokerState(mergeTestState(SIX_PLAYER_BASELINE, overrides))
+}
+
+export function createTestBettingPokerState(
+  overrides: DeepPartial<PokerStateInput> = {},
+): PokerState {
+  return createPokerState(
+    mergeTestState(SIX_PLAYER_BETTING_BASELINE, overrides),
+  )
 }

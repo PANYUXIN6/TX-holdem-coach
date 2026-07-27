@@ -18,6 +18,8 @@ M1.4 只提供可组合的规则原语，不创建完整手牌、不发牌、不
 
 所有函数返回新对象或新数组，不修改调用方输入。
 
+`positioning.ts` 是扑克引擎内物理座位拓扑的唯一实现。发牌、按钮轮转、庄盲、逻辑位置和行动顺序不得分别实现“从某座位左侧开始按物理座位号顺时针遍历”的算法。
+
 ## 2. 三类座位
 
 三个概念不得混用：
@@ -33,8 +35,8 @@ M1.4 对“可行动”的理解仅限于跳过 `folded`、`allIn`、`out` 和 `
 运行时代码：
 
 - `apps/server/src/poker/random-source.ts`：扑克纯规则共享的 `RandomSource` 和基于 `node:crypto.randomInt` 的安全默认实现。
-- `apps/server/src/poker/dealing.ts`：改为使用并继续转出共享随机源，保持 M1.2 现有公共导入兼容和行为不变。
-- `apps/server/src/poker/positioning.ts`：座位校验与规范化、首手按钮选择、跨手按钮解析、庄盲、逻辑位置和可行动座位查找。
+- `apps/server/src/poker/dealing.ts`：改为使用并继续转出共享随机源；删除现有私有 `buttonRelativeSeatOrder`，复用 `positioning.ts` 的唯一顺时针拓扑原语，保持 M1.2 现有公共导入兼容和发牌行为不变。
+- `apps/server/src/poker/positioning.ts`：物理座位顺时针拓扑的唯一实现，同时负责座位校验与规范化、首手按钮选择、跨手按钮解析、庄盲、逻辑位置和可行动座位查找。
 - `apps/server/src/poker/blind-posting.ts`：一次性盲注投入规则。
 
 测试代码：
@@ -44,9 +46,32 @@ M1.4 对“可行动”的理解仅限于跳过 `folded`、`allIn`、`out` 和 `
 
 不修改共享 Contracts、发牌结果、牌型评估器、扑克命令或数据库模型。
 
-## 4. 按钮与庄盲
+依赖方向固定为“依赖方 → 被依赖方”：
 
-### 4.1 首手按钮
+```text
+dealing.ts       → random-source.ts
+dealing.ts       → positioning.ts
+positioning.ts   → random-source.ts
+blind-posting.ts → positioning.ts
+```
+
+`positioning.ts` 不依赖 `dealing.ts` 或 `blind-posting.ts`，避免循环依赖。
+
+## 4. 唯一座位拓扑原语
+
+`clockwiseParticipantSeatNumbersAfter(anchorSeatNumber, participantSeatNumbers)` 是物理座位拓扑的唯一公开原语：
+
+1. 校验锚点和 6–9 个本手参与座位，锚点必须属于参与集合。
+2. 忽略输入数组顺序。
+3. 从锚点左侧第一个物理座位开始，在领域座位 `0..8` 中顺时针扫描。
+4. 跳过不在 `participantSeatNumbers` 中的物理空洞。
+5. 返回其他参与座位后，最后把锚点自身放在数组末尾，保证每个参与座位恰好出现一次。
+
+按钮轮转取该结果第一项；庄盲取前两项；逻辑位置基于该顺序换算；行动查找在同一物理顺序上过滤 `actionableSeats`；`dealPreflop` 直接把该结果作为两轮底牌发牌顺序。`dealing.ts` 不再保留等价私有实现。
+
+## 5. 按钮与庄盲
+
+### 5.1 首手按钮
 
 `selectInitialButtonSeatNumber(occupiedSeatNumbers, random?)`：
 
@@ -57,7 +82,7 @@ M1.4 对“可行动”的理解仅限于跳过 `folded`、`allIn`、`out` 和 `
 
 默认随机源必须安全；测试注入固定 `nextInt(maxExclusive)`。
 
-### 4.2 开手按钮
+### 5.2 开手按钮
 
 `resolveButtonSeatNumberForHand(input)` 接收：
 
@@ -72,7 +97,7 @@ M1.4 对“可行动”的理解仅限于跳过 `folded`、`allIn`、`out` 和 `
 
 计数必须是非负整数。调用方不得通过临时 `COUNT(hands)` 或普通历史投影推导该值，避免建立第二事实源。M1.4 不负责持久化计数，只消费权威调用方传入的值。
 
-### 4.3 庄盲
+### 5.3 庄盲
 
 `getBlindSeatNumbers(buttonSeatNumber, participantSeatNumbers)` 返回：
 
@@ -81,7 +106,7 @@ M1.4 对“可行动”的理解仅限于跳过 `folded`、`allIn`、`out` 和 `
 
 首版固定 6–9 人，不存在单挑按钮特例。
 
-## 5. 逻辑位置
+## 6. 逻辑位置
 
 `assignLogicalPositions(buttonSeatNumber, participantSeatNumbers)` 返回每个参与座位唯一的位置，并按翻前行动顺序排列：
 
@@ -94,7 +119,7 @@ M1.4 对“可行动”的理解仅限于跳过 `folded`、`allIn`、`out` 和 `
 
 位置在本手发牌时固化，不因之后弃牌、全下或筹码变化而改变。输入数组顺序不具有规则含义。
 
-## 6. 下一可行动座位
+## 7. 下一可行动座位
 
 `findNextActionableSeatNumber(input)` 接收锚点座位、本手参与座位和当前座位记录，从锚点左侧起按物理座位号顺时针查找第一个 `active && stack > 0` 的参与座位。
 
@@ -113,7 +138,7 @@ M1.4 对“可行动”的理解仅限于跳过 `folded`、`allIn`、`out` 和 `
 
 M1.7 消费 `null` 并决定结束下注轮或自动发完公共牌；M1.4 不自行推进街道。
 
-## 7. 盲注投入
+## 8. 盲注投入
 
 `postBlinds(input)` 接收本手开始时的全新座位记录、按钮和 `participantSeatNumbers`。盲注固定为小盲 10、大盲 20，不引入可配置盲注结构。
 
@@ -156,7 +181,7 @@ interface BlindPostingResult {
 
 M1.4 只返回 `potDelta`，不直接构造 `PokerHand` 或改写 `PokerState.hand.pot`；开手编排负责把结果与 M1.2 发牌结果组合后统一通过 `createPokerState()`。
 
-## 8. 测试策略与完成标准
+## 9. 测试策略与完成标准
 
 测试只通过 `positioning.ts` 和 `blind-posting.ts` 的公开函数验证行为，不测试内部辅助函数。
 
@@ -172,6 +197,7 @@ M1.4 只返回 `potDelta`，不直接构造 `PokerHand` 或改写 `PokerState.ha
 8. 重复下盲、非零初始投入、无效按钮/庄盲、无效状态和无效筹码被拒绝。
 9. 所有公开函数不修改输入。
 10. 属性测试验证按钮、庄盲、逻辑位置不会离开参与座位集合，下一可行动座位始终满足 `active && stack > 0` 且不等于锚点，盲注前后筹码减少量严格等于 `potDelta`。
+11. M1.2 的 6–9 人乱序、空洞座位和两轮具体牌序测试继续通过，证明 `dealing.ts` 切换到唯一拓扑原语后没有改变发牌行为。
 
 完成标准：
 

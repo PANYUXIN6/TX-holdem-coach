@@ -19,6 +19,7 @@
     "@tx-holdem-coach/contracts": "workspace:*",
     "dotenv": "^17.4.2",
     "hono": "^4.7.0",
+    "pokersolver": "2.1.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {

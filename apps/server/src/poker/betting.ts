@@ -5,31 +5,33 @@ import {
   type SuggestedTarget,
 } from '@tx-holdem-coach/contracts'
 import { PokerCommandSchema, type PokerCommand } from './commands.js'
-import type { PokerState } from './state.js'
+import type { PokerTableState } from './state.js'
 
 const ACTION_STREETS = new Set(['preflop', 'flop', 'turn', 'river'])
 
 interface BettingContext {
-  readonly hand: NonNullable<PokerState['hand']>
+  readonly hand: NonNullable<PokerTableState['hand']>
   readonly bettingRound: NonNullable<
-    NonNullable<PokerState['hand']>['bettingRound']
+    NonNullable<PokerTableState['hand']>['bettingRound']
   >
-  readonly actor: PokerState['seats'][number]
+  readonly actor: PokerTableState['seats'][number]
   readonly betLevelAfterLastAction: number | null
 }
 
-type BettingRound = NonNullable<NonNullable<PokerState['hand']>['bettingRound']>
+type BettingRound = NonNullable<
+  NonNullable<PokerTableState['hand']>['bettingRound']
+>
 
 export interface BettingTransitionResult {
   readonly actorSeatNumber: number
   readonly action: PokerCommand['action']
   readonly contributionDelta: number
-  readonly seats: PokerState['seats']
+  readonly seats: PokerTableState['seats']
   readonly pot: number
   readonly bettingRound: BettingRound
 }
 
-function getBettingContext(state: PokerState): BettingContext {
+function getBettingContext(state: PokerTableState): BettingContext {
   const hand = state.hand
 
   if (
@@ -133,7 +135,7 @@ function createSuggestedTargets(
   return suggestedTargets
 }
 
-export function getLegalActions(state: PokerState): LegalActions {
+export function getLegalActions(state: PokerTableState): LegalActions {
   const { hand, bettingRound, actor, betLevelAfterLastAction } =
     getBettingContext(state)
   const participantSeatNumbers = new Set(
@@ -265,7 +267,7 @@ function deepFreeze<Value>(value: Value): Value {
 }
 
 export function applyBettingAction(
-  state: PokerState,
+  state: PokerTableState,
   command: PokerCommand,
 ): BettingTransitionResult {
   const parsedCommand = PokerCommandSchema.parse(command)

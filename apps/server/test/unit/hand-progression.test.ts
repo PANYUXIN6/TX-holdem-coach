@@ -8,11 +8,11 @@ import {
   dealTurn,
   type DealtHand,
 } from '../../src/poker/dealing.js'
-import { applyPokerAction } from '../../src/poker/hand-progression.js'
+import { progressPokerAction } from '../../src/poker/hand-progression.js'
 import {
-  createPokerState,
-  type PokerState,
-  type PokerStateInput,
+  createPokerTableState,
+  type PokerTableState,
+  type PokerTableStateInput,
 } from '../../src/poker/state.js'
 
 const PARTICIPANTS = [1, 2, 3, 4, 5, 0] as const
@@ -45,11 +45,11 @@ function createProgressionState(
   street: 'preflop' | 'flop' | 'turn' | 'river',
   overrides: {
     readonly actorSeatNumber?: number
-    readonly seats?: PokerStateInput['seats']
+    readonly seats?: PokerTableStateInput['seats']
     readonly currentBet?: number
     readonly seatLevels?: Readonly<Record<number, number | null>>
   } = {},
-): PokerState {
+): PokerTableState {
   const dealt = dealtThrough(street)
   const defaultContributions =
     street === 'preflop'
@@ -75,8 +75,7 @@ function createProgressionState(
     })
   const currentBet = overrides.currentBet ?? (street === 'preflop' ? 20 : 0)
 
-  return createPokerState({
-    stateVersion: 4,
+  return createPokerTableState({
     pokerPhase: 'inHand',
     seats,
     buttonSeatNumber: 0,
@@ -104,15 +103,14 @@ function createProgressionState(
 }
 
 function expectStableSuccess(
-  before: PokerState,
+  before: PokerTableState,
   command: PokerCommand,
-): PokerState {
+): PokerTableState {
   const snapshot = structuredClone(before)
-  const result = applyPokerAction(before, command)
+  const result = progressPokerAction(before, command)
 
   expect(before).toEqual(snapshot)
-  expect(result.stateVersion).toBe(before.stateVersion + 1)
-  expect(createPokerState(result)).toEqual(result)
+  expect(createPokerTableState(result)).toEqual(result)
   expect(Object.isFrozen(result)).toBe(true)
   expect(Object.isFrozen(result.seats)).toBe(true)
   expect(Object.isFrozen(result.hand)).toBe(true)
@@ -120,7 +118,7 @@ function expectStableSuccess(
   return result
 }
 
-describe('applyPokerAction', () => {
+describe('progressPokerAction', () => {
   test('selects the next clockwise participant who still owes action', () => {
     const baseline = createProgressionState('preflop')
     const state = createProgressionState('preflop', {
@@ -499,7 +497,7 @@ describe('applyPokerAction', () => {
     })
 
     expect(() =>
-      applyPokerAction(state, {
+      progressPokerAction(state, {
         actorSeatNumber: 3,
         action: { type: 'fold' },
       }),
@@ -539,7 +537,7 @@ describe('applyPokerAction', () => {
     })
 
     expect(() =>
-      applyPokerAction(state, {
+      progressPokerAction(state, {
         actorSeatNumber: 3,
         action: { type: 'fold' },
       }),
@@ -548,7 +546,7 @@ describe('applyPokerAction', () => {
 
   test('rejects commands on terminal streets', () => {
     const river = createProgressionState('river')
-    const terminal = createPokerState({
+    const terminal = createPokerTableState({
       ...river,
       hand: {
         ...river.hand,
@@ -559,7 +557,7 @@ describe('applyPokerAction', () => {
     })
 
     expect(() =>
-      applyPokerAction(terminal, {
+      progressPokerAction(terminal, {
         actorSeatNumber: 1,
         action: { type: 'check' },
       }),

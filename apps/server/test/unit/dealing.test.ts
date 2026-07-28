@@ -10,7 +10,7 @@ import {
   SECURE_RANDOM_SOURCE,
   shuffleStandardDeck,
 } from '../../src/poker/dealing.js'
-import { createPokerState } from '../../src/poker/state.js'
+import { createPokerTableState } from '../../src/poker/state.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
 function standardPureDeck() {
@@ -269,7 +269,7 @@ describe('dealing input boundaries', () => {
     const baseState = createTestPokerState()
 
     expect(() =>
-      createPokerState({
+      createPokerTableState({
         ...baseState,
         pokerPhase: 'inHand',
         hand: {

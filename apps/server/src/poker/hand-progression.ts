@@ -12,9 +12,9 @@ import {
   clockwiseParticipantSeatNumbersAfter,
   findPostflopFirstActionableSeatNumber,
 } from './positioning.js'
-import { createPokerState, type PokerState } from './state.js'
+import { createPokerTableState, type PokerTableState } from './state.js'
 
-type Hand = NonNullable<PokerState['hand']>
+type Hand = NonNullable<PokerTableState['hand']>
 type BettingRound = NonNullable<Hand['bettingRound']>
 
 function participantSeatNumbers(hand: Hand): readonly number[] {
@@ -23,16 +23,16 @@ function participantSeatNumbers(hand: Hand): readonly number[] {
 
 function participantSeats(
   hand: Hand,
-  seats: PokerState['seats'],
-): PokerState['seats'] {
+  seats: PokerTableState['seats'],
+): PokerTableState['seats'] {
   const participants = new Set(participantSeatNumbers(hand))
   return seats.filter((seat) => participants.has(seat.seatNumber))
 }
 
 function contenderSeats(
   hand: Hand,
-  seats: PokerState['seats'],
-): PokerState['seats'] {
+  seats: PokerTableState['seats'],
+): PokerTableState['seats'] {
   return participantSeats(hand, seats).filter(
     (seat) => seat.status === 'active' || seat.status === 'allIn',
   )
@@ -40,14 +40,14 @@ function contenderSeats(
 
 function actionableSeats(
   hand: Hand,
-  seats: PokerState['seats'],
-): PokerState['seats'] {
+  seats: PokerTableState['seats'],
+): PokerTableState['seats'] {
   return contenderSeats(hand, seats).filter(
     (seat) => seat.status === 'active' && seat.stack > 0,
   )
 }
 
-function reconstructFromState(state: PokerState, hand: Hand): DealtHand {
+function reconstructFromState(state: PokerTableState, hand: Hand): DealtHand {
   const holeCards = hand.holeCards.map((holeCards) => {
     const firstCard = holeCards.cards[0]
     const secondCard = holeCards.cards[1]
@@ -85,7 +85,7 @@ function projectedCards(dealt: DealtHand) {
 }
 
 function terminalHand(
-  state: PokerState,
+  state: PokerTableState,
   hand: Hand,
   street: 'showdown' | 'complete',
   runout: boolean,
@@ -109,10 +109,10 @@ function terminalHand(
 }
 
 function advanceStreet(
-  state: PokerState,
+  state: PokerTableState,
   hand: Hand,
-  seats: PokerState['seats'],
-): { readonly hand: Hand; readonly seats: PokerState['seats'] } {
+  seats: PokerTableState['seats'],
+): { readonly hand: Hand; readonly seats: PokerTableState['seats'] } {
   const dealt = reconstructFromState(state, hand)
   const next =
     hand.street === 'preflop'
@@ -166,7 +166,7 @@ function advanceStreet(
 
 function stillOwesAction(
   seatNumber: number,
-  seats: PokerState['seats'],
+  seats: PokerTableState['seats'],
   bettingRound: BettingRound,
 ): boolean {
   const seat = seats.find((candidate) => candidate.seatNumber === seatNumber)
@@ -182,10 +182,10 @@ function stillOwesAction(
   )
 }
 
-export function applyPokerAction(
-  state: PokerState,
+export function progressPokerAction(
+  state: PokerTableState,
   command: PokerCommand,
-): PokerState {
+): PokerTableState {
   const hand = state.hand
 
   if (
@@ -265,9 +265,8 @@ export function applyPokerAction(
     }
   }
 
-  return createPokerState({
+  return createPokerTableState({
     ...state,
-    stateVersion: state.stateVersion + 1,
     seats,
     hand: nextHand,
   })

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
+import { ZodError } from 'zod'
 import { PokerCommandSchema } from '../../src/poker/commands.js'
-import { createPokerState } from '../../src/poker/state.js'
+import { createPokerTableState } from '../../src/poker/state.js'
 import {
   createTestBettingPokerState,
   createTestPokerState,
@@ -28,13 +29,56 @@ const REPRESENTATIVE_HAND = {
   },
 } as const
 
-describe('private poker state', () => {
+function createSevenSeatBettingState() {
+  const baseline = createTestBettingPokerState()
+  const hand = baseline.hand
+
+  if (hand === null || hand.bettingRound === null) {
+    throw new Error('预期测试夹具包含稳定下注轮。')
+  }
+
+  return {
+    ...baseline,
+    seats: [
+      ...baseline.seats,
+      {
+        seatNumber: 6,
+        playerId: '00000000-0000-4000-8000-000000000007',
+        isUser: false,
+        stack: 2000,
+        status: 'active' as const,
+        streetContribution: 0,
+        totalContribution: 0,
+      },
+    ],
+    hand: {
+      ...hand,
+      holeCards: [
+        ...hand.holeCards,
+        {
+          seatNumber: 6,
+          cards: [
+            { rank: '2' as const, suit: 'clubs' as const },
+            { rank: '2' as const, suit: 'hearts' as const },
+          ],
+        },
+      ],
+      bettingRound: {
+        ...hand.bettingRound,
+        seatStates: [
+          ...hand.bettingRound.seatStates,
+          { seatNumber: 6, betLevelAfterLastAction: null },
+        ],
+      },
+    },
+  }
+}
+
+describe('private poker table state', () => {
   test('constructs a representative state that can be JSON serialized', () => {
-    const baseline = createTestPokerState({ stateVersion: 3 })
-    const state = createPokerState({ ...baseline, stateVersion: 4 })
+    const state = createPokerTableState(createTestPokerState())
 
     const serialized = JSON.parse(JSON.stringify(state)) as {
-      stateVersion: number
       pokerPhase: string
       buttonSeatNumber: number
       blinds: { smallBlind: number; bigBlind: number }
@@ -47,12 +91,12 @@ describe('private poker state', () => {
     }
 
     expect(serialized).toMatchObject({
-      stateVersion: 4,
       pokerPhase: 'betweenHands',
       buttonSeatNumber: 0,
       blinds: { smallBlind: 10, bigBlind: 20 },
       hand: null,
     })
+    expect(serialized).not.toHaveProperty('stateVersion')
     expect(serialized.seats[0]).toMatchObject({
       seatNumber: 0,
       isUser: true,
@@ -69,7 +113,7 @@ describe('private poker state', () => {
       ),
     }
 
-    expect(() => createPokerState(duplicateSeatState)).toThrow()
+    expect(() => createPokerTableState(duplicateSeatState)).toThrow()
   })
 
   test('rejects duplicate player identities at the domain entry point', () => {
@@ -81,7 +125,7 @@ describe('private poker state', () => {
       ),
     }
 
-    expect(() => createPokerState(duplicatePlayerState)).toThrow()
+    expect(() => createPokerTableState(duplicatePlayerState)).toThrow()
   })
 
   test('requires exactly one local user seat', () => {
@@ -91,7 +135,7 @@ describe('private poker state', () => {
       seats: baseline.seats.map((seat) => ({ ...seat, isUser: false })),
     }
 
-    expect(() => createPokerState(noUserState)).toThrow()
+    expect(() => createPokerTableState(noUserState)).toThrow()
   })
 
   test('requires the user at seat zero and rejects an AI occupying that seat', () => {
@@ -104,14 +148,14 @@ describe('private poker state', () => {
       })),
     }
 
-    expect(() => createPokerState(swappedUserAndAiSeats)).toThrow()
+    expect(() => createPokerTableState(swappedUserAndAiSeats)).toThrow()
   })
 
   test('requires the button to reference an existing seat', () => {
     const baseline = createTestPokerState()
 
     expect(() =>
-      createPokerState({ ...baseline, buttonSeatNumber: 8 }),
+      createPokerTableState({ ...baseline, buttonSeatNumber: 8 }),
     ).toThrow()
   })
 
@@ -132,18 +176,18 @@ describe('private poker state', () => {
       ),
     }
 
-    expect(() => createPokerState(fractionalStackState)).toThrow()
-    expect(() => createPokerState(unmatchedContributionState)).toThrow()
+    expect(() => createPokerTableState(fractionalStackState)).toThrow()
+    expect(() => createPokerTableState(unmatchedContributionState)).toThrow()
   })
 
   test('rejects poker phases that do not agree with whether a hand exists', () => {
     const baseline = createTestPokerState()
 
     expect(() =>
-      createPokerState({ ...baseline, hand: REPRESENTATIVE_HAND }),
+      createPokerTableState({ ...baseline, hand: REPRESENTATIVE_HAND }),
     ).toThrow()
     expect(() =>
-      createPokerState({ ...baseline, pokerPhase: 'inHand', hand: null }),
+      createPokerTableState({ ...baseline, pokerPhase: 'inHand', hand: null }),
     ).toThrow()
   })
 
@@ -158,7 +202,7 @@ describe('private poker state', () => {
       ),
     }
 
-    expect(() => createPokerState(contributionBetweenHands)).toThrow()
+    expect(() => createPokerTableState(contributionBetweenHands)).toThrow()
   })
 
   test('rejects a card repeated across private hand areas', () => {
@@ -174,7 +218,7 @@ describe('private poker state', () => {
       },
     }
 
-    expect(() => createPokerState(duplicateCardHand)).toThrow()
+    expect(() => createPokerTableState(duplicateCardHand)).toThrow()
   })
 
   test('requires private hole cards to reference an existing seat', () => {
@@ -188,7 +232,7 @@ describe('private poker state', () => {
       },
     }
 
-    expect(() => createPokerState(unknownHoleCardsSeat)).toThrow()
+    expect(() => createPokerTableState(unknownHoleCardsSeat)).toThrow()
   })
 
   test('rejects duplicate private hole-card seat records', () => {
@@ -205,7 +249,7 @@ describe('private poker state', () => {
       },
     }
 
-    expect(() => createPokerState(duplicateHoleCardsSeat)).toThrow()
+    expect(() => createPokerTableState(duplicateHoleCardsSeat)).toThrow()
   })
 
   test('requires the current actor to reference an existing seat', () => {
@@ -216,7 +260,7 @@ describe('private poker state', () => {
       hand: { ...REPRESENTATIVE_HAND, currentActorSeatNumber: 8 },
     }
 
-    expect(() => createPokerState(unknownActorState)).toThrow()
+    expect(() => createPokerTableState(unknownActorState)).toThrow()
   })
 
   test('requires the current actor to be an active seat', () => {
@@ -230,7 +274,7 @@ describe('private poker state', () => {
       hand: REPRESENTATIVE_HAND,
     }
 
-    expect(() => createPokerState(foldedActorState)).toThrow()
+    expect(() => createPokerTableState(foldedActorState)).toThrow()
   })
 
   test('constructs a stable betting round from the dedicated test fixture', () => {
@@ -252,7 +296,7 @@ describe('private poker state', () => {
 
     for (const street of ['postingBlinds', 'showdown', 'complete'] as const) {
       expect(() =>
-        createPokerState({
+        createPokerTableState({
           ...baseline,
           pokerPhase: 'inHand',
           hand: {
@@ -267,7 +311,7 @@ describe('private poker state', () => {
 
     for (const street of ['preflop', 'flop', 'turn', 'river'] as const) {
       expect(() =>
-        createPokerState({
+        createPokerTableState({
           ...baseline,
           pokerPhase: 'inHand',
           hand: {
@@ -281,7 +325,7 @@ describe('private poker state', () => {
 
     for (const street of ['postingBlinds', 'showdown', 'complete'] as const) {
       expect(() =>
-        createPokerState({
+        createPokerTableState({
           ...baseline,
           pokerPhase: 'inHand',
           hand: { ...baseline.hand, street },
@@ -295,7 +339,7 @@ describe('private poker state', () => {
 
     for (const street of ['preflop', 'flop', 'turn', 'river'] as const) {
       expect(() =>
-        createPokerState({
+        createPokerTableState({
           ...baseline,
           hand: { ...baseline.hand, street, bettingRound: null },
         }),
@@ -304,7 +348,7 @@ describe('private poker state', () => {
 
     for (const street of ['postingBlinds', 'showdown', 'complete'] as const) {
       expect(() =>
-        createPokerState({
+        createPokerTableState({
           ...baseline,
           hand: {
             ...baseline.hand,
@@ -335,7 +379,7 @@ describe('private poker state', () => {
 
     for (const invalid of invalidSeatStates) {
       expect(() =>
-        createPokerState({
+        createPokerTableState({
           ...baseline,
           hand: {
             ...baseline.hand,
@@ -391,7 +435,7 @@ describe('private poker state', () => {
 
     for (const bettingRound of invalidBettingRounds) {
       expect(() =>
-        createPokerState({
+        createPokerTableState({
           ...baseline,
           hand: { ...baseline.hand, bettingRound },
         }),
@@ -399,11 +443,150 @@ describe('private poker state', () => {
     }
 
     expect(() =>
-      createPokerState({
+      createPokerTableState({
         ...baseline,
         hand: { ...baseline.hand, pot: 31 },
       }),
     ).toThrow()
+  })
+
+  test('requires every non-out seat to have hole cards', () => {
+    const baseline = createSevenSeatBettingState()
+    const missingParticipantHoleCards = {
+      ...baseline,
+      hand: {
+        ...baseline.hand,
+        holeCards: baseline.hand?.holeCards.filter(
+          ({ seatNumber }) => seatNumber !== 5,
+        ),
+        bettingRound: {
+          ...baseline.hand?.bettingRound,
+          seatStates: baseline.hand?.bettingRound?.seatStates.filter(
+            ({ seatNumber }) => seatNumber !== 5,
+          ),
+        },
+      },
+    }
+
+    expect(() => createPokerTableState(missingParticipantHoleCards)).toThrow(
+      '参与座位必须与底牌座位集合一一对应。',
+    )
+  })
+
+  test('allows out seats without hole cards or contributions', () => {
+    const baseline = createSevenSeatBettingState()
+    const stateWithOutSeat = {
+      ...baseline,
+      seats: baseline.seats.map((seat) =>
+        seat.seatNumber === 6
+          ? { ...seat, status: 'out' as const }
+          : { ...seat },
+      ),
+      hand: {
+        ...baseline.hand,
+        holeCards: baseline.hand?.holeCards.filter(
+          ({ seatNumber }) => seatNumber !== 6,
+        ),
+        bettingRound: {
+          ...baseline.hand?.bettingRound,
+          seatStates: baseline.hand?.bettingRound?.seatStates.filter(
+            ({ seatNumber }) => seatNumber !== 6,
+          ),
+        },
+      },
+    }
+
+    expect(() => createPokerTableState(stateWithOutSeat)).not.toThrow()
+  })
+
+  test('reports non-participant contributions at the matching seat index', () => {
+    const baseline = createSevenSeatBettingState()
+    const stateWithOutContribution = {
+      ...baseline,
+      seats: baseline.seats.map((seat) =>
+        seat.seatNumber === 6
+          ? {
+              ...seat,
+              status: 'out' as const,
+              streetContribution: 10,
+              totalContribution: 10,
+            }
+          : { ...seat },
+      ),
+      hand: {
+        ...baseline.hand,
+        holeCards: baseline.hand?.holeCards.filter(
+          ({ seatNumber }) => seatNumber !== 6,
+        ),
+        pot: (baseline.hand?.pot ?? 0) + 10,
+        bettingRound: {
+          ...baseline.hand?.bettingRound,
+          seatStates: baseline.hand?.bettingRound?.seatStates.filter(
+            ({ seatNumber }) => seatNumber !== 6,
+          ),
+        },
+      },
+    }
+
+    try {
+      createPokerTableState(stateWithOutContribution)
+      throw new Error('预期非参与座位投入会被拒绝。')
+    } catch (error) {
+      if (!(error instanceof ZodError)) {
+        throw error
+      }
+
+      expect(error.issues).toContainEqual(
+        expect.objectContaining({
+          message: '非参与座位必须为 out 且本手投入为零。',
+          path: ['seats', 6],
+        }),
+      )
+    }
+  })
+
+  test('keeps the pot conserved on terminal streets', () => {
+    const baseline = createTestBettingPokerState()
+    const terminalWithWrongPot = {
+      ...baseline,
+      hand: {
+        ...baseline.hand,
+        street: 'showdown' as const,
+        currentActorSeatNumber: null,
+        bettingRound: null,
+        pot: 31,
+      },
+    }
+
+    expect(() => createPokerTableState(terminalWithWrongPot)).toThrow()
+  })
+
+  test('requires an in-hand button to belong to a participant', () => {
+    const baseline = createSevenSeatBettingState()
+    const stateWithOutButton = {
+      ...baseline,
+      seats: baseline.seats.map((seat) =>
+        seat.seatNumber === 0
+          ? { ...seat, status: 'out' as const }
+          : { ...seat },
+      ),
+      hand: {
+        ...baseline.hand,
+        holeCards: baseline.hand?.holeCards.filter(
+          ({ seatNumber }) => seatNumber !== 0,
+        ),
+        bettingRound: {
+          ...baseline.hand?.bettingRound,
+          seatStates: baseline.hand?.bettingRound?.seatStates.filter(
+            ({ seatNumber }) => seatNumber !== 0,
+          ),
+        },
+      },
+    }
+
+    expect(() => createPokerTableState(stateWithOutButton)).toThrow(
+      '进行中的牌局按钮必须属于参与座位。',
+    )
   })
 
   test('requires the current actor to participate in the current hand', () => {
@@ -416,7 +599,7 @@ describe('private poker state', () => {
     )
 
     expect(() =>
-      createPokerState({
+      createPokerTableState({
         ...baseline,
         hand: {
           ...baseline.hand,
@@ -462,9 +645,9 @@ describe('private poker state', () => {
       },
     }
 
-    expect(() => createPokerState(shortBlindState)).not.toThrow()
+    expect(() => createPokerTableState(shortBlindState)).not.toThrow()
     expect(() =>
-      createPokerState({
+      createPokerTableState({
         ...shortBlindState,
         hand: {
           ...shortBlindState.hand,
@@ -482,7 +665,7 @@ describe('private poker state', () => {
 
     for (const status of ['folded', 'allIn', 'out'] as const) {
       expect(() =>
-        createPokerState({
+        createPokerTableState({
           ...baseline,
           pokerPhase: 'inHand',
           seats: baseline.seats.map((seat, index) =>
@@ -511,7 +694,7 @@ describe('private poker state', () => {
       hand: REPRESENTATIVE_HAND,
     }
 
-    expect(() => createPokerState(emptyStackActorState)).toThrow()
+    expect(() => createPokerTableState(emptyStackActorState)).toThrow()
   })
 
   test('returns a deeply frozen state without retaining mutable nested data', () => {
@@ -539,7 +722,7 @@ describe('private poker state', () => {
     }
     input.hand = mutableHand
 
-    const state = createPokerState(input)
+    const state = createPokerTableState(input)
 
     input.seats[0]!.stack = 1
     mutableHand.remainingDeck[0]!.rank = '2'
@@ -601,7 +784,7 @@ describe('private poker state', () => {
       },
     }
 
-    expect(() => createPokerState(invalidCardState)).toThrow()
+    expect(() => createPokerTableState(invalidCardState)).toThrow()
     expect(() =>
       createTestPokerState({ seats: baseline.seats.slice(0, 5) }),
     ).toThrow()

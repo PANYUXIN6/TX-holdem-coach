@@ -3,7 +3,7 @@ import fc from 'fast-check'
 import { describe, expect, test } from 'vitest'
 import { applyBettingAction, getLegalActions } from '../../src/poker/betting.js'
 import type { PokerCommand } from '../../src/poker/commands.js'
-import type { PokerState } from '../../src/poker/state.js'
+import type { PokerTableState } from '../../src/poker/state.js'
 import { createTestBettingPokerState } from '../poker/create-test-poker-state.js'
 
 function bettingRoundOf(state: ReturnType<typeof createTestBettingPokerState>) {
@@ -994,10 +994,10 @@ describe('applyBettingAction', () => {
     actor.streetContribution = 21
 
     expect(() =>
-      getLegalActions(invalidPotState as unknown as PokerState),
+      getLegalActions(invalidPotState as unknown as PokerTableState),
     ).toThrow('底池')
     expect(() =>
-      getLegalActions(invalidContributionState as unknown as PokerState),
+      getLegalActions(invalidContributionState as unknown as PokerTableState),
     ).toThrow('本街投入')
   })
 

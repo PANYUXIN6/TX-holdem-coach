@@ -4,7 +4,7 @@ import { z } from 'zod'
 const SeatNumberSchema = z.number().int().min(0).max(8)
 const ChipAmountSchema = z.number().int().nonnegative()
 const PlayerIdSchema = z.uuid()
-const PokerPhaseSchema = z.enum(['setup', 'betweenHands', 'inHand'])
+const PokerPhaseSchema = z.enum(['betweenHands', 'inHand'])
 const SeatStatusSchema = z.enum(['active', 'folded', 'allIn', 'out'])
 const HandStreetSchema = z.enum([
   'postingBlinds',
@@ -55,9 +55,8 @@ const PokerHandSchema = z.strictObject({
   bettingRound: BettingRoundSchema.nullable(),
 })
 
-const PokerStateSchema = z
+const PokerTableStateSchema = z
   .strictObject({
-    stateVersion: z.number().int().nonnegative(),
     pokerPhase: PokerPhaseSchema,
     seats: z.array(PokerSeatSchema).min(6).max(9),
     buttonSeatNumber: SeatNumberSchema,
@@ -197,6 +196,28 @@ const PokerStateSchema = z
         })
       }
 
+      const participantSeatNumbers = new Set(
+        state.seats
+          .filter((seat) => seat.status !== 'out')
+          .map((seat) => seat.seatNumber),
+      )
+
+      if (participantSeatNumbers.size < 6 || participantSeatNumbers.size > 9) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '当前手牌必须包含 6 到 9 个参与座位。',
+          path: ['seats'],
+        })
+      }
+
+      if (!participantSeatNumbers.has(state.buttonSeatNumber)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '进行中的牌局按钮必须属于参与座位。',
+          path: ['buttonSeatNumber'],
+        })
+      }
+
       const dealtCards = new Set<string>()
       const holeCardSeats = new Set<number>()
       const validateUniqueCard = (
@@ -254,6 +275,42 @@ const PokerStateSchema = z
           ])
         })
       })
+
+      state.seats.forEach((seat, seatIndex) => {
+        const hasHoleCards = holeCardSeats.has(seat.seatNumber)
+        const isParticipant = participantSeatNumbers.has(seat.seatNumber)
+
+        if (hasHoleCards !== isParticipant) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '参与座位必须与底牌座位集合一一对应。',
+            path: ['hand', 'holeCards'],
+          })
+        }
+
+        if (
+          !isParticipant &&
+          (seat.streetContribution !== 0 || seat.totalContribution !== 0)
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '非参与座位必须为 out 且本手投入为零。',
+            path: ['seats', seatIndex],
+          })
+        }
+      })
+
+      const totalContributions = state.seats.reduce(
+        (total, seat) => total + seat.totalContribution,
+        0,
+      )
+      if (state.hand.pot !== totalContributions) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '当前手牌底池必须等于全部座位的本手总投入。',
+          path: ['hand', 'pot'],
+        })
+      }
 
       if (state.hand.bettingRound !== null) {
         const { bettingRound } = state.hand
@@ -315,18 +372,6 @@ const PokerStateSchema = z
             })
           }
         })
-
-        const totalContributions = state.seats.reduce(
-          (total, seat) => total + seat.totalContribution,
-          0,
-        )
-        if (state.hand.pot !== totalContributions) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: '下注街道底池必须等于全部座位的本手总投入。',
-            path: ['hand', 'pot'],
-          })
-        }
       }
 
       if (state.hand.currentActorSeatNumber !== null) {
@@ -364,7 +409,7 @@ const PokerStateSchema = z
     }
   })
 
-export type PokerStateInput = z.input<typeof PokerStateSchema>
+export type PokerTableStateInput = z.input<typeof PokerTableStateSchema>
 
 type DeepReadonly<Value> = Value extends readonly (infer Item)[]
   ? readonly DeepReadonly<Item>[]
@@ -372,7 +417,9 @@ type DeepReadonly<Value> = Value extends readonly (infer Item)[]
     ? { readonly [Key in keyof Value]: DeepReadonly<Value[Key]> }
     : Value
 
-export type PokerState = DeepReadonly<z.output<typeof PokerStateSchema>>
+export type PokerTableState = DeepReadonly<
+  z.output<typeof PokerTableStateSchema>
+>
 
 function deepFreeze<Value>(value: Value): DeepReadonly<Value> {
   if (value !== null && typeof value === 'object') {
@@ -386,6 +433,6 @@ function deepFreeze<Value>(value: Value): DeepReadonly<Value> {
   return value as DeepReadonly<Value>
 }
 
-export function createPokerState(input: unknown): PokerState {
-  return deepFreeze(structuredClone(PokerStateSchema.parse(input)))
+export function createPokerTableState(input: unknown): PokerTableState {
+  return deepFreeze(structuredClone(PokerTableStateSchema.parse(input)))
 }

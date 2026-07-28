@@ -1,7 +1,7 @@
 import {
-  createPokerState,
-  type PokerState,
-  type PokerStateInput,
+  createPokerTableState,
+  type PokerTableState,
+  type PokerTableStateInput,
 } from '../../src/poker/state.js'
 
 type DeepPartial<Value> = Value extends readonly (infer Item)[]
@@ -10,8 +10,7 @@ type DeepPartial<Value> = Value extends readonly (infer Item)[]
     ? { [Key in keyof Value]?: DeepPartial<Value[Key]> }
     : Value
 
-const SIX_PLAYER_BASELINE: PokerStateInput = {
-  stateVersion: 0,
+const SIX_PLAYER_BASELINE: PokerTableStateInput = {
   pokerPhase: 'betweenHands',
   seats: [
     {
@@ -75,7 +74,6 @@ const SIX_PLAYER_BASELINE: PokerStateInput = {
 }
 
 const SIX_PLAYER_BETTING_BASELINE = {
-  stateVersion: 0,
   pokerPhase: 'inHand',
   seats: SIX_PLAYER_BASELINE.seats.map((seat) => {
     if (seat.seatNumber === 1) {
@@ -161,7 +159,7 @@ const SIX_PLAYER_BETTING_BASELINE = {
       })),
     },
   },
-} satisfies PokerStateInput
+} satisfies PokerTableStateInput
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -190,15 +188,15 @@ function mergeTestState(base: unknown, overrides: unknown): unknown {
 }
 
 export function createTestPokerState(
-  overrides: DeepPartial<PokerStateInput> = {},
-): PokerState {
-  return createPokerState(mergeTestState(SIX_PLAYER_BASELINE, overrides))
+  overrides: DeepPartial<PokerTableStateInput> = {},
+): PokerTableState {
+  return createPokerTableState(mergeTestState(SIX_PLAYER_BASELINE, overrides))
 }
 
 export function createTestBettingPokerState(
-  overrides: DeepPartial<PokerStateInput> = {},
-): PokerState {
-  return createPokerState(
+  overrides: DeepPartial<PokerTableStateInput> = {},
+): PokerTableState {
+  return createPokerTableState(
     mergeTestState(SIX_PLAYER_BETTING_BASELINE, overrides),
   )
 }

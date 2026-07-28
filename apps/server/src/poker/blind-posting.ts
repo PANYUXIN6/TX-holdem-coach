@@ -1,7 +1,7 @@
-import type { PokerState } from './state.js'
+import type { PokerTableState } from './state.js'
 import { getBlindSeatNumbers } from './positioning.js'
 
-export type BlindPostingSeat = PokerState['seats'][number]
+export type BlindPostingSeat = PokerTableState['seats'][number]
 
 export interface PostBlindsInput {
   readonly seats: readonly BlindPostingSeat[]

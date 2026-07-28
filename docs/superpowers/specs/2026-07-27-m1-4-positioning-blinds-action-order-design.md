@@ -1,5 +1,7 @@
 # M1.4：按钮、盲注、逻辑位置与行动顺序设计
 
+> 2026-07-28 非 Agent 运行时重基线：本设计的按钮、庄盲、位置和顺时针算法全部继续有效。`completedHandCountBeforeStart` 由会话层 `PrivateTableState` 提供；M1.9 `poker-engine.ts` 将这些底层原语封装为 `initializePokerTable()`/`startPokerHand()`，M3 不直接组合。详见[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)。
+
 - 状态：已确认，已实现
 - 日期：2026-07-27
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)

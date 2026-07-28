@@ -1,5 +1,7 @@
 # M1.5：合法动作与两阶段下注迁移设计
 
+> 2026-07-28 非 Agent 运行时重基线：合法动作、金额语义和下注迁移规则全部继续有效；只把 `PokerState` 引用改为无版本的 `PokerTableState`。服务层最终只通过 M1.9 `poker-engine.ts.applyPokerAction()` 使用本模块。详见[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)。
+
 - 状态：已确认，已实现
 - 日期：2026-07-27
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)

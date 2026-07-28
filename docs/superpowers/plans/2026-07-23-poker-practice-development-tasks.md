@@ -2,12 +2,13 @@
 
 - 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构与预设人物方案已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-26
+- 最后更新：2026-07-28
 - 本文不包含工期、人数或里程碑时间估算。
 - 上位文档：
   - [产品需求文档](../specs/2026-07-23-poker-practice-prd.md)
   - [前端交互与页面设计](../specs/2026-07-23-poker-practice-frontend-design.md)
   - [后端、牌局引擎与数据设计](../specs/2026-07-23-poker-practice-backend-design.md)
+  - [非 Agent 运行时架构重基线](../specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)
   - [Agent Foundation 与受限 Runtime](../specs/2026-07-26-agent-foundation-runtime-architecture.md)
   - [Player Agent Runtime 专项设计](../specs/2026-07-23-poker-practice-agent-harness-design.md)
   - [Coach Agent 专项设计](../specs/2026-07-26-poker-coach-agent-design.md)
@@ -62,6 +63,31 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 | 服务端人物目录测试 | 现有八个人物数值已经符合规范表；补充八个 V1 公开投影逐字段回归 | 不改人物值，只锁定版本语义 |
 
 会话创建、首手按钮选择、Provider HTTP/联网检测服务和正式组桌 UI 尚未实现，不属于已完成代码返工；分别按 M1.4、M3.2、M3.5 和 M7 实现。M0.3 只落实从私有环境配置到共享 Provider 初始摘要的静态投影，不提前执行网络检测。
+
+### 2.2 2026-07-28 非 Agent 运行时架构重基线
+
+M1.7 以后所有非 Agent 任务以[非 Agent 运行时架构重基线](../specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)为统一解释基准。发生冲突时，以该文档为准。
+
+- 原 `PokerState` 重命名为纯领域 `PokerTableState`，不得包含 `stateVersion`、时间、ID、事件序号、协议版本或持久化字段。
+- 会话层 `PrivateTableState` 统一持有 `stateVersion`、`poker`、`completedHandCount`、各座位累计买入和最近一手摘要。
+- 当前手行动历史以 `session_events` 为事实源；完整已结算手以 `hands.completedResult` 为事实源；快照不再复制行动数组。
+- `hands.status` 固定为 `inProgress | completed | aborted`，开手时即插入记录和检查点。
+- M1.9 提供 `poker-engine.ts` 作为 M1 唯一公开模块，统一提供开手和行动入口；M1.7 的内部终止状态必须在同次调用内经 M1.8 结算，不得越过门面。
+- 只有 M3 在成功命令事务中为 `PrivateTableState` 递增一次版本，并为事件草稿补齐事件序号、ID、时间与最终 `stateVersion`。
+- 在 M1.8 开发前必须先完成 M1.R；M1.R 只重构状态所有权和调用边界，不改变 M1.2–M1.7 已确认的扑克规则。
+
+从当前代码基线继续的非 Agent 依赖顺序固定为：
+
+```text
+M1.R
+  → M1.8 与 M1.9a
+  → M1.9b/M1.9c
+  → M0.2 协议返工
+  → M2
+  → M3
+  → M5 与 M6/M7
+  → M9 非 Agent 验收
+```
 
 ## 3. 后端测试闭环规则
 
@@ -141,6 +167,9 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 座位号固定为 `0..8`；创建场次必须选择 5–8 个不同人物，公开场次快照必须包含 6–9 个座位。
 - 定义 HTTP 请求/响应、SSE 事件和 `PublicSessionSnapshot` 的 `protocolVersion`；它只属于对外协议，不与私有快照、私有事件或数据库迁移版本共用。
 - SSE 事件词表包含 `handAborted`；它与其他事件使用相同的公开快照负载，用于表达暂停手牌回退并结束场次，而不是伪造一手已完成牌局。
+- M1.9 完成后扩展 SSE 事件词表，至少补齐 `sessionCreated`、`handStarted`、`uncalledBetReturned`、`userRebuy` 和 `aiAutoRebuy`，并为公开快照加入当前手行动时间线与最近完成手摘要。
+- 从共享 `PokerPhaseSchema` 移除不可持久化、不可公开的 `setup`；创建失败无状态，成功直接返回 `inHand`。
+- 固定 `SseEvent.eventSeq === payload.snapshot.eventSeq`、`SseEvent.stateVersion === payload.snapshot.stateVersion`；同一命令的多条事件可以共享同一最终业务状态，但各自快照游标与事件信封一致。
 - 只共享外部协议，不暴露数据库行模型和私有牌堆状态。
 
 后端测试闭环：
@@ -152,6 +181,7 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 逐字段断言八个人物 V1 公开投影与规范目录一致，避免未提升版本的静默改写。
 - 验证 Provider 四种状态的时间/错误码不变量以及响应拒绝 Key、模型、路由和原始错误等额外字段。
 - 验证 `handAborted` 可携带更高版本的 `ended + betweenHands + hand = null` 公开快照，未知 SSE 类型仍被拒绝。
+- 验证同命令多事件共享最终状态但使用连续游标，信封与负载的事件/状态版本不一致时被拒绝。
 - 不为每个字符串字段重复同构用例。
 
 ### M0.3 建立后端启动与配置边界
@@ -328,7 +358,7 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 只剩一名未弃牌玩家时立即结束。
 - 至少两名未弃牌玩家但无法继续相互下注时，一次性发完剩余公共牌；每个尚未发出的街道仍照常先 burn 一张。
 - `showdown/complete` 是通过私有 Schema 校验、等待 M1.8 同步结算的内部终止状态，不表示资金已闭环，不得被 M3 单独持久化或公开。
-- 一次合法动作无论只切换行动者、推进一街、完成多街 runout 或进入终止状态，都只产生 `previousStateVersion + 1` 的规则状态。
+- 纯推进逻辑不读取或修改 `stateVersion`；整条扑克命令最终是否递增版本由 M3 在事务中统一决定。
 - 不支持 run-it-twice。
 
 后端测试闭环：
@@ -337,17 +367,36 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 覆盖多人全下、仅一人仍有筹码、全部过牌和全部弃到一人的情况。
 - 断言一次性发完剩余公共牌不会生成额外行动位。
 
+### M1.R 重构纯引擎状态与统一出口前置边界
+
+产出：
+
+- 将 `PokerState`、`PokerStateSchema`、`createPokerState` 重命名为 `PokerTableState`、`PokerTableStateSchema`、`createPokerTableState`。
+- 稳定阶段只保留 `betweenHands | inHand`，删除未被业务使用的 `setup`。
+- 从纯引擎状态、M1.5 动作迁移和 M1.7 推进中移除 `stateVersion` 及递增逻辑。
+- 将 M1.7 当前公开的 `applyPokerAction()` 重命名为底层 `progressPokerAction()`；M1.9 门面占用正式 `applyPokerAction()` 名称并负责终止后同步结算。
+- 收紧纯状态不变量：6–9 个参与座位与底牌集合一致，非参与座位为 `out` 且零投入，按钮属于参与者，牌堆、burn、公共牌和底牌全局唯一。
+- 将 M1.7 的终止结果降为仅可被 M1.9 门面消费的内部类型，禁止服务层直接持久化。
+- 不改变发牌、行动合法性、下注、加注重开、街道推进或按钮轮转规则。
+
+后端测试闭环：
+
+- 原 M1.1–M1.7 规则测试在重命名后保持通过，版本断言迁移到 M3。
+- 类型与模块边界测试证明服务层不能绕过 M1.9 门面取得可提交的终止状态。
+- 状态 Schema 覆盖参与者、`out`、底牌、按钮和牌张唯一性不变量。
+
 ### M1.8 实现未跟注返还、主池、边池和结算
 
 产出：
 
 - 构建底池前计算并返还任何无法匹配的超额投入。
-- 生成独立 `uncalledBetReturned` 领域事件。
+- 返回事件无关的未跟注返还事实；M1.9 再据此生成独立 `uncalledBetReturned` 领域事件。
 - 按投入层构建主池和多层边池。
 - 逐池比较牌型、平分并按按钮左侧顺时针分配奇数筹码。
 - 直接获胜时不要求展示底牌。
-- 在 M1.7 终止路径中作为同一次扑克命令的同步纯领域后处理执行；M3 只能持久化 M1.7 与 M1.8 组合后的唯一最终状态。
-- 沿用 M1.7 已产生的 `stateVersion`，完成资金闭环时不得再次递增版本。
+- `SettlementHandContext` 保留全部参与者底牌、公共牌、剩余牌堆和 burn card，使结算结果足以形成完整审计事实。
+- 在 M1.7 终止路径中由 M1.9 门面作为同一次扑克命令的同步纯领域后处理执行；M3 只能接收 M1.7 与 M1.8 组合后的唯一最终状态。
+- 纯结算模块不读取或修改 `stateVersion`。
 
 后端测试闭环：
 
@@ -361,15 +410,31 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 
 产出：
 
+- 新增 `poker-engine.ts`，作为 M1 对服务层的唯一公开模块；提供 `initializePokerTable()`、`startPokerHand()` 和 `applyPokerAction()` 三个类型安全入口。
+- `initializePokerTable()` 校验座位并用显式安全随机源选择首手按钮；M3 不直接组合 M1.4 的底层按钮函数。
+- `startPokerHand()` 统一编排按钮保持/轮转、洗牌、发牌、庄盲、逻辑位置和首个行动位，返回冻结 `StartedHandFacts` 与 `handStarted` 草稿；M3 不自行拼装开手规则。
 - 生成每个座位开始/结束筹码、牌型、逐池分配、净变化和标准起手牌类别。
-- 生成历史和统计所需但不依赖数据库的领域事件。
+- 生成不可变的 `CompletedHandResult`，作为 `hands.completedResult`、历史和手牌级统计的权威事实。
+- 生成不含 ID、`eventSeq`、`stateVersion`、时间和协议快照的 `PokerDomainEventDraft[]`；终止命令顺序固定为 `actionCommitted`、可选 `uncalledBetReturned`、`handCompleted`。
+- `actionCommitted` 同时固化行动前合法集合、规范金额、街道/runout 事实及动作本地的 VPIP/PFR/完整加注分类；3-bet 由 M5 按事件序列投影，不在纯状态复制行动历史。
+- 返回 `PokerEngineResult { state, eventDrafts, completedHand }`；非终止动作的 `completedHand` 为 `null`。
 - 不在纯引擎内执行用户补码或 AI 自动买入。
+
+领取边界与顺序：
+
+1. **M1.9a 领域输出类型**：先冻结 `PokerDomainEventDraft`、`StartedHandFacts`、`CompletedHandResult/Summary`、动作本地统计分类及深冻结/规范顺序。
+2. **M1.9b 初始化与开手门面**：实现 `initializePokerTable()`、`startPokerHand()` 和 `handStarted` 草稿；依赖 M1.R、M1.9a。
+3. **M1.9c 行动与完成门面**：实现 `applyPokerAction()`、内部 `progressPokerAction()` → M1.8 接缝、完成结果和终止事件顺序；依赖 M1.8、M1.9a。
+
+三项可以分别提交，但 M1.9c 通过前不得把 M1 门面对 M3 标记为完成。
 
 后端测试闭环：
 
 - 验证 `AA`、`AKs`、`AKo` 等起手牌类别与具体花色无关。
 - 验证单手结束筹码与所有分配一致。
 - 验证事件足以重建按街道行动流程。
+- 验证 M3 无法取得或持久化未结算的内部终止状态。
+- 验证首手按钮不轮转、后续手只轮转一次，固定随机源下 `StartedHandFacts` 与开手状态可复现。
 
 ### M1.10 建立牌局引擎不变量测试集
 
@@ -387,6 +452,7 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 已弃牌或全下玩家不会再次行动。
 - 每次合法状态迁移只消耗允许的筹码和牌张。
 - 生成状态的座位总数只能为 6–9，且座位号唯一并位于 `0..8`。
+- 纯引擎状态和结果中不存在并发版本、基础设施事件 ID、时间戳或协议字段；允许原样回显调用方提供的领域 `handId/playerId`，版本单调性在 M3 属性/集成测试中验证。
 
 ## 6. M2：SQLite 持久化与恢复
 
@@ -411,12 +477,12 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 建立 `sessions`、`session_agents`、`agent_memory_revisions`、`hands`、`command_ledger`、`session_events`、`session_snapshots`、`agent_runs`、`agent_attempts`、`agent_capability_invocations`、`player_decisions`、`coach_reviews`、`coach_decision_assessments`、统计缓存和 `app_settings`；不建立 `agent_templates` 或 `agent_personas` 表。
 - 建立文档要求的唯一索引、外键和查询索引。
 - API Key 不存在于任何表。
-- `session_snapshots.privatePokerState` 保存唯一权威扑克状态；`sessions` 只保存生命周期和协调字段；`session_agents` 只保存本场配置与当前结构化记忆。
+- `session_snapshots.privateTableState` 保存版本化 `PrivateTableState` 信封；其中 `poker` 是唯一权威纯扑克状态，顶层保存版本、已完成手数、累计买入和最近完成手摘要。`sessions` 只保存生命周期、协调字段和事务并发镜像；`session_agents` 只保存本场配置与当前结构化记忆。
 - 所有持久化座位号约束为 `0..8`，一场的用户与 Agent 座位合计只能为 6–9 且不得重复。
 - 不创建 `session_agents.currentStack`、`sessions.buttonPosition` 或 `sessions.resultSummary`；`sessions.currentHandId` 仅作为可重建关系指针。
 - `session_snapshots` 以 `sessionId` 为主键或唯一键，每场只保存一行，通过 UPSERT 替换当前快照，不保存快照历史。
 - `sessions(ownerId) WHERE lifecycleStatus = 'active'` 建立部分唯一索引，作为每个 Owner 单活动场次的最终并发约束。
-- `hands` 区分 `completed | aborted`，并保存版本化 `handStartCheckpoint`、中止原因及关联失败 AgentRun；`aborted` 不保存伪结算。
+- `hands` 区分 `inProgress | completed | aborted`；开手事务即插入 `inProgress` 记录及版本化 `handStartCheckpoint`，正常结算转为 `completed` 并保存 `completedResult`，中止转为 `aborted` 并保存原因及关联失败 AgentRun；`aborted` 不保存伪结算。
 
 后端测试闭环：
 
@@ -466,9 +532,11 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 
 - 在同一事务内完成命令账本、`session_events`、`session_snapshots` 和相关领域表写入。
 - 同一事务同步 `sessions.stateVersion` 等协调列及可重建的 `currentHandId` 指针。
-- 每场 `eventSeq` 单调递增；扑克变化才递增 `stateVersion`。
+- 每场 `eventSeq` 单调递增；每个成功改变 `PrivateTableState` 的命令最多且恰好递增一次 `stateVersion`，一条命令内部不得按子步骤重复递增。
+- 同一命令产生的所有事件共享命令级 `stateVersionBefore/After`；只改变协调状态时两者相等，创建场次统一为 `0 → 1`。
 - Player 协调运行事件可以在同一 `stateVersion` 下继续增加 `eventSeq`；Coach 事件不写 `session_events` 或占用该序列。
 - 纯 Player 协调事件只更新 `sessions` 协调字段和统一事件，不重写未变化的私有扑克快照。
+- 当前手已提交行动历史只存在于 `session_events`；快照不得保存第二份行动数组。
 - 事务提交后才能向发布层返回可发送事件。
 
 后端测试闭环：
@@ -483,26 +551,27 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 
 产出：
 
-- 为私有快照定义独立的 `snapshotSchemaVersion` 和服务端私有 Zod Schema；为私有事件负载定义独立的 `eventSchemaVersion`。两者均不使用对外 `protocolVersion`。
-- 私有快照包含扑克阶段、座位筹码、按钮、当前手牌、行动状态、底池和最近结果摘要，是引擎与恢复的唯一扑克状态输入。
+- 为私有快照、开手检查点、完成手结果和私有事件负载分别定义 `snapshotSchemaVersion`、`checkpointSchemaVersion`、`handResultSchemaVersion`、`eventSchemaVersion` 及服务端私有 Zod Schema；它们均不使用对外 `protocolVersion`，也不把持久化版本写入纯 M1 类型。
+- 私有快照信封包含 `snapshotSchemaVersion` 和 `PrivateTableState`；后者由纯 `PokerTableState`、`stateVersion`、`completedHandCount`、累计买入及最近完成手摘要组成。
+- `PokerTableState` 包含扑克阶段、座位筹码、按钮和当前手牌，是引擎与恢复的唯一纯扑克状态输入；最近结果摘要不放入纯引擎状态。
 - 支持当前版本读取和显式已知旧版本迁移。
 - 未知版本或损坏数据进入只读诊断状态。
 - 禁止通过重新发牌覆盖损坏快照。
 
 后端测试闭环：
 
-- 覆盖当前版本、每个受支持旧版本、未知版本和损坏负载。
+- 分别覆盖各私有 JSON 信封的当前版本、每个受支持旧版本、未知版本和损坏负载。
 - 验证迁移后的领域状态与预期一致。
 - 覆盖 `sessions.stateVersion` 与快照版本不一致时进入只读诊断。
 - 覆盖有效快照与 `currentHandId` 不一致时从快照重建指针并记录诊断。
-- 验证引擎和恢复代码不从关系表拼装筹码、按钮或结果摘要。
+- 验证引擎和恢复代码不从关系表拼装筹码、按钮、累计买入或结果摘要；`session_events` 仅在公开投影/历史查询时提供已提交行动序列。
 - 验证只读诊断状态拒绝所有修改命令但允许读取错误摘要。
 
 ### M2.7 实现手牌与 AgentRun 审计持久化
 
 产出：
 
-- 保存完整牌堆、burn card、全部底牌、公共牌、起止筹码和结算；中止手只保存恢复所需检查点、最小中止元数据和关联失败运行，不伪造结算。
+- 非 Agent 部分直接持久化 M1.9 的 `CompletedHandResult`，保存完整牌堆可重建事实、burn card、全部底牌、公共牌、起止筹码和结算，不重新运行牌型或底池算法；中止手只保存恢复所需检查点、最小中止元数据和关联失败运行，不伪造结算。
 - 保存 AgentRun、尝试、固定能力调用、Player 决策、Coach assessment、记忆版本、实际超时、路由、校验结果、Token 和延迟。
 - 丢弃隐藏推理和 `reasoning_content`。
 
@@ -539,14 +608,16 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 
 - 同一场次一次只处理一个状态修改命令。
 - 不同读请求不绕过权威快照。
-- 牌局引擎的当前状态输入只能来自通过私有 Zod Schema 校验的 `privatePokerState`。
-- 命令统一经过账本、版本校验、引擎和事务提交。
+- 牌局引擎的当前状态输入只能来自通过私有 Zod Schema 校验及迁移的 `PrivateTableState.poker`。
+- 命令统一经过账本、预期版本校验、M1.9 门面、一次最终版本分配和事务提交；同一命令产生的所有事件都使用该最终版本。
+- M3 为事件草稿补齐 `eventId`、连续 `eventSeq`、时间、命令关联和最终 `stateVersion`，M1 不得生成这些基础设施字段。
 
 后端测试闭环：
 
 - 同时提交两个相同版本动作时只有一个成功推进。
 - 相同命令重复提交返回同一结果。
 - 版本落后返回冲突和最新公开快照。
+- 覆盖普通动作、终止并结算动作、补码、开下一手和中止恢复的版本表，证明每个状态变化命令只递增一次。
 
 ### M3.2 实现场次创建与阵容快照
 
@@ -555,7 +626,8 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 校验 5–8 个不同 `personaId` 和 `1..8` 内唯一 AI 座位；本地用户领域座位隐式固定为 `0`，拒绝客户端 `userSeatNumber` 和按钮字段。当前身份适配器固定为 `local-user`。
 - DeepSeek Key 缺失时阻止创建；Kimi Key 缺失时返回警告。
 - 从当前预设人物目录或上一场配置快照创建全新的 `session_agents` 和空记忆；沿用上一场时不升级人物版本。
-- 将座位 `0` 与 AI 座位合并并按座位号规范化，调用 M1.4 的安全随机首手按钮选择器；按钮和初始私有扑克快照在创建事务内原子持久化，第一手不得再次轮转。
+- 将座位 `0` 与 AI 座位合并并按座位号规范化，调用 M1.9 `initializePokerTable()` 安全随机选择首手按钮；创建版本 `0` 的内存 `betweenHands` 内容和开手检查点，再调用 `startPokerHand()` 直接开始第一手，按钮不得再次轮转。
+- 创建成功一次原子写入场次、初始累计买入、`hands.inProgress`、`sessionCreated`、`handStarted` 和最终 `inHand` 快照；最终 `stateVersion = 1`。失败不留下空场次或半手牌。
 - 创建事务依靠 `sessions(ownerId) WHERE lifecycleStatus = 'active'` 的部分唯一索引保证每个 `OwnerScope` 同一时间只有一个活动场次；不同 Owner 不互相阻塞。
 - 同一 Owner 的并发创建冲突稳定映射为 `409 ACTIVE_SESSION_EXISTS`；应用层预查不代替唯一索引。
 - 所有座位以 2,000 筹码开始。
@@ -564,6 +636,7 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 
 - 覆盖 6–9 人合法组桌，以及人数越界、未知人物、重复人物、重复座位、AI 使用座位 `0`、AI 座位越界和客户端提交用户座位/按钮。
 - 固定随机源下首手按钮可复现，创建输入排列不影响选择；快照写入失败时场次、按钮和人物快照全部回滚。
+- 创建响应直接是可运行的第一手；网络重试命中 `ACTIVE_SESSION_EXISTS` 后按返回的活动场次 `latestSnapshot` 恢复，不会创建或开出第二场。
 - 沿用旧版本人物的上一场阵容仍成功并保留旧配置，但不继承记忆。
 - 同一 Owner 的两个活动场次创建竞争时只有一个成功；不同 Owner 的独立场次在 Repository 合约测试中可以同时存在。
 
@@ -571,9 +644,11 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 
 产出：
 
-- 第一手使用创建时已持久化的按钮；从第二手开始轮转按钮，再下盲、发牌并进入正确首个行动位。
-- 玩家动作提交使用完整命令流程。
-- 手牌结束后停留在 `betweenHands` 结果摘要。
+- 第一手已由 M3.2 原子开始；从第二手开始由 M3.4 调用 `startPokerHand()`，按权威已完成手数轮转按钮一次，再下盲、发牌并进入正确首个行动位。
+- 玩家动作提交只能调用 M1.9 `poker-engine.ts` 门面，禁止依次直接调用 M1.7/M1.8。
+- 手牌结束命令在一个事务中完成：写入最终 `PrivateTableState`、递增已完成手数、更新最近完成手摘要、将 `hands` 转为 `completed` 并写入 `CompletedHandResult`、写入事件和命令账本。
+- 完成结果的手牌标识、按钮、参与座位、位置和开始筹码必须与 `hands.inProgress` 的 `StartedHandFacts` 一致；不一致则回滚，不允许静默覆盖。
+- 手牌结束后停留在 `betweenHands`；完整审计以 `hands.completedResult` 为准，快照只保留最近一手的公开/私有摘要。
 - 进行中禁止补码、撤销和重开；只有 `active + inHand + paused` 可以进入 M3.4 的中止结束路径。
 
 后端测试闭环：
@@ -590,12 +665,13 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 用户为零时必须买入 2,000 或结束。
 - 一手结算后不立即为归零 AI 买入；只有“开始下一手”命令通过幂等、版本、阶段和用户参局资格校验后，才为每个余额为 0 的 AI 自动买入 2,000。
 - 每个归零 AI 产生一条 `handId = null` 的 `aiAutoRebuy` 场次账务事件，并更新场次累计买入额。
-- 自动买入、创建新手牌、按钮轮转、下盲、发牌、命令账本、统一事件和快照在同一事务提交；失败全部回滚。
+- 自动买入后必须调用 M1.9 `startPokerHand()`；创建新手牌、按钮轮转、下盲、发牌、命令账本、统一事件和快照在同一事务提交，失败全部回滚。
 - 一次成功的“开始下一手”命令只递增一次 `stateVersion`，内部事件分别递增 `eventSeq`。
 - 直接结束场次不触发 AI 自动买入。
 - 任意正余额可以开始下一手。
 - 两手之间正常结束只把 `sessions.lifecycleStatus` 改为 `ended` 并递增 `eventSeq`，不改写最终私有扑克快照或递增 `stateVersion`。
 - `active + inHand + paused` 的“中止本手并结束场次”读取 `handStartCheckpoint`，恢复开手命令前的筹码、按钮、累计买入投影和已完成手数，以当前版本加一写入最新快照；当前手标记 `aborted`，同时写入连续的 `handAborted`、`sessionEnded` 并清空有效请求。
+- `handAborted` 固化回退前后筹码与累计买入差异，使本手开局时发生但随后被恢复的 AI 自动买入可以审计；统计与当前余额不得通过事件求和。
 - 中止手不进入普通历史、统计或 Coach；已持久化原始事件和失败 AgentRun 保留内部审计。中止和普通结束完成后均销毁可运行 Agent。
 
 后端测试闭环：
@@ -637,9 +713,10 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 产出：
 
 - 私有权威状态映射为当前用户可见快照。
-- `PublicSessionSnapshot` 由私有扑克快照、`sessions` 会话协调状态和可见性规则组合生成，不直接序列化任一数据库表，也不成为新的事实源。
+- `PublicSessionSnapshot` 由 `PrivateTableState`、`sessions` 会话协调状态、当前手已提交的私有行动事件和可见性规则组合生成，不直接序列化任一数据库表，也不成为新的事实源。
 - SSE 只发布已持久化事件。
 - SSE `id` 使用 `eventSeq`，负载包含 `eventId`、`stateVersion` 和对外 `protocolVersion`。
+- 每条 SSE 信封的 `eventSeq/stateVersion` 必须与负载快照一致；同命令多事件共享最终业务状态、使用各自连续游标，不公开原子命令的中间状态。
 - 包含 `handAborted` 在内的 SSE 事件统一使用 `payload: { snapshot }`；`type` 仅表示已持久化事件原因，不引入按类型分支的 SSE 负载。
 - 公开快照同时提供进行中手牌的公开行动序列、两手之间的最新公开结算摘要和脱敏 Agent 运行摘要；这些字段的精确共享 Schema 在 M1.9 领域结果输出完成后定义。
 - 事件不携带完整牌堆、burn card、未公开底牌或原始敏感调用。
@@ -649,6 +726,7 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 - 使用包含全部隐藏信息的私有状态验证公开投影字段白名单。
 - 同一 `stateVersion` 的 Agent 事件仍按更高 `eventSeq` 输出。
 - 断言全部事件类型都使用相同的公开快照负载；`handAborted` 携带更高版本的 `ended + betweenHands + hand = null` 回退快照。
+- 断言信封/快照游标或版本不一致无法通过共享 Schema。
 - 标记密钥和隐藏牌在所有 SSE 负载中不存在。
 
 ### M3.7 实现 SSE 重连和事件补发
@@ -834,7 +912,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- 从统一事件和手牌结果生成翻前、翻牌、转牌、河牌和摊牌时间线。
+- 从 `session_events` 中的 `actionCommitted`/返还/完成事件和 `hands.completedResult` 生成翻前、翻牌、转牌、河牌和摊牌时间线；前者是行动顺序事实源，后者是牌张、牌型和结算事实源。
 - 只投影 `hands.status = completed`；`aborted` 手牌不生成普通历史时间线，只允许内部调试查看最小中止元数据和关联失败运行。
 - 每步展示行动者、逻辑位置、动作、投入、行动后筹码和底池。
 - 包含公共牌、未跟注返还、牌型和逐池分配。
@@ -882,6 +960,9 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 产出：
 
 - 计算手牌数、单手/场次净盈亏、VPIP、PFR、3-bet、WTSD 和 W$SD。
+- 手牌数、手牌净变化、WTSD、W$SD 只从 `CompletedHandResult` 聚合；VPIP、PFR、3-bet 及其机会分母只从 `actionCommitted` 事件聚合；不得从最终快照反推行动。
+- M1.9 在 `actionCommitted` 中固化主动翻前投入、提高下注层级、自愿完整加注和行动前能否完整加注；M5 按 `eventSeq` 维护此前完整加注次数，只有恰好一次时计算 3-bet 机会/分子。盲注不算主动投入，跟注式或不足额全下不算完整加注。
+- 场次净盈亏按最终筹码减累计买入计算，累计买入来自 `PrivateTableState`/账务事实，不把盲注或底池投入重复视为买入。
 - 返回百分比的分子、分母和结果。
 - 分母为零时结果为 `null`。
 - 支持用户、AI、日期、场次、位置和配置快照筛选。
@@ -951,12 +1032,16 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 维护连接状态和最后处理的 `eventSeq`。
 - 使用 `Last-Event-ID` 重连。
 - SSE 断开时禁止提交新的玩家动作，重连并校准最新快照后恢复。
-- 只允许更高 `stateVersion` 替换扑克状态；同版本更高 `eventSeq` 仍处理 Agent 运行状态、场次结束等会话协调变化。
+- HTTP Query、Mutation 响应和 SSE 事件必须进入同一个快照接收器；TanStack Query 是唯一服务端实体缓存，Zustand 不保存镜像。
+- `eventSeq <= localEventSeq` 一律忽略；更高 `eventSeq` 即使 `stateVersion` 相同也接收会话协调变化。
+- 新快照的 `stateVersion` 小于本地版本视为协议错误并重新校准；`eventSeq` 出现缺口时暂停动作并重新获取权威快照。
+- SSE 事件按增量模式接收；成功 Mutation、当前场次 GET 和 SSE 补发后的校准快照按权威校准模式接收，可以跨过已由完整快照覆盖的事件缺口。
+- 不对筹码、行动位、底池或牌面做乐观更新。
 - 重连后重新获取最新场次。
 
 必要的纯逻辑验证：
 
-- 重复、乱序、同版本多事件和更高版本快照处理正确。
+- 重复、乱序、同版本多事件、更高版本快照、版本倒退和事件缺口处理正确。
 - SSE 负载未通过 Zod 时不写入 Query 缓存。
 
 ### M6.4 建立按领域拆分的 Zustand UI Store
@@ -1037,12 +1122,13 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 支持调整入座顺序和随机排座。
 - 确认页展示固定盲注 10/20、每席初始筹码 2,000、最终阵容和人物版本。
 - 显示 DeepSeek 必需配置和 Kimi 降级警告。
-- 创建场次后阵容锁定。
+- 创建场次后阵容锁定，成功响应直接携带原子开出的第一手 `inHand` 快照并进入牌桌，不再发送“开始第一手”命令。
 
 人工验收：
 
 - 座位、人数和连接问题在开场前表达清楚。
 - 沿用上一场不会误导用户继承了记忆或自动升级人物版本。
+- 创建请求因网络重试返回 `ACTIVE_SESSION_EXISTS` 时进入该活动场次继续训练，不重复创建或发牌。
 
 ### M7.4 牌桌布局与公开状态
 
@@ -1300,7 +1386,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - 使用确定性牌堆和动作脚本覆盖普通摊牌、直接获胜、短盲、不足额全下累计重开、未跟注返还、多边池、平分和一次性发完剩余公共牌。
 - 至少包含一条六人桌和一条九人桌主链夹具，验证逻辑位置、庄盲、发牌和首个行动位。
-- 夹具同时验证引擎结果、持久化事件、历史投影和统计贡献。
+- 夹具同时验证创建场次原子开第一手、引擎结果、持久化事件、历史投影和统计贡献。
 
 原则：
 
@@ -1321,6 +1407,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - 覆盖浏览器式重连、重复命令、服务进程重建时取消旧 Player 运行并从 DeepSeek 自动新建请求、`paused` 保持暂停和损坏快照只读诊断。
 - 验证 `stateVersion`、`eventSeq` 和 `decisionRequestId` 三者职责没有混用。
+- 验证全部状态变化命令的版本表、同命令多事件共享最终状态、SSE 信封/快照游标一致，以及 Mutation/SSE 竞速、重复、乱序、事件缺口和权威校准。
 - 验证 Coach 生命周期不占用场次 `eventSeq`，服务重启前的旧请求无法提交。
 
 ### M9.4 完成数据生命周期验收
@@ -1328,6 +1415,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 产出：
 
 - 连续完成多手牌局，结束场次并验证历史、统计和调用链。
+- 验证每座位场次净盈亏严格等于最终筹码减累计买入，且累计买入只由初始买入、用户补码和 AI 自动买入改变。
 - 在暂停中止当前手，验证回退开手前内容但版本前进，`handAborted`/`sessionEnded` 连续，普通历史、统计和 Coach 排除该手。
 - 同一 Owner 并发创建两个活动场次时仅一个成功并返回稳定 409；不同 Owner 不冲突。
 - 修改服务端预设人物版本后，历史人物配置快照仍保持原版本、可读且可筛选。

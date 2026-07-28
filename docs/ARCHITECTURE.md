@@ -6,7 +6,7 @@
 
 - 根目录通过 pnpm 编排开发、构建、类型检查、格式检查和后端测试命令；`verify` 固定按“格式检查 → 类型检查 → 后端测试”执行，后端测试会先验证并重建 Contracts，再运行 Server 分类测试，不承载运行时业务代码。
 - `apps/web` 是 React/Vite 手机竖屏浏览器客户端，入口为 `src/main.tsx`；目标可玩宽度为 360–430px，宽屏不建立第二套布局。唯一的牌面资源位于 `public/poker/`，由 Vite 作为 `/poker/<filename>` 提供。
-- `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。入口是唯一加载 dotenv 的位置；`src/config.ts` 用 Zod 校验私有环境配置，并通过 Contracts 生成不含密钥的初始 Provider 设置响应（不联网、不检测）；`src/poker/cards.ts` 使用 Contracts 的 Card 词汇生成标准牌与 `apps/web/public/poker/` 文件名映射；`src/poker/random-source.ts` 提供扑克规则共享的安全随机源；`src/poker/positioning.ts` 统一物理座位拓扑、按钮、庄盲、位置和可行动座位；`src/poker/blind-posting.ts` 不可变地提交固定 10/20 盲注；`src/poker/dealing.ts` 复用共享随机与座位拓扑洗出纯 `Card`、发两轮底牌，并可从私有牌张投影规范重建供逐街 burn/公共牌原语继续消费的 `DealtHand`；`src/poker/hand-evaluator.ts` 用严格输入校验和稳定领域结果隔离 CommonJS `pokersolver`，支持 5–7 张牌、七选五、九类牌型、轮子等级、同花截取和精确平局；`src/poker/state.ts` 通过私有 Zod 校验、深拷贝和深冻结构造私有扑克状态，固定用户在座位 `0`、AI 在 `1..8`，并持久表达当前下注、最小完整增量和按参与座位记录的上次行动层级；`src/poker/commands.ts` 定义无会话信封的共用扑克行动，`bet`、`raise` 使用唯一的 `targetStreetCommitment` 目标字段；`src/poker/betting.ts` 生成结构化合法动作，唯一可行动玩家只面对可匹配的实际投入，并执行为不可持久化的深层不可变 `BettingTransitionResult`；`src/poker/hand-progression.ts` 组合下注、拓扑、发牌和状态构造，原子决定下一行动者、街道推进、runout 与内部终止类型，并只递增一次版本；`src/personas/catalog.ts` 用私有 Zod Schema 校验并冻结八个人物目录，再投影为 Contracts 的公开摘要。目录仍无 API、数据库或 Agent Runtime 行为，后续创建场次时才会固化到 `session_agents`，不建立 `agent_templates` 或 `agent_personas` 表。
+- `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。入口是唯一加载 dotenv 的位置；`src/config.ts` 用 Zod 校验私有环境配置，并通过 Contracts 生成不含密钥的初始 Provider 设置响应（不联网、不检测）；`src/poker/cards.ts` 使用 Contracts 的 Card 词汇生成标准牌与 `apps/web/public/poker/` 文件名映射；`src/poker/random-source.ts` 提供扑克规则共享的安全随机源；`src/poker/positioning.ts` 统一物理座位拓扑、按钮、庄盲、位置和可行动座位；`src/poker/blind-posting.ts` 不可变地提交固定 10/20 盲注；`src/poker/dealing.ts` 复用共享随机与座位拓扑洗出纯 `Card`、发两轮底牌，并可从私有牌张投影规范重建供逐街 burn/公共牌原语继续消费的 `DealtHand`；`src/poker/hand-evaluator.ts` 用严格输入校验和稳定领域结果隔离 CommonJS `pokersolver`，支持 5–7 张牌、七选五、九类牌型、轮子等级、同花截取和精确平局；`src/poker/state.ts` 当前通过私有 Zod 校验、深拷贝和深冻结构造 `PokerState`，固定用户在座位 `0`、AI 在 `1..8`，并持久表达当前下注、最小完整增量和按参与座位记录的上次行动层级；`src/poker/commands.ts` 定义无会话信封的共用扑克行动，`bet`、`raise` 使用唯一的 `targetStreetCommitment` 目标字段；`src/poker/betting.ts` 生成结构化合法动作，唯一可行动玩家只面对可匹配的实际投入，并执行为不可持久化的深层不可变 `BettingTransitionResult`；`src/poker/hand-progression.ts` 当前组合下注、拓扑、发牌和状态构造，原子决定下一行动者、街道推进、runout 与内部终止类型，并递增 `PokerState.stateVersion`。该版本职责将在 M1.R 迁出，见下文；`src/personas/catalog.ts` 用私有 Zod Schema 校验并冻结八个人物目录，再投影为 Contracts 的公开摘要。目录仍无 API、数据库或 Agent Runtime 行为，后续创建场次时才会固化到 `session_agents`，不建立 `agent_templates` 或 `agent_personas` 表。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与预留的 `service/` 分类。临时 SQLite 只用于 integration 中验证真实 SQLite 行为，不承载产品数据。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、结构化合法动作、人物公开摘要与创建选择、Provider 健康/设置、HTTP/SSE 信封和错误响应。`LegalActionsSchema` 约束动作顺序、互斥、快捷目标顺序/唯一性/区间和普通目标与全下边界；Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。`bet`、`raise` 的命令金额固定为行动后本街总投入的 `targetStreetCommitment`。通用座位为 `0..8`，创建选择的 AI 为 `1..8`，公开快照固定唯一用户在座位 `0` 且总席数为 6–9；人物目录由八个固定标识组成。
 
@@ -16,7 +16,20 @@
 
 ## 当前运行链路
 
-`pnpm run dev` 同时编排 Web 与 Server；`pnpm run dev:web` 和 `pnpm run dev:server` 可分别启动。`pnpm run verify` 不启动服务、不联网，也不需模型 Key。Server 入口按“加载 dotenv → 校验配置 → 从 Key 生成初始 Provider 投影 → 仅监听 `127.0.0.1`”运行；投影尚未挂载 HTTP，M3.5 才加入手动检测与 Settings/Health 路由。当前动作调用链固定为 `PokerState + PokerCommand → applyBettingAction → BettingTransitionResult → applyPokerAction → PokerState`；`applyPokerAction` 选择仍欠行动者、推进新街或补完牌面，并统一生成版本恰好加一的 Schema 有效冻结状态。`showdown/complete` 仍是等待 M1.8 结算的内部状态，M3 不得单独持久化，M1.8 同步处理后也不再递增版本。测试链路独立使用确定性输入与临时 SQLite。真实 SQLite 初始化、迁移与命令接收门控仍由 M2.1/M3 实现。Web 构建使用 Vite，Server 与 Contracts 构建使用 TypeScript。
+`pnpm run dev` 同时编排 Web 与 Server；`pnpm run dev:web` 和 `pnpm run dev:server` 可分别启动。`pnpm run verify` 不启动服务、不联网，也不需模型 Key。Server 入口按“加载 dotenv → 校验配置 → 从 Key 生成初始 Provider 投影 → 仅监听 `127.0.0.1`”运行；投影尚未挂载 HTTP，M3.5 才加入手动检测与 Settings/Health 路由。当前已实现动作调用链仍为 `PokerState + PokerCommand → applyBettingAction → BettingTransitionResult → applyPokerAction → PokerState`；`applyPokerAction` 选择仍欠行动者、推进新街或补完牌面，并统一生成版本恰好加一的 Schema 有效冻结状态。该链路只描述 M1.7 完成时的现状，不是 M1.8 以后允许沿用的目标边界。测试链路独立使用确定性输入与临时 SQLite。真实 SQLite 初始化、迁移与命令接收门控仍由 M2.1/M3 实现。Web 构建使用 Vite，Server 与 Contracts 构建使用 TypeScript。
+
+## 已确认待实施的非 Agent 重基线
+
+[非 Agent 运行时架构重基线](./superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)已经确认，但代码尚未实施。进入 M1.8 前必须先完成 M1.R：
+
+- `PokerState` 重命名为纯 `PokerTableState`，移除 `stateVersion` 和不可观察的 `setup` 稳定阶段；`hand-progression.ts` 不再递增版本。
+- `apps/server/src/poker/settlement.ts` 负责返还、池层、单次牌型评估结果比较和派奖。
+- `apps/server/src/poker/poker-engine.ts` 成为 M1 唯一公开模块，通过 `initializePokerTable()` 封装初始按钮，通过 `startPokerHand()` 封装开手，通过 `applyPokerAction()` 封装 M1.7 内部终止和 M1.8 同步结算。
+- M1.9 的手牌结果模块输出不可变 `CompletedHandResult`、最近完成手摘要和不含基础设施字段的事件草稿。
+- M2/M3 会话层新增 `PrivateTableState`，统一持有版本、纯扑克状态、已完成手数、累计买入和最近结果；M3 每个成功状态变化命令只分配一个最终版本。
+- 当前手行动历史归 `session_events`，完整完成手归 `hands.completedResult`；快照不复制行动数组。
+
+目标行动链为 `PokerTableState + PokerCommand → poker-engine.ts → PokerEngineResult`，开手也只调用同一模块并取得 `StartedHandFacts`。M3 只消费门面结果，不得直接持久化 `showdown/complete`，也不得自行组合发牌、庄盲、推进与结算模块。
 
 ## 已确认但尚未实现的 Agent 边界
 

@@ -5,6 +5,7 @@
 ## 当前目录与职责
 
 - `docs/superpowers/specs/`：已确认的 PRD 与专项设计，是产品和实现边界的事实源。
+- `docs/superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md`：M1.7 以后非 Agent 运行时唯一重基线，定义纯引擎、会话聚合、版本、事件、持久化、公开投影和前端同步的事实归属。
 - `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md`：Agent 大模块总体事实源，定义 Foundation、Runtime、权限、运行生命周期、策略事实源、数据模型与当前/未来边界。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
 - `docs/superpowers/specs/2026-07-26-poker-coach-agent-design.md`：已确认的 Coach Agent 唯一详细设计源，约束手动复盘、两阶段信息隔离、确定性工具、策略数据、输出契约和验收。
@@ -29,4 +30,17 @@
 
 ## 当前主链路
 
-根 pnpm 脚本编排三个 workspace；`verify` 固定执行格式检查、类型检查与后端分类测试，且不读取模型 Key 或联网。根 `test:backend` 会在 Contracts 测试通过后重建 Contracts，再运行 Server 分类测试，保证 Server 从 workspace 导出的 `dist` 读取最新共享协议。Server 启动时先在入口加载 dotenv、校验端口与数据库路径，再以仅本机监听启动 Hono。Server 从 Contracts 的冻结 Card 字面量生成标准 52 张牌，并映射到 `apps/web/public/poker/` 中未修改的静态资源；浏览器通过 `/poker/<filename>` 访问它们。M1 的座位/发牌链路以 `positioning.ts` 作为唯一物理拓扑：创建场次从规范化入座集合选择首手按钮，开手按权威 `completedHandCountBeforeStart` 保持或轮转按钮，庄盲、位置、行动查找及 `dealing.ts` 两轮发牌均复用该顺序；`blind-posting.ts` 返回实际盲注、底池增量和固定名义 20 基准。`dealing.ts` 产生的可追溯牌张仍必须经 `createPokerState()`；独立评估链路是 `CardSchema → hand-evaluator.ts → pokersolver`，第三方对象不会离开适配器，M1.8 才消费其领域结果完成结算。动作链路为 `PokerState + PokerCommand → betting.ts → BettingTransitionResult → hand-progression.ts → PokerState`：下注迁移更新筹码、投入和下注元数据；手牌推进再按参与集合选择仍欠行动者、推进新街、补完牌面或进入内部 `showdown/complete`，最终统一通过 `createPokerState()` 校验冻结且版本只加一。终止结果尚未资金闭环，M3 必须在同一命令中继续同步执行 M1.8，且只能持久化组合后的最终状态。服务端测试由 Vitest Node/V8 coverage 驱动，按 unit、integration、service 分类运行；通用夹具使用独立临时 SQLite，这不等同于 M2 的生产持久化。供应商 Key 始终留在服务端私有配置中；M0.3 只把 Key 是否存在投影为不含 Key 的初始 Provider 设置响应，M3.5 才加入检测与 HTTP。数据库、SSE 传输与 Agent 调用尚未实现；它们之后只能使用 Contracts 的对外协议，不能泄露私有牌局状态。
+本节描述 M1.7 完成后的代码现状；其中 `PokerState.stateVersion` 和由 `hand-progression.ts` 递增版本的职责已被新重基线判定为待返工，不得作为 M1.8 以后新代码的目标边界。
+
+根 pnpm 脚本编排三个 workspace；`verify` 固定执行格式检查、类型检查与后端分类测试，且不读取模型 Key 或联网。根 `test:backend` 会在 Contracts 测试通过后重建 Contracts，再运行 Server 分类测试，保证 Server 从 workspace 导出的 `dist` 读取最新共享协议。Server 启动时先在入口加载 dotenv、校验端口与数据库路径，再以仅本机监听启动 Hono。Server 从 Contracts 的冻结 Card 字面量生成标准 52 张牌，并映射到 `apps/web/public/poker/` 中未修改的静态资源；浏览器通过 `/poker/<filename>` 访问它们。M1 的座位/发牌链路以 `positioning.ts` 作为唯一物理拓扑：创建场次从规范化入座集合选择首手按钮，开手按权威 `completedHandCountBeforeStart` 保持或轮转按钮，庄盲、位置、行动查找及 `dealing.ts` 两轮发牌均复用该顺序；`blind-posting.ts` 返回实际盲注、底池增量和固定名义 20 基准。`dealing.ts` 产生的可追溯牌张当前仍必须经 `createPokerState()`；独立评估链路是 `CardSchema → hand-evaluator.ts → pokersolver`，第三方对象不会离开适配器。当前动作链路为 `PokerState + PokerCommand → betting.ts → BettingTransitionResult → hand-progression.ts → PokerState`：下注迁移更新筹码、投入和下注元数据；手牌推进再按参与集合选择仍欠行动者、推进新街、补完牌面或进入内部 `showdown/complete`，最终统一通过 `createPokerState()` 校验冻结且版本只加一。服务端测试由 Vitest Node/V8 coverage 驱动，按 unit、integration、service 分类运行；通用夹具使用独立临时 SQLite，这不等同于 M2 的生产持久化。供应商 Key 始终留在服务端私有配置中；M0.3 只把 Key 是否存在投影为不含 Key 的初始 Provider 设置响应，M3.5 才加入检测与 HTTP。数据库、SSE 传输与 Agent 调用尚未实现；它们之后只能使用 Contracts 的对外协议，不能泄露私有牌局状态。
+
+## 已确认但尚未落地的非 Agent 文件边界
+
+- `apps/server/src/poker/state.ts`：在 M1.R 重命名为 `PokerTableState` 构造与校验入口，并移除版本字段与不可观察的 `setup` 稳定阶段。
+- `apps/server/src/poker/hand-progression.ts`：当前 `applyPokerAction()` 在 M1.R 重命名为底层 `progressPokerAction()`，只保留下注后推进与内部终止判定。
+- `apps/server/src/poker/settlement.ts`：M1.8 新增；负责返还、池层、牌型比较和派奖。
+- `apps/server/src/poker/poker-engine.ts`：M1.9 新增；M1 对 M3 的唯一公开模块，提供 `initializePokerTable()`、`startPokerHand()` 与 `applyPokerAction()`。
+- `apps/server/src/poker/hand-result.ts`（实现时可按现有命名规范微调）：M1.9 新增；定义 `CompletedHandResult`、最近结果摘要与事件草稿。
+- `apps/server/src/sessions/authoritative-state/`：M2/M3 实现 `PrivateTableState`、快照迁移、版本镜像校验和公开投影。
+
+目标行动链固定为 `PokerTableState + PokerCommand → poker-engine.ts → PokerEngineResult`；开手也只通过同一模块返回 `StartedHandFacts`。M3 不得取得未结算的 `showdown/complete`，也不得自行组合发牌、庄盲、推进与结算模块。

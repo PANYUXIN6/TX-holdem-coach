@@ -2,11 +2,14 @@
 
 - 状态：已确认，Agent 运行状态、Coach 决策字段、移动端视觉重构与预设人物方案已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-26
+- 最后更新：2026-07-28
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
+- 非 Agent 运行时基线：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
 - Agent 运行边界：[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
 - Coach 边界：[Coach Agent 专项设计](./2026-07-26-poker-coach-agent-design.md)
 - 开发任务：[开发任务分解](../plans/2026-07-23-poker-practice-development-tasks.md)
+
+> 本文的状态同步部分以 2026-07-28 非 Agent 运行时架构重基线为准；视觉、页面和 Agent 展示设计不受此次重基线影响。
 
 ## 1. 设计目标
 
@@ -99,7 +102,7 @@
    - 显示最终阵容及顺序。
    - 检查 DeepSeek 必需配置和 Kimi 降级配置。
    - 创建本场人物配置快照；首手按钮由服务端安全随机并随创建响应返回，前端不预选或覆盖。
-   - 使用服务端确认的初始快照开始第一手。
+   - 创建场次成功响应已经是原子开出的第一手 `inHand` 快照，直接进入牌桌；前端不再发送第二个“开始第一手”命令。
 
 开场后阵容锁定。前端不提供人物创建、编辑、复制、删除或导入操作。
 
@@ -353,7 +356,7 @@ AI 底牌严格使用服务端可见性投影。前端不接收未公开牌后�
 
 ### 7.2 事件
 
-前端通过场次 SSE 接收下列已持久化的扑克事件和 Player 协调事件。`stateVersion` 只比较权威扑克状态；场次内单调递增的 `eventSeq` 只用于排序、去重该 SSE 流中的扑克及 Player 协调事件，每个事件另带全局唯一 `eventId`。Coach 使用独立复盘生命周期，不进入该事件流：
+前端通过场次 SSE 接收下列已持久化的扑克事件和 Player 协调事件。`eventSeq` 是整个场次快照更新的总顺序，`stateVersion` 只验证桌状态不能倒退；每个事件另带全局唯一 `eventId`。Coach 使用独立复盘生命周期，不进入该事件流：
 
 - 权威状态快照。
 - 已提交行动。
@@ -363,7 +366,18 @@ AI 底牌严格使用服务端可见性投影。前端不接收未公开牌后�
 - 牌局暂停。
 - 手牌正常完成、手牌中止和场次结束。
 
-只有 `stateVersion` 高于本地版本的 `PublicSessionSnapshot` 才能替换 `['session', sessionId]` 中的扑克状态。同一 `stateVersion` 下更高 `eventSeq` 的会话协调事件仍必须处理，包括 Agent 运行状态和场次结束；它们更新场次 Query 中的协调字段，或使关联调用链 Query 失效。Zustand 不保存这些服务端事件。
+HTTP Query、Mutation 响应和 SSE 都调用同一个快照接收器，并把通过 Zod 校验的完整 `PublicSessionSnapshot` 写入 `['session', sessionId]`：
+
+1. 本地尚无快照时直接接收。
+2. `eventSeq <= localEventSeq` 时视为重复或旧到达并忽略。
+3. 更高 `eventSeq` 携带更低 `stateVersion` 时视为协议异常，暂停玩家动作并获取最新快照。
+4. 增量来源的 `eventSeq = localEventSeq + 1` 且版本不倒退时接收；同一 `stateVersion` 的更高事件仍会更新生命周期、运行摘要等协调字段。
+5. 增量来源出现 `eventSeq` 缺口时不应用候选快照，进入校准状态。
+6. 只有显式的权威校准来源（成功 Mutation 响应、当前场次 GET 或 SSE 补发后的校准快照）可以跨越缺口；校准快照仍不得发生 `stateVersion` 倒退。
+
+Mutation 与 SSE 竞速时，较晚到达的相同 `eventSeq` 自动被忽略。创建场次返回 `ACTIVE_SESSION_EXISTS + latestSnapshot` 时也把该快照作为权威校准输入，并进入“继续训练”。Zustand 只记录连接/校准等 UI 状态，不保存这些服务端事件或快照。
+
+每个 SSE 信封必须与负载满足 `event.eventSeq === snapshot.eventSeq`、`event.stateVersion === snapshot.stateVersion`。同一命令的多条事件共享最终业务状态但使用各自连续游标；事件类型提示属于尽力而为的 UI 效果，不能作为牌桌状态。
 
 ### 7.3 重连
 
@@ -374,14 +388,14 @@ SSE 断开时：
 3. 使用最后处理的 SSE `eventSeq` 作为 `Last-Event-ID` 自动重新订阅。
 4. 顺序补收遗漏的已持久化事件。
 5. 重连成功后读取由服务端组合生成、包含当前生命周期、`agentRunState` 和有效请求摘要的最新 `PublicSessionSnapshot`。
-6. 通过 TanStack Query 使当前场次查询失效并重新获取。
-7. 丢弃旧版本缓存，以服务端版本为准；Zustand 不参与快照恢复。
+6. 将 SSE 校准快照或当前场次 GET 标记为权威校准输入，交给同一快照接收器。
+7. 校准成功后恢复玩家动作；Zustand 不参与快照恢复。
 
 历史、统计和设置的写操作成功后，只使对应 Query Key 失效。场次结束或离开牌桌时重置该页面的 Zustand UI 状态，不影响 Query 缓存和服务端数据。
 
 Coach 创建和重新生成通过独立 Mutation 完成。它们只使目标手牌的 Coach Query 失效，不修改场次快照 Query、扑克 `stateVersion` 或 SSE 游标。
 
-快照或状态版本异常时进入只读诊断页，展示错误标识和恢复建议，禁止继续发送扑克命令。
+校准后仍存在快照 Schema、版本倒退或事件序列异常时进入只读诊断页，展示错误标识和恢复建议，禁止继续发送扑克命令。
 
 ## 8. AI 等待与暂停
 

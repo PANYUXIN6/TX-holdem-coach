@@ -237,6 +237,17 @@ function applyPokerAction(
 
 `initializePokerTable()` 校验 6–9 个座位、选择首手按钮并返回版本无关的 `betweenHands` 纯状态。`startPokerHand()` 统一执行按钮保持/轮转、安全洗牌、发牌、庄盲、逻辑位置与首个行动位；首手传入 `completedHandCountBeforeStart = 0`，后续手传入权威已完成手数。随机源是必传的唯一显式非确定性依赖：生产传入安全随机源，测试传入固定源，不允许门面内部读取时间或使用隐藏的随机全局。
 
+这里的“权威已完成手数”描述最终调用链，不表示 M1.4 或 M1.9 依赖 M2：
+
+```text
+M3 读取 PrivateTableState.completedHandCount
+  → 作为 completedHandCountBeforeStart 标量传给 M1.9b startPokerHand()
+  → M1.9b 调用 M1.4 按钮原语
+  → M1.9b 调用 M1.2 发牌原语
+```
+
+M1.2/M1.4 不导入 `PrivateTableState`，也不反向依赖 `poker-engine.ts`。M1.9b 在 M2 完成前使用显式标量输入即可独立实现和测试；M2 只定义该值的权威存储，M3 才负责读取和接线。
+
 `StartedHandFacts.handNumber = completedHandCountBeforeStart + 1`；`startingStacks` 是下盲前筹码，所有座位事实按座位号升序，`positions` 使用 M1.4 已确认的逻辑位置枚举。M3 直接用该结果创建 `hands.inProgress`，不得从结算结果或事件负载反推开手事实。
 
 底层 `positioning.ts`、`dealing.ts`、`blind-posting.ts`、`betting.ts`、`hand-progression.ts`、`settlement.ts` 和结果构造模块保持可独立单元测试，但 M3 不得绕过 `poker-engine.ts` 组合开手或行动步骤。
@@ -542,6 +553,8 @@ HTTP Mutation、普通 Query 和 SSE 统一经过同一个快照接收器。接�
 - 移除纯状态和 M1.7 中的版本处理。
 - 把版本断言移到 M3 服务/事务测试。
 - 补齐全部 `inHand` 参与集合、底牌和底池不变量。
+- M1.2 只修改纯状态类型引用；M1.4 继续接收显式 `completedHandCountBeforeStart`。两者不依赖尚未实现的 M1.9 或 M2。
+- M1.R 只为 M1.9 门面准备底层边界，不把“服务层只能调用门面”作为本任务可独立完成的验收项；该边界在 M1.9c/M3 验收。
 - 保持 M1.1–M1.7 已确认扑克规则不变。
 
 ### 13.2 M1.8
@@ -558,6 +571,8 @@ HTTP Mutation、普通 Query 和 SSE 统一经过同一个快照接收器。接�
 
 M1.9b 依赖 M1.R/M1.9a；M1.9c 依赖 M1.8/M1.9a。只有三个切片全部通过，M1 对 M3 的门面才算完成。
 
+默认单任务开发顺序固定为 M1.8 → M1.9a → M1.9b → M1.9c。依赖图允许 M1.8 与 M1.9a 并行准备，但线性流程先完成 M1.8，使 M1.9a 直接使用稳定结算事实而不定义临时占位类型。M1.9b 的测试直接提供 `completedHandCountBeforeStart`，不等待 M2。
+
 ### 13.4 M2/M3
 
 先固定 Schema 和快照，再实现 Repository、事务、恢复和 API。M3 不得在 M1.9 输出未稳定前定义重复的手牌结果结构。
@@ -570,8 +585,10 @@ M1.9b 依赖 M1.R/M1.9a；M1.9c 依赖 M1.8/M1.9a。只有三个切片全部通�
 
 ```text
 M1.R
-  → M1.8 与 M1.9a
-  → M1.9b/M1.9c
+  → M1.8
+  → M1.9a
+  → M1.9b
+  → M1.9c
   → M0.2 公开协议返工
   → M2
   → M3
@@ -588,9 +605,9 @@ M6 可以在 M3 完成前建设应用壳和纯 UI 基础，但场次数据模型
 | M0.2 共享契约 | 从公开 `PokerPhase` 移除不可观察的 `setup`；M1.9 后扩展当前手时间线、最近结果摘要与配套测试；SSE 接收以 `eventSeq` 为总顺序 | 既有牌张、行动金额、座位和 Provider 契约 |
 | M0.3 配置边界 | 无非 Agent 返工 | 全部现有实现 |
 | M1.1 私有状态 | 重命名为 `PokerTableState`、移除 `stateVersion/setup`、增强参与集合和底池不变量 | 深拷贝、深冻结、座位和牌张校验模式 |
-| M1.2 发牌 | 只做类型重命名；确保完成手结果保留 burn、board、remaining deck | 洗牌、发牌和 runout 算法 |
+| M1.2 发牌 | M1.R 只做类型重命名；M1.9a/M1.9b 再负责结果字段和门面编排 | 洗牌、发牌和 runout 算法 |
 | M1.3 牌型 | 只做类型引用调整 | 评估和比较算法 |
-| M1.4 座位庄盲 | `completedHandCount` 明确由 `PrivateTableState` 提供 | 按钮、庄盲、位置和顺时针算法 |
+| M1.4 座位庄盲 | 保留显式 `completedHandCountBeforeStart` 输入；M1.9b 负责传递，M3 集成时才从 `PrivateTableState` 读取 | 按钮、庄盲、位置和顺时针算法 |
 | M1.5/M1.6 下注 | 只做状态类型重命名 | 合法动作、下注迁移和累计不足额全下规则 |
 | M1.7 手牌推进 | 移除版本递增；收敛为 `poker-engine.ts` 内部步骤；测试不再断言版本 | 行动位、街道推进、runout 和终止判定 |
 | M1.8 设计 | 改用 `PokerTableState`；由 M1.9 facade 编排；补齐 burn/remaining deck；删除版本规则 | 返还、池层、派奖和奇数筹码算法 |

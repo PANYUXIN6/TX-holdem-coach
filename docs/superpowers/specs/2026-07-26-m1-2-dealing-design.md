@@ -1,6 +1,6 @@
 # M1.2：牌堆、洗牌、发牌与 burn 流程设计
 
-> 2026-07-28 非 Agent 运行时重基线：本设计的洗牌、发牌、burn、runout 与牌张可追溯规则全部继续有效。实现时仅把 `PokerState/createPokerState` 引用改为 `PokerTableState/createPokerTableState`，并由 M1.9 `poker-engine.ts.startPokerHand()` 统一编排开手；M3 不直接组合本模块。详见[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)。
+> 2026-07-28 非 Agent 运行时重基线：本设计的洗牌、发牌、burn、runout 与牌张可追溯规则全部继续有效。M1.R 只把 `PokerState/createPokerState` 引用改为 `PokerTableState/createPokerTableState`；本模块仍保持可独立测试，不依赖 `poker-engine.ts` 或 `PrivateTableState`。M1.9b 后续通过 `poker-engine.ts.startPokerHand()` 统一编排本模块，M3 只调用门面而不直接组合发牌。详见[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)。
 
 - 状态：已确认
 - 日期：2026-07-26

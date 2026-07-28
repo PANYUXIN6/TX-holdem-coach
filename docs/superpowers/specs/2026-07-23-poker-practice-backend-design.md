@@ -122,6 +122,7 @@ API 不直接计算扑克规则。
 
 - 处理纯输入状态和命令。
 - 通过 M1.9 `poker-engine.ts` 唯一公开模块提供 `initializePokerTable()`、`startPokerHand()` 与 `applyPokerAction()`；初始化返回纯桌状态，后两者分别返回 `StartPokerHandResult` 和 `PokerEngineResult { state, eventDrafts, completedHand }`。
+- `startPokerHand()` 接收显式 `completedHandCountBeforeStart` 标量；M1.2/M1.4 不读取 `PrivateTableState`，也不依赖门面。M1.9b 可以在 M2 前独立实现和测试，M3 集成时才从 `PrivateTableState.completedHandCount` 读取权威值并传入门面。
 - 计算行动顺序、合法行动、下注、筹码、底池、牌型和结算。
 - M1.7 的 `showdown/complete` 是门面内部终止状态；门面必须在同次调用中同步完成 M1.8 结算后才可返回。
 

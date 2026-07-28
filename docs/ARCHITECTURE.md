@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-07-28（M0.2/M0.3 已实现固定用户座位与 Provider 初始配置投影；M1.1–M1.7 已实现私有扑克规则，M1.R 已完成纯状态去版本化）
+更新时间：2026-07-28（M0.2/M0.3 已实现固定用户座位与 Provider 初始配置投影；M1.1–M1.8 已实现私有扑克规则，M1.R 已完成纯状态去版本化）
 
 ## Workspace 边界
 
@@ -16,13 +16,12 @@
 
 ## 当前运行链路
 
-`pnpm run dev` 同时编排 Web 与 Server；`pnpm run dev:web` 和 `pnpm run dev:server` 可分别启动。`pnpm run verify` 不启动服务、不联网，也不需模型 Key。Server 入口按“加载 dotenv → 校验配置 → 从 Key 生成初始 Provider 投影 → 仅监听 `127.0.0.1`”运行；投影尚未挂载 HTTP，M3.5 才加入手动检测与 Settings/Health 路由。当前已实现动作调用链为 `PokerTableState + PokerCommand → applyBettingAction → BettingTransitionResult → progressPokerAction → PokerTableState`；推进函数选择仍欠行动者、推进新街或补完牌面，并统一生成无版本的 Schema 有效冻结状态。测试链路独立使用确定性输入与临时 SQLite。真实 SQLite 初始化、迁移与命令接收门控仍由 M2.1/M3 实现。Web 构建使用 Vite，Server 与 Contracts 构建使用 TypeScript。
+`pnpm run dev` 同时编排 Web 与 Server；`pnpm run dev:web` 和 `pnpm run dev:server` 可分别启动。`pnpm run verify` 不启动服务、不联网，也不需模型 Key。Server 入口按“加载 dotenv → 校验配置 → 从 Key 生成初始 Provider 投影 → 仅监听 `127.0.0.1`”运行；投影尚未挂载 HTTP，M3.5 才加入手动检测与 Settings/Health 路由。当前已实现动作调用链为 `PokerTableState + PokerCommand → applyBettingAction → BettingTransitionResult → progressPokerAction → PokerTableState`；推进函数选择仍欠行动者、推进新街或补完牌面，并统一生成无版本的 Schema 有效冻结状态。终止候选可由独立 `settlement.ts` 纯函数结算为 `betweenHands` 状态与冻结结算事实；M1.9 才负责把该内部接缝封装为公开引擎入口。测试链路独立使用确定性输入与临时 SQLite。真实 SQLite 初始化、迁移与命令接收门控仍由 M2.1/M3 实现。Web 构建使用 Vite，Server 与 Contracts 构建使用 TypeScript。
 
 ## 已确认待实施的非 Agent 重基线
 
-[非 Agent 运行时架构重基线](./superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)已确认；M1.R 已实施，M1.8 及后续任务仍待完成：
+[非 Agent 运行时架构重基线](./superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)已确认；M1.R/M1.8 已实施，后续任务仍待完成：
 
-- `apps/server/src/poker/settlement.ts` 负责返还、池层、单次牌型评估结果比较和派奖。
 - `apps/server/src/poker/poker-engine.ts` 成为 M1 唯一公开模块，通过 `initializePokerTable()` 封装初始按钮，通过 `startPokerHand()` 封装开手，通过 `applyPokerAction()` 封装 M1.7 内部终止和 M1.8 同步结算。
 - M1.9 的手牌结果模块输出不可变 `CompletedHandResult`、最近完成手摘要和不含基础设施字段的事件草稿。
 - M2/M3 会话层新增 `PrivateTableState`，统一持有版本、纯扑克状态、已完成手数、累计买入和最近结果；M3 每个成功状态变化命令只分配一个最终版本。

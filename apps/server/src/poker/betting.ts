@@ -136,7 +136,50 @@ function createSuggestedTargets(
 export function getLegalActions(state: PokerState): LegalActions {
   const { hand, bettingRound, actor, betLevelAfterLastAction } =
     getBettingContext(state)
-  const callAmount = bettingRound.currentBet - actor.streetContribution
+  const participantSeatNumbers = new Set(
+    hand.holeCards.map((holeCards) => holeCards.seatNumber),
+  )
+  const contenders = state.seats.filter(
+    (seat) =>
+      participantSeatNumbers.has(seat.seatNumber) &&
+      (seat.status === 'active' || seat.status === 'allIn'),
+  )
+  const actionable = contenders.filter(
+    (seat) => seat.status === 'active' && seat.stack > 0,
+  )
+
+  if (contenders.length < 2 || actionable.length === 0) {
+    throw new RangeError('当前手牌已经无需继续行动。')
+  }
+
+  const callAmount =
+    actionable.length === 1
+      ? Math.max(
+          0,
+          Math.max(
+            ...contenders
+              .filter((seat) => seat.seatNumber !== actor.seatNumber)
+              .map((seat) => seat.streetContribution),
+          ) - actor.streetContribution,
+        )
+      : bettingRound.currentBet - actor.streetContribution
+
+  if (actionable.length === 1) {
+    if (actionable[0]?.seatNumber !== actor.seatNumber || callAmount === 0) {
+      throw new RangeError('当前手牌已经无需继续行动。')
+    }
+
+    return LegalActionsSchema.parse([
+      { type: 'fold' },
+      actor.stack > callAmount
+        ? { type: 'call', amount: callAmount }
+        : {
+            type: 'allIn',
+            target: actor.streetContribution + actor.stack,
+          },
+    ])
+  }
+
   const allInTarget = actor.streetContribution + actor.stack
   const ordinaryMaxTarget = allInTarget - 1
   const minTarget =
@@ -241,9 +284,18 @@ export function applyBettingAction(
   let contributionDelta = 0
 
   switch (parsedCommand.action.type) {
-    case 'call':
-      contributionDelta = previousCurrentBet - actor.streetContribution
+    case 'call': {
+      const legalCall = legalActions.find(
+        (legalAction) => legalAction.type === 'call',
+      )
+
+      if (legalCall === undefined) {
+        throw new RangeError('合法动作中缺少跟注金额。')
+      }
+
+      contributionDelta = legalCall.amount
       break
+    }
     case 'bet':
     case 'raise':
       contributionDelta =

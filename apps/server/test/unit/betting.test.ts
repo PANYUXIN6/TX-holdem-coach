@@ -38,6 +38,97 @@ function commandForLegalAction(
 }
 
 describe('getLegalActions', () => {
+  test('limits the only actionable player to the amount another contender can match', () => {
+    const baseline = createTestBettingPokerState()
+    const state = createTestBettingPokerState({
+      seats: baseline.seats.map((seat) => {
+        if (seat.seatNumber === 2) {
+          return {
+            ...seat,
+            stack: 0,
+            status: 'allIn' as const,
+            streetContribution: 7,
+            totalContribution: 7,
+          }
+        }
+
+        if (seat.seatNumber === 3) {
+          return {
+            ...seat,
+            stack: 100,
+            streetContribution: 0,
+            totalContribution: 0,
+          }
+        }
+
+        return {
+          ...seat,
+          status: 'folded' as const,
+          streetContribution: 0,
+          totalContribution: 0,
+        }
+      }),
+      hand: {
+        currentActorSeatNumber: 3,
+        pot: 7,
+        bettingRound: {
+          currentBet: 20,
+          minimumFullRaiseIncrement: 20,
+          seatStates: bettingRoundOf(baseline).seatStates,
+        },
+      },
+    })
+
+    expect(getLegalActions(state)).toEqual([
+      { type: 'fold' },
+      { type: 'call', amount: 7 },
+    ])
+  })
+
+  test('rejects a snapshot where the only actionable player has no matchable call', () => {
+    const baseline = createTestBettingPokerState()
+    const state = createTestBettingPokerState({
+      seats: baseline.seats.map((seat) => {
+        if (seat.seatNumber === 2) {
+          return {
+            ...seat,
+            stack: 0,
+            status: 'allIn' as const,
+            streetContribution: 7,
+            totalContribution: 7,
+          }
+        }
+
+        if (seat.seatNumber === 3) {
+          return {
+            ...seat,
+            stack: 90,
+            streetContribution: 10,
+            totalContribution: 10,
+          }
+        }
+
+        return {
+          ...seat,
+          status: 'folded' as const,
+          streetContribution: 0,
+          totalContribution: 0,
+        }
+      }),
+      hand: {
+        currentActorSeatNumber: 3,
+        pot: 17,
+        bettingRound: {
+          currentBet: 20,
+          minimumFullRaiseIncrement: 20,
+          seatStates: bettingRoundOf(baseline).seatStates,
+        },
+      },
+    })
+
+    expect(() => getLegalActions(state)).toThrow(/无需继续行动/)
+  })
+
   test('describes fold, call, a full raise range, and all-in when facing the big blind', () => {
     const state = createTestBettingPokerState()
 
@@ -168,6 +259,286 @@ describe('getLegalActions', () => {
       { type: 'fold' },
       { type: 'call', amount: 10 },
     ])
+  })
+
+  test('keeps raising closed when cumulative short all-ins remain below one full increment', () => {
+    const baseline = createTestBettingPokerState()
+    const state = createTestBettingPokerState({
+      seats: baseline.seats.map((seat) => {
+        if (seat.seatNumber === 3) {
+          return {
+            ...seat,
+            stack: 1980,
+            streetContribution: 20,
+            totalContribution: 20,
+          }
+        }
+        if (seat.seatNumber === 4) {
+          return {
+            ...seat,
+            stack: 0,
+            status: 'allIn' as const,
+            streetContribution: 39,
+            totalContribution: 39,
+          }
+        }
+
+        return seat
+      }),
+      hand: {
+        pot: 89,
+        bettingRound: {
+          currentBet: 39,
+          minimumFullRaiseIncrement: 20,
+          seatStates: bettingRoundOf(baseline).seatStates.map((seatState) => {
+            if (seatState.seatNumber === 3) {
+              return { ...seatState, betLevelAfterLastAction: 20 }
+            }
+            if (seatState.seatNumber === 4) {
+              return { ...seatState, betLevelAfterLastAction: 39 }
+            }
+
+            return seatState
+          }),
+        },
+      },
+    })
+
+    expect(getLegalActions(state)).toEqual([
+      { type: 'fold' },
+      { type: 'call', amount: 19 },
+    ])
+  })
+
+  test('reopens raising per player when cumulative short all-ins reach one full increment', () => {
+    const baseline = createTestBettingPokerState()
+    const seats = baseline.seats.map((seat) => {
+      if (seat.seatNumber === 3) {
+        return {
+          ...seat,
+          stack: 1980,
+          streetContribution: 20,
+          totalContribution: 20,
+        }
+      }
+      if (seat.seatNumber === 4) {
+        return {
+          ...seat,
+          stack: 1970,
+          streetContribution: 30,
+          totalContribution: 30,
+        }
+      }
+      if (seat.seatNumber === 5) {
+        return {
+          ...seat,
+          stack: 0,
+          status: 'allIn' as const,
+          streetContribution: 40,
+          totalContribution: 40,
+        }
+      }
+
+      return seat
+    })
+    const bettingRound = {
+      currentBet: 40,
+      minimumFullRaiseIncrement: 20,
+      seatStates: bettingRoundOf(baseline).seatStates.map((seatState) => {
+        if (seatState.seatNumber === 3) {
+          return { ...seatState, betLevelAfterLastAction: 20 }
+        }
+        if (seatState.seatNumber === 4) {
+          return { ...seatState, betLevelAfterLastAction: 30 }
+        }
+        if (seatState.seatNumber === 5) {
+          return { ...seatState, betLevelAfterLastAction: 40 }
+        }
+
+        return seatState
+      }),
+    }
+    const earlierActorState = createTestBettingPokerState({
+      seats,
+      hand: {
+        currentActorSeatNumber: 3,
+        pot: 120,
+        bettingRound,
+      },
+    })
+    const laterActorState = createTestBettingPokerState({
+      seats,
+      hand: {
+        currentActorSeatNumber: 4,
+        pot: 120,
+        bettingRound,
+      },
+    })
+
+    const earlierActions = getLegalActions(earlierActorState)
+
+    expect(
+      earlierActions.find((action) => action.type === 'raise'),
+    ).toMatchObject({
+      minTarget: 60,
+    })
+    expect(earlierActions.find((action) => action.type === 'allIn')).toEqual({
+      type: 'allIn',
+      target: 2000,
+    })
+    expect(getLegalActions(laterActorState)).toEqual([
+      { type: 'fold' },
+      { type: 'call', amount: 10 },
+    ])
+  })
+
+  test('reopens raising when cumulative short all-ins exceed one full increment', () => {
+    const baseline = createTestBettingPokerState()
+    const state = createTestBettingPokerState({
+      seats: baseline.seats.map((seat) => {
+        if (seat.seatNumber === 3) {
+          return {
+            ...seat,
+            stack: 1980,
+            streetContribution: 20,
+            totalContribution: 20,
+          }
+        }
+        if (seat.seatNumber === 4) {
+          return {
+            ...seat,
+            stack: 0,
+            status: 'allIn' as const,
+            streetContribution: 45,
+            totalContribution: 45,
+          }
+        }
+
+        return seat
+      }),
+      hand: {
+        pot: 95,
+        bettingRound: {
+          currentBet: 45,
+          minimumFullRaiseIncrement: 20,
+          seatStates: bettingRoundOf(baseline).seatStates.map((seatState) => {
+            if (seatState.seatNumber === 3) {
+              return { ...seatState, betLevelAfterLastAction: 20 }
+            }
+            if (seatState.seatNumber === 4) {
+              return { ...seatState, betLevelAfterLastAction: 45 }
+            }
+
+            return seatState
+          }),
+        },
+      },
+    })
+
+    const actions = getLegalActions(state)
+
+    expect(actions.find((action) => action.type === 'raise')).toMatchObject({
+      minTarget: 65,
+    })
+    expect(actions.find((action) => action.type === 'allIn')).toEqual({
+      type: 'allIn',
+      target: 2000,
+    })
+  })
+
+  test('uses the last full increment after cumulative short all-ins reopen raising', () => {
+    const baseline = createTestBettingPokerState()
+    const state = createTestBettingPokerState({
+      seats: baseline.seats.map((seat) => {
+        if (seat.seatNumber === 3) {
+          return {
+            ...seat,
+            stack: 1970,
+            streetContribution: 30,
+            totalContribution: 30,
+          }
+        }
+        if (seat.seatNumber === 4) {
+          return {
+            ...seat,
+            stack: 0,
+            status: 'allIn' as const,
+            streetContribution: 65,
+            totalContribution: 65,
+          }
+        }
+
+        return seat
+      }),
+      hand: {
+        pot: 125,
+        bettingRound: {
+          currentBet: 65,
+          minimumFullRaiseIncrement: 30,
+          seatStates: bettingRoundOf(baseline).seatStates.map((seatState) => {
+            if (seatState.seatNumber === 3) {
+              return { ...seatState, betLevelAfterLastAction: 30 }
+            }
+            if (seatState.seatNumber === 4) {
+              return { ...seatState, betLevelAfterLastAction: 65 }
+            }
+
+            return seatState
+          }),
+        },
+      },
+    })
+
+    const actions = getLegalActions(state)
+
+    expect(actions.find((action) => action.type === 'raise')).toMatchObject({
+      minTarget: 95,
+    })
+    expect(actions.find((action) => action.type === 'allIn')).toEqual({
+      type: 'allIn',
+      target: 2000,
+    })
+  })
+
+  test('keeps raising open for a player who has not acted on the street', () => {
+    const baseline = createTestBettingPokerState()
+    const state = createTestBettingPokerState({
+      seats: baseline.seats.map((seat) => {
+        if (seat.seatNumber === 4) {
+          return {
+            ...seat,
+            stack: 0,
+            status: 'allIn' as const,
+            streetContribution: 30,
+            totalContribution: 30,
+          }
+        }
+
+        return seat
+      }),
+      hand: {
+        pot: 60,
+        bettingRound: {
+          currentBet: 30,
+          minimumFullRaiseIncrement: 20,
+          seatStates: bettingRoundOf(baseline).seatStates.map((seatState) =>
+            seatState.seatNumber === 4
+              ? { ...seatState, betLevelAfterLastAction: 30 }
+              : seatState,
+          ),
+        },
+      },
+    })
+
+    const actions = getLegalActions(state)
+
+    expect(actions.find((action) => action.type === 'raise')).toMatchObject({
+      minTarget: 50,
+    })
+    expect(actions.find((action) => action.type === 'allIn')).toEqual({
+      type: 'allIn',
+      target: 2000,
+    })
   })
 
   test('clips and deduplicates suggested targets before the independent all-in', () => {

@@ -28,6 +28,14 @@ export interface DealtHand {
   readonly board: readonly Card[]
 }
 
+export interface ReconstructDealtHandInput {
+  readonly buttonSeatNumber: number
+  readonly holeCards: readonly DealtHoleCards[]
+  readonly burnedCards: readonly Card[]
+  readonly board: readonly Card[]
+  readonly remainingDeck: readonly Card[]
+}
+
 function copyPureCard(card: Card): Card {
   return { rank: card.rank, suit: card.suit }
 }
@@ -307,6 +315,44 @@ function normalizeDealtHand(hand: unknown): DealtHand {
     burnedCards: copyCards(burnedCards),
     board: copyCards(board),
   }
+}
+
+export function reconstructDealtHand(
+  input: ReconstructDealtHandInput,
+): DealtHand {
+  const participantSeatNumbers = input.holeCards.map(
+    (holeCards) => holeCards.seatNumber,
+  )
+  const shuffledDeck: Card[] = [
+    ...input.holeCards.map((holeCards) => holeCards.cards[0]),
+    ...input.holeCards.map((holeCards) => holeCards.cards[1]),
+  ]
+
+  if (input.board.length >= 3) {
+    shuffledDeck.push(
+      input.burnedCards[0] as Card,
+      input.board[0] as Card,
+      input.board[1] as Card,
+      input.board[2] as Card,
+    )
+  }
+  if (input.board.length >= 4) {
+    shuffledDeck.push(input.burnedCards[1] as Card, input.board[3] as Card)
+  }
+  if (input.board.length === 5) {
+    shuffledDeck.push(input.burnedCards[2] as Card, input.board[4] as Card)
+  }
+  shuffledDeck.push(...input.remainingDeck)
+
+  return normalizeDealtHand({
+    buttonSeatNumber: input.buttonSeatNumber,
+    participantSeatNumbers,
+    shuffledDeck,
+    remainingDeck: input.remainingDeck,
+    holeCards: input.holeCards,
+    burnedCards: input.burnedCards,
+    board: input.board,
+  })
 }
 
 function appendCommunityCards(

@@ -50,13 +50,13 @@ CHECK (jsonb_typeof(<payload>) = 'object')
 
 ### 3.1 会话和参与者
 
-`sessions` 保存 `id`、`owner_id`、`lifecycle_status (active|ended|readonlyDiagnostic)`、`state_version` 镜像、下一 `event_seq`、可空 `current_hand_id`、Player 协调镜像 `agent_run_state (idle|thinking|paused)`、可空 `current_agent_run_id`、可空 `active_decision_request_id` 以及创建/结束/更新时间。它不保存筹码、按钮、完成手数、累计买入或最近结果。`UNIQUE(owner_id) WHERE lifecycle_status = 'active'` 是每个 Owner 一场活动场次的最终并发约束。只有实时 Player 流程更新这组三列；Coach Review 不占用或修改它们。
+`sessions` 保存 `id`、`owner_id`、`lifecycle_status (active|ended|readonlyDiagnostic)`、`state_version` 镜像、下一 `event_seq`、可空 `current_hand_id`、Player 协调镜像 `agent_run_state (idle|thinking|paused)`、可空 `active_player_run_id`、可空 `active_decision_request_id` 以及创建/结束/更新时间。它不保存筹码、按钮、完成手数、累计买入或最近结果。`UNIQUE(owner_id) WHERE lifecycle_status = 'active'` 是每个 Owner 一场活动场次的最终并发约束。只有实时 Player 流程更新这组三列；Coach Review 不占用或修改它们。
 
-`current_hand_id` 与 `current_agent_run_id` 必须通过同 Owner、同场次的复合外键指向子表；因双方存在创建顺序环，迁移在相关表建立后追加可延迟外键。其他子表指针同样优先使用复合外键排除跨 Owner、跨场关联。
+行级检查规定 `thinking` 时两个活动指针同时非空，`idle|paused` 时同时为空；`paused` 的失败 Run 只保留在 Agent 审计表和事件中，不作为活动指针。`current_hand_id` 通过同 Owner、同场次的复合外键指向 `hands`。`(active_player_run_id, id, owner_id, active_decision_request_id)` 通过 `DEFERRABLE INITIALLY DEFERRED` 复合外键指向 `agent_runs(id, session_id, owner_id, decision_request_id)`，因此活动 Run 和请求 ID 必须来自同一条同场 Player Run。迁移在相关子表建立后追加这些循环方向外键；其他子表指针同样优先使用复合外键排除跨 Owner、跨场关联。
 
 `session_participants` 是一场中用户与 AI 的统一外键目标，保存 `id`、`session_id`、`owner_id`、`participant_type (user|agent)`、`seat_number` 与时间。它有 `UNIQUE(session_id, seat_number)`；行级检查规定 user 只能占座位 0，agent 只能占 1–8，整体座位范围为 0–8。
 
-`session_agents` 直接以 `participant_id` 作为主键，一对一关联 AI participant；该 ID 同时是本项目的 Session Agent ID，不再引入第二个 Agent 标识。它保存用户可见的名称/头像快照、结构化 `persona_id`、`persona_version`、`config_snapshot_key`、当前记忆修订号，以及彼此独立的 `config_payload_*`、`memory_payload_*`。`config_snapshot_key` 是完整、规范化且不含秘密的配置快照之 SHA-256，用于精确区分配置；它不保存当前筹码、按钮或手牌状态。
+`session_agents` 直接以 `participant_id` 作为主键，一对一关联 AI participant；该 ID 同时是本项目的 Session Agent ID，不再引入第二个 Agent 标识。它保存用户可见的名称/头像快照、结构化 `persona_id`、`persona_version`、`config_snapshot_key`、当前记忆修订号，以及彼此独立的 `config_payload_*`、`memory_payload_*`。`config_snapshot_key` 是完整、规范化且不含秘密的配置快照之 SHA-256，用于精确区分配置；它不保存当前筹码、按钮或手牌状态。表上提供 `UNIQUE(participant_id, session_id, owner_id)` 复合候选键，供 Player Run 与 Decision 排除跨场、跨 Owner 关联。
 
 `agent_memory_revisions` 关联 `session_agents`，以 `(participant_id, revision)` 唯一保存从 revision 0 开始的不可变历史修订、载荷版本/对象载荷和创建时间。`session_agents.current_memory_revision` 以可延迟复合外键指向对应修订。后续 Player 决策必须记录实际读取的记忆修订；当前记忆与修订历史的更新由后续命令事务原子完成。
 
@@ -84,19 +84,35 @@ CHECK (jsonb_typeof(<payload>) = 'object')
 
 ## 4. Agent 与设置
 
-`agent_runs` 保存 Owner、场次、Runtime (`player|coach`)、触发类型、生命周期 (`queued|leased|running|completed|failed|cancelled|stale`)、幂等键、手牌关联、父/替代运行关联、租约拥有者/到期时间、非负 fencing token、截止时间、Runtime 定义版本、终止原因和起止时间。运行配置、预算、检查点和最终结果使用独立的命名载荷对。当前两类 Runtime 均必须关联一手牌；Player Run 还必须结构化保存 AI `participant_id`、来源状态版本和 `decision_request_id`。
+`agent_runs` 保存 Owner、场次、Runtime (`player|coach`)、触发类型、生命周期 (`queued|leased|running|completed|failed|cancelled|stale`)、幂等键、手牌关联、父/替代运行关联、租约拥有者/到期时间、非负 fencing token、截止时间、Runtime 定义版本、终止原因和起止时间。运行配置、预算、检查点和最终结果使用独立的命名载荷对。当前两类 Runtime 均必须关联一手牌。Runtime 判别检查规定：Player Run 的 `participant_id`、`source_state_version` 和 `decision_request_id` 全部非空；Coach Run 的三列全部为空。
 
-它唯一约束 `(session_id, runtime, idempotency_key)`，为 Player `decision_request_id` 和活动决策点建立必要的部分唯一约束，并建立 Worker 领取与场次读取索引。数据库保证身份、归属、唯一性与安全领取字段，不在 M2.2 中实现完整 Runtime 状态机；后续 Runtime/Commit Gate 在更新父级状态前验证允许的状态转换和 fencing token。
+Player Run 与 `player_decisions` 均通过 `(participant_id, session_id, owner_id)` 复合外键指向 `session_agents`，从而只能绑定同 Owner、同场次的 AI participant。数据库不以触发器重复表达该静态类型关系。
+
+`agent_runs` 建立：
+
+- `UNIQUE(session_id, runtime, idempotency_key)`；
+- `UNIQUE(session_id, decision_request_id)`，使 Player 请求 ID 在场次历史范围内永久不复用；Coach 的空值不冲突；
+- `UNIQUE(session_id, source_state_version, participant_id) WHERE runtime = 'player' AND lifecycle IN ('queued', 'leased', 'running')`，精确保证同一决策点至多一条有效 Player Run；
+- `UNIQUE(id, session_id, owner_id, decision_request_id)`，供 Session Run/请求双指针引用；
+- `UNIQUE(id, owner_id, session_id, hand_id, participant_id, source_state_version, decision_request_id, runtime)`，供 Player Decision 精确匹配其 Run；
+- `UNIQUE(id, owner_id, session_id, hand_id, runtime)`，供 Coach Review 精确匹配其 Run；
+- Worker 领取、场次、手牌和 participant 读取索引。
+
+Player 协调使用第二个 `DEFERRABLE INITIALLY DEFERRED CONSTRAINT TRIGGER` 函数，挂到 `sessions INSERT | UPDATE | DELETE` 与 `agent_runs INSERT | UPDATE | DELETE`。提交前逐场保证：`thinking` 时恰好有一条 `queued|leased|running` Player Run，且它与 Session 的 Run/请求双指针完全一致；`idle|paused` 时不存在有效 Player Run，且两个指针均为空；有效 Player Run 不得脱离 Session 协调指针存在。新 Run 只有在旧 Run 已转为 `completed|failed|cancelled|stale` 后才能建立；stale 接替、人工重试和进程重启恢复必须在同一事务中使旧 Run 失效、建立新 Run 并切换 Session 指针。整场级联删除时父 Session 已不存在则跳过该场校验。
+
+数据库保证身份、归属、唯一性和上述协调不变量，但不实现完整 Runtime 状态机；后续 Runtime/Commit Gate 仍须在更新父级状态前验证允许的状态转换、权威扑克状态、当前行动者、租约和 fencing token。
 
 `agent_attempts` 关联运行，保存稳定尝试序号、阶段、生命周期、采用/过期/中断标识、Provider、模型、尝试类型、路由原因、token/成本/时长、错误分类和起止时间；脱敏 I/O 与校验详情使用 `attempt_payload_*`，不得保存 `reasoning_content`，并唯一 `(agent_run_id, attempt_number)`。
 
 `agent_capability_invocations` 关联运行，保存调用序号、能力名称/版本、授权结果、输入/输出 schema 版本与哈希、预算消耗、时长、错误分类和起止时间；脱敏输入输出详情使用 `invocation_payload_*`，并唯一 `(agent_run_id, invocation_number)`。
 
-`player_decisions` 关联 Player Run、场次、手牌、AI participant、来源状态版本、实际使用的记忆修订、提交状态和可空 `command_ledger_id`；`decision_request_id` 是结构化列，决策包/候选集合与 Validator 结果分别使用命名载荷对。一条 Player Run 至多一份决策，并建立手牌/座位/版本读取索引。
+`player_decisions` 关联 Player Run、场次、手牌、AI participant、来源状态版本、实际使用的记忆修订、提交状态和可空 `command_ledger_id`；`decision_request_id` 是结构化列，决策包/候选集合与 Validator 结果分别使用命名载荷对。它保存固定判别列 `runtime = 'player'`，并以复合外键同时匹配 Run 的 Owner、Session、Hand、participant、来源状态版本、请求 ID 与 Runtime，禁止 Decision 与 Run 字段错配。一条 Player Run 至多一份决策，并建立手牌/座位/版本读取索引。
 
-`coach_reviews.id` 即公开的 `coachReviewId`。它关联 Coach Run、场次和已完成手牌，保存请求 ID、状态 `pending|running|completed|failed`、请求/完成时间；冻结 Context/版本、过程分析、Hindsight 和最终报告使用彼此独立的命名载荷对。一条 Coach Run 仅对应一份 Review。
+`coach_reviews.id` 即公开的 `coachReviewId`。它关联 Coach Run、场次和已完成手牌，保存固定判别列 `runtime = 'coach'`、请求 ID、状态 `pending|running|completed|failed`、请求/完成时间；冻结 Context/版本、过程分析、Hindsight 和最终报告使用彼此独立的命名载荷对。复合外键保证 Review 与 Run 的 Runtime、Owner、Session 和 Hand 完全一致；一条 Coach Run 仅对应一份 Review。
 
 `coach_decision_assessments` 只评价用户自己的决策；对手行为仅作为判断上下文。它关联 Review，结构化保存稳定 `decision_id`、`street (preflop|flop|turn|river)`、`ordinal_on_street`，冻结分类结果保存于 `assessment_payload_*`。`decision_id` 由 hand、street 和权威动作序号稳定确定。它具有 `UNIQUE(coach_review_id, decision_id)`、`(coach_review_id, street, ordinal_on_street)` 索引和 `decision_id` 索引。
+
+Coach 手牌资格使用第三个 `DEFERRABLE INITIALLY DEFERRED CONSTRAINT TRIGGER` 函数，挂到 `agent_runs INSERT | UPDATE`、`coach_reviews INSERT | UPDATE` 与 `hands UPDATE OF status`。提交前保证每个 Coach Run 和 Review 均关联同 Owner、同场次的 `completed` Hand；存在 Coach Run/Review 时，Hand 不得改为 `inProgress|aborted`。Assessment 通过外键关联已验证的 Review，传递获得相同保证，不增加重复触发器。整场级联删除时父 Session 已不存在则跳过该生命周期校验。
 
 Coach 可以展示整手公开动作时间线，但对某个用户决策的判断只能使用该决策发生前已公开的信息、对手的用户可见形象快照和截至当时的公开统计证据；不得读取 AI 私有 Prompt、私有配置、隐藏记忆、原始模型输出或未来动作。冻结边界与证据放入 Review/Assessment 载荷，不另建缓存维度。
 
@@ -116,7 +132,7 @@ Coach 可以展示整手公开动作时间线，但对某个用户决策的判�
 
 ## 6. 迁移与测试
 
-M2.2 使用一条后续 Drizzle 迁移。`src/db/schema.ts` 是唯一 Drizzle schema 入口；Drizzle 负责表、列、普通约束和索引。仅阵容完整性使用 PostgreSQL 延迟约束触发器；其他关系优先由外键、复合外键、检查和唯一索引表达。迁移仅执行 DDL 与固定 Owner 插入，不执行 Repository、Runtime、命令事务、缓存计算或历史回填。
+M2.2 使用一条后续 Drizzle 迁移。`src/db/schema.ts` 是唯一 Drizzle schema 入口；Drizzle 负责表、列、普通约束和索引。跨行且无法声明式表达的不变量仅使用三个窄范围 PostgreSQL 延迟约束函数：阵容完整性、Player 活动协调、Coach completed Hand 资格；其他关系由外键、复合外键、检查和唯一索引表达。迁移仅执行 DDL 与固定 Owner 插入，不执行 Repository、Runtime、命令事务、缓存计算或历史回填。
 
 集成测试仅在显式隔离 `TEST_DATABASE_URL` 下运行，并至少覆盖：
 
@@ -124,7 +140,10 @@ M2.2 使用一条后续 Drizzle 迁移。`src/db/schema.ts` 是唯一 Drizzle sc
 - UUID、时间、正载荷版本、JSONB object、安全整数、状态、复合外键、唯一索引和每 Owner 单活动场次约束。
 - 空场次、缺 user、Agent 数量越界、座位冲突、Agent participant 缺子行、user 错误关联子行、单独破坏阵容失败，以及整场级联删除成功。
 - 两个真实连接竞争创建同一 Owner 的 active 场次时只有一个提交；不同 Owner 不冲突。
-- Session Player 协调镜像、Player 决策唯一性、Agent 领取/fencing 字段、Coach 单手/用户决策范围及关键索引。
+- 两个真实连接竞争同一 Player 决策点时只有一个提交；重复请求 ID、旧 Run 未失效便接替、活动 Run 脱离 Session 指针、Run/请求指针错配，以及 `idle|paused` 携带活动指针均失败；旧 Run 转为 stale/cancelled 后可在同一事务中建立并切换到替代 Run。
+- Player Run/Decision 绑定 user participant，或 Decision 与 Run 的 Owner、Session、Hand、participant、来源版本、请求 ID、Runtime 任一错配时失败。
+- Coach Run/Review 关联 `inProgress|aborted` Hand 失败；已有 Coach 数据的 Hand 不能改为非 completed；Assessment 通过 Review 继承资格，整场级联删除仍成功。
+- Agent 领取/fencing 字段、Coach 仅评价用户决策的范围及关键查询索引。
 - 分片允许缺失和删除后重建；用户/AI 配置字段互斥，AI 快照严格匹配，跨 Owner/场次关系失败，删除场次级联清除分片。
 
 最终实现必须运行格式化、Server 构建、默认离线 `pnpm run verify`、显式数据库集成测试、迁移资产校验和 `git diff --check`。

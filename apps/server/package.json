@@ -6,13 +6,16 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-migrations.mjs",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "test": "pnpm run test:unit && pnpm run test:integration && pnpm run test:service",
     "test:unit": "vitest run --dir test/unit",
     "test:integration": "vitest run --dir test/integration --passWithNoTests",
     "test:service": "vitest run --dir test/service --passWithNoTests",
-    "test:coverage": "vitest run --coverage --passWithNoTests"
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "verify:migration-assets": "node scripts/verify-migration-assets.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",

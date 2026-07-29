@@ -1,6 +1,6 @@
 # Supabase Postgres 与 Drizzle 迁移设计
 
-- 状态：已确认；配置、依赖与旧数据库夹具迁移已实现，M2 数据库基础设施待实现
+- 状态：已确认；M2.1 数据库基础设施已实现，M2.2 业务持久化待实现
 - 日期：2026-07-29
 - 适用阶段：M2/M3/Agent 之前的数据库基础设施迁移
 
@@ -16,12 +16,12 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 
 | 用途 | 环境变量 | 端口/连接方式 | 约束 |
 | --- | --- | --- | --- |
-| 服务运行时 | `DATABASE_URL` | Supabase transaction pooler，`6543` | 当前 `ServerConfig` 只校验并私有保存此变量；M2.1 的 `postgres.js` 客户端才负责 TLS 与 `prepare: false` |
-| 生成和执行迁移 | `DATABASE_MIGRATION_URL` | Supabase session/direct，`5432` | 当前只存在脱敏环境示例且不进入 `ServerConfig`；M2.1 才由 Drizzle Kit 在显式部署迁移步骤读取并启用 TLS |
+| 服务运行时 | `DATABASE_URL` | Supabase transaction pooler，`6543` | `ServerConfig` 私有保存此变量；M2.1 的 `postgres.js` 客户端固定 TLS 与 `prepare: false`，只读核验迁移兼容性 |
+| 生成和执行迁移 | `DATABASE_MIGRATION_URL` | Supabase session/direct，`5432` | 不进入 `ServerConfig`；Drizzle Kit 仅在显式部署迁移步骤读取并启用 TLS |
 
 运行时不得复用 `DATABASE_MIGRATION_URL`，迁移工具也不得通过 transaction pooler 执行 DDL。连接配置不得进入 Contracts、浏览器包、日志或 SSE 负载。
 
-运行时依赖 `drizzle-orm` 与 `postgres`、开发依赖 `drizzle-kit` 已安装，但当前没有数据库客户端、`drizzle.config`、迁移脚本、schema 或 repository。后四者连同 `drizzle-kit generate`/`drizzle-kit migrate` 脚本属于未来 M2.1 的显式部署工作；服务启动绝不自动执行 DDL。M2.1 启动时只做数据库连接检查及 schema 兼容门控：数据库不可连接、迁移记录缺失或版本不兼容时拒绝开始接收命令，不尝试修复数据库。
+运行时依赖 `drizzle-orm` 与 `postgres`、开发依赖 `drizzle-kit` 已安装；M2.1 已提供按需数据库客户端、`drizzle.config`、基线迁移、`drizzle-kit generate`/`drizzle-kit migrate` 脚本和启动兼容门控。服务启动绝不自动执行 DDL：数据库不可连接、迁移记录缺失或版本不兼容时关闭客户端并拒绝监听端口，不尝试修复数据库。业务 Repository 与业务表仍留待 M2.2。
 
 ## 3. 数据模型边界
 
@@ -72,7 +72,7 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 | --- | --- | --- | --- |
 | P0 | Server 配置 | 已令 `ServerConfig` 校验并私有保存 `DATABASE_URL`；`DATABASE_MIGRATION_URL` 不进入运行时配置 | 已完成；尚未创建数据库客户端 |
 | P0 | Drizzle 依赖 | 已安装运行时 `drizzle-orm`、`postgres`，以及开发依赖 `drizzle-kit` | 已完成；未新增配置、schema、repository 或迁移脚本 |
-| P0 | Drizzle 配置与迁移脚本 | 未来 M2.1 新增 `drizzle.config`、schema、repository 与显式 generate/migrate 脚本 | 可显式 generate/migrate，启动不执行 DDL |
+| P0 | Drizzle 配置与迁移脚本 | M2.1 已新增 `drizzle.config`、schema 入口、基线迁移和显式 generate/migrate 脚本；Repository 留待 M2.2 | 可显式 generate/migrate，启动不执行 DDL |
 | P0 | 会话/命令持久化 | M2/M3 实现 `app_private` schema、事务、锁、唯一约束、UPSERT 与事件序号 | 并发和重试不重复提交命令或事件 |
 | P0 | 测试夹具 | 已移除旧数据库 helper、专项集成测试与 manifest 依赖，默认测试保持离线 | 已完成；`pnpm run verify` 默认不需数据库、网络或 Supabase 凭据 |
 | P1 | 临时 Postgres 集成测试 | 未来仅在提供 `TEST_DATABASE_URL` 时启动隔离临时 PostgreSQL | 创建、迁移、测试、清理均隔离于产品库 |
@@ -83,7 +83,7 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 
 ## 6. 风险与安全
 
-- transaction pooler 不支持需要持久会话语义的 prepared statement，因此 M2.1 运行时客户端固定 `prepare: false`；DDL 使用 session/direct URL。当前 `ServerConfig` 不建立连接，不能把 URL 校验误写成已经启用 TLS 或已配置客户端。
+- transaction pooler 不支持需要持久会话语义的 prepared statement，因此 M2.1 运行时客户端固定 `prepare: false`；DDL 使用 session/direct URL。`ServerConfig` 只校验 URL，实际 TLS 客户端由按需工厂创建。
 - 连接串属于最高敏感配置，不写入仓库、前端构建产物、错误详情或日志；分别最小化运行时和迁移凭据权限。
 - `app_private` 不暴露给匿名或浏览器角色；Hono 在服务端完成鉴权、授权、输入验证和公开投影。
 - schema 兼容门控失败时保持 fail-closed：健康检查可报告不可用原因类别，命令入口不可写入。
@@ -91,8 +91,8 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 
 ## 7. 验收
 
-- `ServerConfig` 已只读取、校验并私有保存 `DATABASE_URL`；当前未建立连接。未来 M2.1 的 `postgres.js` 客户端才通过 TLS 使用 `6543` transaction pooler 并固定 `prepare: false`；Drizzle Kit 才独立读取 `DATABASE_MIGRATION_URL`，通过 TLS 使用 `5432` session/direct。
-- 运行时 `drizzle-orm`、`postgres` 和开发依赖 `drizzle-kit` 已安装，但没有数据库客户端、`drizzle.config`、Drizzle schema、repository 或迁移脚本；未来 M2.1 的迁移只能通过显式部署命令生成和执行，服务启动不执行任何 DDL，且在连接/schema 不兼容时停止命令接收。
+- `ServerConfig` 只读取、校验并私有保存 `DATABASE_URL`；M2.1 的 `postgres.js` 客户端通过 TLS 使用 `6543` transaction pooler 并固定 `prepare: false`。Drizzle Kit 独立读取 `DATABASE_MIGRATION_URL`，通过 TLS 使用 `5432` session/direct。
+- 运行时 `drizzle-orm`、`postgres` 和开发依赖 `drizzle-kit` 已由 M2.1 接入客户端、`drizzle.config`、`app_private` schema 入口、基线迁移与显式脚本；服务启动不执行任何 DDL，且在连接/schema 不兼容时不监听端口。业务 Repository 与表仍未实现。
 - 非负可增长持久化数值使用 PostgreSQL `bigint` + Drizzle `number` 映射，并由私有 Zod 与数据库 `CHECK` 双重限制在 `0..Number.MAX_SAFE_INTEGER`；小型有界值继续使用 `integer`，公开 Contracts 与领域数值范围不缩窄。
 - 所有私有表位于 `app_private`，公开协议、`protocolVersion` 和 Hono 单一入口不变；仓库没有 Supabase 客户端/Auth/Realtime/Storage/Edge 依赖。
 - 写命令在事务、`SELECT FOR UPDATE`、唯一约束和 UPSERT 下具备重试幂等性；`eventSeq` 仅为成功提交分配。

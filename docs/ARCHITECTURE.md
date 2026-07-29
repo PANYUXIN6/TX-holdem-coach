@@ -1,12 +1,12 @@
 # 架构概览
 
-更新时间：2026-07-29（Supabase Postgres/Drizzle 基础迁移已完成配置、依赖与测试夹具调整；M2 生产数据库仍未实现；M0.2 已完成公开协议返工，M1.1–M1.9 已实现私有扑克规则与唯一行为门面）
+更新时间：2026-07-29（M2.1 已完成 Supabase Postgres/Drizzle 连接、基线迁移和启动兼容门控；M2.2 业务持久化尚未实现；M0.2 已完成公开协议返工，M1.1–M1.9 已实现私有扑克规则与唯一行为门面）
 
 ## Workspace 边界
 
 - 根目录通过 pnpm 编排开发、构建、类型检查、格式检查和后端测试命令；`verify` 固定按“格式检查 → 类型检查 → 后端测试”执行，后端测试会先验证并重建 Contracts，再运行 Server 分类测试，不承载运行时业务代码。
 - `apps/web` 是 React/Vite 手机竖屏浏览器客户端，入口为 `src/main.tsx`；目标可玩宽度为 360–430px，宽屏不建立第二套布局。唯一的牌面资源位于 `public/poker/`，由 Vite 作为 `/poker/<filename>` 提供。
-- `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。`ServerConfig` 已改为只读取并私有保存 `DATABASE_URL`，校验 Supabase shared `6543` transaction-pooler 主机、协议、凭据和数据库名；`drizzle-orm` 与 `postgres` 已作为运行依赖安装，`drizzle-kit` 已作为开发依赖安装。当前没有数据库客户端、Drizzle schema、Repository、迁移或启动连接门控，因此 M2 生产数据库仍未实现。未来运行时将以 TLS 和 `prepare: false` 使用该 URL；Drizzle Kit 独立读取部署环境中的 `DATABASE_MIGRATION_URL` 并以 TLS 连接 `5432` session/direct。`drizzle.config`、`app_private` schema、Repository 及 generate/migrate 脚本属于未来 M2.1；启动只做连接/schema 兼容门控而不自动 DDL。Hono 保持唯一入口，不安装 `supabase-js`，也不使用 Supabase Auth、Data API、Realtime、Storage 或 Edge Functions。
+- `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。`ServerConfig` 只读取并私有保存 `DATABASE_URL`；`src/db/client.ts` 按需以 TLS/`prepare: false` 创建客户端，`src/db/schema.ts` 只声明 `app_private`，`src/db/migration-compatibility.ts` 精确核验部署内 journal/SQL hash 与 Drizzle 日志，`src/startup.ts` 编排连接与 fail-closed 门控，`src/bootstrap.ts` 只在成功后监听本机端口。`index.ts` 是唯一加载 dotenv 的真实进程入口，测试改为直接注入 bootstrap，避免默认验证读取 `.env`。`drizzle.config.ts` 只读取 `DATABASE_MIGRATION_URL` 并使用 TLS/5432 session/direct 显式迁移，基线迁移与 snapshot 位于 `src/db/migrations/` 并在构建时复制到 `dist`。M2.2 才实现业务 Schema 和 Repository。Hono 保持唯一入口，不安装 `supabase-js`，也不使用 Supabase Auth、Data API、Realtime、Storage 或 Edge Functions。
 - `apps/server/.env.example` 提供脱敏占位的两条数据库连接和 Provider Key 示例；真实值只存在于后端或部署环境。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、预留的 `integration/` 与 `service/` 分类。数据库专用临时夹具已移除，默认 `verify` 不读取数据库 URL 或联网；未来仅在显式提供 `TEST_DATABASE_URL` 时运行隔离临时 PostgreSQL 集成测试，非生产 Supabase pooler smoke 为可选步骤。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、结构化合法动作、人物公开摘要与创建选择、Provider 健康/设置、HTTP/SSE 信封和错误响应。`LegalActionsSchema` 约束动作顺序、互斥、快捷目标顺序/唯一性/区间和普通目标与全下边界；Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。`bet`、`raise` 的命令金额固定为行动后本街总投入的 `targetStreetCommitment`。通用座位为 `0..8`，创建选择的 AI 为 `1..8`，公开快照固定唯一用户在座位 `0` 且总席数为 6–9；人物目录由八个固定标识组成。
@@ -18,7 +18,7 @@
 
 ## 当前运行链路
 
-`pnpm run dev` 同时编排 Web 与 Server；`pnpm run dev:web` 和 `pnpm run dev:server` 可分别启动。`pnpm run verify` 不启动服务、不联网，也不读取模型 Key 或数据库凭据。Server 入口按“加载 dotenv → 校验端口和私有 `DATABASE_URL` → 从 Key 生成初始 Provider 投影 → 仅监听 `127.0.0.1`”运行；当前不建立数据库连接或执行迁移，Provider 投影也尚未挂载 HTTP，M2.1 才加入数据库客户端与连接/schema 兼容门控，M3.5 才加入手动检测与 Settings/Health 路由。唯一会话行为链路为 `PokerTableState + PokerCommand → poker-engine.ts.applyPokerAction()`：门面先固化行动前事实，再调用内部 `progressPokerAction()`；终止动作在同次调用中交给 `settlement.ts`，构造完成手结果与事件后只返回 `betweenHands` 状态。`hand-result.ts` 只固化领域结果与事件，不编排行为。默认测试链路只使用确定性、数据库无关输入。Web 构建使用 Vite，Server 与 Contracts 构建使用 TypeScript。
+`pnpm run dev` 同时编排 Web 与 Server；`pnpm run dev:web` 和 `pnpm run dev:server` 可分别启动。`pnpm run verify` 不启动服务、不联网，也不读取模型 Key 或数据库凭据。Server 入口按“加载 dotenv → 校验端口和私有 `DATABASE_URL` → 创建运行时客户端 → `SELECT 1` → 只读精确核验迁移日志 → 仅监听 `127.0.0.1`”运行；门控失败时关闭客户端、输出脱敏中文错误并非零退出，绝不自动 DDL。`db:migrate` 是唯一可执行 DDL/写 Drizzle 日志的路径。Provider 投影也尚未挂载 HTTP，M3.5 才加入手动检测与 Settings/Health 路由。唯一会话行为链路为 `PokerTableState + PokerCommand → poker-engine.ts.applyPokerAction()`：门面先固化行动前事实，再调用内部 `progressPokerAction()`；终止动作在同次调用中交给 `settlement.ts`，构造完成手结果与事件后只返回 `betweenHands` 状态。`hand-result.ts` 只固化领域结果与事件，不编排行为。默认测试链路只使用确定性、数据库无关输入；临时 PostgreSQL 集成测试只有在安全门确认隔离 `TEST_DATABASE_URL` 后才运行。Web 构建使用 Vite，Server 与 Contracts 构建使用 TypeScript。
 
 ## 已实现的 M1 门面与待实施的非 Agent 重基线
 

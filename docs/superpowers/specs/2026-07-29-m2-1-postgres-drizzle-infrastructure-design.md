@@ -1,6 +1,6 @@
 # M2.1 Supabase Postgres、Drizzle 与显式迁移基础设施设计
 
-- 状态：待用户审阅
+- 状态：已实现
 - 日期：2026-07-29
 - 任务来源：[M2.1](../plans/2026-07-23-poker-practice-development-tasks.md#m21-建立-supabase-postgresdrizzle-与显式迁移基础设施)
 - 上位设计：[Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)

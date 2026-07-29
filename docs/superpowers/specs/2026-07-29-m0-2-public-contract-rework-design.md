@@ -139,13 +139,15 @@ interface PublicRevealedHand {
 
 `PublicLogicalPosition` 由 Contracts 独立声明为 `UTG | UTG+1 | MP | LJ | HJ | CO | BTN | SB | BB`。`PublicHandCategory` 由 Contracts 独立声明为 `highCard | onePair | twoPair | threeOfAKind | straight | flush | fullHouse | fourOfAKind | straightFlush`。`comparisonGrade` 不进入公开协议：客户端不负责判定赢家或排序，赢家以公开底池派奖为准。`handEvaluation !== null` 时 `holeCards` 必须非空；反向不成立，用户可看到自己的底牌但该座位没有摊牌评估。
 
+M3 只能从私有 `participantHands` 作可见性投影，不得重新评估、按池结果猜测或查询完整手牌结果。规则固定为：座位 `0` 的底牌始终可见；`showdown` 中私有摘要实际有评估的非弃牌参与者公开底牌和对应公开牌型；其他 AI 座位（包括弃牌者及 `complete` 的直接获胜者）底牌和评估均为 `null`。显式审计揭示属于后续历史详情能力，不在最近摘要协议中。
+
 ### 3.3 跨字段不变量
 
 - `pokerPhase = 'inHand'` 当且仅当 `hand !== null` 且 `lastCompletedHandSummary === null`。
 - `pokerPhase = 'betweenHands'` 当且仅当 `hand === null`；最近完成手摘要可为 `null` 或合法公开摘要。
-- `positions`、`seatResults`、`revealedHands` 与 `participantSeatNumbers` 完全同集合；按钮、小盲、大盲为三个不同的参与座位。
+- 除 `PublicSettledPot.awards` 外，`participantSeatNumbers`、`positions`、`seatResults`、`revealedHands`、`uncalledBetReturns` 及其座位类嵌套数组按 `seatNumber` 升序；`positions`、`seatResults`、`revealedHands` 与 `participantSeatNumbers` 完全同集合；按钮、小盲、大盲为三个不同的参与座位。
 - `uncalledBetReturns` 是无重复参与座位子集，按座位号升序，最多一项。
-- `pots` 的 `potIndex` 从 `0` 连续递增，第一池为 `main`，其余为 `side`。每池赢家为非空参与座位子集；`awards` 与赢家一一对应，奖金总和等于池金额。
+- `pots` 按 `potIndex` 升序，且从 `0` 连续递增，第一池为 `main`，其余为 `side`。每池 `winningSeatNumbers` 按座位号升序且为非空参与座位子集；`awards` 保持 M1.8 按按钮左侧顺时针的派奖顺序，与赢家一一对应，奖金总和等于池金额。
 - `PublicSessionSnapshot` 内置的公开座位约束继续适用。
 
 ## 4. SSE 与阶段返工
@@ -157,7 +159,7 @@ interface PublicRevealedHand {
 
 ## 5. 测试与验收
 
-Contracts 测试覆盖新增严格 Schema、私有字段拒绝、时间线顺序/手牌/事件游标、阶段组合、公开摘要集合/池/返还/揭示牌不变量、SSE 新类型与光标一致性。M1.9 单元测试覆盖 `participantHands` 的规范排序、深冻结、无引用复用、`complete` 全空评估、`showdown` 仅映射既有结算评估及缺失/矛盾事实拒绝。
+Contracts 测试覆盖新增严格 Schema、私有字段拒绝、时间线顺序/手牌/事件游标、阶段组合、公开摘要集合/池/返还/揭示牌不变量、可见性投影规则、所有公开数组的规范顺序、按钮顺时针顺序与座位号不同的奇数筹码派奖、SSE 新类型与光标一致性。M1.9 单元测试覆盖 `participantHands` 的规范排序、深冻结、无引用复用、`complete` 全空评估、`showdown` 仅映射既有结算评估及缺失/矛盾事实拒绝。
 
 验收执行目标测试、Contracts 测试、服务端单测、`pnpm run verify` 与 `git diff --check`。
 

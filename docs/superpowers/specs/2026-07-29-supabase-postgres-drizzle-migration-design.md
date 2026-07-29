@@ -21,7 +21,7 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 
 运行时不得复用 `DATABASE_MIGRATION_URL`，迁移工具也不得通过 transaction pooler 执行 DDL。连接配置不得进入 Contracts、浏览器包、日志或 SSE 负载。
 
-本轮只安装 `drizzle-kit` 依赖，不新增 `drizzle.config`、迁移脚本、schema 或 repository。它们连同 `drizzle-kit generate`/`drizzle-kit migrate` 脚本属于未来 M2.1 的显式部署工作；服务启动绝不自动执行 DDL。M2.1 启动时只做数据库连接检查及 schema 兼容门控：数据库不可连接、迁移记录缺失或版本不兼容时拒绝开始接收命令，不尝试修复数据库。
+本轮安装运行时依赖 `drizzle-orm` 与 `postgres`，以及开发依赖 `drizzle-kit`，但不新增 `drizzle.config`、迁移脚本、schema 或 repository。它们连同 `drizzle-kit generate`/`drizzle-kit migrate` 脚本属于未来 M2.1 的显式部署工作；服务启动绝不自动执行 DDL。M2.1 启动时只做数据库连接检查及 schema 兼容门控：数据库不可连接、迁移记录缺失或版本不兼容时拒绝开始接收命令，不尝试修复数据库。
 
 ## 3. 数据模型边界
 
@@ -69,7 +69,7 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 | 优先级 | 迁移对象 | 本次/后续动作 | 完成标准 |
 | --- | --- | --- | --- |
 | P0 | Server 配置 | 本轮仅令 `ServerConfig` 读取私有 `DATABASE_URL`；`DATABASE_MIGRATION_URL` 不进入运行时配置 | 运行时只接受 `DATABASE_URL` |
-| P0 | Drizzle 依赖 | 本轮只安装 `drizzle-kit` | 不新增配置、schema、repository 或迁移脚本 |
+| P0 | Drizzle 依赖 | 本轮安装运行时 `drizzle-orm`、`postgres`，以及开发依赖 `drizzle-kit` | 不新增配置、schema、repository 或迁移脚本 |
 | P0 | Drizzle 配置与迁移脚本 | 未来 M2.1 新增 `drizzle.config`、schema、repository 与显式 generate/migrate 脚本 | 可显式 generate/migrate，启动不执行 DDL |
 | P0 | 会话/命令持久化 | M2/M3 实现 `app_private` schema、事务、锁、唯一约束、UPSERT 与事件序号 | 并发和重试不重复提交命令或事件 |
 | P0 | 测试夹具 | 默认测试移除真实 SQLite 依赖，保持离线 | `pnpm run verify` 默认不需数据库、网络或 Supabase 凭据 |
@@ -90,7 +90,7 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 ## 7. 验收
 
 - `ServerConfig` 只读取 `DATABASE_URL`，其使用 `6543` transaction pooler、TLS 和 `postgres.js` 的 `prepare: false`；未来 Drizzle Kit 独立读取 `DATABASE_MIGRATION_URL`，其使用 `5432` session/direct 与 TLS。
-- 本轮没有 `drizzle.config`、Drizzle schema、repository 或迁移脚本；未来 M2.1 的迁移只能通过显式部署命令生成和执行，服务启动不执行任何 DDL，且在连接/schema 不兼容时停止命令接收。
+- 本轮安装运行时 `drizzle-orm`、`postgres` 和开发依赖 `drizzle-kit`，但没有 `drizzle.config`、Drizzle schema、repository 或迁移脚本；未来 M2.1 的迁移只能通过显式部署命令生成和执行，服务启动不执行任何 DDL，且在连接/schema 不兼容时停止命令接收。
 - 所有私有表位于 `app_private`，公开协议、`protocolVersion` 和 Hono 单一入口不变；仓库没有 Supabase 客户端/Auth/Realtime/Storage/Edge 依赖。
 - 写命令在事务、`SELECT FOR UPDATE`、唯一约束和 UPSERT 下具备重试幂等性；`eventSeq` 仅为成功提交分配。
 - 默认 `pnpm run verify` 离线运行；`TEST_DATABASE_URL` 临时 Postgres 集成测试与非生产 Supabase smoke 均为显式可选步骤。

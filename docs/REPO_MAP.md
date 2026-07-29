@@ -1,10 +1,11 @@
 # 仓库地图
 
-更新时间：2026-07-29（M0.2 已完成公开协议返工，M0.3 已实现 Provider 初始配置投影；M1.1–M1.9 已实现私有扑克规则与唯一行为门面，M1.R 已完成纯状态去版本化）
+更新时间：2026-07-29（已确认 Supabase Postgres/Drizzle 迁移设计；M0.2 已完成公开协议返工，M0.3 已实现 Provider 初始配置投影；M1.1–M1.9 已实现私有扑克规则与唯一行为门面，M1.R 已完成纯状态去版本化）
 
 ## 当前目录与职责
 
 - `docs/superpowers/specs/`：已确认的 PRD 与专项设计，是产品和实现边界的事实源。
+- `docs/superpowers/specs/2026-07-29-supabase-postgres-drizzle-migration-design.md`：已确认的数据库目标边界；Supabase 仅托管 Postgres，Hono 为唯一入口，运行时走 transaction pooler，Drizzle 迁移为显式部署步骤。
 - `docs/superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md`：M1.7 以后非 Agent 运行时唯一重基线，定义纯引擎、会话聚合、版本、事件、持久化、公开投影和前端同步的事实归属。
 - `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md`：Agent 大模块总体事实源，定义 Foundation、Runtime、权限、运行生命周期、策略事实源、数据模型与当前/未来边界。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
@@ -24,7 +25,7 @@
 
 - 根 `package.json`：pnpm workspace 的开发、构建、类型检查和测试编排入口。
 - `apps/web/`：React/Vite 手机竖屏 Web 客户端入口；目标可玩宽度为 360–430px，宽屏只居中承载手机画布。其 `public/poker/` 是唯一牌面资源位置，后续只负责前端展示和调用服务端 API。
-- `apps/server/`：Node/Hono 本地服务入口；`src/index.ts` 是唯一加载 dotenv 的位置，`src/config.ts` 负责私有环境配置校验，并从 Key 配置生成不含密钥、通过 Contracts 校验的初始 Provider 设置投影（仅 `notConfigured`/`notChecked`，不联网）；`src/poker/cards.ts` 提供标准 52 张牌及其到现有静态文件名的纯映射；`src/poker/random-source.ts` 提供扑克规则共享的安全随机边界；`src/poker/positioning.ts` 是唯一物理座位拓扑实现，负责首手/跨手按钮、庄盲、6–9 人逻辑位置和可行动座位顺序；`src/poker/blind-posting.ts` 以不可变方式提交固定 10/20 盲注并保留短码名义下注基准；`src/poker/dealing.ts` 复用共享随机源和唯一座位拓扑，生成纯 `Card`、按钮相对两轮底牌、逐街 burn/公共牌与补完结果，并可从私有状态牌张投影规范重建供既有发牌原语继续消费的 `DealtHand`；`src/poker/hand-evaluator.ts` 是 `pokersolver` 的唯一适配边界，校验 5–7 张纯 `Card`，返回九类牌型、最佳五张、稳定比较等级和精确胜负；`src/poker/state.ts` 是无版本 `PokerTableState` 的唯一校验构造入口，固定用户在座位 `0`、AI 在 `1..8`，并约束进行中参与座位、按钮、底牌与底池一致；`src/poker/commands.ts` 定义玩家和 AI 共用的纯行动命令，并使用共享的 `targetStreetCommitment` 下注目标语义；`src/poker/betting.ts` 从稳定状态生成严格合法动作，唯一可行动玩家只面对其他竞争者可匹配的实际投入，并把共用命令执行为深层不可变、无下一行动位和版本号的 `BettingTransitionResult`；`src/poker/hand-progression.ts` 组合下注迁移、座位拓扑、发牌和状态构造，内部 `progressPokerAction()` 原子选择下一行动者、推进街道或 runout，返回无版本的稳定内部状态；`src/poker/settlement.ts` 只消费已验证的 `showdown`/`complete` 终止状态，返还未跟注超额、构建规范主池/边池、按牌型或直接获胜分配筹码，并返回冻结的私有结算事实和 `betweenHands` 状态；`src/personas/catalog.ts` 是八个版本化只读预设人物的私有目录，并投影为公开摘要。目录仍无 API、数据库、Agent Foundation、Player Runtime 或 Coach Runtime。后续 Agent 代码固定落在 `src/agents/foundation/`、`src/agents/player/`、`src/agents/coach/`；权威状态投影落在 `src/sessions/authoritative-state/`；共享策略事实源和两种投影落在 `src/poker-strategy/`。预设人物随服务端版本发布，不建立用户可变人物表。
+- `apps/server/`：Node/Hono 本地服务入口；生产数据库目前尚未实现。已确认目标为 Supabase 托管的 PostgreSQL（仅经 Hono 访问）和 Drizzle 显式迁移：运行时 `DATABASE_URL` 走 `6543` transaction pooler，迁移 `DATABASE_MIGRATION_URL` 走 `5432` session/direct；私有表将位于 `app_private`。当前 SQLite 仅待移除的配置/测试 fixture，不含需迁移的产品数据。其余扑克模块边界保持既有定义。
 - `apps/server/test/`：仅服务端测试使用的通用夹具与分类测试；`unit/` 覆盖纯逻辑，`integration/` 使用真实临时 SQLite，`service/` 为后续服务层测试预留。通用夹具提供泛型确定性输入、假时钟、固定 ID 和真实临时 SQLite，不定义牌局状态或模型端口。
 - `apps/server/src/poker/hand-result.ts`：仅定义、校验、排序和冻结手牌领域结果与事件草稿；不编排行为。
 - `apps/server/src/poker/poker-engine.ts`：M1 对会话层唯一可调用的行为入口，编排初始化、开手、行动推进与同步结算，绝不返回内部终止状态。

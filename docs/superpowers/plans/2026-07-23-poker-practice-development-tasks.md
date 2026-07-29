@@ -413,6 +413,8 @@ M1.R
 
 ### M1.9 实现一手牌结果与连续现金桌所需领域输出
 
+专项设计：[M1.9 扑克引擎门面与领域结果设计](../specs/2026-07-28-m1-9-poker-engine-domain-results-design.md)。
+
 产出：
 
 - 新增 `poker-engine.ts`，作为 M1 对服务层的唯一公开模块；提供 `initializePokerTable()`、`startPokerHand()` 和 `applyPokerAction()` 三个类型安全入口。

@@ -17,6 +17,8 @@
 
 迁移位于 `apps/server/src/db/migrations/`，并由 `drizzle.config.ts` 指向。迁移日志固定在 `app_private.__drizzle_migrations`。
 
+`src/db/schema.ts` 是 Drizzle schema 的唯一入口，只导出 `pgSchema('app_private')`。`drizzle.config.ts` 的 `schema` 指向该文件；M2.2 前不得在其中定义业务表、列、索引或关系。
+
 基线迁移使用锁定的 `drizzle-kit 0.31.10` 离线执行一次 `generate --name=app_private_baseline` 生成，然后将 SQL 的 schema 创建语句调整为：
 
 ```sql
@@ -80,8 +82,8 @@ CREATE SCHEMA IF NOT EXISTS "app_private";
 | 条件 | 错误类别 | 标准输出 |
 | --- | --- | --- |
 | `SELECT 1` 失败；连接中断/超时；权限拒绝（SQLSTATE `42501`）；或其他无法使用数据库的错误 | databaseConnectionFailed | 数据库连接失败，服务未启动。 |
-| `app_private` 不存在（`3F000`）或迁移日志表不存在（`42P01`） | migrationRecordsMissing | 数据库迁移记录缺失，服务未启动。 |
-| 本地迁移资产无效/缺失；记录少于期望，或出现任何数量、顺序、时间或 hash 差异 | schemaVersionIncompatible | 数据库结构版本不兼容，服务未启动。 |
+| `app_private` 不存在（`3F000`）、迁移日志表不存在（`42P01`），或记录数少于仓库期望 | migrationRecordsMissing | 数据库迁移记录缺失，服务未启动。 |
+| 本地迁移资产无效/缺失；记录数多于期望；或等量记录的顺序、时间或 hash 不同 | schemaVersionIncompatible | 数据库结构版本不兼容，服务未启动。 |
 
 分类只依据受控错误类型或 PostgreSQL SQLSTATE，绝不解析原始错误文本。`id` 的 sequence 空洞不构成不兼容。
 
@@ -92,7 +94,8 @@ CREATE SCHEMA IF NOT EXISTS "app_private";
 ### 5.1 单元测试
 
 - 覆盖 journal 的合法结构、非连续/倒退 idx、无效或不递增 `when`、重复 tag、SQL 缺失与 SHA-256 完整文本计算。
-- 覆盖期望与实际迁移记录完全一致、少记录、多记录、乱序、时间不同、hash 不同；验证 id 有空洞仍可通过。
+- 覆盖期望与实际迁移记录完全一致、少记录、多记录、乱序、时间不同、hash 不同；少记录归 `migrationRecordsMissing`，其余差异归 `schemaVersionIncompatible`；验证 id 有空洞仍可通过。
+- 覆盖客户端工厂固定传入 `ssl: 'require'` 与 `prepare: false`，且只有调用工厂才创建连接。覆盖运行时模块不读取 `DATABASE_MIGRATION_URL`，迁移配置只读取该变量、拒绝 `6543` 运行时地址，并只接受经校验的 `5432` Supabase session/direct 地址。
 - 覆盖 `SELECT 1`、日志表缺失/schema 缺失、权限与超时的 SQLSTATE 分类；所有 startup 失败都在关闭完成后不返回 ready 资源。
 - 通过可注入的启动/监听依赖验证 `index.ts` 的 bootstrap 在失败时不调用监听、只输出固定错误消息，且 `ServerConfigurationError` 保持自身类别。
 
@@ -100,12 +103,16 @@ CREATE SCHEMA IF NOT EXISTS "app_private";
 
 只有显式提供 `TEST_DATABASE_URL` 时，条件分支内部才加载测试配置、启动 Drizzle CLI 和创建客户端。未提供该变量时，不在模块导入阶段读取 URL、加载测试配置或建立连接。
 
+测试配置必须先将 `TEST_DATABASE_URL` 规范化，并拒绝它与 `DATABASE_URL` 或 `DATABASE_MIGRATION_URL` 为相同规范化地址。执行迁移前还必须确认目标库不存在 `app_private`；任一安全门失败即拒绝，不清理、重置或修改未知数据库。
+
 集成测试使用隔离空 PostgreSQL，通过测试专用 Drizzle Kit 配置运行同一个 `migrate` 流程，验证：
 
 - `app_private` 被建立；
 - `app_private.__drizzle_migrations` 由 Drizzle 建立；
 - 基线迁移只产生首条日志记录；
 - 运行时真实查询 `ORDER BY id ASC` 能通过精确核验。
+
+集成测试还会基于迁移资产副本添加一条故意失败的迁移，并验证失败迁移不产生迁移日志记录、不会遗留该迁移自身的部分 DDL。Drizzle 在迁移尝试前创建但仍为空的 `app_private` 日志 schema/table 可以保留，不视为业务半迁移。
 
 默认 `pnpm run verify` 不运行该步骤。可选的非生产 Supabase smoke 留待显式命令，验证 TLS、6543 和 `prepare: false`，不作为 M2.1 默认验收前置。
 
@@ -116,4 +123,5 @@ CREATE SCHEMA IF NOT EXISTS "app_private";
 3. 运行时 journal/SQL 与数据库迁移日志必须按顺序、数量、时间和 hash 完全一致；id 空洞允许。
 4. 连接失败、日志缺失和版本不兼容均在完成关闭后以脱敏固定中文错误非零退出，且不监听端口。
 5. 基线迁移只包含 `app_private` schema 与由 Drizzle 管理的迁移日志表/记录；业务表留给 M2.2。
-6. 默认 `pnpm run verify` 离线通过；显式集成测试验证空库迁移和真实日志读取；最终执行格式化、`pnpm run verify` 与 `git diff --check`。
+6. 默认 `pnpm run verify` 离线通过；显式集成测试验证空库迁移、失败迁移原子性和真实日志读取。
+7. 最终执行格式化、`pnpm run build:server`、`pnpm run verify` 与 `git diff --check`；验证 `dist/db/migrations/` 的 SQL、journal、snapshot 与源码资产一致，并以 dist 路径成功构造期望迁移序列。

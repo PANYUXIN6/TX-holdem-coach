@@ -5,6 +5,5 @@ dist/
 coverage/
 pnpm-debug.log*
 .env
-/data/
 apikey.txt
 .superpowers/

@@ -1,14 +1,15 @@
 # 德州扑克 AI 练习工具：产品需求文档
 
-- 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构与预设人物方案已纳入
+- 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构、预设人物与 Supabase Postgres 迁移方案已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-28
+- 最后更新：2026-07-29
 - 产品形态：本机单用户 Web 应用
 - 开发任务：[开发任务分解](../plans/2026-07-23-poker-practice-development-tasks.md)
 - 关联设计：
   - [前端交互与页面设计](./2026-07-23-poker-practice-frontend-design.md)
   - [后端、牌局引擎与数据设计](./2026-07-23-poker-practice-backend-design.md)
   - [非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
+  - [Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)
   - [Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
   - [Player Agent Runtime 专项设计](./2026-07-23-poker-practice-agent-harness-design.md)
   - [Coach Agent 专项设计](./2026-07-26-poker-coach-agent-design.md)
@@ -30,24 +31,24 @@
 
 - 当前版本只有一个本地用户，不提供注册或登录；服务端仍以固定 `local-user` 的 `OwnerScope` 隔离资源，保证未来上线为多个互相独立的单人教练账户时不需要重写领域和 Agent Runtime。
 - 产品始终是“每位用户独立与 AI 练习并获得 Coach 复盘”，不发展用户之间的多人牌桌。
-- 前后端都在同一台电脑运行，只监听本机地址。
+- 浏览器与 Hono 服务端都在同一台电脑运行，Hono 只监听本机地址；持久化数据位于 Supabase 托管 PostgreSQL，浏览器不直连数据库。
 - 首版只提供 360–430 CSS px 的手机竖屏布局，并适配顶部和底部安全区域。
 - 更宽的桌面浏览器只在页面中央承载最大 430px 宽的手机画布，不提供独立宽屏布局；横屏显示旋转提示。
 - 界面仅提供简体中文；常见扑克缩写保留英文并提供中文解释。
-- SQLite 和运行数据都保存在项目本地数据目录。
+- 运行数据保存在 Supabase 托管 PostgreSQL 的非公开 `app_private` schema；本机只保存受版本控制的源码、静态资源和后端私有环境配置，不保存产品数据库文件。
 
 ## 3. 技术约束
 
 - 前端：React + Vite + TypeScript；TanStack Query 管理服务端状态，Zustand 管理页面级或跨组件的纯客户端状态，组件私有状态使用 React 内置状态。
 - 后端：Node.js + Hono + TypeScript；Zod 负责边界校验，dotenv 只在后端加载环境变量，Vercel AI SDK 接入 DeepSeek 和 Kimi。
-- 数据库：项目本地 SQLite，使用 Drizzle ORM + `better-sqlite3`，迁移由 Drizzle Kit 管理。
+- 数据库目标：Supabase 托管 PostgreSQL；M2.1 的 Hono 服务端使用 Drizzle ORM + `postgres.js`，运行时客户端通过 TLS 连接 `6543` transaction pooler 并固定 `prepare: false`，Drizzle Kit 通过独立的 `5432` session/direct 连接执行显式发布迁移。当前只完成依赖安装以及 `ServerConfig` 对 `DATABASE_URL` 的校验和私有保存，尚未建立数据库客户端或迁移。
 - 仓库：单仓库，使用 pnpm workspace。
 - 推荐目录边界：
   - `apps/web`：React/Vite 前端。
   - `apps/server`：Hono、牌局引擎、数据与 Agent 模块。
   - `packages/contracts`：前后端共享 Zod 协议、事件 Schema 和推导类型，不共享数据库内部模型。
 - 不使用 TanStack Start；它的全栈路由和服务端能力与已确认的 Hono + Vite 边界重叠。
-- API Key 只从后端环境变量读取，不进入浏览器、SQLite 或日志。
+- API Key、`DATABASE_URL` 与 `DATABASE_MIGRATION_URL` 只从后端或部署环境读取，不进入浏览器、业务表、日志、错误或公开协议。
 
 ## 4. 术语
 
@@ -284,7 +285,7 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 - Agent 请求、响应、纠错、降级和失败。
 - 最终牌型、底池分配和净输赢。
 
-完整隐藏信息只保存在 SQLite，用于应用内审计、调试和可控揭示。首版不提供任何数据或手牌导出功能。
+完整隐藏信息只保存在 `app_private` 的服务端私有数据中，用于应用内审计、调试和可控揭示。浏览器只能通过 Hono 获得按可见性生成的公开投影；首版不提供任何数据或手牌导出功能。
 
 ### 9.2 手牌历史
 
@@ -313,8 +314,9 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 ### 9.4 数据删除
 
 - 只允许永久删除已经结束的整场数据，不允许只删除单手；删除时先取消该场仍在途的 Player/Coach 运行，再同步移除场次快照、命令账本、全部事件、玩家 Agent 调用与记忆版本、Coach 报告与调用尝试及统计贡献。
-- 提供带指定确认文字的“清空全部数据”操作；它会先取消并使全部活动模型请求失效，再删除所有场次和统计数据，但保留 SQLite Schema、后端预设人物目录、静态资源和 `.env`。
+- 提供带指定确认文字的“清空全部数据”操作；它会先取消并使全部活动模型请求失效，再在数据库事务中删除所有应用拥有的场次和统计数据，但保留 `app_private` schema、Drizzle 迁移记录、后端预设人物目录、静态资源和部署环境配置。
 - 删除事务提交后，迟到结果必须在 Commit Gate 中因场次或运行不存在而被拒绝；不得写回快照、事件或报告，也不得创建替代运行。
+- 上述删除语义指应用在线数据库中的逻辑永久删除；Supabase 托管备份、PITR 或基础设施副本可能按供应商保留策略暂存，应用不得把它们作为可查询数据源或自行声称即时物理擦除。
 
 ## 10. 状态恢复
 
@@ -342,7 +344,7 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 
 ### 11.2 性能
 
-- 排除外部模型等待后，普通本地行动应在 200ms 内完成持久化并产生 SSE 更新。
+- 排除外部模型等待后，普通行动的服务内编排必须保持短事务且不执行额外网络调用；数据库往返延迟单独监测，不作固定的本地存储时延承诺。
 - AI 等待期间界面保持响应。
 - Agent 上下文大小不得随场次手数线性增长。
 
@@ -350,7 +352,8 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 
 - 服务仅监听本机。
 - 不实施账号与认证。
-- API Key 仅存在于后端环境变量。
+- API Key 与数据库连接串仅存在于后端或部署环境；浏览器不得获得 Supabase 项目标识、数据库凭据或 `app_private` 访问能力。
+- M2.1 建立的所有数据库连接必须启用 TLS；Supabase Data API、Auth、Realtime、Storage 与 Edge Functions 不进入首版信任边界。
 - 任何日志、错误和前端响应都必须对敏感字段脱敏。
 
 ### 11.4 可诊断性
@@ -372,7 +375,7 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 7. 每手可以查看分街日志、全部结果和关联调用链。
 8. 用户与 AI 的基础统计符合固定分子、分母和净盈亏口径。
 9. 命令账本可以阻止服务重启前后的重复行动和重复补码。
-10. 删除整场或清空全部数据后，约定范围内的关联记录和统计贡献同步消失。
+10. 删除整场或清空全部数据后，应用在线数据库中约定范围内的关联记录和统计贡献同步消失，且迟到结果无法重建；托管备份服从 Supabase 保留策略。
 11. 360–430px 手机竖屏牌桌、底部安全区域、右侧工具栏和全屏手牌流程可用；宽屏只承载居中的手机画布。
 12. 用户可以对任意正常完成（`completed`）的内部手牌手动请求 Coach 复盘；`aborted` 手牌不能请求；每个用户决策恰好生成一条包含策略基准、局面约束、对手证据和事后解释的结构化报告。
 13. Coach 的当时信息评价与事后事实通过两个模型阶段隔离；未覆盖策略、非 100BB 参考和样本不足均被明确标注，复盘失败或重试不改变牌局状态。
@@ -388,7 +391,8 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 
 ## 13. 首版明确不做
 
-- 真人联机、账号系统、云同步和公网部署。
+- 真人联机、账号系统、面向用户的跨设备同步和公网部署。
+- 浏览器直连 Supabase，以及 Supabase Auth、Data API、Realtime、Storage 或 Edge Functions。
 - 独立宽屏桌面、平板和横屏牌桌布局。
 - 2–5 人桌及单挑模式。
 - 锦标赛、前注、straddle、抽水及其他扑克变体。
@@ -401,6 +405,6 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 - 多语言和音效。
 - AI 自由聊天、后台自主工具调用或角色间通信。
 - 通用 RAG、动态 Skills/Plugins、Agent 自主 Cron 和协作式 Multi-Agent。
-- 真实认证、计费、PostgreSQL、外部消息队列和分布式 Worker；这些只保留替换边界。
+- 真实认证、计费、外部消息队列和分布式 Worker；这些只保留替换边界。
 - 本地机器人或规则策略代打。
 - 用户创建、编辑、复制、删除或导入 AI 人物。

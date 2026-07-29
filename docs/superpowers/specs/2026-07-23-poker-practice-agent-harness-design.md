@@ -2,9 +2,10 @@
 
 - 状态：已确认，Agent Foundation 与 Player 决策预处理已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-26
+- 最后更新：2026-07-29
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - 后端边界：[后端、牌局引擎与数据设计](./2026-07-23-poker-practice-backend-design.md)
+- 数据库边界：[Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)
 - 共同运行架构：[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
 - Coach 边界：[Coach Agent 专项设计](./2026-07-26-poker-coach-agent-design.md)
 - 开发任务：[开发任务分解](../plans/2026-07-23-poker-practice-development-tasks.md)
@@ -104,6 +105,8 @@ AI 预设人物由后端只读、版本化目录提供，包含：
 10. **Record**：保存运行、尝试、能力调用和业务决策审计。
 
 每个行动结束后，Agent 不保持厂商对话线程。下一次行动重新从权威状态和有界记忆构建全新的决策包。
+
+Player Runtime 不直接查询 Drizzle Schema 或 PostgreSQL 表。Observe、Recall、Commit 和 Record 都通过 Hono 后端内部应用服务与窄 Repository 端口完成；Supabase 仅托管共享 PostgreSQL，不替代 OwnerScope、会话协调或 Commit Gate。
 
 ## 5. 观察边界
 
@@ -351,7 +354,7 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 - 候选目标金额是否仍在最小和最大边界内。
 - 候选是否满足人物与剥削调整的硬边界。
 - 决策创建时的状态版本和有效请求是否仍是当前版本。
-- Commit Gate 是否仍能在同一事务中读取到匹配 OwnerScope 的 `active` 场次、有效 AgentRun、当前 `decisionRequestId`、同一行动者、有效租约和 fencing token。场次已结束、正在删除或已经不存在时必须拒绝，且不得触发替代运行。
+- Commit Gate 是否仍能在同一异步 PostgreSQL 事务中读取到匹配 OwnerScope 的 `active` 场次、有效 AgentRun、当前 `decisionRequestId`、同一行动者、有效租约和 fencing token。场次已结束、正在删除或已经不存在时必须拒绝，且不得触发替代运行。
 
 ### 11.3 归一化
 
@@ -385,7 +388,7 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 ## 13. 超时、迟到响应与取消
 
 - Player 使用独立于 Coach 的保留 Worker 槽位；首版 Player 和 Coach 各一个进程内槽位，Coach 不能占用 Player 槽位。
-- 单次供应商请求超时是 SQLite 中的 Player 设置，默认 15 秒，合法范围 5–30 秒。
+- 单次供应商请求超时是持久化的 Player 设置，默认 15 秒，合法范围 5–30 秒。
 - 每个 Player AgentRun 固化完整决策 deadline，默认 45 秒，合法范围 15–120 秒且不得小于单次超时。
 - 初始请求、同厂商纠错和供应商降级共享该运行的剩余总时间。每个尝试的实际超时取单次设置与剩余时间的较小值；新尝试开始前剩余不足 5 秒时直接以 `player_deadline_exhausted` 暂停。
 - 每个尝试在开始时固化实际超时与剩余总时间；设置修改只影响之后创建的 Player 运行。
@@ -429,6 +432,8 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 - 自动跳过 AI。
 
 ## 15. 可观测性
+
+以下记录由服务端 Repository 写入 `app_private`，Player Runtime 不直接拼 SQL；提交后的公开状态只能经 Hono 查询或 SSE 投影读取。
 
 每条 `agent_run` 记录：
 
@@ -578,7 +583,7 @@ Player Runtime 使用稳定的内部错误类别：
 
 在以下位置搜索测试密钥并断言不存在：
 
-- SQLite。
+- Repository 持久化记录；未来真实 PostgreSQL 合约测试使用隔离的 `TEST_DATABASE_URL`。
 - 应用日志。
 - 调试 API。
 - SSE。

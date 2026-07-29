@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "test": "pnpm run test:unit && pnpm run test:integration && pnpm run test:service",
     "test:unit": "vitest run --dir test/unit",
-    "test:integration": "vitest run --dir test/integration",
+    "test:integration": "vitest run --dir test/integration --passWithNoTests",
     "test:service": "vitest run --dir test/service --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
@@ -18,15 +18,16 @@
     "@hono/node-server": "^1.14.0",
     "@tx-holdem-coach/contracts": "workspace:*",
     "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.7.0",
     "pokersolver": "2.1.4",
+    "postgres": "^3.4.9",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^3.2.7",
-    "better-sqlite3": "^13.0.1",
+    "drizzle-kit": "^0.31.10",
     "fast-check": "^4.9.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

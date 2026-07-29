@@ -4,6 +4,7 @@
 - 日期：2026-07-26
 - 性质：2–6 人到 6–9 人改造的历史影响与完成记录
 - 阅读说明：正文中的“当前”“需要修改”和“尚未实现”均描述 2026-07-26 改造开始时的基线，不代表今天的代码或待办状态。当前规范以所列上位文档和主开发任务为准。
+- 数据库替代说明：正文中的 SQLite 表述是当时的历史背景，数据库前提已由 [Supabase Postgres 与 Drizzle 迁移设计](../specs/2026-07-29-supabase-postgres-drizzle-migration-design.md) 替代，不据此保留 SQLite 适配器或兼容分支。
 - 上位文档：
   - [产品需求文档](../specs/2026-07-23-poker-practice-prd.md)
   - [前端交互与页面设计](../specs/2026-07-23-poker-practice-frontend-design.md)

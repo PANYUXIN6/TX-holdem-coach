@@ -1,18 +1,19 @@
 # 德州扑克 AI 练习工具：后端、牌局引擎与数据设计
 
-- 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构与预设人物方案已纳入
+- 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构、预设人物与 Supabase Postgres 迁移方案已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-28
+- 最后更新：2026-07-29
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - 专项设计：
   - [非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
+  - [Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)
   - [Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
   - [Player Agent Runtime](./2026-07-23-poker-practice-agent-harness-design.md)
   - [Coach Agent](./2026-07-26-poker-coach-agent-design.md)
 - 开发任务：[开发任务分解](../plans/2026-07-23-poker-practice-development-tasks.md)
 - Agent 专项任务：[Agent 大模块开发任务](../plans/2026-07-26-agent-module-development-tasks.md)
 
-> 2026-07-28 起，本文的非 Agent 运行时部分须与“非 Agent 运行时架构重基线”共同阅读；发生冲突时，以该重基线为准。Agent Foundation、Player Runtime 与 Coach Runtime 的内部设计不在本次重构范围内。
+> 2026-07-28 起，本文的非 Agent 运行时部分须与“非 Agent 运行时架构重基线”共同阅读；2026-07-29 起，数据库连接、schema、迁移、事务与测试边界以“Supabase Postgres 与 Drizzle 迁移设计”为最高事实源。Agent Foundation、Player Runtime 与 Coach Runtime 的业务边界不因此改变。
 
 ## 1. 总体架构
 
@@ -22,7 +23,7 @@
 
 - 私有扑克快照用于快速恢复当前牌局状态。
 - 事件用于完整日志、诊断和统计重建。
-- 每次扑克状态变化在同一 SQLite 事务中写事件和快照。
+- 每次扑克状态变化在同一 PostgreSQL 事务中写事件和快照。
 - 事件不是恢复当前牌局时唯一需要重放的事实源。
 
 前端通过 HTTP 提交命令，通过 SSE 接收已提交事件和最新快照。
@@ -32,16 +33,16 @@
 - Hono 提供本地 HTTP API 与 SSE；不引入 TanStack Start 或第二套服务端路由。
 - Zod 校验环境变量、HTTP 输入输出、SSE 事件和 Agent 结构化结果。`packages/contracts` 只共享对外 Schema 及推导类型。
 - dotenv 只在后端入口加载 `.env`；服务启动时立即用 Zod 校验必需配置。
-- Drizzle ORM 管理 SQLite Schema、查询和事务，Drizzle Kit 生成并执行迁移。
-- SQLite 驱动使用 `better-sqlite3`。它的同步模型适合首版单用户、单 Node.js 进程；运行时使用受支持的 Node.js LTS 版本。
+- M2.1 的 Drizzle ORM 将通过 `postgres.js` 管理 PostgreSQL 查询和异步事务；运行时客户端通过 Supabase `6543` transaction pooler 连接，固定 `prepare: false` 并启用 TLS。
+- M2.1 的 Drizzle Kit 配置将使用独立的 `DATABASE_MIGRATION_URL` 通过 `5432` session/direct 连接生成和执行版本化 SQL 迁移；正式流程只允许显式 `generate + migrate`，不以 `push` 或服务启动自动 DDL 代替发布迁移。
 - Vercel AI SDK 只由 Agent Foundation 的 `ModelGateway` 使用；Player 与 Coach 通过独立、版本化 Route Policy 选择供应商和预算，具体业务限制见各自专项设计。
-- SQLite 是唯一的运行时与用户数据事实源；随服务端版本发布的只读预设人物属于产品配置，不是第二套运行时持久化或导出数据源。首版不维护 JSONL 或其他数据导出格式。
+- Supabase 托管 PostgreSQL 是唯一的运行时与用户数据事实源；所有应用私有表置于非公开 `app_private` schema。随服务端版本发布的只读预设人物属于产品配置，不是第二套运行时持久化或导出数据源。首版不维护 JSONL 或其他数据导出格式。
 
-服务启动时依次加载并校验环境变量、建立数据库连接、执行迁移，并设置 `foreign_keys = ON`、WAL 和合理的 `busy_timeout`。任一步失败都不得接受牌局命令。
+当前代码只由 `ServerConfig` 校验并私有保存 `DATABASE_URL`；依赖已经安装，但数据库客户端、Drizzle 配置、schema、Repository 和迁移尚未实现。M2.1 完成后，服务启动才会依次加载并校验环境变量、建立数据库连接并执行 schema 兼容门控。数据库不可连接、迁移记录缺失或版本不兼容时不得接受牌局命令，也不得尝试自动修复或执行 DDL。迁移由发布流程在启动前显式完成。
 
 ### 1.2 数据权威归属
 
-SQLite 是系统级唯一事实源，但 SQLite 内部仍必须为不同类别的数据指定唯一权威存储，不能让多个表共同决定同一项运行事实：
+Supabase 托管 PostgreSQL 是系统级唯一事实源，但 `app_private` 内部仍必须为不同类别的数据指定唯一权威存储，不能让多个表共同决定同一项运行事实：
 
 | 数据类别 | 权威存储 | 典型字段 | 使用规则 |
 | --- | --- | --- | --- |
@@ -139,7 +140,7 @@ API 不直接计算扑克规则。
 
 职责：
 
-- 在服务端源码中维护只读、版本化的 AI 人物目录，不把它作为用户可变数据写入 SQLite。
+- 在服务端源码中维护只读、版本化的 AI 人物目录，不把它作为用户可变数据写入 PostgreSQL。
 - 服务启动时使用私有 Zod Schema 校验人物标识、版本、头像颜色、风格参数、人物提示和模型配置。
 - 提供按 `personaId` 读取和列出人物的只读端口。
 - 创建场次时向会话服务提供完整配置，由会话服务固化到 `session_agents`。
@@ -168,7 +169,10 @@ Player Runtime 负责扑克业务：
 
 职责：
 
-- 基于 Drizzle ORM 和 `better-sqlite3` 的 SQLite 连接、Schema、事务与迁移。
+- 基于 Drizzle ORM 和 `postgres.js` 的 PostgreSQL 连接、异步事务、Repository 与恢复。
+- 所有业务表限定在 `app_private`；浏览器和 Supabase Data API 均不能直接访问。
+- M2.1 运行时客户端只读取 `DATABASE_URL`，使用 TLS、`6543` transaction pooler 与 `prepare: false`；迁移配置只读取 `DATABASE_MIGRATION_URL`，使用 TLS 和 `5432` session/direct。当前 `ServerConfig` 只验证并私有保存前者，不建立连接。
+- schema 与迁移由显式发布步骤管理；启动只做连接与兼容门控，不执行 DDL。
 - 事件与快照原子写入。
 - 场次、手牌、AgentRun、Runtime 业务记录和统计查询。
 - 数据删除。
@@ -218,9 +222,9 @@ Player 与 Coach 均不得绕过该中枢直接读取活动 `PrivateTableState`�
 玩家或 AI 的扑克行动都使用相同流程：
 
 1. 接收命令唯一标识、场次标识和预期状态版本。
-2. 进入该场次串行写入路径并开启单一 SQLite 事务。
-3. 按 `(sessionId, commandId)` 查询持久化命令账本：相同规范化负载返回原结果，不同负载返回冲突。
-4. 在事务中读取并校验/迁移 `PrivateTableState`，检查 `sessions.stateVersion` 镜像、预期版本和会话阶段。
+2. 进入该场次写入路径并开启单一异步 PostgreSQL 事务；首先以 `SELECT ... FOR UPDATE` 锁定目标 `sessions` 行。
+3. 依靠 `(sessionId, commandId)` 数据库唯一约束和 UPSERT 登记命令；已存在时，相同规范化负载返回原结果，不同负载返回冲突，不以无锁“先查后插”保证幂等。
+4. 在锁内读取并校验/迁移 `PrivateTableState`，检查 `sessions.stateVersion` 镜像、预期版本和会话阶段。
 5. 仅把 `PrivateTableState.poker` 和纯命令交给 M1.9 门面，取得无基础设施字段的开手/行动最终状态、事件草稿及相应 `StartedHandFacts` 或可空 `CompletedHandResult`。
 6. 若命令改变 `PrivateTableState`，基于事务内当前版本分配一次最终 `stateVersion`；同一命令所有事件使用该版本。
 7. 为事件草稿分配连续 `eventSeq`、事件 ID 和时间，但先保留在内存中。
@@ -231,16 +235,17 @@ Player 与 Coach 均不得绕过该中枢直接读取活动 `PrivateTableState`�
 
 任何步骤在事务提交前失败，都不得向前端发布新扑克状态。
 
-第 9 步不得先写缺少公开负载的半成品事件。纯引擎、投影和 SQLite 操作都必须同步且有界；任何外部网络调用严格位于该事务之外。
+第 9 步不得先写缺少公开负载的半成品事件。纯引擎和投影保持同步、有界，PostgreSQL I/O 与事务编排使用异步调用；任何 Agent、供应商或其他外部网络调用严格位于数据库事务之外。
 
 ## 4. 并发、幂等与状态版本
 
 - 每个 `PrivateTableState` 具有只随该聚合业务内容变化递增的 `stateVersion`；纯 `PokerTableState` 没有版本。
 - 每个场次另有对全部已持久化扑克事件和 Player 协调运行事件单调递增的 `eventSeq`；Coach 不使用该序列。
 - 每个命令具有客户端生成的 `commandId`。
-- 同一场次一次只处理一个状态变更命令。
+- 同一场次一次只提交一个状态变更命令；进程内队列可降低竞争，但正确性必须由 PostgreSQL 行锁、唯一约束和事务保证，多实例不得依赖进程内串行化。
 - `(sessionId, commandId)` 具有数据库唯一约束；账本保存命令类型、规范化负载摘要、处理状态、结果版本和原响应。
 - 相同 `commandId` 与相同负载返回原处理结果，不重复执行；相同 `commandId` 与不同负载返回冲突。
+- `eventSeq` 只在成功提交的事务内分配；失败、回滚或重复命令不得消耗新的已提交序号。
 - 预期版本落后时返回冲突和最新快照。
 - 创建场次在内存中以版本 `0` 建立检查点，并与第一手原子提交为最终版本 `1`；客户端不会观察到空 `betweenHands` 场次。
 - 一次成功的“开始下一手”命令可以产生多条自动买入、开局和下盲事件，但只提交一个最终扑克快照并递增一次 `stateVersion`；每条事件分别占用连续的 `eventSeq`。
@@ -283,7 +288,7 @@ Player 与 Coach 均不得绕过该中枢直接读取活动 `PrivateTableState`�
 
 Agent 暂停时扑克阶段仍为 `inHand`，当前行动者和街道不变，不生成伪造行动，也不递增扑克 `stateVersion`。思考、降级、纠错、暂停和重试只递增 `eventSeq`。合法 AI 行动提交后才递增 `stateVersion` 并把 `agentRunState` 设回 `idle`。
 
-每次 `agentRunState` 或有效请求标识变化，都在同一 SQLite 事务中更新 `sessions` 的协调字段并追加 `session_events`。由于扑克状态未变化，不重写私有扑克快照；事件的公开负载使用未变化的私有扑克状态与事务提交后的会话协调状态组合生成。
+每次 `agentRunState` 或有效请求标识变化，都在同一 PostgreSQL 事务中锁定目标会话、更新 `sessions` 的协调字段并追加 `session_events`。由于扑克状态未变化，不重写私有扑克快照；事件的公开负载使用未变化的私有扑克状态与事务提交后的会话协调状态组合生成。
 
 唯一允许在手牌进行中结束场次的路径是 `lifecycleStatus = active`、`pokerPhase = inHand` 且 `agentRunState = paused`。该命令执行“中止本手并结束场次”：
 
@@ -328,7 +333,7 @@ Agent 暂停时扑克阶段仍为 `inHand`，当前行动者和街道不变，�
 - 会话服务先完成命令幂等、预期版本、`betweenHands` 阶段和用户参局资格校验；用户余额为 0 且尚未重新买入时直接拒绝命令，不执行 AI 自动买入。
 - 校验通过后，为每个余额恰好为 0 的 AI 生成一条 `aiAutoRebuy` 场次账务事件，将其筹码从 0 增加到 2,000，并增加该 AI 的场次累计买入额。
 - `aiAutoRebuy` 发生在新手牌创建前，因此 `handId` 为 `null`；新手牌的起始筹码是买入后、下盲前的筹码。
-- AI 自动买入、按钮轮转、创建手牌、下盲、发牌、命令账本、统一事件和最新快照在同一 SQLite 事务中提交。任一步失败全部回滚。
+- AI 自动买入、按钮轮转、创建手牌、下盲、发牌、命令账本、统一事件和最新快照在同一 PostgreSQL 事务中提交。任一步失败全部回滚。
 - 重复提交相同“开始下一手”命令返回命令账本中的原结果，不得重复买入。
 - 直接结束场次不触发 AI 自动买入。
 - 用户余额为 0 时必须买入 2,000 或结束场次。
@@ -517,7 +522,7 @@ Provider Settings/Health 使用 `packages/contracts` 中的严格公开协议：
 - `available` 必须有检测时间且错误码为 `null`；`unavailable` 必须同时有检测时间和脱敏错误码。
 - `deepSeek.canCreateSession` 当且仅当 DeepSeek Key 已配置；`kimi.canFallback` 当且仅当 Kimi Key 已配置。最近检测失败只提供诊断，不改变这两个能力值。
 
-`GET /api/settings/providers` 只返回进程内缓存的最近检测摘要，不产生供应商网络调用。检测摘要不写入 SQLite；服务重启后，未配置 Provider 仍为 `notConfigured`，已配置 Provider 回到 `notChecked`。`POST /api/settings/providers/:provider/check` 才执行一次有界、脱敏的手动连接检测；供应商不可用属于成功完成的诊断，返回 HTTP 200 和更新后的 `unavailable` 摘要，而不是泄露原始错误。未配置时直接返回 `notConfigured`，不发起网络请求。前端的“检测中”由本地 mutation 状态表达，不增加持久化 `checking` 状态。
+`GET /api/settings/providers` 只返回进程内缓存的最近检测摘要，不产生供应商网络调用。检测摘要不写入 PostgreSQL；服务重启后，未配置 Provider 仍为 `notConfigured`，已配置 Provider 回到 `notChecked`。`POST /api/settings/providers/:provider/check` 才执行一次有界、脱敏的手动连接检测；供应商不可用属于成功完成的诊断，返回 HTTP 200 和更新后的 `unavailable` 摘要，而不是泄露原始错误。未配置时直接返回 `notConfigured`，不发起网络请求。前端的“检测中”由本地 mutation 状态表达，不增加持久化 `checking` 状态。
 
 任何 Provider 响应都不得包含 API Key、模型标识、路由、请求正文、供应商响应正文或原始错误消息。真正的创建场次和 Player 行动仍在服务端重新校验 Key 与运行时状态，不能把这个公开摘要当作授权事实源。
 
@@ -544,7 +549,7 @@ Provider Settings/Health 使用 `packages/contracts` 中的严格公开协议：
 
 创建事务同时建立全部座位 2,000 初始筹码/累计买入、版本 `0` 的开手检查点，调用 `startPokerHand()` 下盲发牌，插入 `hands.inProgress` 并写入 `sessionCreated`、`handStarted`。最终快照为 `inHand + stateVersion 1`；任一步失败都不得留下空场次。网络重试命中活动场次唯一约束时返回 `ACTIVE_SESSION_EXISTS` 和该活动场次的 `latestSnapshot`，客户端直接继续训练。
 
-每个 `OwnerScope` 同时只能有一个 `active` 场次。创建事务可以先查询以返回已有场次提示，但并发正确性由 `sessions(ownerId) WHERE lifecycleStatus = 'active'` 的 SQLite 部分唯一索引保证；竞争插入触发唯一约束时统一映射为 HTTP `409` 和稳定错误码 `ACTIVE_SESSION_EXISTS`，不得通过“先查再插”替代数据库约束。
+每个 `OwnerScope` 同时只能有一个 `active` 场次。创建事务可以先查询以返回已有场次提示，但并发正确性由 `app_private.sessions(owner_id) WHERE lifecycle_status = 'active'` 的 PostgreSQL 部分唯一索引保证；竞争插入触发唯一约束时统一映射为 HTTP `409` 和稳定错误码 `ACTIVE_SESSION_EXISTS`，不得通过“先查再插”替代数据库约束。
 
 `endSession` 在 `betweenHands` 时执行普通结束；在 `active + inHand + paused` 时执行 §5 的原子中止回退；其他进行中组合返回状态冲突和最新公开快照。
 
@@ -572,7 +577,19 @@ Provider Settings/Health 使用 `packages/contracts` 中的严格公开协议：
 
 响应只返回 `pending | running | completed | failed` 状态、结构化报告或脱敏失败摘要。Coach 请求不进入扑克命令账本和 `session_events`；客户端通过轮询或 Query 失效读取状态，首版不为 Coach 占用扑克 SSE `eventSeq`。
 
-## 14. SQLite 数据模型
+## 14. Supabase Postgres 目标数据模型
+
+本节描述 M2 未来要建立的目标模型，不表示仓库当前已经存在 Drizzle schema、Repository 或迁移文件。所有业务表、索引、约束和 Drizzle 映射统一位于非公开 `app_private` schema；Hono 是唯一业务入口，不向 `anon`、`authenticated` 或浏览器授予直接访问权。
+
+字段类型遵循以下固定边界：
+
+- 会话、手牌、命令、事件和 Agent 运行等标识符使用 PostgreSQL `uuid`。
+- 业务时间、事件时间、租约和审计时间使用 `timestamptz`。
+- 版本化私有快照、完成手结果、检查点和允许演进的私有载荷使用 `jsonb`，读写边界继续由服务端私有 Zod Schema 校验。
+- 筹码、投入、累计买入、`stateVersion`、`eventSeq`、fencing token、手牌序号等可能增长到 JavaScript 安全整数上限的非负持久化值使用 PostgreSQL `bigint`；Drizzle 映射为 `number`，私有 Zod Schema 与数据库 `CHECK` 共同限制在 `0..Number.MAX_SAFE_INTEGER`。这只约束持久化表示，不把既有 Contracts 或领域 `number` 改为字符串/JavaScript `bigint`，也不缩窄其范围。
+- `seatNumber`、牌张/位置索引、枚举序数和重试次数等明确小型有界值继续使用 PostgreSQL `integer`。
+- 任何筹码字段都不得使用浮点数据库类型；允许为负的派生金额若单独持久化，也使用 `bigint` 并由私有 Schema/`CHECK` 限制在 JavaScript 安全整数范围内。
+- 关系、枚举、非空、检查、唯一和级联规则尽可能落为 PostgreSQL 约束；应用校验不能代替数据库不变量。
 
 ### 14.1 预设人物不入库
 
@@ -596,7 +613,7 @@ Provider Settings/Health 使用 `packages/contracts` 中的严格公开协议：
 
 ```sql
 CREATE UNIQUE INDEX sessions_one_active_per_owner
-ON sessions(owner_id)
+ON app_private.sessions(owner_id)
 WHERE lifecycle_status = 'active';
 ```
 
@@ -641,7 +658,7 @@ WHERE lifecycle_status = 'active';
 - 结果 `stateVersion`、关联事件范围和原响应。
 - 创建和完成时间。
 
-命令账本、扑克状态、相关场次事件和快照在同一 SQLite 事务中提交。
+命令账本、扑克状态、相关场次事件和快照在同一 PostgreSQL 事务中提交。命令登记依靠唯一约束与 UPSERT，重复请求不得绕过锁或再次推进领域状态。
 
 ### 14.7 `session_events`
 
@@ -668,7 +685,7 @@ WHERE lifecycle_status = 'active';
 
 行上保存独立的 `snapshotSchemaVersion` 和更新时间。`agentRunState`、有效请求标识和下一 `eventSeq` 不进入 `PrivateTableState`，它们由 `sessions` 权威保存。API 和 SSE 所需的 `PublicSessionSnapshot` 还要读取当前手已提交 `session_events`，再与上述两类状态组合生成。
 
-从 SQLite 恢复时先使用服务端私有 Zod Schema 校验，再按显式应用层迁移升级已知旧版本。未知版本或损坏数据使该场次进入只读错误状态，不得重新发牌覆盖。
+从 PostgreSQL 恢复时先使用服务端私有 Zod Schema 校验 `jsonb` 信封，再按显式应用层数据迁移升级已知旧版本。未知版本或损坏数据使该场次进入只读错误状态，不得重新发牌覆盖；这类应用数据版本迁移独立于 Drizzle 的数据库结构迁移。
 
 恢复时还必须校验 `sessions.stateVersion` 与 `PrivateTableState.stateVersion` 一致。版本不一致进入只读诊断；只有 `currentHandId` 这类明确标记为可重建的指针允许从有效快照修复。
 
@@ -749,14 +766,14 @@ WHERE lifecycle_status = 'active';
 
 Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `agent_capability_invocations`。Coach 业务表不得写入扑克状态版本之外的可变协调字段；删除所属整场时级联删除。
 
-## 15. 本地文件
+## 15. 连接、迁移与本地文件
 
-建议数据路径：
-
-- `data/poker-practice.sqlite`
-- `apps/web/public/poker/`：受版本控制的扑克牌静态资源规范目录。
-
-整个根目录 `/data/` 和 `.env` 必须排除出版本控制，从而同时覆盖 SQLite 主文件、`-wal`、`-shm` 及其他运行数据。头像由前端根据场次人物快照中的颜色和姓名文字渲染，不创建头像文件。
+- 当前 `ServerConfig` 只读取、验证并私有保存后端 `DATABASE_URL`，不建立连接。
+- M2.1 的运行时 `postgres.js` 客户端只读取该 URL，通过 TLS 连接 Supabase `6543` transaction pooler，并固定 `prepare: false`。
+- M2.1 的 Drizzle Kit 配置只读取部署环境中的 `DATABASE_MIGRATION_URL`，通过 TLS 连接 `5432` session/direct；迁移由显式发布步骤执行，服务启动不执行 DDL。
+- `DATABASE_URL`、`DATABASE_MIGRATION_URL`、供应商 Key 和 `.env` 不得提交版本控制、进入日志或传给浏览器。
+- `apps/web/public/poker/` 是受版本控制的扑克牌静态资源规范目录。头像由前端根据场次人物快照中的颜色和姓名文字渲染，不创建头像文件。
+- 不创建项目本地产品数据库文件，也不保留任何本地数据库运行文件或初始化路径。
 
 ## 16. 数据删除
 
@@ -774,7 +791,9 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 
 不允许只删除单手。
 
-单场删除事务先把该场仍在途的 Player/Coach AgentRun 标记为 `cancelled` 并使租约、有效请求标识和 fencing 失效，再执行级联删除。“清空全部数据”需要指定确认文字，并对全部运行执行相同失效步骤后，在串行化写入路径中删除全部场次派生数据、活动场次和统计缓存；保留 SQLite Schema、后端预设人物目录、扑克牌静态资源和 `.env`。首版不存在用户人物配置、备注、标签、头像文件或导出文件。
+单场删除事务先锁定目标场次，把仍在途的 Player/Coach AgentRun 标记为 `cancelled` 并使租约、有效请求标识和 fencing 失效，再执行级联删除。“清空全部数据”需要指定确认文字，并对全部运行执行相同失效步骤后，在受约束的事务路径中删除全部应用拥有的场次派生数据、活动场次和统计缓存；保留 `app_private` schema、Drizzle 迁移记录、后端预设人物目录、扑克牌静态资源和部署环境配置。首版不存在用户人物配置、备注、标签、头像文件或导出文件。
+
+上述接口承诺的是在线业务表中的逻辑永久删除以及删除后不可查询、不可由迟到结果重建。Supabase 托管备份、PITR 或基础设施副本可能按供应商保留策略暂存；应用不得访问它们恢复已删除数据，也不得宣称删除事务会即时擦除供应商全部物理副本。
 
 所有迟到结果必须在同一个提交事务内执行运行时专属屏障：
 
@@ -792,7 +811,7 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - Kimi Key 缺失：允许创建场次但返回明确警告；需要降级时把 `agentRunState` 设为 `paused`。
 - Provider 手动检测失败：保存脱敏 `unavailable` 摘要并返回 HTTP 200，不改变由 Key 配置决定的开场或降级资格；检测基础设施自身无法完成持久化时才返回服务端错误。
 - 数据库事务失败：回滚并进入可诊断错误，不发布 SSE。
-- 数据库无法启动或迁移：阻止服务接受牌局命令。
+- 数据库不可连接、迁移记录缺失或 schema 版本不兼容：启动兼容门控失败并阻止服务接受牌局命令；服务不得自动迁移或修复。
 - 玩家 Agent 最终失败：保持扑克状态不变并把 `agentRunState` 设为 `paused`。
 - Coach 最终失败：只把当前 `coachReviewId` 标记为 `failed`，保留脱敏调用链并允许用户以新请求重新生成。
 - 迟到的 AI 响应：记录为过期，不提交。
@@ -856,7 +875,7 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - 修改服务端人物目录后，已有活动及历史人物配置快照仍保持原版本并可读取和筛选。
 - 删除整场会清除命令账本、统一事件、快照、AgentRun、尝试、能力调用、Runtime 业务记录与记忆版本；清空全部数据不删除服务端预设人物目录。
 - 人物目录在启动时执行 Schema 校验，重复 `personaId`、非法版本、颜色、风格参数或模型配置会阻止服务接受创建场次请求。
-- Drizzle 迁移可以从空数据库完整建立当前 Schema。
+- Drizzle 显式发布迁移可以在隔离的空 PostgreSQL 数据库中完整建立当前 `app_private` schema；服务启动不会执行该迁移。
 - 相同 Coach `requestId` 不重复生成报告；重新生成使用新标识并保留旧报告。
 - Coach 报告固化指标、策略版本和对手证据截止点，后续手牌和数据集升级不改变旧报告。
 - 决策分析尝试不含事后完整底牌或后续公共牌；事后解释尝试不能返回可覆盖过程评价的字段。
@@ -883,10 +902,10 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 
 ## 19. 性能与运行约束
 
-- 排除外部模型等待后，普通本地命令应在 200ms 内完成事务和 SSE 发布。
+- 排除外部模型等待后，普通命令保持短事务，事务中不调用 Agent、供应商或其他网络服务；Supabase 数据库往返延迟单独观测，不作固定的本地存储时延承诺。
 - Coach 请求在独立异步生命周期中运行，不阻塞开始下一手、牌局命令或扑克 SSE。
 - 每个 `OwnerScope` 同一时间只允许一个活动场次；不同 Owner 的独立单人牌桌不共享状态或锁。
 - 进程内调度使用独立 Player/Coach 队列，首版各保留一个 Worker 槽位；Coach 不得占用 Player 槽位。
 - Player 初始请求、纠错和降级共享固化的完整决策 deadline；实际单次超时不得超过剩余时间，剩余不足 5 秒时不再创建尝试而进入暂停。
-- 单个 Node.js 进程和单个 SQLite 数据库足以满足首版。
+- 单个 Node.js/Hono 进程与一个 Supabase Postgres 项目足以满足首版；事务正确性仍由 PostgreSQL 行锁和约束保证，不依赖单进程假设。
 - 不引入消息队列、缓存服务、微服务或分布式锁。

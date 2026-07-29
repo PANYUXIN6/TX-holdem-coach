@@ -1,6 +1,8 @@
 # M1.5：合法动作与两阶段下注迁移设计
 
 > 2026-07-28 非 Agent 运行时重基线：合法动作、金额语义和下注迁移规则全部继续有效；只把 `PokerState` 引用改为无版本的 `PokerTableState`。服务层最终只通过 M1.9 `poker-engine.ts.applyPokerAction()` 使用本模块。详见[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)。
+>
+> 2026-07-29 数据库迁移说明：本文纯领域原子性不变；未来命令持久化由 M3 按 [Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md) 放入异步 PostgreSQL 事务。
 
 - 状态：已确认，已实现
 - 日期：2026-07-27
@@ -32,7 +34,7 @@ BettingTransitionResult
 事务化保存快照、事件和协调字段
 ```
 
-“原子”在 M1.7 表示纯领域调用不会向外暴露非法中间状态；SQLite 事务原子性仍由 M3 负责。
+“原子”在 M1.7 表示纯领域调用不会向外暴露非法中间状态；持久化事务原子性仍由 M3 通过异步 PostgreSQL 事务负责。
 
 ## 2. 两阶段纯迁移
 

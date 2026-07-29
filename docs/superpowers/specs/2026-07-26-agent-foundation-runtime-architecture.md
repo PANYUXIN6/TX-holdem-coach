@@ -2,10 +2,12 @@
 
 - 状态：已确认
 - 日期：2026-07-26
+- 最后更新：2026-07-29
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - Player 专项设计：[Player Agent Runtime](./2026-07-23-poker-practice-agent-harness-design.md)
 - Coach 专项设计：[Coach Agent](./2026-07-26-poker-coach-agent-design.md)
 - 后端边界：[后端、牌局引擎与数据设计](./2026-07-23-poker-practice-backend-design.md)
+- 数据库边界：[Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)
 - 专项开发任务：[Agent 大模块开发任务](../plans/2026-07-26-agent-module-development-tasks.md)
 
 ## 1. 目标
@@ -51,7 +53,8 @@ Player 与 Coach 都服务于本项目的 6–9 人无限注德州扑克规则�
 - Agent 自主 Cron。
 - Agent 间消息、委派和协作式 Multi-Agent。
 - 用户可覆盖协议的自由 Prompt。
-- Redis、云消息队列、PostgreSQL、真实认证和 OpenTelemetry 平台。
+- Redis、云消息队列、真实认证和 OpenTelemetry 平台。
+- `supabase-js`、Supabase Auth、Realtime、Storage 和 Edge Functions；Supabase 只托管 Agent 与牌局共享的 PostgreSQL。
 
 ## 3. 总体架构
 
@@ -77,9 +80,9 @@ flowchart TD
     PF --> OUT["Output / Repair Pipeline"]
     PF --> OBS["Audit / Metrics / Eval"]
 
-    AR --> DB1["agent_runs / attempts / capability_invocations"]
-    PR --> DB2["player_decisions"]
-    CR --> DB3["coach_reviews / decision_assessments"]
+    AR --> DB1["Supabase Postgres / app_private<br/>agent_runs / attempts / capability_invocations"]
+    PR --> DB2["Supabase Postgres / app_private<br/>player_decisions"]
+    CR --> DB3["Supabase Postgres / app_private<br/>coach_reviews / decision_assessments"]
 ```
 
 依赖方向：
@@ -89,6 +92,7 @@ flowchart TD
 - API、Session Coordinator 和 Worker 只调用 Runtime 应用入口，不直接拼 Prompt。
 - Player 与 Coach 不共享 Context Schema、Prompt、记忆、业务 Validator 或 Commit Gate。
 - 策略事实源可以共享，Player 与 Coach 使用不同投影。
+- Hono 是浏览器可访问的唯一服务入口；Agent、会话和 Coach 只能通过应用服务与窄 Repository 端口访问 PostgreSQL，不能绕过所有权、生命周期或公开投影边界。
 
 ## 4. Agent Foundation
 
@@ -187,6 +191,8 @@ Foundation 提供：
 Player Commit Gate 只允许合法、未过期的候选扑克决策进入标准命令事务，并在同一事务验证场次存在、OwnerScope、`active` 生命周期、有效请求标识、行动者、租约和 fencing。Coach Commit Gate 只允许通过事实校验的报告写入 Coach Repository，并验证场次存在、OwnerScope、目标手牌正常完成且未进入删除流程；Coach 不要求所属场次仍为 `active`。
 
 删除或清空后的场次/运行不存在时，两种 Commit Gate 都必须无副作用拒绝。失败结果不能写入业务表、快照或 `session_events`，也不能触发替代运行。fencing token 只解决旧租约问题，不能代替场次存在性、OwnerScope 和删除屏障。
+
+两种 Commit Gate 都使用异步 PostgreSQL 事务，并复用 M2/M3 的行锁、唯一约束和幂等命令边界。事务中不得调用模型、外部网络或发布 SSE；只有提交成功后才能发布已经持久化的运行或牌局事件。
 
 ### 4.8 类型化 Channel
 
@@ -416,6 +422,8 @@ Player 的 heuristic 规则不属于策略事实源，Coach 不能把它称为 G
 
 ## 9. 数据模型
 
+Agent Foundation、Player 与 Coach 共享 Supabase 托管的 PostgreSQL 持久化基础，但各自只消费所需的窄 Repository 端口。所有业务表位于非公开 `app_private` schema，Drizzle 只用于服务端 Schema、查询和迁移实现；浏览器、Contracts 和 Runtime 领域对象都不能接触连接信息或直接访问表。固定 `local-user` 身份适配器与 `OwnerScope` 继续生效，Supabase 不承担认证。
+
 ### 9.1 通用执行表
 
 `agent_runs`：
@@ -538,10 +546,10 @@ Coach 固定场景：
 
 ## 12. 当前与未来实现边界
 
-当前实现：
+首版实现目标：
 
 - Agent Foundation、静态 Registry、OwnerScope 和 Capability 权限。
-- SQLite 通用运行与业务表。
+- Supabase 托管 PostgreSQL 中 `app_private` 的通用运行与业务表，由 Drizzle 和窄 Repository 访问。
 - 持久化 AgentRun、租约和进程内 Worker。
 - Player 与 Coach 两种 Runtime。
 - 版本化审计、保留策略、结构化日志、测试指标和 Eval。
@@ -549,7 +557,6 @@ Coach 固定场景：
 未来适配：
 
 - 真实注册与认证。
-- PostgreSQL Repository。
 - 消息队列和独立 Worker 集群。
 - OpenTelemetry、监控与告警。
 
@@ -617,6 +624,6 @@ apps/server/src/
 11. Coach 检查点只在固定版本完全匹配时复用。
 12. 动作执行频率与下注尺度始终使用不同字段。
 13. 隐藏牌、未来牌、其他用户数据和 API Key 泄漏测试通过。
-14. 本地实现不依赖真实认证、PostgreSQL、消息队列或监控平台。
+14. 本地身份仍固定为 `local-user`；Agent 持久化使用与牌局共享的 Supabase Postgres，但不依赖 Supabase Auth、Realtime、Storage、Edge Functions、消息队列或监控平台。
 15. Player 与 Coach 有独立容量，Player 全部供应商尝试共享一个总 deadline。
 16. 删除/清空后的迟到结果在 Runtime 专属 Commit Gate 被拒绝，且不能创建替代运行。

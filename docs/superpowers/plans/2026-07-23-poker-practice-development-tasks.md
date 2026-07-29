@@ -1,14 +1,15 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构与预设人物方案已纳入
+- 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构、预设人物与 Supabase Postgres 迁移方案已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-28
+- 最后更新：2026-07-29
 - 本文不包含工期、人数或里程碑时间估算。
 - 上位文档：
   - [产品需求文档](../specs/2026-07-23-poker-practice-prd.md)
   - [前端交互与页面设计](../specs/2026-07-23-poker-practice-frontend-design.md)
   - [后端、牌局引擎与数据设计](../specs/2026-07-23-poker-practice-backend-design.md)
   - [非 Agent 运行时架构重基线](../specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)
+  - [Supabase Postgres 与 Drizzle 迁移设计](../specs/2026-07-29-supabase-postgres-drizzle-migration-design.md)
   - [Agent Foundation 与受限 Runtime](../specs/2026-07-26-agent-foundation-runtime-architecture.md)
   - [Player Agent Runtime 专项设计](../specs/2026-07-23-poker-practice-agent-harness-design.md)
   - [Coach Agent 专项设计](../specs/2026-07-26-poker-coach-agent-design.md)
@@ -27,7 +28,7 @@
 4. 后端任务没有完成对应的必要自动化测试，不能视为完成。
 5. 前端视觉与可用性以用户亲自验收为主，不堆积组件快照和样式断言。
 6. 不提前实现首版明确不做的导入导出、独立桌面/平板/横屏布局、人物编辑、音效、真人联机、求解器、实时 Coach、自动复盘或用户画像。
-7. SQLite 是唯一的运行时与用户数据事实源；服务端只读预设人物是版本控制的产品配置，不增加 JSONL、文本日志副本或其他运行时/导出存储。
+7. Supabase 托管 PostgreSQL 的非公开 `app_private` schema 是唯一的运行时与用户数据事实源；Hono 是唯一业务入口，服务端只读预设人物是版本控制的产品配置，不增加浏览器直连、JSONL、文本日志副本或其他运行时/导出存储。
 
 ## 2. 总体模块与依赖
 
@@ -35,7 +36,7 @@
 | --- | --- | --- | --- |
 | M0 | 工程底座与共享契约 | 无 | pnpm workspace、共享 Schema、测试底座 |
 | M1 | 确定性牌局引擎 | M0 | 规则正确的纯函数引擎 |
-| M2 | SQLite 持久化与恢复 | M0，部分依赖 M1 状态模型 | Schema、事务、快照、事件、幂等和恢复 |
+| M2 | Supabase Postgres 持久化与恢复 | M0，部分依赖 M1 状态模型 | Drizzle 基础设施、显式迁移、Schema、事务、快照、事件、幂等和恢复 |
 | M3 | 会话服务、HTTP API 与 SSE | M1、M2 | 服务端权威命令链路和实时同步 |
 | M4 | Agent Foundation 与 Player Runtime | M0、M2，接入 M3 | 运行底座、权限、持久任务、决策预处理、有界选择、提交和恢复 |
 | M5 | 历史、统计与数据管理 | M1、M2、M3 | 分街复盘、可见性投影、统计和删除 |
@@ -85,13 +86,24 @@ M1.R
   → M1.9b
   → M1.9c
   → M0.2 协议返工
-  → M2
+  → M2.1 Supabase Postgres/Drizzle 基础设施
+  → M2 其余持久化
   → M3
   → M5 与 M6/M7
   → M9 非 Agent 验收
 ```
 
 依赖图允许 M1.8 与 M1.9a 并行准备，但默认线性流程先完成 M1.8，使 M1.9a 可以直接消费已冻结的结算事实类型，不建立临时占位结构。M1.9b 与 M1.9c 是两个独立任务，不得合并领取。
+
+### 2.3 2026-07-29 Supabase Postgres 迁移基线
+
+数据库相关任务以 [Supabase Postgres 与 Drizzle 迁移设计](../specs/2026-07-29-supabase-postgres-drizzle-migration-design.md) 为最高事实源：
+
+- Supabase 只托管 PostgreSQL；Hono 继续作为唯一服务入口，不引入 `supabase-js`、Auth、Data API、Realtime、Storage 或 Edge Functions。
+- 本轮已实现代码只令 `ServerConfig` 校验并私有保存 `DATABASE_URL`，安装 Drizzle/`postgres.js` 依赖并移除旧数据库配置、依赖和测试夹具；当前不建立数据库连接，也不提前创建 M2 的 Drizzle 配置、schema、Repository 或迁移。
+- M2 生产数据库仍未实现。M2.1 未来先建立 `app_private`、运行时 `6543` transaction pooler 连接、独立 `5432` migration 连接、显式发布迁移和启动兼容门控，随后才实现业务表与 Repository。
+- 运行时事务均为异步 PostgreSQL 事务；写命令使用 `SELECT ... FOR UPDATE`、数据库唯一约束和 UPSERT。进程内队列只优化竞争，不承担正确性。
+- 默认验证始终离线；临时 PostgreSQL 集成测试和非生产 Supabase smoke 都是显式可选步骤。
 
 ## 3. 后端测试闭环规则
 
@@ -106,13 +118,15 @@ M1.R
    - 使用 fast-check 验证牌张唯一、筹码守恒、合法行动者和底池守恒等跨大量输入组合的不变量。
    - 失败时保存可复现的 seed/path。
 3. **持久化集成测试**
-   - 使用真实 `better-sqlite3` 临时数据库和实际 Drizzle 迁移。
+   - 仅在显式提供 `TEST_DATABASE_URL` 时使用隔离临时 PostgreSQL 和实际 Drizzle 迁移；测试库不得指向生产或日常开发 Supabase 项目。
    - 验证事务、唯一约束、级联删除、事件顺序和服务重启恢复。
-   - 不用内存 Repository 假实现替代 SQLite 关键行为。
+   - 不用内存 Repository 假实现替代 PostgreSQL 行锁、唯一约束、UPSERT 和级联等关键行为。
 4. **服务/API 集成测试**
    - 通过 Hono 应用入口发请求。
    - 使用可编程假模型适配器，不依赖 DeepSeek 或 Kimi 在线。
    - 只覆盖跨模块关键链路，不重复枚举纯引擎已经覆盖的每一种牌型和下注边界。
+
+默认 `pnpm run verify` 只运行离线测试，不读取数据库 URL、不连接 Supabase 或网络。临时 PostgreSQL 集成测试是显式任务；另可提供非生产 Supabase transaction-pooler smoke，验证 TLS、`6543` 和 `prepare: false`，但不得成为默认验证前置条件。
 
 ### 3.2 “充分且必要”的判断
 
@@ -196,12 +210,12 @@ M1.R
 
 - 后端入口只监听本机地址。
 - dotenv 仅在服务端入口加载。
-- 使用 Zod 校验端口、数据库路径、可选存在的 DeepSeek Key 和 Kimi Key。
+- 使用 Zod 校验端口、后端私有 `DATABASE_URL`、可选存在的 DeepSeek Key 和 Kimi Key；`DATABASE_MIGRATION_URL` 不进入运行时 `ServerConfig`。
 - 使用共享 Provider Schema 从私有配置投影 `configured`、DeepSeek 开场资格和 Kimi 降级资格，不暴露 Key。Key 未配置时生成 `notConfigured`，已配置但尚未检测时生成 `notChecked`；两种状态的 `lastCheckedAt` 和 `errorCode` 均为 `null`。
 - 现有 `getServerCapabilities` 必须从同一 Provider 设置投影派生只读能力和警告，不得独立重复判断 DeepSeek/Kimi 配置。
 - Key 缺失不阻止查看页面和历史；DeepSeek Key 缺失只阻止创建场次，Kimi Key 缺失只产生降级不可用警告。
 - M0.3 不调用供应商网络、不保存检测结果，也不产生 `available/unavailable`；这些行为留给 M3.5。
-- 未通过配置或数据库初始化时不接受牌局命令。
+- 未通过配置校验时不启动；数据库连接与 schema 兼容门控由未来 M2.1 接入，服务启动不得自动执行迁移。
 - 提供中文、脱敏的启动错误。
 - 仓库当前存在 `apikey.txt`；实现本任务时不得读取或记录其内容。若其中保存真实密钥，应在用户确认后迁移到 `.env` 并排除版本控制，不能把普通文本密钥文件继续作为运行时配置源。
 
@@ -217,14 +231,14 @@ M1.R
 产出：
 
 - 配置 Vitest Node 测试项目和 V8 coverage 报告。
-- 提供不依赖领域状态的确定性牌堆、可控随机数、假时钟、固定 ID 生成器和临时 SQLite。
+- 提供不依赖领域状态的确定性牌堆、可控随机数、假时钟、固定 ID 生成器和数据库无关测试工厂；默认夹具不创建或连接真实数据库。
 - 引入 fast-check，仅用于真正适合不变量验证的牌局规则。
 
 依赖说明：最小牌局状态构造器随 M1.1 的领域状态模型完成；可编程假模型适配器随 M4.3 的 Foundation `ModelGateway` 端口完成。两者不得在本任务预先定义接口。
 
 验证：
 
-- 测试之间数据库、时钟、随机数和固定 ID 脚本完全隔离。
+- 测试之间输入、时钟、随机数和固定 ID 脚本完全隔离；默认验证不读取数据库 URL。
 
 ### M0.5 建立牌张领域编码与静态资源清单
 
@@ -245,11 +259,11 @@ M1.R
 产出：
 
 - 根目录提供格式检查、类型检查、后端单元测试、后端集成测试和完整验证命令。
-- 测试输出可以区分纯单元、SQLite 集成和服务集成失败。
+- 测试输出可以区分纯单元、显式 PostgreSQL 集成和服务集成失败。
 
 验证：
 
-- 新环境可以通过单一命令运行后端完整验证。
+- 新环境可以通过单一命令运行默认离线后端完整验证；需要数据库的集成与 smoke 使用独立显式命令。
 - 不把真实模型 Key 或在线厂商作为验证前置条件。
 
 ## 5. M1：确定性牌局引擎
@@ -464,21 +478,25 @@ M1.R
 - 生成状态的座位总数只能为 6–9，且座位号唯一并位于 `0..8`。
 - 纯引擎状态和结果中不存在并发版本、基础设施事件 ID、时间戳或协议字段；允许原样回显调用方提供的领域 `handId/playerId`，版本单调性在 M3 属性/集成测试中验证。
 
-## 6. M2：SQLite 持久化与恢复
+## 6. M2：Supabase Postgres 持久化与恢复
 
-### M2.1 建立数据库连接和迁移
+### M2.1 建立 Supabase Postgres、Drizzle 与显式迁移基础设施
 
 产出：
 
-- 使用 Drizzle ORM 和 `better-sqlite3` 建立连接。
-- 启动时执行迁移并设置 `foreign_keys = ON`、WAL 和 `busy_timeout`。
-- 创建项目本地 `data/poker-practice.sqlite`，并排除数据库和 `.env` 的版本控制。
+- 新增 Drizzle Kit 配置、`app_private` schema 入口和版本化 SQL 迁移目录；所有业务对象限定在 `app_private`。
+- 新增显式 `drizzle-kit generate` 与 `drizzle-kit migrate` 发布脚本；不提供正式 `push` 流程，服务启动不执行 DDL。
+- 运行时单例使用 Drizzle ORM + `postgres.js` 读取 `DATABASE_URL`，通过 TLS 连接 Supabase `6543` transaction pooler 并固定 `prepare: false`。
+- 迁移工具只读取 `DATABASE_MIGRATION_URL`，通过 TLS 连接 `5432` session/direct；运行时不得读取该变量。
+- 服务启动只做数据库连接与 schema 兼容门控；不可连接、迁移记录缺失或版本不兼容时拒绝接受牌局命令，不尝试修复数据库。
+- 数据库连接串只存在于后端或部署环境，不进入 Contracts、浏览器、日志、错误或测试输出。
 
 后端测试闭环：
 
-- 空临时数据库可以完整迁移到当前版本。
-- 外键、唯一约束和级联行为实际生效。
-- 迁移或连接失败时服务不接受牌局命令。
+- 在显式 `TEST_DATABASE_URL` 指向的隔离空 PostgreSQL 中，版本化迁移可以完整建立当前 `app_private` schema。
+- 断言运行时连接固定 `prepare: false` 且迁移/运行时 URL 不混用；可选非生产 Supabase smoke 验证 TLS 和 `6543` pooler。
+- 迁移工具失败不产生半套 schema；连接失败、迁移记录缺失或版本不兼容时服务不接受牌局命令。
+- 默认 `pnpm run verify` 不连接 PostgreSQL、Supabase 或网络。
 
 ### M2.2 实现完整 Schema
 
@@ -486,7 +504,9 @@ M1.R
 
 - 建立 `sessions`、`session_agents`、`agent_memory_revisions`、`hands`、`command_ledger`、`session_events`、`session_snapshots`、`agent_runs`、`agent_attempts`、`agent_capability_invocations`、`player_decisions`、`coach_reviews`、`coach_decision_assessments`、统计缓存和 `app_settings`；不建立 `agent_templates` 或 `agent_personas` 表。
 - 建立文档要求的唯一索引、外键和查询索引。
-- API Key 不存在于任何表。
+- 所有业务表位于 `app_private`；不向 `anon`、`authenticated` 或 Data API 暴露权限。
+- 标识符使用 PostgreSQL `uuid`，业务/事件时间使用 `timestamptz`，版本化快照、完成结果和私有载荷使用 `jsonb`。筹码、投入、累计买入、`stateVersion`、`eventSeq`、fencing token、手牌序号等非负可增长持久化值使用 PostgreSQL `bigint`，由 Drizzle 映射为 `number`，并由私有 Zod 与数据库 `CHECK` 双重限制在 `0..Number.MAX_SAFE_INTEGER`；不得改为字符串或 JavaScript `bigint`，也不得缩窄既有 Contracts/领域范围。`seatNumber`、牌张/位置索引、枚举序数和重试次数等小型有界值继续使用 `integer`。
+- API Key 与数据库连接串不存在于任何表。
 - `session_snapshots.privateTableState` 保存版本化 `PrivateTableState` 信封；其中 `poker` 是唯一权威纯扑克状态，顶层保存版本、已完成手数、累计买入和最近完成手摘要。`sessions` 只保存生命周期、协调字段和事务并发镜像；`session_agents` 只保存本场配置与当前结构化记忆。
 - 所有持久化座位号约束为 `0..8`，一场的用户与 Agent 座位合计只能为 6–9 且不得重复。
 - 不创建 `session_agents.currentStack`、`sessions.buttonPosition` 或 `sessions.resultSummary`；`sessions.currentHandId` 仅作为可重建关系指针。
@@ -498,9 +518,10 @@ M1.R
 
 - 用代表性记录验证各关系可以写入和读取。
 - 验证 `(sessionId, commandId)`、场次内 `eventSeq` 等关键唯一约束。
-- 使用两个真实 SQLite 连接竞争创建，验证同一 Owner 只有一个 `active` 场次，不同 Owner 不冲突。
+- 使用两个真实 PostgreSQL 连接竞争创建，验证同一 Owner 只有一个 `active` 场次，不同 Owner 不冲突。
 - 使用 Schema 检查确认不存在 Key 字段和旧 `hand_events` 表。
 - 使用 Schema 检查确认三个非必要扑克投影列不存在。
+- 使用边界测试确认上述非负 `bigint` 字段经 Drizzle 保持为 `number`，私有 Zod 与数据库 `CHECK` 都拒绝负值、非安全整数和超过 `Number.MAX_SAFE_INTEGER` 的值；小型有界字段仍执行各自 `integer` 约束。
 - 连续提交多个扑克状态后仍只有一行场次快照，内容和更新时间对应最后一次成功事务。
 
 ### M2.3 实现预设人物目录、设置和场次基础 Repository
@@ -526,6 +547,7 @@ M1.R
 
 - 规范化命令负载并生成稳定摘要。
 - 记录处理中和已完成结果、状态版本、事件范围和原响应。
+- 用 `(sessionId, commandId)` 数据库唯一约束与 UPSERT 登记命令，禁止以无锁“先查后插”保证幂等。
 - 同一 `(sessionId, commandId)` 加同一负载返回原结果。
 - 同一标识加不同负载返回冲突。
 
@@ -541,19 +563,22 @@ M1.R
 产出：
 
 - 在同一事务内完成命令账本、`session_events`、`session_snapshots` 和相关领域表写入。
+- 事务开始后先对目标 `sessions` 行执行 `SELECT ... FOR UPDATE`，再校验幂等、期望版本和领域前置条件。
 - 同一事务同步 `sessions.stateVersion` 等协调列及可重建的 `currentHandId` 指针。
-- 每场 `eventSeq` 单调递增；每个成功改变 `PrivateTableState` 的命令最多且恰好递增一次 `stateVersion`，一条命令内部不得按子步骤重复递增。
+- 每场 `eventSeq` 单调递增且只在成功提交的事务中分配；失败、回滚或幂等重放不消耗新的已提交序号。每个成功改变 `PrivateTableState` 的命令最多且恰好递增一次 `stateVersion`，一条命令内部不得按子步骤重复递增。
 - 同一命令产生的所有事件共享命令级 `stateVersionBefore/After`；只改变协调状态时两者相等，创建场次统一为 `0 → 1`。
 - Player 协调运行事件可以在同一 `stateVersion` 下继续增加 `eventSeq`；Coach 事件不写 `session_events` 或占用该序列。
 - 纯 Player 协调事件只更新 `sessions` 协调字段和统一事件，不重写未变化的私有扑克快照。
 - 当前手已提交行动历史只存在于 `session_events`；快照不得保存第二份行动数组。
 - 事务提交后才能向发布层返回可发送事件。
+- Repository 与事务 API 全部异步；进程内串行执行器只降低竞争，不替代 PostgreSQL 行锁、唯一约束和事务。
 
 后端测试闭环：
 
 - 在每个写入阶段注入失败，断言全部回滚。
 - 覆盖同一扑克版本的多条 Player 协调事件，并验证 Coach 生命周期不改变场次 `eventSeq`。
 - 覆盖并发或重复请求不能产生重复 `eventSeq`。
+- 覆盖两个连接并发提交同一场次命令，断言行锁、预期版本和唯一约束只允许一次领域推进。
 - 覆盖扑克快照、协调版本和关系指针的原子提交。
 - 断言未提交事件不会进入发布层。
 
@@ -588,7 +613,7 @@ M1.R
 后端测试闭环：
 
 - 完整审计记录可在服务重启后读取。
-- 标记密钥和隐藏推理不出现在 SQLite。
+- 标记密钥、数据库连接串和隐藏推理不出现在 PostgreSQL 业务表。
 - 每个运行、尝试和业务结果可关联到 Owner、场次、手牌、座位或 Coach 决策、状态版本和事件序号。
 
 ### M2.8 实现场次删除和清空全部数据事务
@@ -600,7 +625,8 @@ M1.R
 - 删除整场时清除全部约定派生记录和统计贡献。
 - 删除或清空时先取消在途 Player/Coach 运行并使请求标识、租约和 fencing 失效，再删除目标数据。
 - Player/Coach Commit Gate 在同一提交事务中复验场次存在、OwnerScope、Runtime 专属生命周期、有效请求、租约和 fencing；失败不得写入或创建替代运行。
-- 保留 Schema、服务端预设人物目录、静态资源和 `.env`。
+- 保留 `app_private` schema、Drizzle 迁移记录、服务端预设人物目录、静态资源和部署环境配置。
+- 删除承诺限定为在线业务表的逻辑永久删除；Supabase 备份、PITR 和基础设施副本服从供应商保留策略，应用不可查询它们或声称即时物理擦除。
 
 后端测试闭环：
 
@@ -616,7 +642,7 @@ M1.R
 
 产出：
 
-- 同一场次一次只处理一个状态修改命令。
+- 同一场次一次只提交一个状态修改命令；进程内串行器可降低竞争，但数据库正确性必须由 PostgreSQL 事务、`SELECT ... FOR UPDATE` 和唯一约束保证。
 - 不同读请求不绕过权威快照。
 - 牌局引擎的当前状态输入只能来自通过私有 Zod Schema 校验及迁移的 `PrivateTableState.poker`。
 - 命令统一经过账本、预期版本校验、M1.9 门面、一次最终版本分配和事务提交；同一命令产生的所有事件都使用该最终版本。
@@ -624,7 +650,7 @@ M1.R
 
 后端测试闭环：
 
-- 同时提交两个相同版本动作时只有一个成功推进。
+- 通过两个独立 PostgreSQL 连接同时提交相同版本动作时只有一个成功推进，多实例语义与单进程一致。
 - 相同命令重复提交返回同一结果。
 - 版本落后返回冲突和最新公开快照。
 - 覆盖普通动作、终止并结算动作、补码、开下一手和中止恢复的版本表，证明每个状态变化命令只递增一次。
@@ -703,7 +729,7 @@ M1.R
 
 - 实现健康、供应商设置、Agent 设置、只读预设人物目录、场次、命令、历史、统计和删除的概念 API。
 - 人物 API 只提供列表和详情读取，不提供创建、修改、复制或删除端点；目录严格返回共享人物最小摘要，不暴露模型标识、模型参数、路由、Prompt 或“模型配置摘要”。Provider 状态使用独立 Settings/Health API。
-- 在 M0.3 的 `notConfigured/notChecked` 静态投影之上，使用进程内缓存保存最近一次手动检测摘要并实现 `available/unavailable` 状态转换；不写入 SQLite。服务重启后，已配置 Provider 回到 `notChecked`。
+- 在 M0.3 的 `notConfigured/notChecked` 静态投影之上，使用进程内缓存保存最近一次手动检测摘要并实现 `available/unavailable` 状态转换；不写入 PostgreSQL。服务重启后，已配置 Provider 回到 `notChecked`。
 - `GET /api/settings/providers` 只读取最近检测摘要，不发起网络；`POST /api/settings/providers/:provider/check` 才执行有界手动检测。检测失败返回 HTTP 200 的脱敏 `unavailable` 结果，不改变由 Key 配置决定的开场或降级资格。
 - 所有入口和响应经过共享 Zod Schema。
 - 错误返回稳定代码、中文说明、字段详情和必要的最新快照。
@@ -754,7 +780,7 @@ M1.R
 - 覆盖无游标首次连接、从零、从中间、从最新序号重连。
 - 覆盖非法、负数、超前游标和事件序列内部缺口；这些情况不得被解释为正常裁剪。
 - 覆盖同版本多事件、重复订阅和断线后补发顺序。
-- 验证补发数据只来自已提交 SQLite 记录。
+- 验证补发数据只来自已提交 PostgreSQL 记录。
 
 ### M3.8 实现服务启动恢复协调
 
@@ -1348,7 +1374,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 后端测试闭环：
 
-- 使用真实临时 SQLite 验证唯一约束、状态转换、服务重启读取和级联删除。
+- 在显式 `TEST_DATABASE_URL` 的隔离临时 PostgreSQL 中验证唯一约束、状态转换、服务重启读取和级联删除。
 - 相同 `requestId` 不重复调用模型，不同手牌复用标识返回冲突。
 - 同街多轮决策产生不同 `decisionId`；重新复盘生成新 `coachReviewId` 且历史 assessment 永不覆盖。
 - 运行或失败中的 Coach 请求不阻塞开始下一手和普通牌局命令。
@@ -1431,14 +1457,15 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 修改服务端预设人物版本后，历史人物配置快照仍保持原版本、可读且可筛选。
 - 删除结束场次后所有关联数据和统计贡献消失。
 - 删除结束场次后关联 Coach 报告与调用尝试同步消失。
-- 清空全部数据后保留 Schema、服务端预设人物目录、静态资源和 `.env`。
+- 清空全部数据后保留 `app_private` schema、Drizzle 迁移记录、服务端预设人物目录、静态资源和部署环境配置；在线业务表不可再查询目标数据。
+- 删除说明明确区分应用在线逻辑删除与 Supabase 托管备份/PITR 的供应商保留周期，不承诺即时物理擦除。
 - 删除/清空与迟到 Player/Coach 结果竞争时无任何回写或替代任务。
 
 ### M9.5 完成安全与隐私检查
 
 产出：
 
-- 使用标记 Key 扫描 SQLite、日志、HTTP、SSE 和调试响应。
+- 使用标记 Key 和标记数据库连接串扫描 PostgreSQL 业务表、日志、HTTP、SSE 和调试响应。
 - 验证服务只监听本机。
 - 验证公开投影不含完整牌堆、burn card 和未公开底牌。
 - 验证供应商隐藏推理从采集入口即被丢弃。
@@ -1448,8 +1475,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- 在排除模型等待的情况下测量普通本地命令事务和 SSE 发布。
-- 验证目标环境中典型命令满足 200ms 目标。
+- 在排除模型等待的情况下分别测量服务内编排、Supabase 数据库事务和 SSE 发布。
+- 验证事务保持短小且不包含 Agent、供应商或其他外部网络调用；记录目标网络环境的延迟基线，不使用易波动的固定毫秒数单元测试断言。
 - 验证 1,000 手牌记忆上下文不线性增长。
 - 验证长场次事件查询、历史分页和统计查询没有明显全表退化。
 - 验证 Coach 异步运行不阻塞普通牌局命令或开始下一手。
@@ -1500,7 +1527,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 首版开发完成需要同时满足：
 
 1. M0–M9 的所有适用小任务完成。
-2. 后端纯单元、属性、SQLite 集成和服务集成测试全部通过。
+2. 默认离线的后端纯单元、属性和服务集成测试全部通过；显式临时 PostgreSQL 集成测试及适用的非生产 Supabase smoke 通过。
 3. PRD、前端、后端、Agent Foundation、Player Runtime 和 Coach Runtime 六份上位文档中的验收标准都有明确实现和验证归属。
 4. 用户完成前端人工验收，页面信息和操作流程清楚。
 5. 没有加入首版明确不做的功能。

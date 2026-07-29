@@ -6,9 +6,21 @@ import {
   ServerConfigurationError,
 } from '../../src/config.js'
 
+const databaseUrl =
+  'postgresql://postgres.project-ref:database-secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
+
+function createEnvironment(
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  return {
+    DATABASE_URL: databaseUrl,
+    ...overrides,
+  }
+}
+
 describe('server configuration', () => {
   test('keeps read-only features available when both provider keys are missing', () => {
-    const config = loadServerConfig({})
+    const config = loadServerConfig(createEnvironment())
 
     expect(getServerCapabilities(config)).toStrictEqual({
       canUseReadOnlyFeatures: true,
@@ -38,10 +50,12 @@ describe('server configuration', () => {
   })
 
   test('treats blank provider keys as missing', () => {
-    const config = loadServerConfig({
-      DEEPSEEK_API_KEY: '   ',
-      KIMI_API_KEY: '',
-    })
+    const config = loadServerConfig(
+      createEnvironment({
+        DEEPSEEK_API_KEY: '   ',
+        KIMI_API_KEY: '',
+      }),
+    )
 
     expect(getServerCapabilities(config)).toStrictEqual({
       canUseReadOnlyFeatures: true,
@@ -52,14 +66,16 @@ describe('server configuration', () => {
       ],
     })
     expect(getProviderSettingsResponse(config)).toStrictEqual(
-      getProviderSettingsResponse(loadServerConfig({})),
+      getProviderSettingsResponse(loadServerConfig(createEnvironment())),
     )
   })
 
   test('blocks session creation when the DeepSeek key is missing', () => {
-    const config = loadServerConfig({
-      KIMI_API_KEY: 'kimi-test-key',
-    })
+    const config = loadServerConfig(
+      createEnvironment({
+        KIMI_API_KEY: 'kimi-test-key',
+      }),
+    )
 
     expect(getServerCapabilities(config)).toStrictEqual({
       canUseReadOnlyFeatures: true,
@@ -86,9 +102,11 @@ describe('server configuration', () => {
   })
 
   test('allows session creation and reports unavailable fallback when the Kimi key is missing', () => {
-    const config = loadServerConfig({
-      DEEPSEEK_API_KEY: 'deepseek-test-key',
-    })
+    const config = loadServerConfig(
+      createEnvironment({
+        DEEPSEEK_API_KEY: 'deepseek-test-key',
+      }),
+    )
 
     expect(getServerCapabilities(config)).toStrictEqual({
       canUseReadOnlyFeatures: true,
@@ -116,15 +134,20 @@ describe('server configuration', () => {
 
   test('returns a key-free public projection for a valid configuration', () => {
     const marker = 'must-not-appear-in-public-config'
-    const config = loadServerConfig({
-      PORT: '8799',
-      DATABASE_PATH: 'data/test.sqlite',
-      DEEPSEEK_API_KEY: marker,
-      KIMI_API_KEY: marker,
-    })
+    const markedDatabaseUrl =
+      'postgresql://postgres.project-ref:must-not-appear-in-public-config@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
+    const config = loadServerConfig(
+      createEnvironment({
+        PORT: '8799',
+        DATABASE_URL: markedDatabaseUrl,
+        DEEPSEEK_API_KEY: marker,
+        KIMI_API_KEY: marker,
+      }),
+    )
 
     expect(config.port).toBe(8799)
-    expect(config.databasePath).toBe('data/test.sqlite')
+    expect(config.getDatabaseUrl()).toBe(markedDatabaseUrl)
+    expect('databasePath' in config).toBe(false)
     expect(getServerCapabilities(config)).toStrictEqual({
       canUseReadOnlyFeatures: true,
       canCreateSession: true,
@@ -157,31 +180,83 @@ describe('server configuration', () => {
     )
   })
 
-  test.each([{ PORT: '0' }, { PORT: 'not-a-port' }, { DATABASE_PATH: '   ' }])(
-    'rejects invalid configuration without exposing provider keys',
+  test.each([['postgresql'], ['postgres']])(
+    'accepts the %s scheme',
+    (scheme) => {
+      const value = databaseUrl.replace('postgresql:', `${scheme}:`)
+
+      expect(
+        loadServerConfig(
+          createEnvironment({ DATABASE_URL: value }),
+        ).getDatabaseUrl(),
+      ).toBe(value)
+    },
+  )
+
+  test.each([
+    ['missing DATABASE_URL', undefined],
+    ['blank DATABASE_URL', '   '],
+    ['non-PostgreSQL scheme', 'sqlite:///data/poker-practice.sqlite'],
+    [
+      'non-Supabase host',
+      'postgresql://postgres.project-ref:secret@db.example.com:6543/postgres',
+    ],
+    [
+      'session pooler port',
+      'postgresql://postgres.project-ref:secret@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres',
+    ],
+    [
+      'missing username',
+      'postgresql://:secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+    ],
+    [
+      'missing password',
+      'postgresql://postgres.project-ref@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+    ],
+    [
+      'missing database name',
+      'postgresql://postgres.project-ref:secret@aws-0-ap-northeast-1.pooler.supabase.com:6543',
+    ],
+    [
+      'password placeholder',
+      'postgresql://postgres.project-ref:[YOUR-PASSWORD]@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+    ],
+    [
+      'invalid password encoding',
+      'postgresql://postgres.project-ref:%ZZ@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+    ],
+  ])('rejects %s', (_caseName, value) => {
+    expect(() =>
+      loadServerConfig(createEnvironment({ DATABASE_URL: value })),
+    ).toThrow(ServerConfigurationError)
+  })
+
+  test.each([{ PORT: '0' }, { PORT: 'not-a-port' }])(
+    'rejects invalid configuration without exposing secrets',
     (environment) => {
       const marker = 'must-not-appear-in-errors'
+      const markedDatabaseUrl =
+        'postgresql://postgres.project-ref:must-not-appear-in-errors@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
+      const invalidEnvironment = createEnvironment({
+        ...environment,
+        DATABASE_URL: markedDatabaseUrl,
+        DEEPSEEK_API_KEY: marker,
+        KIMI_API_KEY: marker,
+      })
 
-      expect(() =>
-        loadServerConfig({
-          ...environment,
-          DEEPSEEK_API_KEY: marker,
-          KIMI_API_KEY: marker,
-        }),
-      ).toThrow(ServerConfigurationError)
+      expect(() => loadServerConfig(invalidEnvironment)).toThrow(
+        ServerConfigurationError,
+      )
 
       try {
-        loadServerConfig({
-          ...environment,
-          DEEPSEEK_API_KEY: marker,
-          KIMI_API_KEY: marker,
-        })
+        loadServerConfig(invalidEnvironment)
       } catch (error) {
         expect(error).toBeInstanceOf(ServerConfigurationError)
         expect(String(error)).toBe(
           'ServerConfigurationError: 服务配置无效，请检查后端 .env 文件。',
         )
         expect(JSON.stringify(error)).not.toContain(marker)
+        expect(JSON.stringify(error)).not.toContain(markedDatabaseUrl)
       }
     },
   )

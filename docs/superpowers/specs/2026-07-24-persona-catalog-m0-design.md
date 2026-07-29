@@ -2,8 +2,9 @@
 
 - 状态：已确认
 - 日期：2026-07-24
-- 最后更新：2026-07-26
+- 最后更新：2026-07-29
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)、[后端设计](./2026-07-23-poker-practice-backend-design.md)
+- 数据库边界：[Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)
 - 关联任务：[M0.2 共享契约](../plans/2026-07-23-poker-practice-development-tasks.md)
 - 返工说明：[6–9 人局代码返工说明](../plans/2026-07-26-six-to-nine-player-code-refactor.md)
 
@@ -62,9 +63,9 @@ DeepSeek 是否满足开场条件、Kimi 是否可用于降级以及连接检测
 
 ## 4. 服务端边界
 
-新增的服务端人物目录是版本控制的只读产品配置，而不是 SQLite 事实源。目录定义由服务端私有 Zod Schema 校验，并从同一份私有定义生成公开 `AgentPersonaSummary`。目录查找和版本校验留给后续 M2/M3 服务层；本次仅提供可导入、可测试的只读目录。
+新增的服务端人物目录是版本控制的只读产品配置，而不是运行时数据库事实源。目录定义由服务端私有 Zod Schema 校验，并从同一份私有定义生成公开 `AgentPersonaSummary`。目录查找和版本校验留给后续 M2/M3 服务层；本次仅提供可导入、可测试的只读目录，不引入 `supabase-js` 或任何浏览器数据库访问。
 
-未来 M2 将固化人物完整配置快照；M4 才可扩展私有人物策略、Prompt、模型和路由字段。这些私有字段不得进入 `AgentPersonaSummary`，也不得回写、改变或重新解释历史快照。
+未来 M2 将通过服务端 Repository 把人物完整配置快照固化到 `app_private`；M4 才可扩展私有人物策略、Prompt、模型和路由字段。这些私有字段不得进入 `AgentPersonaSummary`，也不得回写、改变或重新解释历史快照。历史快照是运行事实，源码目录仍是新场次可选人物及版本的规范源。
 
 ## 5. 验证
 

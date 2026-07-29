@@ -1,7 +1,8 @@
 # 非 Agent 运行时架构重新基线
 
-- 状态：已确认，待实现
+- 状态：已确认；M1.7–M1.9 与 M0.2 已实现，M2/M3、M5–M7 待实现
 - 日期：2026-07-28
+- 最后更新：2026-07-29
 - 范围：M1.7–M3、M5–M7，以及 M9 中非 Agent 的验收
 - 不包含：Agent Foundation、Player Runtime、Coach Runtime 及其持久化、恢复和前端流程
 
@@ -16,7 +17,7 @@ M0–M1.6 已经建立了稳定的共享契约、牌张、牌型、座位拓扑�
 - `hands` 需要在开手时保存检查点，却只定义了完成和中止两种状态。
 - HTTP Mutation、SSE 和 Query 缓存缺少统一的新旧判定规则。
 
-本设计重新固定非 Agent 后半程的状态、事实、事务和投影边界。它优先于此前文档中与本设计冲突的非 Agent 运行时描述；产品行为仍以 PRD 为准，具体扑克算法仍以各 M1 专项设计为准。
+本设计重新固定非 Agent 后半程的状态、事实、事务和投影边界。它优先于此前文档中与本设计冲突的非 Agent 运行时描述；产品行为仍以 PRD 为准，具体扑克算法仍以各 M1 专项设计为准。数据库连接、schema、迁移和并发语义以 [Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md) 为最高事实源。
 
 ## 2. 核心原则
 
@@ -25,7 +26,7 @@ M0–M1.6 已经建立了稳定的共享契约、牌张、牌型、座位拓扑�
 3. 当前可继续运行的状态、行动历史和完成手审计各有唯一事实源。
 4. 下游只能消费上游冻结事实，不得重新计算结算、牌型、位置或动作合法性。
 5. 临时 `showdown | complete` 状态可以在纯函数内部存在，但不得返回给 M3、持久化或公开。
-6. SQLite 事务提交之前，不生成可发布 SSE。
+6. PostgreSQL 事务提交之前，不生成可发布 SSE。
 7. 前端不保存第二份服务端实体状态，也不做扑克筹码乐观更新。
 
 ### 2.1 首版业务闭环
@@ -311,6 +312,10 @@ M1.8 不生成持久化事件；M1.9 根据结算事实生成 `uncalledBetReturn
 
 ## 7. M2 持久化模型
 
+M2 的生产数据库尚未实现。本节描述未来位于 Supabase 托管 PostgreSQL 非公开 `app_private` schema 中的目标模型，不表示当前仓库已有 Drizzle schema、Repository 或迁移。Hono 始终是唯一业务入口；浏览器和 Supabase Data API 不直连业务表。
+
+字段类型固定为：标识符使用 `uuid`，业务和事件时间使用 `timestamptz`，版本化快照、完成结果和私有事件信封使用 `jsonb` 并经私有 Zod Schema 校验。筹码、投入、累计买入、`stateVersion`、`eventSeq`、fencing token、手牌序号等可能增长到 JavaScript 安全整数上限的非负持久化值使用 PostgreSQL `bigint`，由 Drizzle 映射为 `number`，并由私有 Zod 与数据库 `CHECK` 双重限制在 `0..Number.MAX_SAFE_INTEGER`；这不改变或缩窄既有 Contracts/领域 `number`。`seatNumber`、牌张/位置索引、枚举序数和重试次数等小型有界值继续使用 `integer`。关系、唯一、检查和级联规则必须落为 PostgreSQL 约束，不能只依赖应用校验。
+
 ### 7.1 `sessions`
 
 非 Agent 范围内只保存：
@@ -348,7 +353,7 @@ inProgress | completed | aborted
 
 ### 7.4 `command_ledger`
 
-以 `(sessionId, commandId)` 幂等，保存规范负载摘要、完成状态、最终版本、事件范围和原响应。相同标识与相同负载返回原响应；相同标识与不同负载冲突。
+以 `(sessionId, commandId)` 数据库唯一约束保证幂等，使用 UPSERT 保存规范负载摘要、完成状态、最终版本、事件范围和原响应。相同标识与相同负载返回原响应；相同标识与不同负载冲突，不能用无锁“先查后插”代替约束。
 
 ### 7.5 派生读取
 
@@ -362,10 +367,12 @@ inProgress | completed | aborted
 ### 8.1 通用命令流程
 
 ```text
-串行化场次命令
-  → 开启单一 SQLite 事务
+接收场次命令
+  → 开启单一异步 PostgreSQL 事务
+  → SELECT ... FOR UPDATE 锁定目标 sessions 行
+  → 通过唯一约束/UPSERT 校验 commandId
   → 读取并迁移 StoredTableSnapshot
-  → 校验 commandId、sessions.stateVersion 镜像与 expectedStateVersion
+  → 校验 sessions.stateVersion 镜像与 expectedStateVersion
   → 同步执行纯领域或场次规则
   → 得到最终 PrivateTableState 与事件草稿
   → 若状态改变，stateVersion 恰好 +1
@@ -373,7 +380,7 @@ inProgress | completed | aborted
   → 更新 hands / sessions 与关系事实
   → 构造公开快照
   → 写入完整 command_ledger / snapshot / events
-  → SQLite 事务提交
+  → PostgreSQL 事务提交
   → 返回 Mutation 响应并允许 SSE 发布
 ```
 
@@ -383,7 +390,9 @@ inProgress | completed | aborted
 
 构造公开快照时，把事务前已提交的当前手私有事件与本命令已分配序号的事件草稿在内存中合并后投影，再一次写入带完整私有/公开负载的事件行；禁止先插入缺少公开负载的半成品事件来打破循环。
 
-纯引擎、投影和 SQLite 操作必须同步且有界；模型或其他网络调用一律在事务外完成，并以之后的新命令重新进入本链路。
+纯引擎和投影必须同步且有界；PostgreSQL I/O 与事务编排使用异步调用。Agent、供应商或其他网络调用一律在事务外完成，并以之后的新命令重新进入本链路。进程内队列只允许作为降低竞争的优化，正确性依赖行锁、唯一约束和事务；多实例不得依赖进程内串行化。
+
+`eventSeq` 只在成功提交的事务中分配并与事件同事务写入；失败、回滚或幂等重放不得消耗新的已提交序号。
 
 ### 8.2 版本规则
 
@@ -575,7 +584,7 @@ M1.9b 依赖 M1.R/M1.9a；M1.9c 依赖 M1.8/M1.9a。只有三个切片全部通�
 
 ### 13.4 M2/M3
 
-先固定 Schema 和快照，再实现 Repository、事务、恢复和 API。M3 不得在 M1.9 输出未稳定前定义重复的手牌结果结构。
+当前 `ServerConfig` 只验证并私有保存 `DATABASE_URL`，尚未建立数据库连接。先完成 M2.1 Supabase Postgres 基础设施：Drizzle 配置、`app_private` schema、显式发布迁移、运行时连接和启动兼容门控；再实现 Repository、事务、恢复和 API。M2.1 运行时客户端通过 `DATABASE_URL` 使用 TLS、`6543` transaction pooler 与 `prepare: false`，Drizzle Kit 通过独立 `DATABASE_MIGRATION_URL` 使用 TLS 和 `5432` session/direct。服务启动只检查连接和兼容性，不执行 DDL。M3 不得在 M1.9 输出未稳定前定义重复的手牌结果结构。
 
 ### 13.5 M5–M7
 
@@ -590,7 +599,8 @@ M1.R
   → M1.9b
   → M1.9c
   → M0.2 公开协议返工
-  → M2
+  → M2.1 Supabase Postgres/Drizzle 基础设施
+  → M2 其余持久化
   → M3
   → M5 与 M6/M7
   → M9 非 Agent 验收
@@ -628,6 +638,8 @@ M6 可以在 M3 完成前建设应用壳和纯 UI 基础，但场次数据模型
 8. Mutation 与 SSE 乱序、重复、同版本多事件和序列缺口均正确处理。
 9. 公开快照递归扫描不含完整牌堆、burn 或未公开底牌。
 10. 删除结束场次后，历史、事件、快照、命令账本和统计贡献全部消失。
+11. 同一场次并发命令由 `SELECT FOR UPDATE`、唯一约束和 UPSERT 保证不重复推进；失败或幂等重放不分配新的已提交 `eventSeq`。
+12. 显式 Drizzle 迁移可在隔离空 PostgreSQL 建立 `app_private`，而服务启动只做连接/schema 兼容门控。
 
 ## 16. 明确不做
 

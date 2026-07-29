@@ -6,7 +6,8 @@ import type { ProviderSettingsResponse } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
 
 const DEFAULT_PORT = 8787
-const DEFAULT_DATABASE_PATH = 'data/poker-practice.sqlite'
+const SUPABASE_SHARED_POOLER_HOST_PATTERN =
+  /^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$/
 
 const optionalApiKeySchema = z
   .string()
@@ -14,31 +15,73 @@ const optionalApiKeySchema = z
   .transform((value) => value || undefined)
   .optional()
 
+const databaseUrlSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .superRefine((value, context) => {
+    let url: URL
+    let password: string
+    let databaseName: string
+
+    try {
+      url = new URL(value)
+      password = decodeURIComponent(url.password)
+      databaseName = decodeURIComponent(url.pathname.slice(1))
+    } catch {
+      context.addIssue({
+        code: 'custom',
+        message: 'Invalid PostgreSQL URL.',
+      })
+      return
+    }
+
+    const isValid =
+      (url.protocol === 'postgres:' || url.protocol === 'postgresql:') &&
+      SUPABASE_SHARED_POOLER_HOST_PATTERN.test(url.hostname) &&
+      url.port === '6543' &&
+      url.username.length > 0 &&
+      password.length > 0 &&
+      password !== '[YOUR-PASSWORD]' &&
+      databaseName.length > 0
+
+    if (!isValid) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Invalid Supabase transaction pooler URL.',
+      })
+    }
+  })
+
 const environmentSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65_535).default(DEFAULT_PORT),
-  DATABASE_PATH: z.string().trim().min(1).default(DEFAULT_DATABASE_PATH),
+  DATABASE_URL: databaseUrlSchema,
   DEEPSEEK_API_KEY: optionalApiKeySchema,
   KIMI_API_KEY: optionalApiKeySchema,
 })
 
 interface ServerConfigValues {
   readonly port: number
-  readonly databasePath: string
+  readonly databaseUrl: string
   readonly deepSeekApiKey?: string
   readonly kimiApiKey?: string
 }
 
 export class ServerConfig {
   public readonly port: number
-  public readonly databasePath: string
+  readonly #databaseUrl: string
   readonly #deepSeekApiKey: string | undefined
   readonly #kimiApiKey: string | undefined
 
   public constructor(values: ServerConfigValues) {
     this.port = values.port
-    this.databasePath = values.databasePath
+    this.#databaseUrl = values.databaseUrl
     this.#deepSeekApiKey = values.deepSeekApiKey
     this.#kimiApiKey = values.kimiApiKey
+  }
+
+  public getDatabaseUrl(): string {
+    return this.#databaseUrl
   }
 
   public hasDeepSeekApiKey(): boolean {
@@ -90,7 +133,7 @@ export class ServerConfigurationError extends Error {
 export function loadServerConfig(environment: NodeJS.ProcessEnv): ServerConfig {
   const result = environmentSchema.safeParse({
     PORT: environment.PORT,
-    DATABASE_PATH: environment.DATABASE_PATH,
+    DATABASE_URL: environment.DATABASE_URL,
     DEEPSEEK_API_KEY: environment.DEEPSEEK_API_KEY,
     KIMI_API_KEY: environment.KIMI_API_KEY,
   })
@@ -101,14 +144,14 @@ export function loadServerConfig(environment: NodeJS.ProcessEnv): ServerConfig {
 
   const {
     PORT: port,
-    DATABASE_PATH: databasePath,
+    DATABASE_URL: databaseUrl,
     DEEPSEEK_API_KEY: deepSeekApiKey,
     KIMI_API_KEY: kimiApiKey,
   } = result.data
 
   return new ServerConfig({
     port,
-    databasePath,
+    databaseUrl,
     ...(deepSeekApiKey === undefined ? {} : { deepSeekApiKey }),
     ...(kimiApiKey === undefined ? {} : { kimiApiKey }),
   })

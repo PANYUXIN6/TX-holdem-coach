@@ -2,9 +2,10 @@
 
 - 状态：已确认，Agent 运行状态、Coach 决策字段、移动端视觉重构与预设人物方案已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-28
+- 最后更新：2026-07-29
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - 非 Agent 运行时基线：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
+- 数据库边界：[Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)
 - Agent 运行边界：[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
 - Coach 边界：[Coach Agent 专项设计](./2026-07-26-poker-coach-agent-design.md)
 - 开发任务：[开发任务分解](../plans/2026-07-23-poker-practice-development-tasks.md)
@@ -28,6 +29,7 @@
 
 - React + Vite + TypeScript 构建单页应用，不使用 TanStack Start。
 - TanStack Query 管理所有服务端状态：预设人物目录、场次快照、历史、统计、供应商健康状态和 Agent 调用记录。
+- 数据库健康也只作为 Hono 返回的抽象服务状态进入 TanStack Query；前端不得连接 Supabase、持有数据库凭据或获知数据库 URL、主机、端口、schema 和迁移版本。
 - Coach 复盘列表、状态和结构化报告也由 TanStack Query 管理，不复制到 Zustand。
 - Zustand 管理页面级或跨组件的纯客户端状态，例如右侧工具栏选中项、牌桌页共享的下注草稿、基础动画队列、全局弹窗和提示。
 - 只被一个组件或紧密组件子树使用的状态留在组件内，优先使用 `useState` 或 `useReducer`，不为简单局部状态创建全局 Store。
@@ -213,7 +215,7 @@
 - 可空的最近检测时间与脱敏错误码；不显示模型标识、路由、原始供应商错误或响应正文。
 - Player 单次供应商尝试超时，默认 15 秒，合法范围 5–30 秒。
 - Player 完整决策总 deadline，默认 45 秒，合法范围 15–120 秒且不得小于单次尝试超时；修改只影响之后新建的 Player 运行。
-- 数据目录只读展示。
+- 服务端数据存储健康摘要，只显示“可用”或“不可用”等抽象状态；不显示数据库 URL、主机、端口、schema、连接池或迁移细节。
 - 删除已结束场次与清空全部数据。
 
 预设人物目录不是用户数据，清空全部数据后仍保留。

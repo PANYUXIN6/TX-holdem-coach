@@ -2,10 +2,12 @@
 
 - 状态：待开发
 - 日期：2026-07-26
+- 最后更新：2026-07-29
 - 总体架构：[Agent Foundation 与受限 Runtime](../specs/2026-07-26-agent-foundation-runtime-architecture.md)
 - Player 设计：[Player Agent Runtime 专项设计](../specs/2026-07-23-poker-practice-agent-harness-design.md)
 - Coach 设计：[Coach Agent Runtime](../specs/2026-07-26-poker-coach-agent-design.md)
 - 后端设计：[后端、牌局引擎与数据设计](../specs/2026-07-23-poker-practice-backend-design.md)
+- 数据库设计：[Supabase Postgres 与 Drizzle 迁移设计](../specs/2026-07-29-supabase-postgres-drizzle-migration-design.md)
 - 总开发计划：[项目开发任务](./2026-07-23-poker-practice-development-tasks.md)
 
 ## 1. 目的与执行原则
@@ -20,7 +22,7 @@
 4. 数学、策略查询、对手证据和 Coach 标签分类由确定性服务完成。
 5. 模型只能在 Runtime 给定的边界内生成结构化结果。
 6. 每个任务必须有自动化验证；真实模型 Eval 不进入普通 CI，但相关版本发布前必须执行。
-7. 当前只实现 SQLite、进程内 Worker、固定 `local-user` 和静态 Runtime Registry。
+7. 持久化只实现 Supabase 托管 PostgreSQL 与 Drizzle 适配器，不保留旧本地数据库适配器或双数据库实现；进程内 Worker、固定 `local-user` 和静态 Runtime Registry 继续有效。
 
 ## 2. 工作包与依赖
 
@@ -28,7 +30,7 @@
 | --- | --- | --- | --- |
 | A0 | 权威状态与共享契约 | 牌局领域模型 | `OwnerScope`、决策标识、状态投影和版本契约 |
 | A1 | Foundation 核心协议 | A0 | 静态 Runtime Registry、预算、能力与 Commit Gate 端口 |
-| A2 | Agent 持久化 | A0、A1 | 通用运行表和 Runtime 业务表 |
+| A2 | Agent 持久化 | A0、A1、M2.1 数据库基础 | `app_private` 通用运行表和 Runtime 业务表 |
 | A3 | 运行协调与 Worker | A1、A2 | 持久化任务、租约、fencing、恢复和 stale |
 | A4 | Context、能力与模型网关 | A1、A2 | ContextEnvelope、能力执行、路由、纠错和审计 |
 | A5 | 策略数据基础 | A0 | 共享版本化策略事实源及 Player/Coach 投影 |
@@ -223,6 +225,8 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 
 ## 5. A2：Agent 持久化
 
+A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不创建第二套连接器、迁移目录或数据库抽象。Agent 表与牌局表共享非公开 `app_private` schema，但只能经各自 Repository 端口访问。所有迁移通过 `DATABASE_MIGRATION_URL` 显式执行；运行时只使用 `DATABASE_URL`，服务启动不执行 DDL。
+
 ### A2.1 建立通用运行表
 
 迁移：
@@ -316,17 +320,19 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
 实现：
 
 - Foundation、Player、Coach 各自只依赖所需 Repository 端口。
-- 首版只实现 SQLite 适配器。
+- 只实现基于 Drizzle 的异步 PostgreSQL 适配器，不保留旧本地数据库适配器或双实现。
 - 不建立接受任意表名、任意过滤器的通用 Repository。
+- Runtime 和 Worker 不导入 Drizzle 表或 SQL；Hono、应用服务与 Commit Gate 通过窄端口协调所有权和事务。
 
 验证：
 
 - Repository 合约测试覆盖 OwnerScope、事务、并发约束和级联。
-- SQLite 重启后可以恢复 queued/leased/running 运行。
+- 服务进程重启后可以从 PostgreSQL 恢复 queued/leased/running 运行。
+- 默认 Repository 合约测试使用离线替身；未来提供 `TEST_DATABASE_URL` 时，额外对隔离的临时 PostgreSQL 执行迁移与真实事务集成测试。
 
 完成标准：
 
-- 未来 PostgreSQL 替换不要求 Runtime 读取 SQL 或数据库类型。
+- Runtime 不读取 SQL、Drizzle Schema 或数据库类型，Player 与 Coach 不能绕过 Repository 直接访问共享 PostgreSQL。
 
 ## 6. A3：运行协调、Worker 与恢复
 
@@ -1037,6 +1043,7 @@ Coach 投影：
 - Coach 分类、两阶段解释、版本恢复、重新复盘和历史不覆盖。
 - OwnerScope、CapabilityManifest、单活动场次唯一索引、删除提交屏障、级联删除和敏感信息扫描。
 - Audit Replay 与 Re-execution。
+- 默认 `pnpm run verify` 不要求网络、Supabase 凭据或真实数据库；PostgreSQL 集成测试只在显式提供隔离的 `TEST_DATABASE_URL` 时运行。
 
 人工：
 
@@ -1058,7 +1065,8 @@ Coach 投影：
 以下内容不得夹带到上述任务：
 
 - 真实登录、组织、多人房间或多人对战。
-- PostgreSQL 双实现。
+- 旧本地数据库与 PostgreSQL 双实现或兼容适配器。
+- `supabase-js`、Supabase Auth、Realtime、Storage 或 Edge Functions。
 - Redis、Kafka 或云消息队列。
 - 分布式 Worker 和跨节点调度。
 - OpenTelemetry 后端平台。

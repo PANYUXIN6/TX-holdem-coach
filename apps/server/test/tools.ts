@@ -1,8 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import Database from 'better-sqlite3'
-
 export interface DeterministicDeck<T> {
   draw(): T
   remaining(): number
@@ -90,31 +85,5 @@ export function createFixedIdGenerator(ids: readonly string[]): IdGenerator {
       nextIndex += 1
       return id
     },
-  }
-}
-
-export interface TemporarySqliteDatabase {
-  readonly database: Database.Database
-  readonly directory: string
-  dispose(): void
-}
-
-export function createTemporarySqliteDatabase(): TemporarySqliteDatabase {
-  const directory = mkdtempSync(join(tmpdir(), 'tx-holdem-coach-test-'))
-
-  try {
-    const database = new Database(join(directory, 'test.sqlite'))
-
-    return {
-      database,
-      directory,
-      dispose() {
-        database.close()
-        rmSync(directory, { recursive: true, force: true })
-      },
-    }
-  } catch (error) {
-    rmSync(directory, { recursive: true, force: true })
-    throw error
   }
 }

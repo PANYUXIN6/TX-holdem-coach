@@ -13,6 +13,8 @@ import {
   LegalActionsSchema,
   PersonaSnapshotFilterSchema,
   PokerActionSchema,
+  PokerPhaseSchema,
+  PublicCompletedHandSummarySchema,
   ProviderCheckStatusSchema,
   ProviderHealthSummarySchema,
   ProviderIdSchema,
@@ -22,6 +24,7 @@ import {
   SeatNumberSchema,
   SuggestedTargetSchema,
   SseEventSchema,
+  SseEventTypeSchema,
   type LegalAction,
   type LegalActions,
   type SuggestedTarget,
@@ -101,10 +104,296 @@ const publicSnapshot = {
       },
       { type: 'allIn', target: 1960 },
     ],
+    actionTimeline: [],
   },
+  lastCompletedHandSummary: null,
+}
+
+const publicCompletedHandSummary = {
+  handId: ids.hand,
+  terminationReason: 'showdown' as const,
+  participantSeatNumbers: [0, 1, 2, 3, 4, 5],
+  buttonSeatNumber: 0,
+  smallBlindSeatNumber: 1,
+  bigBlindSeatNumber: 2,
+  positions: [
+    { seatNumber: 0, position: 'BTN' },
+    { seatNumber: 1, position: 'SB' },
+    { seatNumber: 2, position: 'BB' },
+    { seatNumber: 3, position: 'UTG' },
+    { seatNumber: 4, position: 'HJ' },
+    { seatNumber: 5, position: 'CO' },
+  ],
+  board: [],
+  seatResults: Array.from({ length: 6 }, (_, seatNumber) => ({
+    seatNumber,
+    startingStack: 1000,
+    endingStack: 1000,
+    totalContribution: 100,
+    netChange: 0,
+  })),
+  uncalledBetReturns: [],
+  pots: [
+    {
+      potIndex: 0,
+      kind: 'main' as const,
+      amount: 3,
+      winningSeatNumbers: [0, 2],
+      awards: [
+        { seatNumber: 2, amount: 2 },
+        { seatNumber: 0, amount: 1 },
+      ],
+    },
+  ],
+  revealedHands: Array.from({ length: 6 }, (_, seatNumber) => ({
+    seatNumber,
+    holeCards: null,
+    handEvaluation: null,
+  })),
 }
 
 describe('共享外部协议', () => {
+  it('收紧阶段并验证公开时间线与规范派奖', () => {
+    const validTimelineEntry = {
+      eventSeq: 8,
+      handId: ids.hand,
+      streetBefore: 'preflop' as const,
+      actorSeatNumber: 0,
+      action: { type: 'call' as const },
+      streetAfter: 'flop' as const,
+      boardAfter: [],
+      seatStatesAfter: Array.from({ length: 6 }, (_, seatNumber) => ({
+        seatNumber,
+        status: 'active' as const,
+        stack: 1000,
+        streetContribution: 0,
+        totalContribution: 0,
+      })),
+      potAfter: 60,
+      currentActorSeatNumberAfter: 1,
+    }
+    expect(PokerPhaseSchema.safeParse('setup').success).toBe(false)
+    expect(SseEventTypeSchema.safeParse('handStarted').success).toBe(true)
+    expect(
+      PublicCompletedHandSummarySchema.safeParse(publicCompletedHandSummary)
+        .success,
+    ).toBe(true)
+    expect(
+      PublicCompletedHandSummarySchema.safeParse({
+        ...publicCompletedHandSummary,
+        pots: [
+          {
+            ...publicCompletedHandSummary.pots[0],
+            awards: [...publicCompletedHandSummary.pots[0].awards].reverse(),
+          },
+        ],
+      }).success,
+    ).toBe(false)
+    expect(
+      PublicSessionSnapshotSchema.safeParse({
+        ...publicSnapshot,
+        hand: {
+          ...publicSnapshot.hand,
+          actionTimeline: [
+            {
+              eventSeq: 9,
+              handId: ids.hand,
+              streetBefore: 'preflop',
+              actorSeatNumber: 0,
+              action: { type: 'call' },
+              streetAfter: 'flop',
+              boardAfter: [],
+              seatStatesAfter: Array.from({ length: 6 }, (_, seatNumber) => ({
+                seatNumber,
+                status: 'active',
+                stack: 1000,
+                streetContribution: 0,
+                totalContribution: 0,
+              })),
+              potAfter: 60,
+              currentActorSeatNumberAfter: 1,
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false)
+    for (const actionTimeline of [
+      [{ ...validTimelineEntry, handId: ids.session }],
+      [validTimelineEntry, { ...validTimelineEntry, eventSeq: 8 }],
+      [
+        validTimelineEntry,
+        { ...validTimelineEntry, eventSeq: 7, streetAfter: 'turn' },
+      ],
+      [
+        {
+          ...validTimelineEntry,
+          seatStatesAfter: validTimelineEntry.seatStatesAfter.slice(1),
+        },
+      ],
+      [
+        {
+          ...validTimelineEntry,
+          seatStatesAfter: [...validTimelineEntry.seatStatesAfter].reverse(),
+        },
+      ],
+    ]) {
+      expect(
+        PublicSessionSnapshotSchema.safeParse({
+          ...publicSnapshot,
+          hand: { ...publicSnapshot.hand, actionTimeline },
+        }).success,
+      ).toBe(false)
+    }
+    for (const summary of [
+      {
+        ...publicCompletedHandSummary,
+        participantSeatNumbers: [1, 0, 2, 3, 4, 5],
+      },
+      {
+        ...publicCompletedHandSummary,
+        positions: [...publicCompletedHandSummary.positions].reverse(),
+      },
+      {
+        ...publicCompletedHandSummary,
+        seatResults: publicCompletedHandSummary.seatResults.slice(1),
+      },
+      {
+        ...publicCompletedHandSummary,
+        revealedHands: [...publicCompletedHandSummary.revealedHands].reverse(),
+      },
+      {
+        ...publicCompletedHandSummary,
+        pots: [{ ...publicCompletedHandSummary.pots[0], potIndex: 1 }],
+      },
+      {
+        ...publicCompletedHandSummary,
+        pots: [
+          {
+            ...publicCompletedHandSummary.pots[0],
+            kind: 'side' as const,
+          },
+        ],
+      },
+      {
+        ...publicCompletedHandSummary,
+        pots: [
+          {
+            ...publicCompletedHandSummary.pots[0],
+            winningSeatNumbers: [0, 8],
+          },
+        ],
+      },
+      {
+        ...publicCompletedHandSummary,
+        pots: [
+          {
+            ...publicCompletedHandSummary.pots[0],
+            winningSeatNumbers: [2, 0],
+          },
+        ],
+      },
+      {
+        ...publicCompletedHandSummary,
+        pots: [
+          {
+            ...publicCompletedHandSummary.pots[0],
+            awards: [
+              { seatNumber: 2, amount: 2 },
+              { seatNumber: 0, amount: 2 },
+            ],
+          },
+        ],
+      },
+    ]) {
+      expect(PublicCompletedHandSummarySchema.safeParse(summary).success).toBe(
+        false,
+      )
+    }
+    expect(
+      PublicCompletedHandSummarySchema.safeParse({
+        ...publicCompletedHandSummary,
+        privateFacts: true,
+      }).success,
+    ).toBe(false)
+    expect(
+      PublicCompletedHandSummarySchema.safeParse({
+        ...publicCompletedHandSummary,
+        uncalledBetReturns: [{ seatNumber: 8, amount: 1 }],
+      }).success,
+    ).toBe(false)
+    expect(
+      PublicCompletedHandSummarySchema.safeParse({
+        ...publicCompletedHandSummary,
+        revealedHands: publicCompletedHandSummary.revealedHands.map((hand) =>
+          hand.seatNumber === 1
+            ? {
+                ...hand,
+                handEvaluation: {
+                  category: 'onePair',
+                  bestFive: [
+                    { rank: 'A', suit: 'spades' },
+                    { rank: 'K', suit: 'spades' },
+                    { rank: 'Q', suit: 'spades' },
+                    { rank: 'J', suit: 'spades' },
+                    { rank: 'T', suit: 'spades' },
+                  ],
+                },
+              }
+            : hand,
+        ),
+      }).success,
+    ).toBe(false)
+    expect(
+      PublicSessionSnapshotSchema.safeParse({
+        ...publicSnapshot,
+        lastCompletedHandSummary: publicCompletedHandSummary,
+      }).success,
+    ).toBe(false)
+    for (const eventType of [
+      'sessionCreated',
+      'handStarted',
+      'uncalledBetReturned',
+      'userRebuy',
+      'aiAutoRebuy',
+    ]) {
+      expect(SseEventTypeSchema.safeParse(eventType).success).toBe(true)
+    }
+    expect(
+      SseEventSchema.safeParse({
+        protocolVersion: 1,
+        eventId: ids.event,
+        sessionId: ids.session,
+        eventSeq: 7,
+        stateVersion: 4,
+        type: 'handStarted',
+        payload: { snapshot: publicSnapshot },
+      }).success,
+    ).toBe(false)
+    expect(
+      SseEventSchema.safeParse({
+        protocolVersion: 1,
+        eventId: ids.event,
+        sessionId: ids.session,
+        eventSeq: 8,
+        stateVersion: 3,
+        type: 'handStarted',
+        payload: { snapshot: publicSnapshot },
+      }).success,
+    ).toBe(false)
+    expect(
+      PublicSessionSnapshotSchema.safeParse({
+        ...publicSnapshot,
+        hand: null,
+      }).success,
+    ).toBe(false)
+    expect(
+      PublicSessionSnapshotSchema.safeParse({
+        ...publicSnapshot,
+        pokerPhase: 'betweenHands',
+      }).success,
+    ).toBe(false)
+  })
+
   it('可解析所有主 Schema 的代表性合法数据', () => {
     const commandRequest = {
       protocolVersion: 1,

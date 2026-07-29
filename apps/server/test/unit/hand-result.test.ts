@@ -235,8 +235,111 @@ describe('hand result facts', () => {
     })
     expect(result.pots).not.toBe(settlementFacts.pots)
     expect(result.summary).not.toHaveProperty('remainingDeck')
+    expect(result.summary.participantHands).toEqual([
+      { seatNumber: 0, holeCards: [cards[0], cards[1]], handEvaluation: null },
+      { seatNumber: 1, holeCards: [cards[2], cards[3]], handEvaluation: null },
+      { seatNumber: 2, holeCards: [cards[4], cards[5]], handEvaluation: null },
+      { seatNumber: 3, holeCards: [cards[6], cards[7]], handEvaluation: null },
+      { seatNumber: 4, holeCards: [cards[8], cards[9]], handEvaluation: null },
+      {
+        seatNumber: 5,
+        holeCards: [cards[10], cards[11]],
+        handEvaluation: null,
+      },
+    ])
     expect(Object.isFrozen(result)).toBe(true)
     expect(Object.isFrozen(result.pots)).toBe(true)
+  })
+
+  test('rejects an evaluation for a folded showdown participant', () => {
+    const base = facts()
+    const showdown: SettlementFacts = {
+      ...base,
+      hand: { ...base.hand, terminationReason: 'showdown' },
+      handEvaluations: [
+        {
+          seatNumber: 1,
+          evaluation: {
+            category: 'onePair',
+            comparisonGrade: [1, 14, 13, 12, 11, 10],
+            bestFive: [
+              cards[0] as Card,
+              cards[1] as Card,
+              cards[2] as Card,
+              cards[3] as Card,
+              cards[4] as Card,
+            ],
+            displayName: '一对',
+          },
+        },
+      ],
+    }
+    expect(() =>
+      createCompletedHandResult({
+        ...started(),
+        facts: showdown,
+        state: finalState(),
+      }),
+    ).toThrow(RangeError)
+  })
+
+  test('copies only existing showdown evaluations into immutable participant hands', () => {
+    const base = facts()
+    const evaluation = {
+      category: 'onePair' as const,
+      comparisonGrade: [1, 14, 13, 12, 11, 10] as const,
+      bestFive: [
+        cards[0] as Card,
+        cards[1] as Card,
+        cards[2] as Card,
+        cards[3] as Card,
+        cards[4] as Card,
+      ] as const,
+      displayName: '一对',
+    }
+    const showdown: SettlementFacts = {
+      ...base,
+      hand: {
+        ...base.hand,
+        terminationReason: 'showdown',
+        participants: [...base.hand.participants].reverse(),
+      },
+      handEvaluations: [
+        {
+          seatNumber: 0,
+          evaluation,
+        },
+      ],
+    }
+    const result = createCompletedHandResult({
+      ...started(),
+      facts: showdown,
+      state: finalState(),
+    })
+    expect(
+      result.summary.participantHands.map((hand) => hand.seatNumber),
+    ).toEqual([0, 1, 2, 3, 4, 5])
+    expect(result.summary.participantHands[0]?.handEvaluation?.category).toBe(
+      'onePair',
+    )
+    expect(result.summary.participantHands[1]?.handEvaluation).toBeNull()
+    expect(Object.isFrozen(result.summary.participantHands)).toBe(true)
+    expect(Object.isFrozen(result.summary.participantHands[0])).toBe(true)
+    expect(Object.isFrozen(result.summary.participantHands[0]?.holeCards)).toBe(
+      true,
+    )
+    expect(
+      Object.isFrozen(result.summary.participantHands[0]?.handEvaluation),
+    ).toBe(true)
+    const originalSeatZero = showdown.hand.participants.find(
+      (participant) => participant.seatNumber === 0,
+    )
+    expect(result.summary.participantHands[0]?.holeCards).not.toBe(
+      originalSeatZero?.holeCards,
+    )
+    expect(result.summary.participantHands[0]?.handEvaluation).not.toBe(
+      evaluation,
+    )
   })
 
   test('creates sorted immutable event facts and rejects malformed facts', () => {

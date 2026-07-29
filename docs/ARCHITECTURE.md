@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-07-29（M0.2/M0.3 已实现固定用户座位与 Provider 初始配置投影；M1.1–M1.9 已实现私有扑克规则与唯一行为门面，M1.R 已完成纯状态去版本化）
+更新时间：2026-07-29（M0.2 已完成公开协议返工，M0.3 已实现固定用户座位与 Provider 初始配置投影；M1.1–M1.9 已实现私有扑克规则与唯一行为门面，M1.R 已完成纯状态去版本化）
 
 ## Workspace 边界
 
@@ -9,6 +9,7 @@
 - `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。入口是唯一加载 dotenv 的位置；`src/config.ts` 用 Zod 校验私有环境配置，并通过 Contracts 生成不含密钥的初始 Provider 设置响应（不联网、不检测）；`src/poker/cards.ts` 使用 Contracts 的 Card 词汇生成标准牌与 `apps/web/public/poker/` 文件名映射；`src/poker/random-source.ts` 提供扑克规则共享的安全随机源；`src/poker/positioning.ts` 统一物理座位拓扑、按钮、庄盲、位置和可行动座位；`src/poker/blind-posting.ts` 不可变地提交固定 10/20 盲注；`src/poker/dealing.ts` 复用共享随机与座位拓扑洗出纯 `Card`、发两轮底牌，并可从私有牌张投影规范重建供逐街 burn/公共牌原语继续消费的 `DealtHand`；`src/poker/hand-evaluator.ts` 用严格输入校验和稳定领域结果隔离 CommonJS `pokersolver`，支持 5–7 张牌、七选五、九类牌型、轮子等级、同花截取和精确平局；`src/poker/state.ts` 通过私有 Zod 校验、深拷贝和深冻结构造无版本 `PokerTableState`，固定用户在座位 `0`、AI 在 `1..8`，并约束进行中参与座位、按钮、底牌和底池一致；`src/poker/commands.ts` 定义无会话信封的共用扑克行动，`bet`、`raise` 使用唯一的 `targetStreetCommitment` 目标字段；`src/poker/betting.ts` 生成结构化合法动作，唯一可行动玩家只面对可匹配的实际投入，并执行为不可持久化的深层不可变 `BettingTransitionResult`；`src/poker/hand-progression.ts` 组合下注、拓扑、发牌和状态构造，内部 `progressPokerAction()` 原子决定下一行动者、街道推进、runout 与内部终止类型，不管理版本；`src/personas/catalog.ts` 用私有 Zod Schema 校验并冻结八个人物目录，再投影为 Contracts 的公开摘要。目录仍无 API、数据库或 Agent Runtime 行为，后续创建场次时才会固化到 `session_agents`，不建立 `agent_templates` 或 `agent_personas` 表。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与预留的 `service/` 分类。临时 SQLite 只用于 integration 中验证真实 SQLite 行为，不承载产品数据。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、结构化合法动作、人物公开摘要与创建选择、Provider 健康/设置、HTTP/SSE 信封和错误响应。`LegalActionsSchema` 约束动作顺序、互斥、快捷目标顺序/唯一性/区间和普通目标与全下边界；Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。`bet`、`raise` 的命令金额固定为行动后本街总投入的 `targetStreetCommitment`。通用座位为 `0..8`，创建选择的 AI 为 `1..8`，公开快照固定唯一用户在座位 `0` 且总席数为 6–9；人物目录由八个固定标识组成。
+- 公开快照只承载当前手的最小行动时间线及两手之间的最小完成手摘要；M3 以后只能从私有事件与 M1.9 私有 `participantHands` 作可见性投影，Contracts 不导入服务器类型、评估比较等级、牌堆、burn 或未公开底牌。
 
 ## 依赖方向
 

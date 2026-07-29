@@ -349,7 +349,7 @@ export const SessionCommandSchema = z.discriminatedUnion('type', [
   }),
 ])
 
-export const PokerPhaseSchema = z.enum(['setup', 'betweenHands', 'inHand'])
+export const PokerPhaseSchema = z.enum(['betweenHands', 'inHand'])
 export const SessionLifecycleSchema = z.enum([
   'active',
   'ended',
@@ -370,6 +370,28 @@ export const PublicSeatStatusSchema = z.enum([
   'folded',
   'allIn',
   'out',
+])
+export const PublicLogicalPositionSchema = z.enum([
+  'UTG',
+  'UTG+1',
+  'MP',
+  'LJ',
+  'HJ',
+  'CO',
+  'BTN',
+  'SB',
+  'BB',
+])
+export const PublicHandCategorySchema = z.enum([
+  'highCard',
+  'onePair',
+  'twoPair',
+  'threeOfAKind',
+  'straight',
+  'flush',
+  'fullHouse',
+  'fourOfAKind',
+  'straightFlush',
 ])
 
 export const ProviderIdSchema = z.enum(['deepseek', 'kimi'])
@@ -514,6 +536,225 @@ export const AgentDecisionSummarySchema = z.strictObject({
   actorSeatNumber: SeatNumberSchema,
 })
 
+export const PublicActionSeatStateSchema = z.strictObject({
+  seatNumber: SeatNumberSchema,
+  status: PublicSeatStatusSchema,
+  stack: ChipAmountSchema,
+  streetContribution: ChipAmountSchema,
+  totalContribution: ChipAmountSchema,
+})
+export const PublicActionTimelineEntrySchema = z.strictObject({
+  eventSeq: EventSequenceSchema,
+  handId: HandIdSchema,
+  streetBefore: HandStreetSchema,
+  actorSeatNumber: SeatNumberSchema,
+  action: PokerActionSchema,
+  streetAfter: HandStreetSchema,
+  boardAfter: z.array(CardSchema).max(5),
+  seatStatesAfter: z.array(PublicActionSeatStateSchema),
+  potAfter: ChipAmountSchema,
+  currentActorSeatNumberAfter: SeatNumberSchema.nullable(),
+})
+
+export const PublicPotAwardSchema = z.strictObject({
+  seatNumber: SeatNumberSchema,
+  amount: PositiveChipAmountSchema,
+})
+export const PublicSettledPotSchema = z.strictObject({
+  potIndex: z.number().int().nonnegative(),
+  kind: z.enum(['main', 'side']),
+  amount: PositiveChipAmountSchema,
+  winningSeatNumbers: z.array(SeatNumberSchema).min(1),
+  awards: z.array(PublicPotAwardSchema).min(1),
+})
+export const PublicHandEvaluationSchema = z.strictObject({
+  category: PublicHandCategorySchema,
+  bestFive: z.tuple([
+    CardSchema,
+    CardSchema,
+    CardSchema,
+    CardSchema,
+    CardSchema,
+  ]),
+})
+export const PublicRevealedHandSchema = z
+  .strictObject({
+    seatNumber: SeatNumberSchema,
+    holeCards: z.tuple([CardSchema, CardSchema]).nullable(),
+    handEvaluation: PublicHandEvaluationSchema.nullable(),
+  })
+  .superRefine((hand, context) => {
+    if (hand.handEvaluation !== null && hand.holeCards === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '公开牌型必须同时公开底牌。',
+        path: ['handEvaluation'],
+      })
+    }
+  })
+export const PublicCompletedHandSeatResultSchema = z.strictObject({
+  seatNumber: SeatNumberSchema,
+  startingStack: ChipAmountSchema,
+  endingStack: ChipAmountSchema,
+  totalContribution: ChipAmountSchema,
+  netChange: z.number().int(),
+})
+export const PublicCompletedHandSummarySchema = z
+  .strictObject({
+    handId: HandIdSchema,
+    terminationReason: z.enum(['showdown', 'complete']),
+    participantSeatNumbers: z.array(SeatNumberSchema).min(6).max(9),
+    buttonSeatNumber: SeatNumberSchema,
+    smallBlindSeatNumber: SeatNumberSchema,
+    bigBlindSeatNumber: SeatNumberSchema,
+    positions: z.array(
+      z.strictObject({
+        seatNumber: SeatNumberSchema,
+        position: PublicLogicalPositionSchema,
+      }),
+    ),
+    board: z.array(CardSchema).max(5),
+    seatResults: z.array(PublicCompletedHandSeatResultSchema),
+    uncalledBetReturns: z
+      .array(
+        z.strictObject({
+          seatNumber: SeatNumberSchema,
+          amount: PositiveChipAmountSchema,
+        }),
+      )
+      .max(1),
+    pots: z.array(PublicSettledPotSchema).min(1),
+    revealedHands: z.array(PublicRevealedHandSchema),
+  })
+  .superRefine((summary, context) => {
+    const participants = summary.participantSeatNumbers
+    const participantSet = new Set(participants)
+    const isAscending = (values: readonly number[]) =>
+      values.every((value, index) => index === 0 || value > values[index - 1]!)
+    const exactSeats = (
+      values: readonly { seatNumber: number }[],
+      path: string,
+    ) => {
+      if (
+        values.length !== participants.length ||
+        new Set(values.map((value) => value.seatNumber)).size !==
+          participants.length ||
+        values.some((value) => !participantSet.has(value.seatNumber))
+      )
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '座位集合必须与参与者完全一致。',
+          path: [path],
+        })
+    }
+    if (new Set(participants).size !== participants.length)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '参与座位不得重复。',
+        path: ['participantSeatNumbers'],
+      })
+    if (!isAscending(participants))
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '参与座位必须按座位号升序。',
+        path: ['participantSeatNumbers'],
+      })
+    exactSeats(summary.positions, 'positions')
+    exactSeats(summary.seatResults, 'seatResults')
+    exactSeats(summary.revealedHands, 'revealedHands')
+    if (
+      new Set(summary.uncalledBetReturns.map((item) => item.seatNumber))
+        .size !== summary.uncalledBetReturns.length ||
+      summary.uncalledBetReturns.some(
+        (item) => !participantSet.has(item.seatNumber),
+      )
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '未跟注返还必须是参与座位的无重复子集。',
+        path: ['uncalledBetReturns'],
+      })
+    for (const [path, values] of [
+      ['positions', summary.positions],
+      ['seatResults', summary.seatResults],
+      ['revealedHands', summary.revealedHands],
+      ['uncalledBetReturns', summary.uncalledBetReturns],
+    ] as const) {
+      if (!isAscending(values.map((value) => value.seatNumber)))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '座位数组必须按座位号升序。',
+          path: [path],
+        })
+    }
+    if (
+      new Set([
+        summary.buttonSeatNumber,
+        summary.smallBlindSeatNumber,
+        summary.bigBlindSeatNumber,
+      ]).size !== 3 ||
+      ![
+        summary.buttonSeatNumber,
+        summary.smallBlindSeatNumber,
+        summary.bigBlindSeatNumber,
+      ].every((seat) => participantSet.has(seat))
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '按钮和庄盲必须是不同参与座位。',
+        path: ['buttonSeatNumber'],
+      })
+    summary.pots.forEach((pot, index) => {
+      if (
+        pot.potIndex !== index ||
+        pot.kind !== (index === 0 ? 'main' : 'side')
+      )
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '公开底池顺序必须规范。',
+          path: ['pots', index],
+        })
+      if (!isAscending(pot.winningSeatNumbers))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '赢家座位必须按座位号升序。',
+          path: ['pots', index, 'winningSeatNumbers'],
+        })
+      const clockwiseWinners = [
+        ...participants.filter((seat) => seat > summary.buttonSeatNumber),
+        ...participants.filter((seat) => seat <= summary.buttonSeatNumber),
+      ].filter((seat) => pot.winningSeatNumbers.includes(seat))
+      if (
+        pot.awards.some(
+          (award, awardIndex) =>
+            award.seatNumber !== clockwiseWinners[awardIndex],
+        )
+      )
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '派奖必须按按钮左侧顺时针排序。',
+          path: ['pots', index, 'awards'],
+        })
+      if (
+        new Set(pot.winningSeatNumbers).size !==
+          pot.winningSeatNumbers.length ||
+        pot.winningSeatNumbers.some((seat) => !participantSet.has(seat)) ||
+        new Set(pot.awards.map((award) => award.seatNumber)).size !==
+          pot.winningSeatNumbers.length ||
+        !pot.awards.every((award) =>
+          pot.winningSeatNumbers.includes(award.seatNumber),
+        ) ||
+        pot.awards.reduce((total, award) => total + award.amount, 0) !==
+          pot.amount
+      )
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '公开派奖必须与赢家和池金额一致。',
+          path: ['pots', index],
+        })
+    })
+  })
+
 export const PublicHandSnapshotSchema = z.strictObject({
   handId: HandIdSchema,
   street: HandStreetSchema,
@@ -522,6 +763,7 @@ export const PublicHandSnapshotSchema = z.strictObject({
   currentActorSeatNumber: SeatNumberSchema.nullable(),
   heroHoleCards: z.array(CardSchema).length(2).nullable(),
   legalActions: LegalActionsSchema,
+  actionTimeline: z.array(PublicActionTimelineEntrySchema),
 })
 
 export const PublicSessionSnapshotSchema = z
@@ -536,6 +778,7 @@ export const PublicSessionSnapshotSchema = z
     activeDecision: AgentDecisionSummarySchema.nullable(),
     seats: z.array(PublicSeatSchema).min(6).max(9),
     hand: PublicHandSnapshotSchema.nullable(),
+    lastCompletedHandSummary: PublicCompletedHandSummarySchema.nullable(),
   })
   .superRefine((snapshot, context) => {
     const seatNumbers = new Set<number>()
@@ -578,10 +821,60 @@ export const PublicSessionSnapshotSchema = z
         path: ['seats'],
       })
     }
+    if (
+      (snapshot.pokerPhase === 'inHand' &&
+        (snapshot.hand === null ||
+          snapshot.lastCompletedHandSummary !== null)) ||
+      (snapshot.pokerPhase === 'betweenHands' && snapshot.hand !== null)
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '公开阶段、当前手牌与最近摘要必须一致。',
+        path: ['pokerPhase'],
+      })
+    if (snapshot.hand !== null) {
+      let previous = -1
+      const publicSeatNumbers = new Set(
+        snapshot.seats.map((seat) => seat.seatNumber),
+      )
+      snapshot.hand.actionTimeline.forEach((entry, index) => {
+        if (
+          entry.eventSeq <= previous ||
+          entry.eventSeq > snapshot.eventSeq ||
+          entry.handId !== snapshot.hand?.handId
+        )
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '公开行动时间线必须属于当前手且严格递增。',
+            path: ['hand', 'actionTimeline', index],
+          })
+        previous = entry.eventSeq
+        if (
+          entry.seatStatesAfter.length !== publicSeatNumbers.size ||
+          entry.seatStatesAfter.some(
+            (seat, seatIndex) =>
+              !publicSeatNumbers.has(seat.seatNumber) ||
+              (seatIndex > 0 &&
+                seat.seatNumber <=
+                  entry.seatStatesAfter[seatIndex - 1]!.seatNumber),
+          )
+        )
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '行动后座位必须与公开座位按座位号一一对应。',
+            path: ['hand', 'actionTimeline', index, 'seatStatesAfter'],
+          })
+      })
+    }
   })
 
 export const SseEventTypeSchema = z.enum([
   'snapshot',
+  'sessionCreated',
+  'handStarted',
+  'uncalledBetReturned',
+  'userRebuy',
+  'aiAutoRebuy',
   'actionCommitted',
   'agentStarted',
   'agentProviderFallback',
@@ -592,15 +885,27 @@ export const SseEventTypeSchema = z.enum([
   'sessionEnded',
 ])
 
-export const SseEventSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
-  eventId: EventIdSchema,
-  sessionId: SessionIdSchema,
-  eventSeq: EventSequenceSchema,
-  stateVersion: StateVersionSchema,
-  type: SseEventTypeSchema,
-  payload: z.strictObject({ snapshot: PublicSessionSnapshotSchema }),
-})
+export const SseEventSchema = z
+  .strictObject({
+    protocolVersion: ProtocolVersionSchema,
+    eventId: EventIdSchema,
+    sessionId: SessionIdSchema,
+    eventSeq: EventSequenceSchema,
+    stateVersion: StateVersionSchema,
+    type: SseEventTypeSchema,
+    payload: z.strictObject({ snapshot: PublicSessionSnapshotSchema }),
+  })
+  .superRefine((event, context) => {
+    if (
+      event.eventSeq !== event.payload.snapshot.eventSeq ||
+      event.stateVersion !== event.payload.snapshot.stateVersion
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'SSE 信封游标必须与快照一致。',
+        path: ['payload', 'snapshot'],
+      })
+  })
 
 export const CommandRequestSchema = z.strictObject({
   protocolVersion: ProtocolVersionSchema,
@@ -651,6 +956,15 @@ export type ProviderSettingsResponse = z.infer<
 >
 export type SessionCommand = z.infer<typeof SessionCommandSchema>
 export type PublicSeat = z.infer<typeof PublicSeatSchema>
+export type PublicActionTimelineEntry = z.infer<
+  typeof PublicActionTimelineEntrySchema
+>
+export type PublicCompletedHandSummary = z.infer<
+  typeof PublicCompletedHandSummarySchema
+>
+export type PublicHandEvaluation = z.infer<typeof PublicHandEvaluationSchema>
+export type PublicRevealedHand = z.infer<typeof PublicRevealedHandSchema>
+export type PublicSettledPot = z.infer<typeof PublicSettledPotSchema>
 export type PublicHandSnapshot = z.infer<typeof PublicHandSnapshotSchema>
 export type PublicSessionSnapshot = z.infer<typeof PublicSessionSnapshotSchema>
 export type SseEvent = z.infer<typeof SseEventSchema>

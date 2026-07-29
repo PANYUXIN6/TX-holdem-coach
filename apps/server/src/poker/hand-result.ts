@@ -6,6 +6,7 @@ import {
 } from '@tx-holdem-coach/contracts'
 import { PokerCommandSchema, type PokerCommand } from './commands.js'
 import type { LogicalPosition } from './positioning.js'
+import type { HandEvaluation } from './hand-evaluator.js'
 import type {
   SettlementFacts,
   SettlementParticipantContext,
@@ -60,6 +61,12 @@ export interface CompletedHandSummary {
   readonly seats: readonly CompletedHandSeatResult[]
   readonly uncalledBetReturns: readonly UncalledBetReturn[]
   readonly pots: readonly SettledPot[]
+  readonly participantHands: readonly CompletedHandParticipantHand[]
+}
+export interface CompletedHandParticipantHand {
+  readonly seatNumber: number
+  readonly holeCards: readonly [Card, Card]
+  readonly handEvaluation: HandEvaluation | null
 }
 export interface CompletedHandResult extends Omit<
   CompletedHandSummary,
@@ -270,6 +277,25 @@ export function createCompletedHandResult(
   const cards = new Map(
     facts.hand.participants.map((item) => [item.seatNumber, item.holeCards]),
   )
+  const evaluations = new Map(
+    facts.handEvaluations.map((item) => [item.seatNumber, item.evaluation]),
+  )
+  const terminationStatuses = new Map(
+    facts.hand.seats.map((seat) => [seat.seatNumber, seat.statusAtTermination]),
+  )
+  if (
+    evaluations.size !== facts.handEvaluations.length ||
+    [...evaluations.keys()].some(
+      (seatNumber) =>
+        !participantSet.has(seatNumber) ||
+        !['active', 'allIn'].includes(
+          terminationStatuses.get(seatNumber) ?? '',
+        ),
+    ) ||
+    (facts.hand.terminationReason === 'complete' && evaluations.size !== 0)
+  ) {
+    throw new RangeError('结算牌型评估必须与终止参与座位一致。')
+  }
   const seats = facts.hand.seats.map((seat) => {
     const finalSeat = finalSeats.get(seat.seatNumber)
     const holeCards = cards.get(seat.seatNumber)
@@ -308,6 +334,13 @@ export function createCompletedHandResult(
     pots: facts.pots,
     handEvaluations: sortSeats(facts.handEvaluations),
   }
+  const participantHands = sortSeats(
+    facts.hand.participants.map((participant) => ({
+      seatNumber: participant.seatNumber,
+      holeCards: participant.holeCards,
+      handEvaluation: evaluations.get(participant.seatNumber) ?? null,
+    })),
+  )
   const summary: CompletedHandSummary = {
     handId: result.handId,
     terminationReason: result.terminationReason,
@@ -320,8 +353,9 @@ export function createCompletedHandResult(
     seats: result.seats,
     uncalledBetReturns: result.uncalledBetReturns,
     pots: result.pots,
+    participantHands,
   }
-  return copy({ ...result, summary })
+  return copy({ ...result, participantHands, summary })
 }
 
 export function createHandStartedEventDraft(

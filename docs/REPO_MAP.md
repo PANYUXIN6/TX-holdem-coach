@@ -5,7 +5,7 @@
 ## 当前目录与职责
 
 - `docs/superpowers/specs/`：已确认的 PRD 与专项设计，是产品和实现边界的事实源。
-- `docs/superpowers/specs/2026-07-29-supabase-postgres-drizzle-migration-design.md`：已确认的数据库目标边界；Supabase 仅托管 Postgres，Hono 为唯一入口，运行时走 transaction pooler，Drizzle 迁移为显式部署步骤。
+- `docs/superpowers/specs/2026-07-29-supabase-postgres-drizzle-migration-design.md`：已确认、待实施的数据库目标边界；Supabase 仅托管 Postgres，Hono 为唯一入口，未来运行时走 transaction pooler，未来 Drizzle 迁移为显式部署步骤。
 - `docs/superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md`：M1.7 以后非 Agent 运行时唯一重基线，定义纯引擎、会话聚合、版本、事件、持久化、公开投影和前端同步的事实归属。
 - `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md`：Agent 大模块总体事实源，定义 Foundation、Runtime、权限、运行生命周期、策略事实源、数据模型与当前/未来边界。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
@@ -25,7 +25,7 @@
 
 - 根 `package.json`：pnpm workspace 的开发、构建、类型检查和测试编排入口。
 - `apps/web/`：React/Vite 手机竖屏 Web 客户端入口；目标可玩宽度为 360–430px，宽屏只居中承载手机画布。其 `public/poker/` 是唯一牌面资源位置，后续只负责前端展示和调用服务端 API。
-- `apps/server/`：Node/Hono 本地服务入口；生产数据库目前尚未实现。已确认目标为 Supabase 托管的 PostgreSQL（仅经 Hono 访问）和 Drizzle 显式迁移：运行时 `DATABASE_URL` 走 `6543` transaction pooler，迁移 `DATABASE_MIGRATION_URL` 走 `5432` session/direct；私有表将位于 `app_private`。当前 SQLite 仅待移除的配置/测试 fixture，不含需迁移的产品数据。其余扑克模块边界保持既有定义。
+- `apps/server/`：Node/Hono 本地服务入口；生产数据库与 Supabase/Drizzle 配置/依赖目前均未实现。已确认目标为 Supabase 托管的 PostgreSQL（仅经 Hono 访问）和 Drizzle 显式迁移：未来运行时 `ServerConfig` 仅读取 `DATABASE_URL` 并走 `6543` transaction pooler；未来 Drizzle Kit 独立读取 `DATABASE_MIGRATION_URL` 并走 `5432` session/direct；私有表将位于 `app_private`。当前 SQLite 仅待移除的配置/测试 fixture，不含需迁移的产品数据。其余扑克模块边界保持既有定义。
 - `apps/server/test/`：仅服务端测试使用的通用夹具与分类测试；`unit/` 覆盖纯逻辑，`integration/` 使用真实临时 SQLite，`service/` 为后续服务层测试预留。通用夹具提供泛型确定性输入、假时钟、固定 ID 和真实临时 SQLite，不定义牌局状态或模型端口。
 - `apps/server/src/poker/hand-result.ts`：仅定义、校验、排序和冻结手牌领域结果与事件草稿；不编排行为。
 - `apps/server/src/poker/poker-engine.ts`：M1 对会话层唯一可调用的行为入口，编排初始化、开手、行动推进与同步结算，绝不返回内部终止状态。

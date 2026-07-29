@@ -16,12 +16,12 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 
 | 用途 | 环境变量 | 端口/连接方式 | 约束 |
 | --- | --- | --- | --- |
-| 服务运行时 | `DATABASE_URL` | Supabase transaction pooler，`6543` | 使用 `postgres.js`，`prepare: false`，启用 TLS |
-| 生成和执行迁移 | `DATABASE_MIGRATION_URL` | Supabase session/direct，`5432` | 只在显式部署迁移步骤使用，启用 TLS |
+| 服务运行时 | `DATABASE_URL` | Supabase transaction pooler，`6543` | `ServerConfig` 只读取此私有变量；使用 `postgres.js`，`prepare: false`，启用 TLS |
+| 生成和执行迁移 | `DATABASE_MIGRATION_URL` | Supabase session/direct，`5432` | 未来只由 Drizzle Kit 在显式部署迁移步骤读取，启用 TLS |
 
 运行时不得复用 `DATABASE_MIGRATION_URL`，迁移工具也不得通过 transaction pooler 执行 DDL。连接配置不得进入 Contracts、浏览器包、日志或 SSE 负载。
 
-Drizzle 负责 schema 声明、`generate` 迁移文件与 `migrate` 执行。`drizzle-kit generate` 和 `drizzle-kit migrate` 是显式部署步骤；服务启动绝不自动执行 DDL。启动只做数据库连接检查及 schema 兼容门控：数据库不可连接、迁移记录缺失或版本不兼容时拒绝开始接收命令，不尝试修复数据库。
+本轮只安装 `drizzle-kit` 依赖，不新增 `drizzle.config`、迁移脚本、schema 或 repository。它们连同 `drizzle-kit generate`/`drizzle-kit migrate` 脚本属于未来 M2.1 的显式部署工作；服务启动绝不自动执行 DDL。M2.1 启动时只做数据库连接检查及 schema 兼容门控：数据库不可连接、迁移记录缺失或版本不兼容时拒绝开始接收命令，不尝试修复数据库。
 
 ## 3. 数据模型边界
 
@@ -43,19 +43,41 @@ Drizzle 负责 schema 声明、`generate` 迁移文件与 `migrate` 执行。`dr
 - `eventSeq` 仅在成功提交的事务中分配，且与对应会话事件同事务落库；失败、回滚或重复命令不得消耗新的已提交序号。
 - 进程内队列只是降低同一进程竞争的优化，正确性完全依赖数据库事务、行锁和约束；多实例部署不得依赖该队列。
 
-## 5. 配置、依赖与测试迁移矩阵
+## 5. 文档与实施迁移矩阵
+
+### 5.1 文档迁移矩阵
+
+| 优先级 | 文件 | 本次文档动作 |
+| --- | --- | --- |
+| P0 | `docs/superpowers/specs/2026-07-23-poker-practice-prd.md` | 同步数据库产品边界与非目标 |
+| P0 | `docs/superpowers/specs/2026-07-23-poker-practice-backend-design.md` | 同步 Hono、私有 schema、连接和部署边界 |
+| P0 | `docs/superpowers/plans/2026-07-23-poker-practice-development-tasks.md` | 添加 M2.1 的实施顺序与验收 |
+| P0 | `docs/superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md` | 同步持久化、事务、事件序号与幂等边界 |
+| P0 | `docs/ARCHITECTURE.md` | 标注当前生产 DB 未实现和目标状态 |
+| P0 | `docs/REPO_MAP.md` | 标注目标设计和 SQLite 待移除范围 |
+| P1 | `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md` | 补充未来 Agent 对事务/持久化边界的依赖 |
+| P1 | `docs/superpowers/plans/2026-07-26-agent-module-development-tasks.md` | 对齐 Agent 任务依赖于 M2.1 |
+| P1 | `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md` | 补充 Runtime 不绕过 Hono/持久化边界 |
+| P1 | `docs/superpowers/specs/2026-07-23-poker-practice-frontend-design.md` | 确认前端不直连 Supabase |
+| P1 | `docs/superpowers/specs/2026-07-24-persona-catalog-m0-design.md` | 确认人物目录不引入 Supabase 客户端依赖 |
+| P1 | `docs/superpowers/specs/2026-07-27-m1-5-legal-actions-betting-transition-design.md` | 仅加与未来事务命令门控的交叉引用 |
+
+`docs/superpowers/plans/2026-07-26-six-to-nine-player-code-refactor.md` 是历史返工记录，仅加一条“已由本设计替代数据库前提”的注记，不回写其历史实现叙述。
+
+### 5.2 实施迁移矩阵
 
 | 优先级 | 迁移对象 | 本次/后续动作 | 完成标准 |
 | --- | --- | --- | --- |
-| P0 | Server 配置 | SQLite 运行时配置替换为两条 PostgreSQL URL，私密校验 TLS、端口和用途 | 运行时只接受 `DATABASE_URL`；迁移命令只接受 `DATABASE_MIGRATION_URL` |
-| P0 | Drizzle 依赖与配置 | 增加 `drizzle-orm`、`drizzle-kit`、`postgres` 及最小迁移脚本 | 可显式 generate/migrate，启动不执行 DDL |
+| P0 | Server 配置 | 本轮仅令 `ServerConfig` 读取私有 `DATABASE_URL`；`DATABASE_MIGRATION_URL` 不进入运行时配置 | 运行时只接受 `DATABASE_URL` |
+| P0 | Drizzle 依赖 | 本轮只安装 `drizzle-kit` | 不新增配置、schema、repository 或迁移脚本 |
+| P0 | Drizzle 配置与迁移脚本 | 未来 M2.1 新增 `drizzle.config`、schema、repository 与显式 generate/migrate 脚本 | 可显式 generate/migrate，启动不执行 DDL |
 | P0 | 会话/命令持久化 | M2/M3 实现 `app_private` schema、事务、锁、唯一约束、UPSERT 与事件序号 | 并发和重试不重复提交命令或事件 |
 | P0 | 测试夹具 | 默认测试移除真实 SQLite 依赖，保持离线 | `pnpm run verify` 默认不需数据库、网络或 Supabase 凭据 |
 | P1 | 临时 Postgres 集成测试 | 未来仅在提供 `TEST_DATABASE_URL` 时启动隔离临时 PostgreSQL | 创建、迁移、测试、清理均隔离于产品库 |
 | P1 | Supabase smoke | 可选非生产项目 transaction-pooler smoke | 验证 `6543`、TLS、`prepare: false`，不作为默认 verify 前置条件 |
 | P1 | SQLite 残留 | 删除仅服务于旧 SQLite 的配置与 fixture | 不存在产品 SQLite 路径、初始化或迁移代码 |
 
-已实现代码的范围只允许修改配置、依赖和测试夹具。M2、M3 与 Agent Runtime 尚未实现，本次不创建其实现代码；只以本文档锁定未来边界。
+已实现代码的范围只允许修改配置、依赖和测试夹具。M2、M3 与 Agent Runtime 尚未实现，本轮不创建其实现代码；只以本文档锁定未来边界。
 
 ## 6. 风险与安全
 
@@ -67,8 +89,8 @@ Drizzle 负责 schema 声明、`generate` 迁移文件与 `migrate` 执行。`dr
 
 ## 7. 验收
 
-- `DATABASE_URL` 使用 `6543` transaction pooler、TLS 和 `postgres.js` 的 `prepare: false`；`DATABASE_MIGRATION_URL` 使用 `5432` session/direct 与 TLS。
-- Drizzle 迁移只能通过显式部署命令生成和执行；服务启动不执行任何 DDL，且在连接/schema 不兼容时停止命令接收。
+- `ServerConfig` 只读取 `DATABASE_URL`，其使用 `6543` transaction pooler、TLS 和 `postgres.js` 的 `prepare: false`；未来 Drizzle Kit 独立读取 `DATABASE_MIGRATION_URL`，其使用 `5432` session/direct 与 TLS。
+- 本轮没有 `drizzle.config`、Drizzle schema、repository 或迁移脚本；未来 M2.1 的迁移只能通过显式部署命令生成和执行，服务启动不执行任何 DDL，且在连接/schema 不兼容时停止命令接收。
 - 所有私有表位于 `app_private`，公开协议、`protocolVersion` 和 Hono 单一入口不变；仓库没有 Supabase 客户端/Auth/Realtime/Storage/Edge 依赖。
 - 写命令在事务、`SELECT FOR UPDATE`、唯一约束和 UPSERT 下具备重试幂等性；`eventSeq` 仅为成功提交分配。
 - 默认 `pnpm run verify` 离线运行；`TEST_DATABASE_URL` 临时 Postgres 集成测试与非生产 Supabase smoke 均为显式可选步骤。

@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-07-30（M2.2 已完成完整 `app_private` Schema；数据库目标注册表、统一 Supabase URL 策略、持久测试库入口与迁移制品目标校验已落地）
+更新时间：2026-07-30（M2.2 Schema 已完成，Repository 适配待 M2.3；数据库目标注册表、统一 Supabase URL 策略、持久测试库入口与迁移制品目标校验已落地）
 
 ## Workspace 边界
 

@@ -477,6 +477,7 @@ Player Runtime 使用稳定的内部错误类别：
 - `provider_service_unavailable`
 - `provider_auth_error`
 - `provider_rate_limited`
+- `provider_unknown_error`
 - `provider_fallback_unavailable`
 - `player_deadline_exhausted`
 - `response_parse_error`
@@ -526,7 +527,7 @@ Player Runtime 使用稳定的内部错误类别：
 - 第一次纠错成功。
 - 第二次纠错成功。
 - 两次纠错耗尽。
-- `fold`、`check`、`call` 或 `all_in` 夹带金额时进入纠错。
+- `fold`、`check`、`call` 或 `allIn` 夹带金额时进入纠错。
 - `bet` 或 `raise` 的合法金额已经存在于候选快照，通过后由 Player Runtime 归一化为标准扑克命令。
 
 ### 18.4 路由

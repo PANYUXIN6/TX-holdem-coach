@@ -1,6 +1,6 @@
 # Supabase Postgres 与 Drizzle 迁移设计
 
-- 状态：已确认；M2.1 数据库基础设施已实现，M2.2 业务持久化待实现
+- 状态：M2.2 Schema 已完成，Repository 适配待 M2.3
 - 日期：2026-07-29
 - 适用阶段：M2/M3/Agent 之前的数据库基础设施迁移
 
@@ -21,7 +21,7 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 
 运行时不得复用 `DATABASE_MIGRATION_URL`，迁移工具也不得通过 transaction pooler 执行 DDL。连接配置不得进入 Contracts、浏览器包、日志或 SSE 负载。
 
-运行时依赖 `drizzle-orm` 与 `postgres`、开发依赖 `drizzle-kit` 已安装；M2.1 已提供按需数据库客户端、`drizzle.config`、基线迁移、`drizzle-kit generate`/`drizzle-kit migrate` 脚本和启动兼容门控。服务启动绝不自动执行 DDL：数据库不可连接、迁移记录缺失或版本不兼容时关闭客户端并拒绝监听端口，不尝试修复数据库。业务 Repository 与业务表仍留待 M2.2。
+运行时依赖 `drizzle-orm` 与 `postgres`、开发依赖 `drizzle-kit` 已安装；M2.1 已提供按需数据库客户端、`drizzle.config`、基线迁移、`drizzle-kit generate`/`drizzle-kit migrate` 脚本和启动兼容门控。服务启动绝不自动执行 DDL：数据库不可连接、迁移记录缺失或版本不兼容时关闭客户端并拒绝监听端口，不尝试修复数据库。M2.2 已完成业务表及关系约束，Repository 适配待 M2.3。
 
 ## 3. 数据模型边界
 
@@ -34,7 +34,7 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 - `seatNumber`、牌张/位置索引、枚举序数、重试次数等明确小型有界值继续使用 PostgreSQL `integer`。
 - 任何筹码字段都不得使用浮点数据库类型；允许为负的派生金额若单独持久化，也必须使用 `bigint` 并以私有 Schema/`CHECK` 限制在 JavaScript 安全整数范围内。
 
-`app_private` 的实际表、索引和约束由后续 M2/M3 的已确认领域设计细化。本设计不提前创建 Agent、M2/M3 未实现功能的表或代码。
+`app_private` 的实际表、索引和约束已由 M2.2 的确认设计建立；后续 Repository、事务与运行时实现不得绕过这些关系边界。本设计不提前创建 M2.2 范围之外的功能表或代码。
 
 ## 4. 并发、事务与幂等
 
@@ -72,8 +72,8 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 | --- | --- | --- | --- |
 | P0 | Server 配置 | 已令 `ServerConfig` 校验并私有保存 `DATABASE_URL`；`DATABASE_MIGRATION_URL` 不进入运行时配置 | 已完成；尚未创建数据库客户端 |
 | P0 | Drizzle 依赖 | 已安装运行时 `drizzle-orm`、`postgres`，以及开发依赖 `drizzle-kit` | 已完成；未新增配置、schema、repository 或迁移脚本 |
-| P0 | Drizzle 配置与迁移脚本 | M2.1 已新增 `drizzle.config`、schema 入口、基线迁移和显式 generate/migrate 脚本；Repository 留待 M2.2 | 可显式 generate/migrate，启动不执行 DDL |
-| P0 | 会话/命令持久化 | M2/M3 实现 `app_private` schema、事务、锁、唯一约束、UPSERT 与事件序号 | 并发和重试不重复提交命令或事件 |
+| P0 | Drizzle 配置与迁移脚本 | M2.1 已新增 `drizzle.config`、schema 入口、基线迁移和显式 generate/migrate 脚本；Repository 适配待 M2.3 | 可显式 generate/migrate，启动不执行 DDL |
+| P0 | 会话/命令持久化 | M2.2 已实现 `app_private` Schema 与关系约束；M2.3/M3 实现 Repository、事务、锁、UPSERT 与事件序号 | 并发和重试不重复提交命令或事件 |
 | P0 | 测试夹具 | 已移除旧数据库 helper、专项集成测试与 manifest 依赖，默认测试保持离线 | 已完成；`pnpm run verify` 默认不需数据库、网络或 Supabase 凭据 |
 | P1 | 临时 Postgres 集成测试 | 未来仅在提供 `TEST_DATABASE_URL` 时启动隔离临时 PostgreSQL | 创建、迁移、测试、清理均隔离于产品库 |
 | P1 | Supabase smoke | 可选非生产项目 transaction-pooler smoke | 验证 `6543`、TLS、`prepare: false`，不作为默认 verify 前置条件 |
@@ -92,7 +92,7 @@ Supabase 只托管 PostgreSQL。`apps/server` 的 Hono 是唯一服务入口；�
 ## 7. 验收
 
 - `ServerConfig` 只读取、校验并私有保存 `DATABASE_URL`；M2.1 的 `postgres.js` 客户端通过 TLS 使用 `6543` transaction pooler 并固定 `prepare: false`。Drizzle Kit 独立读取 `DATABASE_MIGRATION_URL`，通过 TLS 使用 `5432` session/direct。
-- 运行时 `drizzle-orm`、`postgres` 和开发依赖 `drizzle-kit` 已由 M2.1 接入客户端、`drizzle.config`、`app_private` schema 入口、基线迁移与显式脚本；服务启动不执行任何 DDL，且在连接/schema 不兼容时不监听端口。业务 Repository 与表仍未实现。
+- 运行时 `drizzle-orm`、`postgres` 和开发依赖 `drizzle-kit` 已由 M2.1 接入客户端、`drizzle.config`、`app_private` schema 入口、基线迁移与显式脚本；服务启动不执行任何 DDL，且在连接/schema 不兼容时不监听端口。M2.2 已完成业务表，Repository 适配待 M2.3。
 - 非负可增长持久化数值使用 PostgreSQL `bigint` + Drizzle `number` 映射，并由私有 Zod 与数据库 `CHECK` 双重限制在 `0..Number.MAX_SAFE_INTEGER`；小型有界值继续使用 `integer`，公开 Contracts 与领域数值范围不缩窄。
 - 所有私有表位于 `app_private`，公开协议、`protocolVersion` 和 Hono 单一入口不变；仓库没有 Supabase 客户端/Auth/Realtime/Storage/Edge 依赖。
 - 写命令在事务、`SELECT FOR UPDATE`、唯一约束和 UPSERT 下具备重试幂等性；`eventSeq` 仅为成功提交分配。

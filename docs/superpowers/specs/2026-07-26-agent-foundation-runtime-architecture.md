@@ -62,7 +62,7 @@ Player 与 Coach 都服务于本项目的 6–9 人无限注德州扑克规则�
 flowchart TD
     T1["轮到 AI 行动"] --> RC["AgentRunCoordinator"]
     T2["用户请求 Coach"] --> RC
-    T3["固定后台 Job"] --> RC
+    T3["进程内 Worker"] --> RC
 
     RC --> AR["持久化 AgentRun<br/>OwnerScope / 幂等 / 租约 / 预算 / 版本"]
     AR --> W["Worker 领取租约与 fencing token"]
@@ -567,10 +567,7 @@ Coach 固定场景：
 ```text
 apps/server/src/
 ├── poker/
-│   ├── state.ts
-│   ├── commands.ts
-│   ├── engine/
-│   └── rules/
+│   └── *.ts
 ├── sessions/
 │   ├── authoritative-state/
 │   │   ├── service.ts

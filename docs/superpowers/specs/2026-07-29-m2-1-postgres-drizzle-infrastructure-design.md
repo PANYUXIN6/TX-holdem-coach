@@ -101,6 +101,8 @@ CREATE SCHEMA IF NOT EXISTS "app_private";
 
 ### 5.2 PostgreSQL 集成测试
 
+> 修订注记（2026-07-30）：本节“迁移前必须确认目标库不存在 `app_private`”的一次性空库前提，已由[持久 Supabase 测试环境设计 §4](./2026-07-30-persistent-supabase-test-environment-design.md#4-迁移兼容性)修订。持久测试库允许长期保留 `app_private`；迁移前执行 `prefix` 核验，迁移后执行 `exact` 核验。
+
 只有显式提供 `TEST_DATABASE_URL` 时，条件分支内部才加载测试配置、启动 Drizzle CLI 和创建客户端。未提供该变量时，不在模块导入阶段读取 URL、加载测试配置或建立连接。
 
 测试配置必须先将 `TEST_DATABASE_URL` 规范化，并拒绝它与 `DATABASE_URL` 或 `DATABASE_MIGRATION_URL` 为相同规范化地址。执行迁移前还必须确认目标库不存在 `app_private`；任一安全门失败即拒绝，不清理、重置或修改未知数据库。

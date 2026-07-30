@@ -32,6 +32,8 @@ export interface ActualMigration {
   readonly hash: string
 }
 
+export type MigrationCompatibilityMode = 'exact' | 'prefix'
+
 export type MigrationCompatibilityFailure =
   'migrationRecordsMissing' | 'schemaVersionIncompatible'
 
@@ -125,11 +127,12 @@ export async function readActualMigrationSequence(
   }))
 }
 
-export function assertExactMigrationSequence(
+export function assertMigrationSequence(
   expected: readonly ExpectedMigration[],
   actual: readonly ActualMigration[],
+  mode: MigrationCompatibilityMode,
 ): void {
-  if (actual.length < expected.length) {
+  if (mode === 'exact' && actual.length < expected.length) {
     throw new MigrationCompatibilityError('migrationRecordsMissing')
   }
 
@@ -137,15 +140,22 @@ export function assertExactMigrationSequence(
     throw new MigrationCompatibilityError('schemaVersionIncompatible')
   }
 
-  for (const [index, expectedMigration] of expected.entries()) {
-    const actualMigration = actual[index]
+  for (const [index, actualMigration] of actual.entries()) {
+    const expectedMigration = expected[index]
 
     if (
-      actualMigration === undefined ||
+      expectedMigration === undefined ||
       actualMigration.createdAt !== String(expectedMigration.when) ||
       actualMigration.hash !== expectedMigration.hash
     ) {
       throw new MigrationCompatibilityError('schemaVersionIncompatible')
     }
   }
+}
+
+export function assertExactMigrationSequence(
+  expected: readonly ExpectedMigration[],
+  actual: readonly ActualMigration[],
+): void {
+  assertMigrationSequence(expected, actual, 'exact')
 }

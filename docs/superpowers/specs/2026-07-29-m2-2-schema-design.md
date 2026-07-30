@@ -1,13 +1,13 @@
 # M2.2 完整私有 Schema 设计
 
-- 状态：已确认，待实现
+- 状态：已实施
 - 日期：2026-07-29
 - 任务来源：[M2.2 实现完整 Schema](../plans/2026-07-23-poker-practice-development-tasks.md#m22-实现完整-schema)
 - 上位设计：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)、[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)、[Player Agent Runtime](./2026-07-23-poker-practice-agent-harness-design.md)、[Coach Agent](./2026-07-26-poker-coach-agent-design.md)、[Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)
 
 ## 1. 目标与非目标
 
-M2.2 用一条后续 Drizzle 迁移，在非公开 `app_private` schema 建立会话、手牌、命令、事件、快照、Agent、统计分片与设置的完整持久化边界。它只建立关系、约束、索引、版本化私有载荷和测试，不实现 Repository、命令事务、Agent Runtime、缓存刷新、HTTP 或 SSE。
+M2.2 使用一条主 Drizzle 迁移在非公开 `app_private` schema 建立会话、手牌、命令、事件、快照、Agent、统计分片与设置的完整持久化边界，并以一条追加纠错迁移补强 `hands.participant_seats` 的座位唯一性。它只建立关系、约束、索引、版本化私有载荷和测试，不实现 Repository、命令事务、Agent Runtime、缓存刷新、HTTP 或 SSE。
 
 所有业务表位于 `app_private`。浏览器、Supabase Data API、`anon`、`authenticated`、Contracts 与 Agent 领域对象均不直接访问这些表。不得引入 Supabase SDK、Auth、Realtime、Storage、Edge Functions 或任何 API Key/数据库连接串存储。
 
@@ -29,7 +29,7 @@ M2.2 用一条后续 Drizzle 迁移，在非公开 `app_private` schema 建立�
 
 任何可演进私有载荷均使用语义化成对列：`<name>_payload_version integer` 与 `<name>_payload jsonb`。每次写入 payload 必须同时携带匹配的版本；仅当载荷结构契约变化时提升版本，同版本下的业务内容更新不提升版本。
 
-版本列独立于数据库迁移版本、私有快照/事件/结果版本和公开 `protocolVersion`，不参与 M2.1 迁移兼容门控。每个已发布版本在应用层必须有对应的私有 Zod 判别式校验，已发布版本的含义不得原地改变。
+版本列独立于数据库迁移版本、私有快照/事件/结果版本和公开 `protocolVersion`，不参与 M2.1 迁移兼容门控。M2.2 只建立数据库载荷边界，不预建无人消费的数据库行 Zod Schema；后续 Repository 或具体 Runtime 发布某个载荷版本时，必须在其真实写入边界建立对应的私有 Zod 判别式校验，且已发布版本的含义不得原地改变。
 
 必填载荷的版本与 payload 均为非空；可选载荷必须同时为空或同时存在。存在的 payload 必须是 JSONB object，并带命名约束：
 
@@ -132,7 +132,7 @@ Coach 可以展示整手公开动作时间线，但对某个用户决策的判�
 
 ## 6. 迁移与测试
 
-M2.2 使用一条后续 Drizzle 迁移。`src/db/schema.ts` 是唯一 Drizzle schema 入口；Drizzle 负责表、列、普通约束和索引。跨行且无法声明式表达的不变量仅使用三个窄范围 PostgreSQL 延迟约束函数：阵容完整性、Player 活动协调、Coach completed Hand 资格；其他关系由外键、复合外键、检查和唯一索引表达。迁移仅执行 DDL 与固定 Owner 插入，不执行 Repository、Runtime、命令事务、缓存计算或历史回填。
+M2.2 使用一条主 Drizzle 迁移和一条追加纠错迁移。`src/db/schema.ts` 是唯一 Drizzle schema 入口；Drizzle 负责表、列、普通约束和索引。跨行且无法声明式表达的不变量仅使用三个窄范围 PostgreSQL 延迟约束函数：阵容完整性、Player 活动协调、Coach completed Hand 资格；其他关系由外键、复合外键、检查和唯一索引表达。迁移仅执行 DDL 与固定 Owner 插入，不执行 Repository、Runtime、命令事务、缓存计算或历史回填。
 
 集成测试仅在显式隔离 `TEST_DATABASE_URL` 下运行，并至少覆盖：
 

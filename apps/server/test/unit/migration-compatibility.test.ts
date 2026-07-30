@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, test } from 'vitest'
 import {
   assertExactMigrationSequence,
+  assertMigrationSequence,
   buildExpectedMigrationSequence,
   MigrationCompatibilityError,
 } from '../../src/db/migration-compatibility.js'
@@ -161,5 +162,66 @@ describe('migration compatibility', () => {
         failure,
       }),
     )
+  })
+
+  test.each([
+    ['exact', []],
+    ['prefix', []],
+    ['prefix', [{ createdAt: '10', hash: 'first' }]],
+    [
+      'prefix',
+      [
+        { createdAt: '10', hash: 'first' },
+        { createdAt: '20', hash: 'second' },
+      ],
+    ],
+  ] as const)('applies the %s migration-state matrix', (mode, actual) => {
+    const assertion = () =>
+      assertMigrationSequence(
+        [
+          { when: 10, hash: 'first' },
+          { when: 20, hash: 'second' },
+        ],
+        actual,
+        mode,
+      )
+
+    if (mode === 'exact' && actual.length === 0) {
+      expect(assertion).toThrow(
+        expect.objectContaining({ failure: 'migrationRecordsMissing' }),
+      )
+    } else {
+      expect(assertion).not.toThrow()
+    }
+  })
+
+  test.each([
+    {
+      name: 'database ahead of the artifact',
+      actual: [
+        { createdAt: '10', hash: 'first' },
+        { createdAt: '20', hash: 'second' },
+        { createdAt: '30', hash: 'third' },
+      ],
+    },
+    {
+      name: 'created_at divergence',
+      actual: [{ createdAt: '11', hash: 'first' }],
+    },
+    {
+      name: 'SQL hash divergence',
+      actual: [{ createdAt: '10', hash: 'changed' }],
+    },
+  ])('rejects a prefix with $name', ({ actual }) => {
+    expect(() =>
+      assertMigrationSequence(
+        [
+          { when: 10, hash: 'first' },
+          { when: 20, hash: 'second' },
+        ],
+        actual,
+        'prefix',
+      ),
+    ).toThrow(expect.objectContaining({ failure: 'schemaVersionIncompatible' }))
   })
 })

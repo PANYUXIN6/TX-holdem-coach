@@ -1,21 +1,17 @@
 import { defineConfig } from 'drizzle-kit'
-import { loadIsolatedTestDatabaseUrl } from './src/db/test-database-safety.js'
+import { parseSupabaseDatabaseUrl } from './src/db/database-url-policy.js'
+import { loadTestDatabaseConnections } from './src/db/test-database-safety.js'
 
-const testDatabaseUrl = loadIsolatedTestDatabaseUrl(process.env)
-
-const url = new URL(testDatabaseUrl)
+const { migrationUrl } = loadTestDatabaseConnections(process.env)
+const { connection } = parseSupabaseDatabaseUrl(migrationUrl, 'migration')
 
 export default defineConfig({
   dialect: 'postgresql',
   schema: './src/db/schema.ts',
-  out: process.env.TEST_MIGRATIONS_OUT ?? './src/db/migrations',
+  out: './src/db/migrations',
   dbCredentials: {
-    host: url.hostname,
-    port: Number(url.port || '5432'),
-    user: decodeURIComponent(url.username),
-    password: decodeURIComponent(url.password),
-    database: decodeURIComponent(url.pathname.slice(1)),
-    ssl: false,
+    ...connection,
+    ssl: 'require',
   },
   migrations: {
     schema: 'app_private',

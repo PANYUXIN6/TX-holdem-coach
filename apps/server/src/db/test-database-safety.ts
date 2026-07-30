@@ -1,54 +1,49 @@
+import { loadDatabaseTargets } from './database-targets.js'
+import { parseSupabaseDatabaseUrl } from './database-url-policy.js'
+
+export interface TestDatabaseConnections {
+  readonly runtimeUrl: string
+  readonly migrationUrl: string
+  readonly projectRef: string
+}
+
 export class TestDatabaseSafetyError extends Error {
-  public constructor() {
-    super('TEST_DATABASE_URL 必须指向隔离测试数据库。')
+  public constructor(options?: ErrorOptions) {
+    super('测试数据库配置无效或目标项目不受信任。', options)
     this.name = 'TestDatabaseSafetyError'
   }
 }
 
-export function normalizeDatabaseAddress(value: string): string {
-  let url: URL
-
-  try {
-    url = new URL(value)
-  } catch {
-    throw new TestDatabaseSafetyError()
-  }
-
-  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
-    throw new TestDatabaseSafetyError()
-  }
-
-  return [
-    'postgresql:',
-    url.hostname.toLowerCase(),
-    url.port || '5432',
-    decodeURIComponent(url.username),
-    decodeURIComponent(url.pathname),
-  ].join('|')
-}
-
-export function loadIsolatedTestDatabaseUrl(
+export function loadTestDatabaseConnections(
   environment: NodeJS.ProcessEnv,
-): string {
-  const testDatabaseUrl = environment.TEST_DATABASE_URL
+): TestDatabaseConnections {
+  try {
+    const runtimeUrl = environment.TEST_DATABASE_URL
+    const migrationUrl = environment.TEST_DATABASE_MIGRATION_URL
 
-  if (testDatabaseUrl === undefined) {
-    throw new TestDatabaseSafetyError()
-  }
+    if (runtimeUrl === undefined || migrationUrl === undefined) {
+      throw new TestDatabaseSafetyError()
+    }
 
-  const normalizedTestAddress = normalizeDatabaseAddress(testDatabaseUrl)
+    const targets = loadDatabaseTargets()
+    const runtime = parseSupabaseDatabaseUrl(runtimeUrl, 'runtime')
+    const migration = parseSupabaseDatabaseUrl(migrationUrl, 'migration')
+    const projectRef = targets.test.supabaseProjectRef
 
-  for (const candidate of [
-    environment.DATABASE_URL,
-    environment.DATABASE_MIGRATION_URL,
-  ]) {
     if (
-      candidate !== undefined &&
-      normalizeDatabaseAddress(candidate) === normalizedTestAddress
+      runtime.projectRef !== projectRef ||
+      migration.projectRef !== projectRef ||
+      projectRef === targets.production.supabaseProjectRef
     ) {
       throw new TestDatabaseSafetyError()
     }
-  }
 
-  return testDatabaseUrl
+    return { runtimeUrl, migrationUrl, projectRef }
+  } catch (error) {
+    if (error instanceof TestDatabaseSafetyError) {
+      throw error
+    }
+
+    throw new TestDatabaseSafetyError({ cause: error })
+  }
 }

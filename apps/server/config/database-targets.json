@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "test": {
+    "supabaseProjectRef": "wlxjauqsesrmcyghibsr"
+  },
+  "production": {
+    "supabaseProjectRef": "hsdyjpghsmqmdpqvufdw"
+  }
+}

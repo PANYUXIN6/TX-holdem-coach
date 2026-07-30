@@ -4,10 +4,9 @@ import {
 } from '@tx-holdem-coach/contracts'
 import type { ProviderSettingsResponse } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
+import { parseSupabaseDatabaseUrl } from './db/database-url-policy.js'
 
 const DEFAULT_PORT = 8787
-const SUPABASE_SHARED_POOLER_HOST_PATTERN =
-  /^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$/
 
 const optionalApiKeySchema = z
   .string()
@@ -20,32 +19,9 @@ const databaseUrlSchema = z
   .trim()
   .min(1)
   .superRefine((value, context) => {
-    let url: URL
-    let password: string
-    let databaseName: string
-
     try {
-      url = new URL(value)
-      password = decodeURIComponent(url.password)
-      databaseName = decodeURIComponent(url.pathname.slice(1))
+      parseSupabaseDatabaseUrl(value, 'runtime')
     } catch {
-      context.addIssue({
-        code: 'custom',
-        message: 'Invalid PostgreSQL URL.',
-      })
-      return
-    }
-
-    const isValid =
-      (url.protocol === 'postgres:' || url.protocol === 'postgresql:') &&
-      SUPABASE_SHARED_POOLER_HOST_PATTERN.test(url.hostname) &&
-      url.port === '6543' &&
-      url.username.length > 0 &&
-      password.length > 0 &&
-      password !== '[YOUR-PASSWORD]' &&
-      databaseName.length > 0
-
-    if (!isValid) {
       context.addIssue({
         code: 'custom',
         message: 'Invalid Supabase transaction pooler URL.',

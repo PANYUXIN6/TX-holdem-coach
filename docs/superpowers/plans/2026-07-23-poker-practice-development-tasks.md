@@ -505,7 +505,7 @@ M1.R
 - 建立 `sessions`、`session_agents`、`agent_memory_revisions`、`hands`、`command_ledger`、`session_events`、`session_snapshots`、`agent_runs`、`agent_attempts`、`agent_capability_invocations`、`player_decisions`、`coach_reviews`、`coach_decision_assessments`、统计缓存和 `app_settings`；不建立 `agent_templates` 或 `agent_personas` 表。
 - 建立文档要求的唯一索引、外键和查询索引。
 - 所有业务表位于 `app_private`；不向 `anon`、`authenticated` 或 Data API 暴露权限。
-- 标识符使用 PostgreSQL `uuid`，业务/事件时间使用 `timestamptz`，版本化快照、完成结果和私有载荷使用 `jsonb`。筹码、投入、累计买入、`stateVersion`、`eventSeq`、fencing token、手牌序号等非负可增长持久化值使用 PostgreSQL `bigint`，由 Drizzle 映射为 `number`，并由私有 Zod 与数据库 `CHECK` 双重限制在 `0..Number.MAX_SAFE_INTEGER`；不得改为字符串或 JavaScript `bigint`，也不得缩窄既有 Contracts/领域范围。`seatNumber`、牌张/位置索引、枚举序数和重试次数等小型有界值继续使用 `integer`。
+- 标识符使用 PostgreSQL `uuid`，业务/事件时间使用 `timestamptz`，版本化快照、完成结果和私有载荷使用 `jsonb`。筹码、投入、累计买入、`stateVersion`、`eventSeq`、fencing token、手牌序号等非负可增长持久化值使用 PostgreSQL `bigint`，由 Drizzle 映射为 `number`，并由数据库 `CHECK` 限制在 `0..Number.MAX_SAFE_INTEGER`；不得改为字符串或 JavaScript `bigint`，也不得缩窄既有 Contracts/领域范围。私有 Zod 只在后续 Repository 或具体版本化载荷获得真实写入边界时由对应任务建立，不在纯 DDL 的 M2.2 中预建无人消费的数据库行 Schema。`seatNumber`、牌张/位置索引、枚举序数和重试次数等小型有界值继续使用 `integer`。
 - API Key 与数据库连接串不存在于任何表。
 - `session_snapshots.privateTableState` 保存版本化 `PrivateTableState` 信封；其中 `poker` 是唯一权威纯扑克状态，顶层保存版本、已完成手数、累计买入和最近完成手摘要。`sessions` 只保存生命周期、协调字段和事务并发镜像；`session_agents` 只保存本场配置与当前结构化记忆。
 - 所有持久化座位号约束为 `0..8`，一场的用户与 Agent 座位合计只能为 6–9 且不得重复。
@@ -521,7 +521,7 @@ M1.R
 - 使用两个真实 PostgreSQL 连接竞争创建，验证同一 Owner 只有一个 `active` 场次，不同 Owner 不冲突。
 - 使用 Schema 检查确认不存在 Key 字段和旧 `hand_events` 表。
 - 使用 Schema 检查确认三个非必要扑克投影列不存在。
-- 使用边界测试确认上述非负 `bigint` 字段经 Drizzle 保持为 `number`，私有 Zod 与数据库 `CHECK` 都拒绝负值、非安全整数和超过 `Number.MAX_SAFE_INTEGER` 的值；小型有界字段仍执行各自 `integer` 约束。
+- 使用边界测试确认上述非负 `bigint` 字段经 Drizzle 保持为 `number`，数据库 `CHECK` 拒绝负值和超过 `Number.MAX_SAFE_INTEGER` 的值；私有 Zod 的非安全整数测试归属于后续实际定义并消费该 Schema 的任务，小型有界字段仍执行各自 `integer` 约束。
 - 连续提交多个扑克状态后仍只有一行场次快照，内容和更新时间对应最后一次成功事务。
 
 ### M2.3 实现预设人物目录、设置和场次基础 Repository

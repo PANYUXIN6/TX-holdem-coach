@@ -7,7 +7,7 @@ import {
 } from '../../src/config.js'
 
 const databaseUrl =
-  'postgresql://postgres.project-ref:database-secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
+  'postgresql://postgres.abcdefghijklmnopqrst:database-secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
 
 function createEnvironment(
   overrides: NodeJS.ProcessEnv = {},
@@ -135,7 +135,7 @@ describe('server configuration', () => {
   test('returns a key-free public projection for a valid configuration', () => {
     const marker = 'must-not-appear-in-public-config'
     const markedDatabaseUrl =
-      'postgresql://postgres.project-ref:must-not-appear-in-public-config@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
+      'postgresql://postgres.abcdefghijklmnopqrst:must-not-appear-in-public-config@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
     const config = loadServerConfig(
       createEnvironment({
         PORT: '8799',
@@ -199,11 +199,11 @@ describe('server configuration', () => {
     ['non-PostgreSQL scheme', 'sqlite:///data/poker-practice.sqlite'],
     [
       'non-Supabase host',
-      'postgresql://postgres.project-ref:secret@db.example.com:6543/postgres',
+      'postgresql://postgres.abcdefghijklmnopqrst:secret@db.example.com:6543/postgres',
     ],
     [
       'session pooler port',
-      'postgresql://postgres.project-ref:secret@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres',
+      'postgresql://postgres.abcdefghijklmnopqrst:secret@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres',
     ],
     [
       'missing username',
@@ -211,19 +211,19 @@ describe('server configuration', () => {
     ],
     [
       'missing password',
-      'postgresql://postgres.project-ref@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+      'postgresql://postgres.abcdefghijklmnopqrst@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
     ],
     [
       'missing database name',
-      'postgresql://postgres.project-ref:secret@aws-0-ap-northeast-1.pooler.supabase.com:6543',
+      'postgresql://postgres.abcdefghijklmnopqrst:secret@aws-0-ap-northeast-1.pooler.supabase.com:6543',
     ],
     [
       'password placeholder',
-      'postgresql://postgres.project-ref:[YOUR-PASSWORD]@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+      'postgresql://postgres.abcdefghijklmnopqrst:[YOUR-PASSWORD]@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
     ],
     [
       'invalid password encoding',
-      'postgresql://postgres.project-ref:%ZZ@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+      'postgresql://postgres.abcdefghijklmnopqrst:%ZZ@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
     ],
   ])('rejects %s', (_caseName, value) => {
     expect(() =>
@@ -236,7 +236,7 @@ describe('server configuration', () => {
     (environment) => {
       const marker = 'must-not-appear-in-errors'
       const markedDatabaseUrl =
-        'postgresql://postgres.project-ref:must-not-appear-in-errors@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
+        'postgresql://postgres.abcdefghijklmnopqrst:must-not-appear-in-errors@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres'
       const invalidEnvironment = createEnvironment({
         ...environment,
         DATABASE_URL: markedDatabaseUrl,

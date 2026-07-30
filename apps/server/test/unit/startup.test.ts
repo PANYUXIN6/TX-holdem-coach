@@ -37,7 +37,7 @@ async function createMigrationDirectory(): Promise<string> {
 function createConfig() {
   return loadServerConfig({
     DATABASE_URL:
-      'postgresql://postgres.project-ref:runtime-secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+      'postgresql://postgres.abcdefghijklmnopqrst:runtime-secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
   })
 }
 

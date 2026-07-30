@@ -1,5 +1,6 @@
 import { access, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { verifyDatabaseTargetsManifest } from '../dist/db/migration-artifact.js'
 import { buildExpectedMigrationSequence } from '../dist/db/migration-compatibility.js'
 
 const sourceDirectory = 'src/db/migrations'
@@ -48,3 +49,23 @@ await Promise.all(
 )
 
 await buildExpectedMigrationSequence(distDirectory)
+
+const [sourceTargetsContents, distTargetsContents, manifestContents] =
+  await Promise.all([
+    readFile('config/database-targets.json', 'utf8'),
+    readFile('dist/db/config/database-targets.json', 'utf8'),
+    readFile('dist/db/database-targets.manifest.json', 'utf8'),
+  ])
+
+if (sourceTargetsContents !== distTargetsContents) {
+  throw new Error('数据库目标注册表构建资产不一致。')
+}
+
+const sourceTargets = JSON.parse(sourceTargetsContents)
+const artifactTargets = verifyDatabaseTargetsManifest(
+  JSON.parse(manifestContents),
+)
+
+if (JSON.stringify(sourceTargets) !== JSON.stringify(artifactTargets)) {
+  throw new Error('迁移制品中的数据库目标注册表不一致。')
+}

@@ -105,7 +105,7 @@ M2.3 不实现 HTTP、SSE、完整场次创建、命令账本、事件/快照事
 
 V1 初始已发布模型 ID 为 `deepseek-v4-flash` 和 `kimi-k2.6`。永久 Schema 中已发布模型 ID 和兼容组合只能追加，不能删除或改变既有分支的含义。若未来模型需要不同字段，例如使用 `reasoningEffort` 而不支持 `thinkingMode`，必须发布新的 `configPayloadVersion`，不能改写 V1。
 
-Kimi V1 对 `kimi-k2.6` 使用判别式约束：非思考模式只接受 `thinkingMode = "disabled"` 与 `temperature = 0.6` 的组合。未来若正式发布其他 K2.6 组合，只能以保持旧分支含义不变的追加分支表达。
+Kimi V1 对 `kimi-k2.6` 使用判别式约束。V1 当前只发布非思考分支，只接受 `thinkingMode = "disabled"` 与 `temperature = 0.6` 的组合；官方兼容但尚未发布为人物配置的思考分支 `thinkingMode = "enabled"` 与 `temperature = 1.0`，未来只能以保持旧分支含义不变的追加方式进入永久 Schema 和 Active 清单。实现不得因为供应商客观支持该组合便提前接受未发布分支。
 
 ### 4.2 V1 工程默认值
 
@@ -248,7 +248,8 @@ Owner 行缺失时抛出脱敏的 `OwnerScopeResolutionError`，不自动创建 
 
 ```text
 解析 OwnerScope → ResolvedOwnerScope
-→ 读取旧快照
+→ 查询该 Owner 最近一条 ended 场次
+→ 使用返回的 sessionId 读取旧快照
 → 按 configPayloadVersion 运行永久 Payload Schema
 → 校验结构化列镜像
 → 根据旧载荷重算哈希并与旧 configSnapshotKey 比对
@@ -264,6 +265,8 @@ Owner 行缺失时抛出脱敏的 `OwnerScopeResolutionError`，不自动创建 
 该拒绝发生在任何数据库写入前，并返回内部的失败座位与人物标识；未来 HTTP 层负责映射为不泄露私有配置的用户错误。
 
 模型退役不使历史场次进入损坏或只读诊断。历史查看、统计和审计只运行永久 Payload Schema 与完整性校验。
+
+“上一场”固定为当前 Owner 按 `ended_at DESC, id DESC` 排序的第一条 `lifecycle_status = 'ended'` 场次。M3.2 必须通过专用 `findLatestEndedSessionForRosterReuse` 端口取得其 `sessionId`，不能从通用历史分页首页推断，也不能接受 `active` 或 `readonlyDiagnostic` 场次作为沿用来源。没有 ended 场次时，沿用入口不可用并返回未找到；客户端不能用任意历史 `sessionId` 改写“上一场”的语义。
 
 `M3.2` 中“沿用旧版本人物仍成功”精确限定为：沿用旧版本人物时保留原始配置且不自动升级；只有其模型配置仍通过当前 Active 准入时才能创建新场次。
 
@@ -288,9 +291,23 @@ M2.3 不提前设计 M4 的结构化记忆。M4 若增加任何字段，必须�
 
 两处记忆版本和载荷必须完全一致。缺少 revision 0、版本不一致或载荷不一致均失败，不能依赖延迟外键在提交时才提供业务错误。
 
-## 7. Player 设置 Repository
+## 7. 共用 OwnerScope 解析
 
-### 7.1 Payload V1
+人物阵容准备、Player 设置 Repository 和场次基础 Repository 共用唯一的 `resolveOwnerScope` 端口：
+
+```text
+OwnerScope.identityKey
+→ SELECT owners.id WHERE identity_key = ?
+→ ResolvedOwnerScope { identityKey, databaseOwnerId }
+```
+
+外部调用方只能提供 OwnerScope，不能构造或传入数据库 Owner UUID。`ResolvedOwnerScope` 是内部不可伪造值，只能由解析端口产生。读取和写入 SQL 必须使用解析后的 `databaseOwnerId`；任何写入准备必须在进入事务前完成解析，事务写入原语不得再次查询 Owner。
+
+Owner 行缺失时抛出脱敏的 `OwnerScopeResolutionError`，不开始写入事务、不自动补建固定 Owner。它表示持久化不变量失败，不等同于具体资源未找到。设置行缺失也与 Owner 缺失不同：前者返回代码默认设置，后者必须失败。
+
+## 8. Player 设置 Repository
+
+### 8.1 Payload V1
 
 固定设置键为 `player-timeouts`，`SETTING_PAYLOAD_VERSION = 1`。永久 `PlayerTimeoutSettingsPayloadV1Schema` 为：
 
@@ -312,17 +329,17 @@ M2.3 不提前设计 M4 的结构化记忆。M4 若增加任何字段，必须�
 
 返回值深冻结。API Key 和 Coach 预算不属于该载荷。
 
-### 7.2 读取
+### 8.2 读取
 
-- 先按 `OwnerScope.identityKey` 解析数据库 Owner UUID。
+- 先按 §7 共用约定解析 OwnerScope；Owner 缺失时失败。
 - `(owner_id, setting_key)` 缺行时返回代码默认值，不写数据库。
 - 已知版本且载荷合法时返回解析后的完整设置。
 - 未知版本、非法 JSON、额外字段或不满足跨字段约束时抛出脱敏的持久化数据损坏错误。
 - 损坏设置不得回退默认值，否则会把持久化错误伪装成合法配置。
 
-### 7.3 写入
+### 8.3 写入
 
-Repository 只接收已经合并的完整设置对象并再次校验，不负责 PATCH 语义。写入使用 `(owner_id, setting_key)` UPSERT：
+Repository 只接收已经合并的完整设置对象并再次校验，不负责 PATCH 语义。写入前按 §7 共用约定解析 OwnerScope；写入使用 `(owner_id, setting_key)` UPSERT：
 
 - 缺行时生成新 UUID 并插入；
 - 冲突时只更新 `setting_payload_version`、`setting_payload` 和 `updated_at`；
@@ -331,17 +348,11 @@ Repository 只接收已经合并的完整设置对象并再次校验，不负责
 
 首版设置更新采用最后写入生效，不建立设置历史或乐观锁。M4 创建 Player AgentRun 时读取当时设置并固化；实际单次尝试超时取固化单次超时与剩余 deadline 的较小值。
 
-## 8. 场次基础 Repository
+## 9. 场次基础 Repository
 
-### 8.1 OwnerScope
+所有端口显式接收 OwnerScope 或 §7 解析产生的 ResolvedOwnerScope。场次、参与者、Agent 和记忆 SQL 均包含 `owner_id` 条件或使用复合 Owner 外键。按 ID 查询时，Owner 不匹配与资源不存在统一返回未找到；错误信息和返回类型不得泄露其他 Owner 是否存在该资源。
 
-所有端口显式接收 OwnerScope。当前身份键固定为 `local-user`，Repository 只能通过 `owners.identity_key` 解析数据库 UUID，不能让调用方直接提供内部 Owner UUID。
-
-场次、参与者、Agent、记忆和设置 SQL 均包含 `owner_id` 条件或使用复合 Owner 外键。按 ID 查询时，Owner 不匹配与资源不存在统一返回未找到；错误信息和返回类型不得泄露其他 Owner 是否存在该资源。
-
-读取和写入共用同一个 Owner 解析端口。任何写入准备必须在进入事务前把外部 OwnerScope 解析为不可伪造的内部 `ResolvedOwnerScope`；事务写入原语只接受该内部值。Owner 行缺失时返回脱敏的 Owner 解析错误，不开始事务、不自动补建固定 Owner。设置缺行与 Owner 缺失是不同分支：前者返回代码默认设置，后者是持久化不变量失败。
-
-### 8.2 内部端口
+### 9.1 内部端口
 
 M2.3 提供以下异步内部端口：
 
@@ -349,19 +360,22 @@ M2.3 提供以下异步内部端口：
 findActiveSession(ownerScope)
 getSessionById(ownerScope, sessionId)
 listHistoricalSessions(ownerScope, { limit, cursor? })
+findLatestEndedSessionForRosterReuse(ownerScope)
 readSessionAgentSnapshots(ownerScope, sessionId)
 insertSessionRosterSnapshot(transaction, input)
 ```
 
 不提供人物创建、编辑、复制或删除 Repository，也不提供单独提交空场次的产品入口。
 
-### 8.3 活动与单场查询
+### 9.2 活动、单场与沿用来源查询
 
 `findActiveSession` 只查询 `lifecycle_status = 'active'`，返回零或一条。`getSessionById` 返回 Owner 所属场次的基础协调字段；未找到和跨 Owner 返回相同结果。
 
 返回的基础记录包括：场次 ID、生命周期、`stateVersion`、`nextEventSeq`、`currentHandId`、Player 协调指针、创建/结束/更新时间。M2.3 不解析尚未发布的私有牌桌快照 Payload。
 
-### 8.4 历史分页
+`findLatestEndedSessionForRosterReuse` 只查询 `lifecycle_status = 'ended'`，按 `ended_at DESC, id DESC` 返回零或一条，供 M3.2 取得唯一的“上一场”来源。它不返回 active 或 readonlyDiagnostic 场次，也不复用按 `updated_at` 排序的历史分页。
+
+### 9.3 历史分页
 
 历史场次包含 `ended | readonlyDiagnostic`，固定排序：
 
@@ -373,10 +387,12 @@ ORDER BY updated_at DESC, id DESC
 
 ```ts
 {
-  updatedAt: valid Date
+  updatedAt: UTC ISO timestamp string with exactly 6 fractional digits
   id: UUID
 }
 ```
+
+Repository 必须在 SQL 中将 `updated_at` 以数据库微秒精度直接投影为 UTC 文本，例如 `YYYY-MM-DDTHH:mm:ss.SSSSSSZ`，并将该原始字符串放入游标；不得先转换为只有毫秒精度的 JavaScript `Date` 再生成游标。回查时把游标字符串显式转换为 PostgreSQL `timestamptz` 后比较，从而保留数据库精度。
 
 游标后的查询条件固定为：
 
@@ -391,7 +407,7 @@ OR (updated_at = cursor.updatedAt AND id < cursor.id)
 
 首版 keyset 分页不保证跨页快照一致。历史记录的 `updated_at` 仍可能因诊断或后续维护写入而变大，导致翻页期间记录移动、遗漏或重复；Repository 不为一次分页持有长事务或数据库快照。调用方需要强一致导出时必须使用后续专用读取边界，普通历史列表通过重新刷新第一页收敛到最新排序。
 
-### 8.5 人物快照读取
+### 9.4 人物快照读取
 
 `readSessionAgentSnapshots`：
 
@@ -404,7 +420,7 @@ OR (updated_at = cursor.updatedAt AND id < cursor.id)
 
 历史模型退役不影响读取。未知 Payload 版本或完整性损坏抛出持久化数据损坏错误，不自动修复。
 
-### 8.6 原子阵容写入原语
+### 9.5 原子阵容写入原语
 
 `insertSessionRosterSnapshot` 必须接收调用方创建的数据库事务能力，不能自行开始、提交或嵌套事务。它在同一事务写入：
 
@@ -420,17 +436,18 @@ M3.2 在外层事务继续写入 Poker 初始化、`hands.inProgress`、事件�
 
 PostgreSQL 的延迟阵容完整性约束和单 Owner 活动场次唯一索引仍是最终并发边界；应用预检只用于提前返回清晰错误，不能替代数据库约束。
 
-## 9. 错误与事务边界
+## 10. 错误与事务边界
 
 内部错误至少区分：
 
 - 人物目录源码无效；
 - 当前模型配置不再 Active；
+- OwnerScope 解析失败；
 - 设置或人物历史 Payload 版本未知；
 - 持久化载荷损坏；
 - 镜像不一致；
 - snapshot key 不匹配；
-- Owner/资源未找到；
+- Owner 已解析但目标资源未找到，或资源属于其他 Owner；
 - 活动场次唯一冲突；
 - 数据库操作失败。
 
@@ -438,15 +455,17 @@ PostgreSQL 的延迟阵容完整性约束和单 Owner 活动场次唯一索引�
 
 Active 准入失败发生在数据库事务之前。Repository 写入的任一步失败使调用方事务整体回滚；不得留下 Session、部分参与者、部分 Agent 或缺失 revision 0 的阵容。
 
-## 10. 测试
+## 11. 测试
 
-### 10.1 离线单元测试
+### 11.1 离线单元测试
 
 人物目录：
 
 - 八个人物合法加载，公开投影与既有 V1 规范一致。
 - 重复/缺失 `personaId`、非法版本、颜色、风格、策略长度和额外字段失败。
+- 七个或九个人物的目录均被拒绝。
 - 非法模型 ID、温度、输出上限、思考模式和 Kimi 不兼容组合失败。
+- Kimi V1 永久 Schema 当前拒绝尚未发布的 `enabled + temperature 1.0` 分支，并可在未来通过追加测试夹具证明旧非思考分支含义不变。
 - 默认配置在八个人物中完全展开，嵌套对象深冻结且不存在共享可修改引用。
 - 公开摘要不含策略、模型、Prompt、路由、Key 或 Provider 状态。
 - 规范 JSON 不受对象键插入顺序影响；内容、Payload 版本或人物字段变化会改变哈希。
@@ -465,8 +484,9 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 - 仍 Active 的旧人物版本原样保留配置、`personaVersion` 和 key。
 - 同 `personaId` 存在当前新版本时不自动升级旧快照。
 - 已退役配置导致整个旧阵容准入失败，数据库写入端口调用次数为零。
+- “上一场”只选择最近 ended 场次；active、readonlyDiagnostic 和客户端指定的任意旧场次均不能成为沿用来源。
 
-### 10.2 显式 PostgreSQL 集成测试
+### 11.2 显式 PostgreSQL 集成测试
 
 - `insertSessionRosterSnapshot` 一次写入完整 6–9 人阵容。
 - 每个 Agent 同时存在 `current_memory_revision = 0` 和一致的 revision 0 历史行。
@@ -476,6 +496,7 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 - 已退役配置的历史快照仍可读取，但不能用于新场次。
 - Owner A 不能按 ID 或列表观察 Owner B 的场次或人物快照。
 - 同一 `updated_at` 的多条历史记录以 UUID 降序稳定分页，无重复或遗漏。
+- 同一毫秒内但微秒不同的历史记录跨页无遗漏，游标未经过 JavaScript `Date` 截断。
 - `limit = 1`、`100` 合法，`0`、`101`、非整数和非法游标失败。
 - 设置缺行、合法 UPSERT、损坏行和保留行 ID 的行为与单元契约一致。
 - Owner 行缺失时读取和写入均失败，且写入事务未开始。
@@ -483,7 +504,7 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 
 远程 PostgreSQL 测试只通过现有显式测试入口运行；默认 `pnpm run verify` 保持离线。
 
-### 10.3 实施验收
+### 11.3 实施验收
 
 最终实现必须运行：
 
@@ -496,7 +517,7 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 
 不调用真实模型，不要求 Provider Key。
 
-## 11. 文档同步
+## 12. 文档同步
 
 实现 M2.3 时同步：
 

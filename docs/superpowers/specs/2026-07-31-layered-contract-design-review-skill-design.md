@@ -231,13 +231,17 @@ DUPLICATE
 OUT_OF_SCOPE
 ```
 
+以上是仅由 L5 写入的 `human_rejection_reason` 枚举。Runner 和 L4 写入独立的 `automatic_rejection_reason` 枚举，其中包含 `REFUTED_BY_COUNTEREXAMPLE`；自动原因码不得作为人工决定写入，人工原因码也不得由 Runner 代填。每条拒绝记录必须携带 `decision_source: automatic | human`，并由 Schema 根据该字段约束对应的原因码枚举。
+
+`review-protocol.md` 只解释两类原因码的归属和写入主体，不重复枚举值；完整枚举以 `rejection-record.schema.json` 中按 `decision_source` 区分的两个条件分支为唯一事实源。
+
 ## 6. Evidence Card 契约
 
 每条候选意见必须包含：
 
 ```yaml
 finding_id: 由脚本计算
-layer: self_consistency | architecture | adversarial
+layer: self_consistency | architecture
 
 claim: 一句话描述被违反的契约
 contract:
@@ -355,6 +359,7 @@ Runner 通过非交互 Codex 进程执行各层，并固定：
 │   ├── candidate-finding.schema.json
 │   ├── adversarial-result.schema.json
 │   ├── evidence-card.schema.json
+│   ├── rejection-record.schema.json
 │   └── eval-cases.jsonl
 └── scripts/
     ├── review-design.mjs

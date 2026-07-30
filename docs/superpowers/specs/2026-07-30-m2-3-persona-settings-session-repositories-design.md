@@ -96,7 +96,7 @@ M2.3 不实现 HTTP、SSE、完整场次创建、命令账本、事件/快照事
     kimi: {
       modelId: published Kimi V1 model id
       temperature: model-compatible literal
-      maxOutputTokens: positive integer, at most 32768
+      maxOutputTokens: positive integer, project V1 limit 32768
       thinkingMode: model-compatible mode
     }
   }
@@ -116,7 +116,9 @@ Kimi V1 对 `kimi-k2.6` 使用判别式约束：非思考模式只接受 `thinki
 | DeepSeek | `deepseek-v4-flash` | `0.2` | `256` | `disabled` |
 | Kimi | `kimi-k2.6` | `0.6` | `256` | `disabled` |
 
-`256` 是项目工程默认值，不是供应商上限。`maxOutputTokens` 是项目内部、供应商无关的配置名；M2.3 不锁定 M4 的 wire 参数名。当前 K2.6 quickstart 示例使用 `max_tokens`，而同站当前 Chat Completion Reference 将 `max_tokens` 标记为已弃用并指向 `max_completion_tokens`。M4 必须在选定目标站点、API 端点和 SDK 版本后，通过适配器契约测试确认实际映射，不能仅凭任一文档页面假定参数名。wire 映射变化不改变人物配置语义，不要求提升 `personaVersion`。
+`256` 是项目工程默认值，不是供应商上限。Kimi 的 `32768` 也只是项目 V1 Schema 上限：K2.6 quickstart 只将其描述为 `max_tokens` 默认值，没有声明为供应商最大值。
+
+M4 适配器把内部 `maxOutputTokens` 映射为 DeepSeek `max_tokens` 和 Kimi `max_completion_tokens`。Kimi K2.6 quickstart 仍示例已弃用的 `max_tokens`，参数级事实以 Chat Completion Reference 明确给出的“`max_tokens` 已弃用，请使用 `max_completion_tokens`”为准。M4 适配器落地后、正式发布前，必须通过不属于默认 `verify` 的显式真实请求 smoke，验证选定站点的 `kimi-k2.6` 接受 `max_completion_tokens`；失败时不得静默回退或带着未验证映射发布，应先复核目标站点、SDK 与当时官方 Reference。
 
 Kimi 官方 K2.6 文档的“参数变动说明 / Parameters Differences in Request Body”把非思考温度固定为 `0.6`，并在“K2.6 禁用思考能力示例 / Disable Thinking Capability Example”注明无需设置温度。因此 M2.3 仍在快照保存有效配置 `temperature = 0.6`；M4 适配器必须验证该值，但不得把 `temperature` 字段发送给 Kimi。这是显式模型适配规则，不是依赖 SDK 默认值。
 

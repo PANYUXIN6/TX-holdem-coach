@@ -182,7 +182,7 @@ M1.R
 - 定义前端可见的预设人物摘要、创建场次人物选择和人物配置快照筛选 Schema；不把 Player Runtime 私有人物提示或完整模型配置暴露到共享协议。
 - 定义 `deepseek | kimi` Provider 标识、`notConfigured | notChecked | available | unavailable` 检测状态、脱敏错误码、健康摘要和设置响应 Schema。
 - 通用 `SeatNumberSchema` 保持 `0..8`；新增创建场次专用 `AiSeatNumberSchema = 1..8`。本地用户领域座位隐式固定为 `0`，创建请求不包含 `userSeatNumber`。
-- 固化至少八个唯一人物标识，以支持九人桌选择八个不同 AI。
+- 固化八个唯一人物标识，以支持九人桌选择八个不同 AI。
 - 八个 `personaVersion = 1` 的全部公开字段以 [人物目录设计 §2](../specs/2026-07-24-persona-catalog-m0-design.md) 为规范事实源；任何公开字段变化必须提升版本，不能原地改写 V1。
 - 座位号固定为 `0..8`；创建场次必须选择 5–8 个不同人物，公开场次快照必须包含 6–9 个座位。
 - 定义 HTTP 请求/响应、SSE 事件和 `PublicSessionSnapshot` 的 `protocolVersion`；它只属于对外协议，不与私有快照、私有事件或数据库迁移版本共用。
@@ -528,7 +528,7 @@ M1.R
 
 产出：
 
-- 在服务端源码中建立至少八个只读、版本化的预设人物目录，并用私有 Zod Schema 在启动时校验。
+- 在服务端源码中建立固定八个只读、版本化的预设人物目录，并用私有 Zod Schema 在启动时校验。
 - 提供列出人物和按 `personaId` 读取的内部端口，不提供人物写入或删除 Repository。
 - Player 单次尝试超时默认 15 秒、范围 5–30 秒；完整决策 deadline 默认 45 秒、范围 15–120 秒且不得小于单次超时。
 - 活动场次和历史场次的基础查询。

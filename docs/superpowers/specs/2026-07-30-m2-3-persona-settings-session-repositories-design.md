@@ -116,18 +116,18 @@ Kimi V1 对 `kimi-k2.6` 使用判别式约束：非思考模式只接受 `thinki
 | DeepSeek | `deepseek-v4-flash` | `0.2` | `256` | `disabled` |
 | Kimi | `kimi-k2.6` | `0.6` | `256` | `disabled` |
 
-`256` 是项目工程上限，不是供应商上限。M4 适配器把内部 `maxOutputTokens` 映射为 DeepSeek `max_tokens` 和 Kimi `max_completion_tokens`。
+`256` 是项目工程默认值，不是供应商上限。`maxOutputTokens` 是项目内部、供应商无关的配置名；M2.3 不锁定 M4 的 wire 参数名。当前 K2.6 quickstart 示例使用 `max_tokens`，而同站当前 Chat Completion Reference 将 `max_tokens` 标记为已弃用并指向 `max_completion_tokens`。M4 必须在选定目标站点、API 端点和 SDK 版本后，通过适配器契约测试确认实际映射，不能仅凭任一文档页面假定参数名。wire 映射变化不改变人物配置语义，不要求提升 `personaVersion`。
 
-Kimi 官方模型约束把 K2.6 非思考温度固定为 `0.6`，并建议不要显式发送固定温度。因此 M2.3 仍在快照保存有效配置 `temperature = 0.6`；M4 适配器必须验证该值，但不得把 `temperature` 字段发送给 Kimi。这是显式模型适配规则，不是依赖 SDK 默认值。
+Kimi 官方 K2.6 文档的“参数变动说明 / Parameters Differences in Request Body”把非思考温度固定为 `0.6`，并在“K2.6 禁用思考能力示例 / Disable Thinking Capability Example”注明无需设置温度。因此 M2.3 仍在快照保存有效配置 `temperature = 0.6`；M4 适配器必须验证该值，但不得把 `temperature` 字段发送给 Kimi。这是显式模型适配规则，不是依赖 SDK 默认值。
 
 模型事实来源：
 
 - [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
 - [DeepSeek Chat Completion](https://api-docs.deepseek.com/api/create-chat-completion/)
-- [Kimi Model List](https://platform.kimi.ai/docs/models)
-- [Kimi Model Parameter Reference](https://platform.kimi.ai/docs/api/models-overview)
-- [Kimi K2.6](https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart)
-- [Kimi Chat Completion](https://platform.kimi.ai/docs/api/chat)
+- 国际站：[Kimi Model List](https://platform.kimi.ai/docs/models)、[Kimi Model Parameter Reference](https://platform.kimi.ai/docs/api/models-overview)、[Kimi K2.6 的 Parameters Differences in Request Body 与 Disable Thinking Capability Example](https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart)、[Kimi Chat Completion](https://platform.kimi.ai/docs/api/chat)
+- 大陆站：[Kimi K2.6 的“参数变动说明”与“K2.6 禁用思考能力示例”](https://platform.kimi.com/docs/guide/kimi-k2-6-quickstart)、[Kimi Chat Completion](https://platform.kimi.com/docs/api/chat)
+
+国际站示例使用 `api.moonshot.ai`，大陆站示例使用 `api.moonshot.cn`。两站在本设计中只用于交叉核对模型语义；M2.3 不选择 Provider 端点或账号体系。M4 必须明确选定其中一个部署目标，不能混用文档、端点或凭据。
 
 ### 4.3 V1 人物策略说明
 
@@ -230,21 +230,23 @@ sha256(
 
 当前目录创建阵容时，在进入数据库事务前完成：
 
-1. 从只读目录取得完整人物定义。
-2. 运行永久 Payload Schema。
-3. 运行 Active Schema。
-4. 规范化并计算哈希。
-5. 检查人物与座位唯一性。
-6. 形成全部座位的已验证写入输入。
+1. 通过 Owner Repository 将外部 `OwnerScope.identityKey` 解析为内部 `ResolvedOwnerScope`。
+2. 从只读目录取得完整人物定义。
+3. 运行永久 Payload Schema。
+4. 运行 Active Schema。
+5. 规范化并计算哈希。
+6. 检查人物与座位唯一性。
+7. 形成包含 `ResolvedOwnerScope` 的全部座位已验证写入输入。
 
-任一座位失败则拒绝整个阵容，不开始数据库事务。
+Owner 行缺失时抛出脱敏的 `OwnerScopeResolutionError`，不自动创建 Owner；任一座位失败则拒绝整个阵容，不开始数据库事务。
 
 ### 5.4 沿用旧阵容
 
 沿用上一场阵容固定为：
 
 ```text
-读取旧快照
+解析 OwnerScope → ResolvedOwnerScope
+→ 读取旧快照
 → 按 configPayloadVersion 运行永久 Payload Schema
 → 校验结构化列镜像
 → 根据旧载荷重算哈希并与旧 configSnapshotKey 比对
@@ -335,6 +337,8 @@ Repository 只接收已经合并的完整设置对象并再次校验，不负责
 
 场次、参与者、Agent、记忆和设置 SQL 均包含 `owner_id` 条件或使用复合 Owner 外键。按 ID 查询时，Owner 不匹配与资源不存在统一返回未找到；错误信息和返回类型不得泄露其他 Owner 是否存在该资源。
 
+读取和写入共用同一个 Owner 解析端口。任何写入准备必须在进入事务前把外部 OwnerScope 解析为不可伪造的内部 `ResolvedOwnerScope`；事务写入原语只接受该内部值。Owner 行缺失时返回脱敏的 Owner 解析错误，不开始事务、不自动补建固定 Owner。设置缺行与 Owner 缺失是不同分支：前者返回代码默认设置，后者是持久化不变量失败。
+
 ### 8.2 内部端口
 
 M2.3 提供以下异步内部端口：
@@ -383,6 +387,8 @@ OR (updated_at = cursor.updatedAt AND id < cursor.id)
 
 当前 `sessions_owner_status_updated_idx(owner_id, lifecycle_status, updated_at)` 足够作为首版查询索引；不为 UUID 尾排序提前增加迁移。只有真实查询计划证明需要时再补充索引。
 
+首版 keyset 分页不保证跨页快照一致。历史记录的 `updated_at` 仍可能因诊断或后续维护写入而变大，导致翻页期间记录移动、遗漏或重复；Repository 不为一次分页持有长事务或数据库快照。调用方需要强一致导出时必须使用后续专用读取边界，普通历史列表通过重新刷新第一页收敛到最新排序。
+
 ### 8.5 人物快照读取
 
 `readSessionAgentSnapshots`：
@@ -400,13 +406,13 @@ OR (updated_at = cursor.updatedAt AND id < cursor.id)
 
 `insertSessionRosterSnapshot` 必须接收调用方创建的数据库事务能力，不能自行开始、提交或嵌套事务。它在同一事务写入：
 
-- 一条 `sessions`；
+- 一条显式初始化为 `lifecycle_status = 'active'`、`agent_run_state = 'idle'`、`state_version = 0`、`next_event_seq = 0`、`current_hand_id = null`、活动 Player 指针均为空、`ended_at = null` 的 `sessions`；
 - 一条座位 0 的 user `session_participants`；
 - 5–8 条 AI `session_participants`；
 - 每个 AI 对应的一条 `session_agents`；
 - 每个 AI 对应的一条 revision 0 `agent_memory_revisions`。
 
-输入必须已经完成当前目录或旧阵容 Active 准入；Repository 自身仍必须执行永久 Payload 校验、关系镜像、哈希、座位/人物唯一性和初始记忆一致性校验。Active 策略不属于 Repository。
+输入必须携带事务前解析完成的 `ResolvedOwnerScope`，并已经完成当前目录或旧阵容 Active 准入；Repository 自身仍必须执行永久 Payload 校验、关系镜像、哈希、座位/人物唯一性和初始记忆一致性校验。Active 策略和 Owner 查询不属于该事务写入原语。
 
 M3.2 在外层事务继续写入 Poker 初始化、`hands.inProgress`、事件和权威快照，并把场次推进到最终 `stateVersion = 1` 后才提交。M2.3 原语不得在中间状态提交，避免持久化 `setup` 或空场次。
 
@@ -470,6 +476,8 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 - 同一 `updated_at` 的多条历史记录以 UUID 降序稳定分页，无重复或遗漏。
 - `limit = 1`、`100` 合法，`0`、`101`、非整数和非法游标失败。
 - 设置缺行、合法 UPSERT、损坏行和保留行 ID 的行为与单元契约一致。
+- Owner 行缺失时读取和写入均失败，且写入事务未开始。
+- 并发更新历史 `updated_at` 时不承诺跨页快照一致，刷新第一页后按最新顺序收敛。
 
 远程 PostgreSQL 测试只通过现有显式测试入口运行；默认 `pnpm run verify` 保持离线。
 

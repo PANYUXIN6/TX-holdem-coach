@@ -49,16 +49,34 @@
 
 测试环境使用独立、Git 忽略的 `apps/server/.env.test.local`：
 
-| 变量 | 是否秘密 | 端口 | 用途 |
-|---|---|---:|---|
-| `TEST_DATABASE_URL` | 是 | 6543 | 测试真实读写和双连接并发 |
-| `TEST_DATABASE_MIGRATION_URL` | 是 | 5432 | 测试迁移、控制锁与迁移回归 |
-| `TEST_SUPABASE_PROJECT_REF` | 否 | - | 显式声明允许操作的测试项目 |
-| `PRODUCTION_SUPABASE_PROJECT_REF` | 否 | - | 仅用于拒绝测试/线上项目相同 |
+| 变量 | 端口 | 用途 |
+|---|---:|---|
+| `TEST_DATABASE_URL` | 6543 | 测试真实读写和双连接并发 |
+| `TEST_DATABASE_MIGRATION_URL` | 5432 | 测试迁移、控制锁与迁移回归 |
 
-显式测试启动器只加载 `.env.test.local`，然后构造 allowlist 子进程环境。即使父 shell 已设置 `DATABASE_URL` 或 `DATABASE_MIGRATION_URL`，也不得把它们传给测试、Drizzle 测试配置或测试迁移子进程。CI 使用注入的四个测试变量，不需要环境文件。
+`.env.test.local` 只允许保存这两条秘密 URL，不允许声明或覆盖任何 project ref。显式测试启动器只加载该文件，然后构造 allowlist 子进程环境。即使父 shell 已设置线上 URL 或任意 project ref 变量，也不得把它们传给测试、Drizzle 测试配置或测试迁移子进程。CI 只注入两条测试 URL，不需要环境文件。
 
-### 3.3 角色专属 URL 策略与 project ref 校验
+### 3.3 受审阅目标注册表
+
+仓库内新增非秘密目标注册表，例如 `apps/server/config/database-targets.json`，作为数据库目标身份的唯一受信事实源：
+
+```json
+{
+  "version": 1,
+  "production": {
+    "supabaseProjectRef": "<reviewed-production-ref>"
+  },
+  "test": {
+    "supabaseProjectRefs": ["<reviewed-test-ref>"]
+  }
+}
+```
+
+当前只登记唯一生产项目和唯一测试项目。若未来增加测试项目，只能通过受审阅的 `test.supabaseProjectRefs` allowlist 扩展，不恢复由环境变量、命令参数或 PR Job 任意声明目标。
+
+注册表及其解析/策略代码必须由 CODEOWNERS 中指定的数据库/发布维护者批准后才能合并。测试启动器只从当前 Git commit 或已验证迁移制品中读取该注册表，环境变量和 CLI 参数都不能覆盖它；工作树中的注册表与目标 commit/制品不同时直接失败，不接受未提交覆盖。发布候选 manifest 必须包含注册表内容的 digest，使测试和线上发布使用同一受审阅目标集合。未经过受信 Review 的 PR Job 不获得持久测试数据库凭据。
+
+### 3.4 角色专属 URL 策略与 project ref 校验
 
 project ref 提取前必须先通过统一的角色专属 Supabase URL 策略。该策略由运行时、迁移、测试和发布配置复用，不为测试另写一套宽松解析器。
 
@@ -88,11 +106,11 @@ URL 通过角色策略后才提取 project ref：
 
 两条测试 URL 提取到的 project ref 必须：
 
-- 均等于 `TEST_SUPABASE_PROJECT_REF`。
 - 彼此一致。
-- 不等于 `PRODUCTION_SUPABASE_PROJECT_REF`。
+- 存在于仓库注册表的 `test.supabaseProjectRefs` allowlist。
+- 不等于仓库注册表唯一的 `production.supabaseProjectRef`。
 
-任何错误只抛出固定脱敏异常，不输出 URL、用户名、密码、project ref 或连接对象。测试安全门不需要也不得解析线上 URL。
+任何错误只抛出固定脱敏异常，不输出 URL、用户名、密码、project ref 或连接对象。测试安全门不需要也不得解析线上 URL，也不接受任何环境变量提供的 ref。
 
 ## 4. 单一迁移序列核验器
 
@@ -278,6 +296,7 @@ Schema 已经完全一致时仍允许快速成功，但不得执行普通数据�
 
 - 完整迁移目录及 journal。
 - 每条迁移的 tag、`created_at` 和完整 SQL SHA-256。
+- 当前 Git commit 中受审阅目标注册表的完整内容及 SHA-256。
 - 规范化 manifest 内容的 SHA-256 digest。
 - Git commit SHA。
 - 构建时间和制品格式版本。
@@ -286,7 +305,7 @@ manifest 由现有迁移序列读取与 hash 实现生成；不建立第二套 S
 
 manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字段顺序由 manifest builder 固定，迁移 entries 保持 journal 顺序，digest 输入不包含 `manifestDigest` 字段本身。归档内最终 manifest 再附加该 digest，发布端按相同规则重新计算并比较。
 
-发布候选 builder 只允许从迁移目录、journal 和相关构建脚本均已被目标 Git commit 跟踪且无未提交差异的工作树生成可发布制品。开发者可以为本地验证生成不可发布的临时制品，但它必须标记为 `publishable: false`，不能进入线上发布流程。
+发布候选 builder 只允许从迁移目录、journal、目标注册表和相关构建脚本均已被目标 Git commit 跟踪且无未提交差异的工作树生成可发布制品。开发者可以为本地迁移代码验证生成不可发布的临时制品，但目标注册表仍必须来自当前 commit且不允许未提交覆盖；临时制品必须标记为 `publishable: false`，不能进入线上发布流程。
 
 `db:test:prepare`、`db:test:integration`、`db:test:migration-regression` 和 `db:test:bootstrap` 必须消费同一保存制品。测试完成后修改工作区 SQL 会产生不同 digest，不能继承原测试结果。
 
@@ -295,15 +314,24 @@ manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字
 线上发布是独立、人工批准的进程，只获得以下输入：
 
 - 线上 `DATABASE_MIGRATION_URL`。
-- 非秘密的 `PRODUCTION_SUPABASE_PROJECT_REF`。
+- protected release environment 提供的非秘密 `PRODUCTION_SUPABASE_PROJECT_REF`。
 - 已测试通过的不可变迁移制品。
 
-发布进程不获得测试凭据。建立任何数据库连接前，必须先让 `DATABASE_MIGRATION_URL` 通过 §3.3 的 5432 migration URL 主机、协议、端口、用户名、数据库名和密码策略，再从合法 URL 提取 project ref，并要求它精确等于 `PRODUCTION_SUPABASE_PROJECT_REF`。目标 allowlist 不匹配时不得读取迁移日志或执行任何 SQL。
+`PRODUCTION_SUPABASE_PROJECT_REF` 必须来自部署平台的 protected variable：普通 PR、普通 CI Job、工作区 `.env` 和命令行参数都不能设置或覆盖它。发布进程不获得测试凭据。
+
+建立任何数据库连接前，发布进程必须：
+
+1. 验证不可变制品中的目标注册表 digest。
+2. 要求 protected `PRODUCTION_SUPABASE_PROJECT_REF` 与制品注册表的 `production.supabaseProjectRef` 完全一致。
+3. 让 `DATABASE_MIGRATION_URL` 通过 §3.4 的 5432 migration URL 主机、协议、端口、用户名、数据库名和密码策略。
+4. 从合法 URL 提取 project ref，并要求它同时等于 protected ref 和制品注册表 ref。
+
+任一目标身份不一致时，不得读取迁移日志、建立数据库连接或执行 SQL。
 
 人工批准在数据库锁之前完成。批准后，发布进程通过该 5432 URL 建立 dedicated reserved control connection，并取得与测试锁 key 不同的 production migration 独占 advisory lock。锁覆盖完整的 `prefix → migrate → exact` 阶段：
 
 1. 离线验证制品 manifest digest、Git commit SHA、`publishable: true` 和归档完整性。
-2. 校验 migration URL 与 `PRODUCTION_SUPABASE_PROJECT_REF`。
+2. 校验制品注册表、protected production ref 与 migration URL 三者完全一致。
 3. 获得人工批准。
 4. 取得 production migration 独占 advisory lock并记录 `pg_backend_pid()`。
 5. 在锁内读取线上迁移日志，使用同一核验器执行 `prefix`，逐项检查十进制 `created_at` 和 hash。
@@ -321,30 +349,34 @@ manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字
 - `pnpm run verify` 不加载 `.env` 或 `.env.test.local`，数据库集成测试保持 skip。
 - 单元测试继续使用离线替身和迁移文件夹具。
 - 本地显式数据库命令只加载 `.env.test.local`。
-- CI 显式数据库命令只接受注入的测试变量。
+- 受信 CI 显式数据库命令只接受注入的两条测试 URL；未经过受信 Review 的 PR Job 不注入持久测试数据库凭据。
 - CI bootstrap 子进程只接受 `BOOTSTRAP_DATABASE_URL` 和迁移制品路径。
 - 所有测试子进程使用 allowlist 环境，不继承线上数据库 URL。
-- `drizzle.integration.config.ts` 只读取测试迁移 URL 与测试 project ref，启用 TLS。
+- `drizzle.integration.config.ts` 只读取测试迁移 URL 与仓库受审阅目标注册表，启用 TLS。
 - 数据断言只读取测试运行时 URL，固定 `prepare: false`。
 
-`.env.example` 继续描述线上变量；新增 `.env.test.example` 只描述两条测试 URL 和两个非秘密 project ref。两个示例文件都只包含占位值。
+`.env.example` 继续描述线上变量；新增 `.env.test.example` 只描述两条测试 URL，不包含任何 project ref。两个示例文件都只包含占位 URL。
 
 ## 11. 实施落点
 
 计划修改或新增：
 
+- `apps/server/config/database-targets.json`
+  - 保存唯一生产 project ref 和受审阅测试 project ref allowlist，不包含凭据。
+- `.github/CODEOWNERS`（或仓库现有等价规则）
+  - 要求数据库/发布维护者批准目标注册表及其策略代码变更。
 - `apps/server/src/db/database-url-policy.ts`
   - 抽取运行时和迁移角色专属的 Supabase host、协议、端口、用户名、数据库名、密码及 project ref 校验，供线上与测试配置复用。
 - `apps/server/src/db/migration-compatibility.ts`
   - 在现有序列读取和 hash 实现上增加 `exact|prefix` 两种比较模式。
   - 两种模式都比较十进制字符串 `created_at` 与 hash。
 - `apps/server/src/db/test-database-safety.ts`
-  - 只解析测试 URL 与显式 project ref。
-  - 校验测试连接配对及测试/线上 project ref 不同。
+  - 只解析测试 URL 并读取仓库受审阅目标注册表。
+  - 校验测试连接配对、测试 ref 命中 allowlist 且不同于注册表生产 ref。
 - `apps/server/test/unit/migration-compatibility.test.ts`
   - 覆盖合法前缀、时间戳不匹配、hash 分叉和数据库超前。
 - `apps/server/test/unit/test-database-safety.test.ts`
-  - 覆盖 project ref 提取、端口配对、同项目拒绝和占位密码。
+  - 覆盖 project ref 提取、端口配对、注册表 allowlist、同项目拒绝、环境 ref 无法覆盖和占位密码。
 - `apps/server/drizzle.integration.config.ts`
   - 只读取 `TEST_DATABASE_MIGRATION_URL`，启用 TLS。
 - `apps/server/test/integration/database-test-coordination.ts`
@@ -358,7 +390,7 @@ manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字
 - `apps/server/package.json`
   - 增加五个显式测试数据库命令以及 manifest/线上发布命令，不改变默认 `verify`。
 - `apps/server/.env.test.example`
-  - 增加脱敏测试连接和 project ref 示例。
+  - 只增加两条脱敏测试连接示例，不声明 project ref。
 - `.gitignore`
   - 明确忽略 `apps/server/.env.test.local`。
 - `docs/REPO_MAP.md`、`docs/ARCHITECTURE.md`
@@ -370,51 +402,52 @@ manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字
 
 ### 12.1 凭据与项目隔离
 
-1. 测试入口只加载 `.env.test.local` 或 CI 测试变量。
+1. 测试入口只加载两条测试 URL；`.env.test.local`、CI 环境和 CLI 都不能声明或覆盖 project ref。
 2. 测试子进程环境中不存在 `DATABASE_URL` 和 `DATABASE_MIGRATION_URL`。
 3. 任意非 Supabase 白名单 host 即使伪造 `postgres.<expected-ref>` 用户名也会在 project ref 提取前被拒绝。
-4. 两条测试 URL 提取的 project ref 与显式测试 ref 一致，且不同于线上 ref。
-5. 测试代码没有创建线上客户端或调用线上 migrator。
-6. 线上发布 URL 通过 5432 migration 策略并提取出与 `PRODUCTION_SUPABASE_PROJECT_REF` 完全相同的 ref 后，才允许建立连接。
+4. 两条测试 URL 提取的 project ref 必须命中仓库受审阅测试 allowlist，且不同于注册表生产 ref。
+5. 修改环境变量、命令参数或工作树中的未提交注册表都不能改变测试目标 allowlist；未受信 PR Job 不获得持久测试数据库凭据。
+6. 测试代码没有创建线上客户端或调用线上 migrator。
+7. 线上发布只有在制品注册表、protected production ref 和合法 5432 URL 提取 ref 三者完全一致后，才允许建立连接。
 
 ### 12.2 迁移兼容与制品
 
-7. `prefix` 和 `exact` 都按 `actual.createdAt === String(journal.when)` 比较十进制时间戳，并比较完整 SQL hash。
-8. 数据库超前、时间戳不一致或 hash 分叉均在写入前失败。
-9. 测试四个阶段消费同一 manifest digest 与 Git commit SHA。
-10. 可发布 manifest 只能来自迁移相关文件无未提交差异的目标 Git commit；本地临时制品不能发布。
-11. 线上发布只接受已测试的不可变制品，并在 production 独占锁内执行迁移前 `prefix`、迁移和迁移后 `exact`。
+8. `prefix` 和 `exact` 都按 `actual.createdAt === String(journal.when)` 比较十进制时间戳，并比较完整 SQL hash。
+9. 数据库超前、时间戳不一致或 hash 分叉均在写入前失败。
+10. 测试四个阶段消费同一 manifest digest、Git commit SHA 和目标注册表 digest。
+11. 可发布 manifest 只能来自迁移相关文件和目标注册表无未提交差异的目标 Git commit；本地临时制品不能发布。
+12. 线上发布只接受已测试的不可变制品，并在 production 独占锁内执行迁移前 `prefix`、迁移和迁移后 `exact`。
 
 ### 12.3 并发与锁存活
 
-12. 两个相同迁移资产的普通集成测试进程可以同时通过。
-13. prepare、迁移回归和 stale 清理必须等待共享测试锁释放。
-14. 两个线上发布进程同时获批时，production 独占锁保证只有一个执行 `prefix → migrate → exact`。
-15. 测试或线上控制连接断开、backend PID 改变时，关联客户端立即关闭，整个 migrator 进程组终止；协调器等待其全部 5432 连接关闭和进程退出后使任务失败。
-16. 重新连接不会让原测试或发布在新锁上继续。
+13. 两个相同迁移资产的普通集成测试进程可以同时通过。
+14. prepare、迁移回归和 stale 清理必须等待共享测试锁释放。
+15. 两个线上发布进程同时获批时，production 独占锁保证只有一个执行 `prefix → migrate → exact`。
+16. 测试或线上控制连接断开、backend PID 改变时，关联客户端立即关闭，整个 migrator 进程组终止；协调器等待其全部 5432 连接关闭和进程退出后使任务失败。
+17. 重新连接不会让原测试或发布在新锁上继续。
 
 ### 12.4 fixture 隔离与清理
 
-17. 两个并发进程使用不同 Owner、UUID 和 identity。
-18. 同一运行创建的主 Owner 与所有辅助 Owner 都使用包含 role 的完整保留 identity 格式。
-19. 任一正常 `finally` 先按本次运行登记的全部主/辅助 Owner UUID 删除其 Session，再按相同精确 UUID 删除全部 Owner。
-20. 清理失败必定使测试失败；已有断言错误时通过 `AggregateError` 同时保留断言和清理错误。
-21. 强杀遗留的主 Owner 与辅助 Owner 不影响后续测试，并可在 24 小时后由独占 stale 清理命令回收。
-22. stale 清理不会删除固定 Owner、近期 Owner 或不符合完整保留 identity 格式的 Owner。
+18. 两个并发进程使用不同 Owner、UUID 和 identity。
+19. 同一运行创建的主 Owner 与所有辅助 Owner 都使用包含 role 的完整保留 identity 格式。
+20. 任一正常 `finally` 先按本次运行登记的全部主/辅助 Owner UUID 删除其 Session，再按相同精确 UUID 删除全部 Owner。
+21. 清理失败必定使测试失败；已有断言错误时通过 `AggregateError` 同时保留断言和清理错误。
+22. 强杀遗留的主 Owner 与辅助 Owner 不影响后续测试，并可在 24 小时后由独占 stale 清理命令回收。
+23. stale 清理不会删除固定 Owner、近期 Owner 或不符合完整保留 identity 格式的 Owner。
 
 ### 12.5 测试分层
 
-23. 测试 Supabase 首次初始化完成一次空库完整迁移验收。
-24. 持久测试 Supabase 可重复执行 prepare、并发集成和迁移回归。
-25. CI bootstrap 进程只接收 `BOOTSTRAP_DATABASE_URL`，并在可丢弃 PostgreSQL 持续验证从零安装。
-26. Player 双真实连接竞争仍保证只有一个事务提交。
-27. 故意失败迁移在独占回归命令中整体回滚。
-28. 测试完成后持久环境只保留固定 Owner、Schema、迁移日志和未超过回收期限的异常遗留 fixture。
+24. 测试 Supabase 首次初始化完成一次空库完整迁移验收。
+25. 持久测试 Supabase 可重复执行 prepare、并发集成和迁移回归。
+26. CI bootstrap 进程只接收 `BOOTSTRAP_DATABASE_URL`，并在可丢弃 PostgreSQL 持续验证从零安装。
+27. Player 双真实连接竞争仍保证只有一个事务提交。
+28. 故意失败迁移在独占回归命令中整体回滚。
+29. 测试完成后持久环境只保留固定 Owner、Schema、迁移日志和未超过回收期限的异常遗留 fixture。
 
 ### 12.6 默认验证
 
-29. `pnpm run verify`、Server 构建、迁移资产校验和 `git diff --check` 全部通过。
-30. 默认 `verify` 不读取任何数据库环境文件、不联网。
+30. `pnpm run verify`、Server 构建、迁移资产校验和 `git diff --check` 全部通过。
+31. 默认 `verify` 不读取任何数据库环境文件、不联网。
 
 ## 13. 发布顺序
 
@@ -427,7 +460,7 @@ manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字
 5. CI 在可丢弃 PostgreSQL 运行 `db:test:bootstrap`。
 6. 保存通过测试的 manifest digest、Git commit SHA 和制品。
 7. 人工批准线上发布。
-8. 线上发布进程先验证 migration URL 的 Supabase host 策略与 `PRODUCTION_SUPABASE_PROJECT_REF` allowlist。
+8. 线上发布进程验证制品中的受审阅目标注册表、protected `PRODUCTION_SUPABASE_PROJECT_REF` 和 migration URL 提取 ref 三者一致。
 9. 线上发布进程取得 production migration 独占锁，再使用同一制品执行迁移前 `prefix`、Drizzle 迁移和迁移后 `exact`。
 10. 线上服务继续只通过 `DATABASE_URL` 启动并执行只读精确兼容门控。
 

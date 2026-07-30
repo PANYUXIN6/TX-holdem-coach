@@ -1,193 +1,385 @@
 # 持久 Supabase 测试环境与并发集成测试设计
 
 日期：2026-07-30
-状态：已确认，待文档复核
+状态：已确认，已按 Review Findings 修订，待文档复核
 
 ## 1. 背景与目标
 
-项目已经使用 Supabase PostgreSQL 承载线上 `app_private` Schema，并通过两类连接分离运行时读写和显式迁移。现在新增独立 Supabase 项目作为长期保留的测试环境，复用同一套版本化迁移，但不复制线上业务数据。
+项目已经使用 Supabase PostgreSQL 承载线上 `app_private` Schema，并通过运行时连接和迁移连接分离日常读写与 DDL。现在新增独立 Supabase 项目作为长期保留的测试环境，复用同一套版本化迁移，但不复制线上业务数据。
 
 测试项目可能同时被多个本地开发进程或 CI Job 使用。设计必须保证：
 
-- 测试和线上 Supabase 项目不能混用。
-- 测试运行时与测试迁移使用同一测试项目的不同 pooler 模式。
-- `app_private` 表、约束和迁移日志长期保留，可重复升级。
+- 测试进程不加载、读取或持有线上数据库 URL。
+- 测试和线上 Supabase 项目通过非秘密 project ref 明确区分。
+- `app_private` 表、约束和迁移日志长期保留并可重复升级。
 - 相同迁移版本的测试任务可以并发运行。
 - Schema 迁移不会在其他任务测试期间改变数据库结构。
-- 每次运行的数据相互隔离，清理操作不删除其他任务的数据。
-- 数据库迁移分叉、超前或哈希不一致时 fail closed。
-- 默认 `pnpm run verify` 继续离线执行，不读取 `.env` 或连接数据库。
+- 持锁控制连接丢失时，数据测试必须立即终止。
+- 每次运行的数据相互隔离，正常清理不删除其他任务的数据。
+- 强杀遗留的 fixture 可以通过受限维护命令安全回收。
+- 迁移前缀必须同时匹配 Drizzle `created_at` 和完整 SQL hash。
+- 测试通过的迁移资产与最终线上发布的迁移资产不可变且可验证地相同。
+- 默认 `pnpm run verify` 继续离线执行，不读取测试或线上凭据。
 
 ## 2. 非目标
 
 - 不在测试和线上项目之间复制 `sessions`、`hands` 或其他业务记录。
 - 不让测试通过后自动迁移线上数据库。
-- 不为每次运行创建或删除 PostgreSQL Schema。
-- 不允许测试任务清空整张业务表或删除整个 `app_private`。
+- 不让普通并发测试执行 DDL 或失败迁移回归。
+- 不为每次普通测试运行创建或删除 PostgreSQL Schema。
+- 不允许测试任务清空整张业务表或删除整个持久 `app_private`。
 - 不使用 Supabase Data API、浏览器 SDK 或 `anon`、`authenticated` 角色执行测试。
 - 不改变线上服务启动时“只检查兼容性、不执行 DDL”的边界。
+- 不要求本地开发者安装 PostgreSQL；持续全量 bootstrap 使用 CI 中的可丢弃 PostgreSQL。
 
-## 3. 环境变量与连接职责
+## 3. 凭据隔离与连接职责
 
-四条连接必须保持明确分工：
+### 3.1 线上进程
 
-| 环境 | 变量 | 端口 | 用途 |
+线上运行与发布继续使用：
+
+| 变量 | 端口 | 用途 |
+|---|---:|---|
+| `DATABASE_URL` | 6543 | Hono/Repository 日常读写，transaction pooler，`prepare: false` |
+| `DATABASE_MIGRATION_URL` | 5432 | 线上发布进程执行 Drizzle 迁移，session pooler |
+
+线上运行配置留在现有 `.env` 或部署平台密钥中。测试启动器和测试子进程不得加载该文件，不得读取这两个变量，也不得创建线上数据库客户端或调用线上 migrator。
+
+### 3.2 测试进程
+
+测试环境使用独立、Git 忽略的 `apps/server/.env.test.local`：
+
+| 变量 | 是否秘密 | 端口 | 用途 |
 |---|---|---:|---|
-| 线上运行时 | `DATABASE_URL` | 6543 | Hono/Repository 日常读写，transaction pooler，`prepare: false` |
-| 线上迁移 | `DATABASE_MIGRATION_URL` | 5432 | Drizzle Kit 显式发布迁移，session pooler |
-| 测试运行时 | `TEST_DATABASE_URL` | 6543 | 集成测试真实读写和双连接并发 |
-| 测试迁移 | `TEST_DATABASE_MIGRATION_URL` | 5432 | 测试环境迁移、迁移锁和失败迁移回滚测试 |
+| `TEST_DATABASE_URL` | 是 | 6543 | 测试真实读写和双连接并发 |
+| `TEST_DATABASE_MIGRATION_URL` | 是 | 5432 | 测试迁移、控制锁与迁移回归 |
+| `TEST_SUPABASE_PROJECT_REF` | 否 | - | 显式声明允许操作的测试项目 |
+| `PRODUCTION_SUPABASE_PROJECT_REF` | 否 | - | 仅用于拒绝测试/线上项目相同 |
 
-测试运行时和测试迁移 URL 必须属于同一个 Supabase 项目；线上两条 URL 也必须属于同一个线上项目；测试项目标识必须与线上项目不同。项目身份比较忽略密码和端口，使用规范化 host、数据库名以及包含 Supabase project ref 的用户名判断，避免把同一项目的 `5432` 与 `6543` 错当成两个环境。
+显式测试启动器只加载 `.env.test.local`，然后构造 allowlist 子进程环境。即使父 shell 已设置 `DATABASE_URL` 或 `DATABASE_MIGRATION_URL`，也不得把它们传给测试、Drizzle 测试配置或测试迁移子进程。CI 使用注入的四个测试变量，不需要环境文件。
 
-任何配置错误只抛出固定脱敏错误，不输出 URL、用户名、密码或连接对象。`.env` 继续被 Git 忽略，`.env.example` 只保存占位值。
+### 3.3 project ref 校验
 
-## 4. 持久 Schema 兼容策略
+统一的测试安全门从连接中提取 project ref：
+
+- shared pooler 用户名：`postgres.<project-ref>`。
+- direct host（若使用）：`db.<project-ref>.supabase.co`。
+
+两条测试 URL 提取到的 project ref 必须：
+
+- 均等于 `TEST_SUPABASE_PROJECT_REF`。
+- 彼此一致。
+- 不等于 `PRODUCTION_SUPABASE_PROJECT_REF`。
+- 分别使用规定的 `6543` 和 `5432`。
+- 包含非空且非占位密码。
+
+任何错误只抛出固定脱敏异常，不输出 URL、用户名、密码、project ref 或连接对象。测试安全门不需要也不得解析线上 URL。
+
+## 4. 单一迁移序列核验器
+
+复用现有迁移兼容模块读取 journal、SQL 完整文本和数据库日志，不建立第二套 hash 实现。核验器扩展为两种显式模式：
+
+- `exact`：数据库记录数等于本地记录数，所有项目逐项相等。
+- `prefix`：数据库记录数不大于本地记录数，已有项目逐项相等。
+
+两种模式都保持数据库记录 `ORDER BY id ASC`，允许 Drizzle 日志 `id` 有空洞，但逐项严格比较：
+
+- `actual.createdAt === journal.entries[i].when`
+- `actual.hash === SHA-256(对应 SQL 文件完整原始文本)`
+
+不得用 journal index 推导数据库 `id`，不得只比较 hash，也不得重新序列化 SQL 后计算 hash。
 
 测试数据库允许两种初始状态：
 
-1. 尚不存在 `app_private`：可从基线开始执行完整迁移。
-2. 已存在 `app_private`：数据库迁移序列必须是当前本地迁移序列的精确前缀。
+1. 尚不存在 `app_private`：测试项目首次初始化可执行完整迁移。
+2. 已存在 `app_private`：迁移日志必须通过 `prefix` 核验。
 
-迁移前按 `id ASC` 读取 `app_private.__drizzle_migrations`，并逐项比较本地 journal 对应 SQL 的哈希：
+以下情况在任何 DDL 或 fixture 写入前失败：
 
-- 数据库记录与本地前缀一致：允许执行尚未应用的迁移。
-- 数据库记录数量超过本地序列：本地代码落后，拒绝测试。
-- 任一已存在记录哈希不同：迁移发生分叉，拒绝测试。
-- `app_private` 存在但迁移日志缺失或不可读：视为未知数据库状态，拒绝写入。
+- 数据库记录数量超过当前迁移资产。
+- 任一 `created_at` 不同。
+- 任一 SQL hash 不同。
+- `app_private` 存在但迁移日志缺失或不可读。
 
-迁移完成后继续使用现有严格兼容门控，要求数据库迁移记录与本地迁移序列数量和哈希完全一致。
+迁移完成后必须通过 `exact` 核验。测试和线上迁移都不执行降级，不删除未知 Schema，也不自动修复分叉。
 
-测试不执行降级迁移，不删除未知 Schema，也不自动修复分叉。
+## 5. 数据库锁协议
 
-## 5. PostgreSQL advisory lock 协议
+### 5.1 锁类型
 
-所有测试迁移和数据库集成测试使用同一个稳定的数据库级 advisory lock key。锁连接通过 `TEST_DATABASE_MIGRATION_URL` 的 5432 session pooler 建立；session 锁在连接断开或进程崩溃时由 PostgreSQL 自动释放。
+所有测试环境协调使用同一个稳定的 PostgreSQL advisory lock key：
 
-锁使用共享/独占两种模式：
+- `db:test:prepare` 与 `db:test:migration-regression` 使用独占锁。
+- 普通数据库集成测试使用共享锁。
+- `db:test:cleanup-stale` 使用独占锁。
 
-- Schema 已与当前本地迁移完全一致时，任务持有共享锁执行数据断言。
-- Schema 缺少当前任务已有的迁移时，任务释放共享锁、取得独占锁、重新检查迁移状态并执行迁移。
-- 迁移、迁移后精确兼容检查以及故意失败迁移的事务回滚验收全部位于独占锁阶段。
-- 普通 Schema 查询、约束测试和数据读写位于共享锁阶段。
+独占锁阻止测试期间发生 Schema 迁移或维护清理；共享锁允许相同迁移资产的普通测试并行执行。
 
-完整状态机：
+锁等待固定最多 120 秒。超时后任务以脱敏错误失败，不无限等待。
 
-1. 尝试取得共享 advisory lock。
-2. 读取当前迁移序列。
-3. 若完全一致，保持共享锁并进入数据测试。
-4. 若数据库是合法旧前缀，释放共享锁并等待独占锁。
-5. 取得独占锁后重新读取迁移序列，防止等待期间状态变化。
-6. 状态仍为合法前缀时，通过 `TEST_DATABASE_MIGRATION_URL` 运行 Drizzle 迁移。
-7. 验证迁移序列完全一致。
-8. 在独占锁下执行故意失败迁移，确认 DDL 与迁移日志整体回滚。
-9. 释放独占锁，重新从共享锁检查开始；只有精确一致时才执行数据测试。
-10. 数据测试结束后释放共享锁。
+### 5.2 专用控制连接
 
-相同迁移版本的多个任务可以同时持有共享锁并行测试。较新代码的迁移任务必须等待旧版本测试释放共享锁；数据库已经超前于旧代码时，旧任务安全失败，不尝试降级。
+锁必须由 `TEST_DATABASE_MIGRATION_URL` 上一条专用、持续存活的 5432 session 连接持有：
 
-锁等待使用固定 120 秒超时。超时后任务失败并输出脱敏的测试环境占用错误，不无限等待。
+- 使用 reserved connection，不把持锁连接归还连接池。
+- 取得锁时记录 `pg_backend_pid()`。
+- 测试期间按固定 2 秒间隔在同一 reserved connection 上执行心跳并核对 backend PID。
+- 心跳失败、连接关闭或 backend PID 改变，都视为原 advisory lock 已丢失。
+- 重新建立连接不能视为恢复原锁，也不得静默重新取得锁后继续当前测试。
 
-所有会修改测试 Schema 的项目命令都必须复用该锁协议；不得绕过锁直接对共享测试项目运行 Drizzle。
+控制连接丢失时，协调器必须：
 
-## 6. 每次运行的数据隔离
+1. 触发当前测试运行的 abort signal。
+2. 立即关闭 6543 的主测试客户端和竞争客户端。
+3. 使当前测试任务失败。
+4. 不继续执行断言、清理或迁移。
 
-每次数据库集成测试启动时，使用安全随机源生成不可预测的 `runToken`。`runToken` 只用于构造测试身份，不包含凭据，也不写入业务日志。
+测试主体和锁丢失监测通过 `Promise.race` 绑定，保证运行时客户端不能在无锁状态继续。只有持锁连接仍是原 backend PID 时才可显式解锁；进程退出时 PostgreSQL 仍会自动释放 session lock。
 
-每次运行建立独立的 fixture 上下文：
+## 6. 拆分后的测试命令
+
+### 6.1 `db:test:prepare`
+
+用途：把持久测试 Supabase 升级到当前迁移资产。
+
+流程：
+
+1. 只加载测试环境 allowlist。
+2. 通过 project ref 安全门。
+3. 取得独占 advisory lock。
+4. 若 `app_private` 已存在，执行 `prefix` 核验。
+5. 通过 `TEST_DATABASE_MIGRATION_URL` 运行 Drizzle。
+6. 执行 `exact` 核验。
+7. 释放独占锁并关闭控制连接。
+
+Schema 已经完全一致时仍允许快速成功，但不得执行普通数据测试或失败迁移测试。
+
+### 6.2 `db:test:integration`
+
+用途：对已经准备好的持久测试 Schema 执行可并发真实读写测试。
+
+流程：
+
+1. 只加载测试环境 allowlist并通过 project ref 安全门。
+2. 取得共享 advisory lock并启动控制连接心跳。
+3. 执行 `exact` 迁移核验；不一致则失败，不自动迁移。
+4. 使用 `TEST_DATABASE_URL` 执行 Schema、约束、级联和双真实连接并发测试。
+5. 正常或普通断言失败时执行本次运行的精确 fixture 清理。
+6. 释放共享锁并关闭控制连接。
+
+多个使用相同迁移资产的 Job 可以并发运行。较新迁移的 prepare 必须等待所有共享锁释放；数据库升级后，仍使用旧资产的 Job 会在 `exact` 核验处失败。
+
+### 6.3 `db:test:migration-regression`
+
+用途：串行验证故意失败迁移整体回滚。
+
+流程：
+
+1. 取得独占 advisory lock。
+2. 对当前数据库执行 `exact` 核验。
+3. 从当前不可变迁移资产复制临时目录并追加故意失败迁移。
+4. 运行测试 migrator并断言失败。
+5. 确认 marker DDL 不存在、迁移日志数量、`created_at` 和 hash 均保持原值。
+6. 再次执行 `exact` 核验并释放锁。
+
+该命令每个发布候选至少运行一次，不要求每个并发普通测试 Job 都运行。
+
+### 6.4 `db:test:bootstrap`
+
+用途：持续验证从空数据库完整安装。
+
+该命令只面向 CI 中的可丢弃 PostgreSQL 数据库或等价临时数据库。CI 仅向该进程注入 `BOOTSTRAP_DATABASE_URL`；bootstrap 进程不接收测试 Supabase 或线上数据库 URL：
+
+- 启动时必须确认目标为空。
+- 从不可变迁移资产执行完整迁移。
+- 执行 `exact` 核验和代表性 Schema 断言。
+- Job 结束后销毁整个临时数据库。
+
+持久测试 Supabase 的首次初始化记录一次空库完整迁移验收；之后它只承担增量升级和真实 Supabase 行为测试。持续 bootstrap 由可丢弃环境补充，不删除长期测试 Schema，也不要求开发者本地安装 PostgreSQL。
+
+## 7. 每次运行的数据隔离
+
+每次普通数据库集成测试使用安全随机源生成不可预测的 `runToken`，并建立运行级 fixture 上下文：
 
 - 独立测试 Owner ID。
 - 独立 UUID 命名空间。
-- 带 `runToken` 的 Owner `identity_key`。
+- 保留格式的 Owner identity：`test-fixture:<unix-ms>:<run-token>`。
 - 独立 Session、participant、Hand、AgentRun、request、command、event 和统计记录。
-- 带 `runToken` 的全局唯一文本值，例如辅助 Owner identity。
+- 带 `runToken` 的全局唯一文本值。
+- 当前运行创建的所有 Owner ID 精确登记在上下文中。
 
-所有可写测试夹具默认归属于当前运行的测试 Owner。固定 `local-user` Owner 只做按主键读取的存在性断言，不再作为可写夹具 Owner，也不再断言 `owners` 表只能存在一行。
+所有可写测试夹具归属于当前运行的测试 Owner。固定 `local-user` Owner 只做按主键读取的存在性断言，不作为可写夹具 Owner，也不再断言 `owners` 表只能存在一行。
 
-每 Owner 单活动场次和 Player 同一决策点竞争测试都使用当前运行独有的 Owner、Session 和 participant，因此不同 Job 不会因业务唯一约束互相干扰。两个真实运行时连接仍在同一运行内竞争同一决策点。
+每 Owner 单活动场次和 Player 同一决策点竞争测试使用当前运行独有的 Owner、Session 和 participant。两个真实运行时连接只在同一运行内部竞争，不会与其他 Job 的业务唯一约束冲突。
 
-## 7. 清理边界
+## 8. 正常清理与 stale fixture 回收
 
-最外层数据库测试在 `finally` 中调用运行级清理：
+### 8.1 正常 finally
 
-1. 删除当前运行创建且属于当前测试 Owner 的 Session。
+普通测试的最外层 `finally` 只使用 fixture 上下文中保存的精确 UUID：
+
+1. 删除当前运行 Owner 下的 Session。
 2. 依赖 Session 外键级联清理 participant、Hand、事件、快照、Agent 和统计数据。
 3. 删除当前运行明确登记的辅助 Owner。
 4. 删除当前运行的主测试 Owner。
 
-清理只使用当前 fixture 上下文中保存的精确 UUID，不使用：
+正常清理不得使用全表 `DELETE`、UUID 前缀、`LIKE` 扫描、固定 setting key、否定条件或删除 Schema。其他运行的数据不在清理目标内。
 
-- 全表 `DELETE`。
-- 公共 UUID 前缀或 `LIKE` 模式。
-- 固定 setting key。
-- “非 local-user”之类的否定条件。
-- 删除 `app_private` Schema。
+锁丢失属于例外：协调器先终止客户端并失败，不在无法证明 Schema 稳定时继续清理；遗留数据交给 stale 清理命令。
 
-清理失败必须使测试失败并报告脱敏错误，避免留下无法感知的脏数据。其他运行的 Owner 和数据不在清理目标内。
+### 8.2 `db:test:cleanup-stale`
 
-## 8. 测试入口与默认离线行为
+强杀、机器掉线或 CI 强制取消可能绕过 `finally`。显式维护命令在独占 advisory lock 下回收 stale fixture：
 
-保留现有默认行为：
+1. 通过测试 project ref 安全门。
+2. 取得独占锁并执行 `exact` 迁移核验。
+3. 在单个事务中选择同时满足以下条件的 Owner：
+   - `identity_key` 匹配严格保留格式 `test-fixture:<unix-ms>:<run-token>`。
+   - `owners.created_at < now() - interval '24 hours'`。
+   - Owner ID 不是固定 `LOCAL_USER_OWNER_ID`。
+4. 使用选中的精确 Owner ID 删除其 Session，再删除 Owner。
+5. 输出删除数量，不输出 Owner identity、UUID 或连接信息。
 
-- `pnpm run verify` 不加载本地 `.env`。
-- 未显式提供测试连接时，数据库集成测试保持 skip。
+该命令由计划任务或人工显式运行，不在每个普通并发测试结束时扫描全库。保留格式和 24 小时安全期限必须同时满足，避免误删近期任务或非测试 Owner。
+
+## 9. 不可变迁移资产与线上发布
+
+### 9.1 测试制品
+
+发布候选构建从同一 Git commit 生成不可变迁移制品，至少包含：
+
+- 完整迁移目录及 journal。
+- 每条迁移的 tag、`created_at` 和完整 SQL SHA-256。
+- 规范化 manifest 内容的 SHA-256 digest。
+- Git commit SHA。
+- 构建时间和制品格式版本。
+
+manifest 由现有迁移序列读取与 hash 实现生成；不建立第二套 SQL hash 算法。测试命令记录并输出非秘密的 manifest digest 和 Git commit SHA。
+
+manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字段顺序由 manifest builder 固定，迁移 entries 保持 journal 顺序，digest 输入不包含 `manifestDigest` 字段本身。归档内最终 manifest 再附加该 digest，发布端按相同规则重新计算并比较。
+
+发布候选 builder 只允许从迁移目录、journal 和相关构建脚本均已被目标 Git commit 跟踪且无未提交差异的工作树生成可发布制品。开发者可以为本地验证生成不可发布的临时制品，但它必须标记为 `publishable: false`，不能进入线上发布流程。
+
+`db:test:prepare`、`db:test:integration`、`db:test:migration-regression` 和 `db:test:bootstrap` 必须消费同一保存制品。测试完成后修改工作区 SQL 会产生不同 digest，不能继承原测试结果。
+
+### 9.2 线上发布
+
+线上发布是独立、人工批准的进程，只获得线上发布凭据和已经测试通过的不可变制品，不获得测试凭据。发布流程：
+
+1. 验证制品 manifest digest、Git commit SHA 和归档完整性。
+2. 通过 `DATABASE_MIGRATION_URL` 读取线上迁移日志。
+3. 使用同一核验器执行 `prefix` 核验，逐项检查 `created_at` 和 hash。
+4. 人工批准后，只从该不可变制品运行 Drizzle 迁移。
+5. 迁移后使用同一制品执行 `exact` 核验。
+6. 保存发布记录中的 manifest digest、Git commit SHA 和结果。
+
+线上发布不从可变工作区读取迁移，不查询或复制测试业务数据，也不由测试成功自动触发。
+
+## 10. 默认离线与显式环境入口
+
+- `pnpm run verify` 不加载 `.env` 或 `.env.test.local`，数据库集成测试保持 skip。
 - 单元测试继续使用离线替身和迁移文件夹具。
+- 本地显式数据库命令只加载 `.env.test.local`。
+- CI 显式数据库命令只接受注入的测试变量。
+- CI bootstrap 子进程只接受 `BOOTSTRAP_DATABASE_URL` 和迁移制品路径。
+- 所有测试子进程使用 allowlist 环境，不继承线上数据库 URL。
+- `drizzle.integration.config.ts` 只读取测试迁移 URL 与测试 project ref，启用 TLS。
+- 数据断言只读取测试运行时 URL，固定 `prepare: false`。
 
-新增显式数据库测试入口，仅该入口使用 Node 的环境文件加载能力读取 `apps/server/.env`；CI 中已注入的环境变量优先。该入口运行唯一的数据库基础设施测试，并设置足够覆盖锁等待和真实 Supabase 往返的测试超时。
+`.env.example` 继续描述线上变量；新增 `.env.test.example` 只描述两条测试 URL 和两个非秘密 project ref。两个示例文件都只包含占位值。
 
-`drizzle.integration.config.ts` 只读取 `TEST_DATABASE_MIGRATION_URL`，启用 TLS，并继续使用 `app_private.__drizzle_migrations`。数据断言和双连接并发只读取 `TEST_DATABASE_URL`，固定 `prepare: false`。
+## 11. 实施落点
 
-## 9. 实施落点
+计划修改或新增：
 
-计划修改：
-
+- `apps/server/src/db/migration-compatibility.ts`
+  - 在现有序列读取和 hash 实现上增加 `exact|prefix` 两种比较模式。
+  - 两种模式都比较 `created_at` 与 hash。
 - `apps/server/src/db/test-database-safety.ts`
-  - 解析四条数据库连接。
-  - 校验线上/测试项目身份分离及测试运行时/迁移配对。
-  - 保持错误脱敏。
+  - 只解析测试 URL 与显式 project ref。
+  - 校验测试连接配对及测试/线上 project ref 不同。
+- `apps/server/test/unit/migration-compatibility.test.ts`
+  - 覆盖合法前缀、时间戳不匹配、hash 分叉和数据库超前。
 - `apps/server/test/unit/test-database-safety.test.ts`
-  - 覆盖端口配对、同项目识别、线上/测试误配和占位密码。
+  - 覆盖 project ref 提取、端口配对、同项目拒绝和占位密码。
 - `apps/server/drizzle.integration.config.ts`
-  - 改用 `TEST_DATABASE_MIGRATION_URL` 和 TLS。
+  - 只读取 `TEST_DATABASE_MIGRATION_URL`，启用 TLS。
+- `apps/server/test/integration/database-test-coordination.ts`
+  - 实现 reserved control connection、共享/独占 advisory lock、PID 心跳、锁丢失 abort 和运行级清理协调。
 - `apps/server/test/integration/database-infrastructure.test.ts`
-  - 接入持久 Schema 前缀检查、共享/独占 advisory lock、失败迁移独占阶段和运行级清理。
+  - 拆分 prepare、普通集成、迁移回归和 bootstrap 可复用流程。
 - `apps/server/test/integration/database-schema-assertions.ts`
-  - 引入运行级 fixture 上下文。
-  - 将所有可写夹具切换到运行专属 Owner 和 UUID 命名空间。
+  - 引入运行级 fixture 上下文并切换到运行专属 Owner 和 UUID。
+- `apps/server/scripts/`
+  - 增加测试环境 allowlist 启动器、bootstrap allowlist 启动器、迁移 manifest 构建器、stale fixture 清理入口和不可变制品线上发布入口。
 - `apps/server/package.json`
-  - 增加显式本地/CI 数据库测试入口，不改变默认 `verify`。
-- `apps/server/.env.example`
-  - 增加两条脱敏测试连接示例。
+  - 增加五个显式测试数据库命令以及 manifest/线上发布命令，不改变默认 `verify`。
+- `apps/server/.env.test.example`
+  - 增加脱敏测试连接和 project ref 示例。
+- `.gitignore`
+  - 明确忽略 `apps/server/.env.test.local`。
 - `docs/REPO_MAP.md`、`docs/ARCHITECTURE.md`
-  - 记录长期测试环境、双测试连接和并发锁边界。
+  - 记录持久测试环境、凭据隔离、并发锁和不可变发布制品边界。
 
 不修改扑克引擎、Contracts、Repository、Hono API 或线上服务启动流程。
 
-## 10. 验收与验证
+## 12. 验收与验证
 
-实现完成后必须验证：
+### 12.1 凭据与项目隔离
 
-1. 四条本地连接均通过脱敏配置校验，测试和线上项目身份不同。
-2. 测试 Supabase 首次从空状态完整迁移成功。
-3. 第二次运行复用已存在 `app_private`，不要求清空或重建 Schema。
-4. 本地迁移缺失、数据库超前或 SQL 哈希分叉时，在执行写入前失败。
-5. 两个数据库测试进程同时运行时均通过，迁移阶段不会并发执行。
-6. 两个进程使用不同 Owner 和 UUID，任一进程清理后不会删除另一进程数据。
-7. Player 双真实连接竞争测试继续保证只有一个事务提交。
-8. 故意失败迁移继续整体回滚，不增加迁移日志。
-9. 测试完成后仅保留固定 Owner、长期 Schema 和迁移日志，不保留运行级夹具。
-10. 测试 Supabase 迁移哈希与本地构建产物完全一致。
-11. 线上 Supabase 迁移数量、哈希和业务数据在测试流程前后保持不变。
-12. `pnpm run verify`、Server 构建、迁移资产校验和 `git diff --check` 全部通过。
+1. 测试入口只加载 `.env.test.local` 或 CI 测试变量。
+2. 测试子进程环境中不存在 `DATABASE_URL` 和 `DATABASE_MIGRATION_URL`。
+3. 两条测试 URL 提取的 project ref 与显式测试 ref 一致，且不同于线上 ref。
+4. 测试代码没有创建线上客户端或调用线上 migrator。
 
-## 11. 发布顺序
+### 12.2 迁移兼容与制品
+
+5. `prefix` 和 `exact` 都逐项比较 `created_at` 与完整 SQL hash。
+6. 数据库超前、时间戳不一致或 hash 分叉均在写入前失败。
+7. 测试四个阶段消费同一 manifest digest 与 Git commit SHA。
+8. 可发布 manifest 只能来自迁移相关文件无未提交差异的目标 Git commit；本地临时制品不能发布。
+9. 线上发布只接受已测试的不可变制品，并执行迁移前 `prefix`、迁移后 `exact`。
+
+### 12.3 并发与锁存活
+
+10. 两个相同迁移资产的普通集成测试进程可以同时通过。
+11. prepare、迁移回归和 stale 清理必须等待共享测试锁释放。
+12. 控制连接断开或 backend PID 改变时，运行时客户端立即关闭且任务失败。
+13. 重新连接不会让原测试在新锁上继续。
+
+### 12.4 fixture 隔离与清理
+
+14. 两个并发进程使用不同 Owner、UUID 和 identity。
+15. 任一正常 `finally` 只删除本次运行的精确 UUID。
+16. 强杀遗留 Owner 不影响后续测试，并可在 24 小时后由独占 stale 清理命令回收。
+17. stale 清理不会删除固定 Owner、近期 Owner 或不符合保留 identity 格式的 Owner。
+
+### 12.5 测试分层
+
+18. 测试 Supabase 首次初始化完成一次空库完整迁移验收。
+19. 持久测试 Supabase 可重复执行 prepare、并发集成和迁移回归。
+20. CI bootstrap 进程只接收 `BOOTSTRAP_DATABASE_URL`，并在可丢弃 PostgreSQL 持续验证从零安装。
+21. Player 双真实连接竞争仍保证只有一个事务提交。
+22. 故意失败迁移在独占回归命令中整体回滚。
+23. 测试完成后持久环境只保留固定 Owner、Schema、迁移日志和未超过回收期限的异常遗留 fixture。
+
+### 12.6 默认验证
+
+24. `pnpm run verify`、Server 构建、迁移资产校验和 `git diff --check` 全部通过。
+25. 默认 `verify` 不读取任何数据库环境文件、不联网。
+
+## 13. 发布顺序
 
 后续数据库变更采用：
 
-1. 从 `src/db/schema.ts` 生成版本化 SQL。
-2. 使用 `TEST_DATABASE_MIGRATION_URL` 在锁保护下升级测试 Supabase。
-3. 使用 `TEST_DATABASE_URL` 执行真实读写、约束和并发测试。
-4. 测试通过后，由显式发布步骤使用 `DATABASE_MIGRATION_URL` 升级线上 Supabase。
-5. 线上服务继续只通过 `DATABASE_URL` 启动并执行只读迁移兼容门控。
+1. 从一个明确 Git commit 构建不可变迁移制品和 manifest digest。
+2. 在独占锁下运行 `db:test:prepare` 升级持久测试 Supabase。
+3. 在共享锁下运行一个或多个 `db:test:integration`。
+4. 每个发布候选串行运行一次 `db:test:migration-regression`。
+5. CI 在可丢弃 PostgreSQL 运行 `db:test:bootstrap`。
+6. 保存通过测试的 manifest digest、Git commit SHA 和制品。
+7. 人工批准线上发布。
+8. 线上发布进程使用同一制品执行迁移前 `prefix`、Drizzle 迁移和迁移后 `exact`。
+9. 线上服务继续只通过 `DATABASE_URL` 启动并执行只读精确兼容门控。
 
 测试通过是线上迁移的前置验证，但不会自动触发线上写入。

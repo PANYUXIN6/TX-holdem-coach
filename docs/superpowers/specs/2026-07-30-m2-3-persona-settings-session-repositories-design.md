@@ -34,8 +34,8 @@ M2.3 不实现 HTTP、SSE、完整场次创建、命令账本、事件/快照事
 
 采用永久 Payload Schema 与当前 Active 准入两层校验：
 
-- 永久 Schema 负责历史结构、已发布模型 ID 和模型参数兼容性。
-- Active Schema 负责当前代码版本是否允许该模型配置组合用于新场次。
+- 永久 Schema 负责历史结构和项目实际发布过的完整模型配置包；供应商允许的参数范围不自动成为历史合法值。
+- Active Schema 负责从永久 Schema 已发布配置包中选出当前代码版本允许用于新场次的子集。
 - 模型退役只影响新场次准入，不影响历史读取、统计或审计。
 - Active 准入只判断模型配置组合，不要求 `personaVersion` 等于当前目录版本。
 
@@ -86,26 +86,65 @@ M2.3 不实现 HTTP、SSE、完整场次创建、命令账本、事件/快照事
     riskPreference: integer 0..100
   }
   strategyDescription: trimmed string, length 1..2000
-  models: {
-    deepSeek: {
-      modelId: published DeepSeek V1 model id
-      temperature: number 0..2
-      maxOutputTokens: positive integer, at most 384000
-      thinkingMode: "enabled" | "disabled"
-    }
-    kimi: {
-      modelId: published Kimi V1 model id
-      temperature: model-compatible literal
-      maxOutputTokens: positive integer, project V1 limit 32768
-      thinkingMode: model-compatible mode
-    }
+  models: PublishedPersonaModelBundleV1
+}
+
+PublishedPersonaModelBundleV1 initial branch = {
+  deepSeek: {
+    modelId: "deepseek-v4-flash"
+    temperature: 0.2
+    maxOutputTokens: 256
+    thinkingMode: "disabled"
+  }
+  kimi: {
+    modelId: "kimi-k2.6"
+    temperature: 0.6
+    maxOutputTokens: 256
+    thinkingMode: "disabled"
   }
 }
 ```
 
-V1 初始已发布模型 ID 为 `deepseek-v4-flash` 和 `kimi-k2.6`。永久 Schema 中已发布模型 ID 和兼容组合只能追加，不能删除或改变既有分支的含义。若未来模型需要不同字段，例如使用 `reasoningEffort` 而不支持 `thinkingMode`，必须发布新的 `configPayloadVersion`，不能改写 V1。
+`PublishedPersonaModelBundleV1Schema` 是已发布完整 `models` 配置包的封闭、严格字面量联合，初始只有上面一个分支。它不能把供应商能力写成宽范围后直接用于历史解析；例如以下配置即使供应商接受，也未被项目发布，必须拒绝：
 
-Kimi V1 对 `kimi-k2.6` 使用判别式约束。V1 当前只发布非思考分支，只接受 `thinkingMode = "disabled"` 与 `temperature = 0.6` 的组合；官方兼容但尚未发布为人物配置的思考分支 `thinkingMode = "enabled"` 与 `temperature = 1.0`，未来只能以保持旧分支含义不变的追加方式进入永久 Schema 和 Active 清单。实现不得因为供应商客观支持该组合便提前接受未发布分支。
+```ts
+{
+  deepSeek: {
+    modelId: "deepseek-v4-flash"
+    temperature: 1.7
+    maxOutputTokens: 256
+    thinkingMode: "enabled"
+  }
+  kimi: {
+    modelId: "kimi-k2.6"
+    temperature: 0.6
+    maxOutputTokens: 256
+    thinkingMode: "disabled"
+  }
+}
+```
+
+未来人物覆盖、参数变化或新模型只有经过产品发布后，才能把对应的完整双供应商配置包作为新联合分支追加到永久 Schema。不得只分别扩展 DeepSeek 和 Kimi 子 Schema 后允许未发布的笛卡尔积组合。若新模型需要不同字段，例如使用 `reasoningEffort` 而不支持 `thinkingMode`，必须发布新的 `configPayloadVersion`，不能改写 V1。
+
+供应商与项目能力边界可以独立记录为：
+
+```ts
+{
+  deepSeek: {
+    temperature: provider range 0..2
+    maxOutputTokens: provider maximum 384000
+  }
+  kimi: {
+    maxOutputTokens: project V1 engineering ceiling 32768
+  }
+}
+```
+
+这些范围只用于评审未来候选分支，不是 `PersonaConfigPayloadV1Schema` 当前接受的数值范围。V1 当前实际接受的模型 ID、参数和思考模式只有已发布完整配置包中的字面量。
+
+V1 初始已发布模型 ID 为 `deepseek-v4-flash` 和 `kimi-k2.6`。永久 Schema 中已发布完整配置包只能追加，不能删除或改变既有分支的含义。
+
+Kimi V1 当前只发布非思考配置，只接受 `thinkingMode = "disabled"` 与 `temperature = 0.6`。官方兼容但尚未发布为人物配置的思考组合 `thinkingMode = "enabled"` 与 `temperature = 1.0`，未来必须随一个明确发布的完整 `models` 配置包追加。实现不得因为供应商客观支持该组合便提前接受未发布分支。
 
 ### 4.2 V1 工程默认值
 
@@ -116,7 +155,7 @@ Kimi V1 对 `kimi-k2.6` 使用判别式约束。V1 当前只发布非思考分�
 | DeepSeek | `deepseek-v4-flash` | `0.2` | `256` | `disabled` |
 | Kimi | `kimi-k2.6` | `0.6` | `256` | `disabled` |
 
-`256` 是项目工程默认值，不是供应商上限。Kimi 的 `32768` 也只是项目 V1 Schema 上限：K2.6 quickstart 只将其描述为 `max_tokens` 默认值，没有声明为供应商最大值。
+`256` 是当前唯一已发布配置包中的项目工程值，不是供应商上限。DeepSeek 的 `0..2`、`384000` 和 Kimi 的项目 V1 工程上界 `32768` 均不代表永久 Schema 已经发布这些范围内的任意值。K2.6 quickstart 只将 `32768` 描述为 `max_tokens` 默认值，没有声明为供应商最大值。
 
 M4 适配器把内部 `maxOutputTokens` 映射为 DeepSeek `max_tokens` 和 Kimi `max_completion_tokens`。Kimi K2.6 quickstart 仍示例已弃用的 `max_tokens`，参数级事实以 Chat Completion Reference 明确给出的“`max_tokens` 已弃用，请使用 `max_completion_tokens`”为准。M4 适配器落地后、正式发布前，必须通过不属于默认 `verify` 的显式真实请求 smoke，验证选定站点的 `kimi-k2.6` 接受 `max_completion_tokens`；失败时不得静默回退或带着未验证映射发布，应先复核目标站点、SDK 与当时官方 Reference。
 
@@ -154,27 +193,34 @@ Kimi 官方 K2.6 文档的“参数变动说明 / Parameters Differences in Requ
 
 ```text
 PersonaConfigPayloadV1Schema
-└── 永久验证 V1 历史结构、已发布模型 ID 和参数兼容组合
+└── 永久验证 V1 历史结构和已发布完整 models 配置包
 
 ActiveModelConfigurationV1Schema
-└── 验证当前代码允许用于新场次的模型配置组合
+└── 从永久合法配置包中验证当前允许用于新场次的子集
 
 ActivePersonaCatalogEntrySchema
 └── PersonaConfigPayloadV1Schema + ActiveModelConfigurationV1Schema
 ```
 
-当前 Active 模型配置组合就是 §4.2 表中的两条完整配置。改变 Active 许可清单必须经过代码发布；它不读取供应商实时模型列表，也不受瞬时健康检测结果影响。
+当前 Active 许可集合只有 §4.2 中由 DeepSeek 与 Kimi 两项共同组成的一个完整 `models` 配置包。Active 许可键从已经通过永久 Schema 的完整配置包规范化生成；生产代码使用随发布冻结的许可集合，且必须是永久已发布集合的子集。改变 Active 许可集合必须经过代码发布；它不读取供应商实时模型列表，也不受瞬时健康检测结果影响。
 
-当前源码目录启动链路：
+`createActiveModelConfigurationV1Schema(activeKeys)` 是唯一的 Active Schema 工厂，只接收只读许可键集合。生产代码以冻结常量创建一次 `ActiveModelConfigurationV1Schema`；退役测试以测试局部集合创建校验器，并从中临时排除当前真实、永久合法的配置包。不得为测试向生产永久 Schema 加入虚假模型 ID，也不得为此建立通用依赖注入容器或运行时可修改策略。
+
+当前源码目录启动链路必须由 `bootstrap()` 显式驱动：
 
 ```text
-源码定义
+bootstrap() 的 try
+→ loadServerConfig()
+→ loadAndValidatePersonaCatalog()
+  → 读取不执行顶层解析的源码定义
 → 展开供应商默认值
 → PersonaConfigPayloadV1Schema
 → ActivePersonaCatalogEntrySchema
 → 目录级唯一性校验
 → 递归深冻结
 → 生成公开摘要
+→ initializeDatabase()
+→ listen()
 ```
 
 目录级校验必须拒绝：
@@ -186,7 +232,9 @@ ActivePersonaCatalogEntrySchema
 - 非法模型 ID、模型参数、思考模式或不兼容参数组合；
 - API Key、Prompt、Provider 健康、供应商优先级、路由、降级或重试字段。
 
-目录校验必须在数据库连接和监听端口之前显式执行。失败抛出脱敏的 `PersonaCatalogValidationError`，启动关闭，不接受创建场次请求。
+任何静态导入路径都不得在模块求值阶段调用 `.parse()`、`loadAndValidatePersonaCatalog()` 或生成目录导出值，否则异常会逃逸 `bootstrap()` 的错误处理。`loadAndValidatePersonaCatalog()` 返回一个深冻结的 `PersonaCatalog` 对象，列出和按 `personaId` 读取是该对象的只读端口；不再导出模块求值时已经解析完成的目录常量。`bootstrap()` 保留该对象并把它作为依赖交给后续消费者，M2.3 不为此增加全局可变目录。
+
+目录校验必须在 `bootstrap()` 的 `try` 内、数据库连接和监听端口之前显式执行；`BootstrapDependencies` 提供可替换 loader 以便验证调用顺序和失败行为。失败抛出并捕获脱敏的 `PersonaCatalogValidationError`，设置失败退出码且不连接数据库、不监听端口。
 
 公开摘要继续只通过 `AgentPersonaSummarySchema` 投影，不能暴露 `strategyDescription` 或 `models`。
 
@@ -232,7 +280,7 @@ sha256(
 
 当前目录创建阵容时，在进入数据库事务前完成：
 
-1. 通过 Owner Repository 将外部 `OwnerScope.identityKey` 解析为内部 `ResolvedOwnerScope`。
+1. 通过 Owner Repository 将外部 `OwnerScope.ownerId` 解析为内部 `ResolvedOwnerScope`。
 2. 从只读目录取得完整人物定义。
 3. 运行永久 Payload Schema。
 4. 运行 Active Schema。
@@ -258,7 +306,7 @@ Owner 行缺失时抛出脱敏的 `OwnerScopeResolutionError`，不自动创建 
 → 任一拒绝：不创建场次，要求用户重新选择对应人物或座位
 ```
 
-“原样复制”表示不根据当前人物目录重新生成或升级配置。为验证旧快照真实性必须重算哈希；验证通过后复制原 key。新场次使用新的 participant/Session Agent ID 和空记忆。
+“原样复制”表示不根据当前人物目录重新生成或升级配置。为验证旧快照内部一致性必须重算哈希；验证通过后复制原 key。新场次使用新的 participant ID 和空记忆；每个 AI 的 participant ID 同时就是其 Session Agent ID。
 
 旧 `personaVersion` 不等于不可用。Active Schema 只判断模型配置组合，不判断该人物是否为当前目录版本，也不要求旧人物定义仍存在于当前目录。同一 `personaId` 已有新版本时不得自动替换。一个座位不再 Active 时拒绝整个新场次，不能部分升级、部分保留。
 
@@ -270,6 +318,28 @@ Owner 行缺失时抛出脱敏的 `OwnerScopeResolutionError`，不自动创建 
 
 `M3.2` 中“沿用旧版本人物仍成功”精确限定为：沿用旧版本人物时保留原始配置且不自动升级；只有其模型配置仍通过当前 Active 准入时才能创建新场次。
 
+### 5.5 新场次稳定身份图
+
+无论使用当前目录还是沿用旧阵容，M3.2 编排层都必须在进入创建事务前一次性生成并校验：
+
+```text
+sessionId
+userParticipantId
+agentParticipants[] {
+  seatNumber
+  agentParticipantId
+}
+```
+
+这些标识均为服务端生成的 UUID，彼此不得重复，客户端不能提供。AI 座位按 `seatNumber` 与准备完成的人物快照一一对应。稳定映射固定为：
+
+```text
+PokerSeat.playerId === session_participants.id
+session_agents.participant_id === 对应 AI PokerSeat.playerId
+```
+
+`session_agents.participant_id` 同时是 Session Agent ID，不再生成第二套 Agent 标识。M3.2 使用同一批 participant ID 构建 Poker 状态和 Repository 写入输入；`insertSessionRosterSnapshot` 只校验并消费这些 ID，不自行生成或替换 `sessionId`、user participant ID 或 AI participant ID。首手 `handId` 仍由 M3.2 在手牌创建流程生成，不属于 M2.3 阵容写入输入。
+
 ## 6. 初始记忆
 
 `MEMORY_PAYLOAD_VERSION = 1`。`AgentMemoryPayloadV1Schema` 永久定义为严格空对象：
@@ -278,7 +348,9 @@ Owner 行缺失时抛出脱敏的 `OwnerScopeResolutionError`，不自动创建 
 z.strictObject({})
 ```
 
-M2.3 不提前设计 M4 的结构化记忆。M4 若增加任何字段，必须发布 `memoryPayloadVersion = 2`；不得改写 V1。
+M2.3 不提前设计 M4 的结构化记忆。所有消费者必须先按 `memoryPayloadVersion` 分派读取，V1 的 `{}` 永久合法。M4 若增加任何字段，必须发布 `memoryPayloadVersion = 2`，并在 V2 规格中定义从 V1 到 V2 初始内存状态的确定性映射；不得改写 V1 或 revision 0。
+
+当当前记忆仍为 revision 0 / V1 时，M4 可以在内存中使用该确定性映射构造 V2 初始状态；第一次成功持久化 V2 必须插入新的 revision 1 / V2，并在同一事务更新 `session_agents.current_memory_revision`、`memory_payload_version` 与 `memory_payload`。原 revision 0 / V1 永不更新。M2.3 只实现和测试 revision 0 / V1 写入，不实现 V2 Schema、映射或更新器。
 
 每个新 Session Agent 必须在同一事务同时写入：
 
@@ -296,12 +368,12 @@ M2.3 不提前设计 M4 的结构化记忆。M4 若增加任何字段，必须�
 人物阵容准备、Player 设置 Repository 和场次基础 Repository 共用唯一的 `resolveOwnerScope` 端口：
 
 ```text
-OwnerScope.identityKey
+OwnerScope.ownerId
 → SELECT owners.id WHERE identity_key = ?
-→ ResolvedOwnerScope { identityKey, databaseOwnerId }
+→ ResolvedOwnerScope { ownerId, databaseOwnerId }
 ```
 
-外部调用方只能提供 OwnerScope，不能构造或传入数据库 Owner UUID。`ResolvedOwnerScope` 是内部不可伪造值，只能由解析端口产生。读取和写入 SQL 必须使用解析后的 `databaseOwnerId`；任何写入准备必须在进入事务前完成解析，事务写入原语不得再次查询 Owner。
+当前外部契约固定为 `OwnerScope { ownerId: "local-user" }`，解析时以该字符串查询数据库列 `owners.identity_key`。`identity_key` 只保留为数据库列名，不成为 OwnerScope 字段。外部调用方不能构造或传入数据库 Owner UUID；`ResolvedOwnerScope { ownerId: "local-user", databaseOwnerId: UUID }` 是内部不可伪造值，只能由解析端口产生。读取和写入 SQL 必须使用解析后的 `databaseOwnerId`；任何写入准备必须在进入事务前完成解析，事务写入原语不得再次查询 Owner。
 
 Owner 行缺失时抛出脱敏的 `OwnerScopeResolutionError`，不开始写入事务、不自动补建固定 Owner。它表示持久化不变量失败，不等同于具体资源未找到。设置行缺失也与 Owner 缺失不同：前者返回代码默认设置，后者必须失败。
 
@@ -344,7 +416,7 @@ Repository 只接收已经合并的完整设置对象并再次校验，不负责
 - 缺行时生成新 UUID 并插入；
 - 冲突时只更新 `setting_payload_version`、`setting_payload` 和 `updated_at`；
 - 保留既有行 `id`；
-- 不修改既有 `agent_runs`、`agent_attempts` 或其他审计记录。
+- SQL 写入目标仅为 `app_settings`，不写入其他表。
 
 首版设置更新采用最后写入生效，不建立设置历史或乐观锁。M4 创建 Player AgentRun 时读取当时设置并固化；实际单次尝试超时取固化单次超时与剩余 deadline 的较小值。
 
@@ -403,7 +475,7 @@ OR (updated_at = cursor.updatedAt AND id < cursor.id)
 
 `limit` 必须是整数 `1..100`。查询读取 `limit + 1` 行判断是否存在下一页，只返回前 `limit` 行，并从最后一条返回记录生成下一内部游标。HTTP 字符串编码、签名或 Base64 表达留给后续应用层。
 
-当前 `sessions_owner_status_updated_idx(owner_id, lifecycle_status, updated_at)` 足够作为首版查询索引；不为 UUID 尾排序提前增加迁移。只有真实查询计划证明需要时再补充索引。
+现有 `sessions_owner_status_updated_idx(owner_id, lifecycle_status, updated_at)` 可以辅助 Owner 和生命周期过滤，但不能直接提供跨 `ended | readonlyDiagnostic` 两种状态的全局 `updated_at DESC, id DESC` 顺序。首版数据量较小时接受 PostgreSQL 的额外排序，不为 UUID 尾排序提前增加迁移；只有真实数据上的 `EXPLAIN (ANALYZE, BUFFERS)` 证明需要时再设计匹配查询形态的索引。
 
 首版 keyset 分页不保证跨页快照一致。历史记录的 `updated_at` 仍可能因诊断或后续维护写入而变大，导致翻页期间记录移动、遗漏或重复；Repository 不为一次分页持有长事务或数据库快照。调用方需要强一致导出时必须使用后续专用读取边界，普通历史列表通过重新刷新第一页收敛到最新排序。
 
@@ -411,9 +483,11 @@ OR (updated_at = cursor.updatedAt AND id < cursor.id)
 
 `readSessionAgentSnapshots`：
 
-- 在 SQL 中约束 Owner 和 Session；
+- 在同一个数据库读取快照中确认 Owner-scoped Session 是否存在，不能仅用 Agent 结果零行推断；实现使用一次 SQL/CTE 同时返回 Session 存在标记与 Agent 行，或使用保证同一快照的只读事务；
+- Session 不存在或属于其他 Owner 时统一返回未找到；
 - 连接 `session_participants` 取得座位；
 - 只读取 `participant_type = agent`；
+- Session 存在时必须得到 5–8 个座位号唯一、范围为 `1..8` 且各自存在 `session_agents` 行的 AI；零行、数量越界、重复座位或缺少 Agent 子行均视为持久化数据损坏；
 - 按 `seat_number ASC` 返回；
 - 对每行运行永久 Payload Schema、镜像一致性和哈希完整性校验；
 - 不运行 Active Schema。
@@ -432,6 +506,8 @@ OR (updated_at = cursor.updatedAt AND id < cursor.id)
 
 输入必须携带事务前解析完成的 `ResolvedOwnerScope`，并已经完成当前目录或旧阵容 Active 准入；Repository 自身仍必须执行永久 Payload 校验、关系镜像、哈希、座位/人物唯一性和初始记忆一致性校验。Active 策略和 Owner 查询不属于该事务写入原语。
 
+输入还必须携带 §5.5 已生成的 `sessionId`、`userParticipantId` 以及每个 AI 座位的 `agentParticipantId`。Repository 再次校验 UUID、全局唯一性和座位映射，按原值写入，并保证 `session_agents.participant_id` 使用对应 AI participant ID；不得在内部生成另一套 ID。
+
 M3.2 在外层事务继续写入 Poker 初始化、`hands.inProgress`、事件和权威快照，并把场次推进到最终 `stateVersion = 1` 后才提交。M2.3 原语不得在中间状态提交，避免持久化 `setup` 或空场次。
 
 PostgreSQL 的延迟阵容完整性约束和单 Owner 活动场次唯一索引仍是最终并发边界；应用预检只用于提前返回清晰错误，不能替代数据库约束。
@@ -447,6 +523,7 @@ PostgreSQL 的延迟阵容完整性约束和单 Owner 活动场次唯一索引�
 - 持久化载荷损坏；
 - 镜像不一致；
 - snapshot key 不匹配；
+- 新场次身份图中的 UUID、唯一性或座位映射无效；
 - Owner 已解析但目标资源未找到，或资源属于其他 Owner；
 - 活动场次唯一冲突；
 - 数据库操作失败。
@@ -464,12 +541,13 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 - 八个人物合法加载，公开投影与既有 V1 规范一致。
 - 重复/缺失 `personaId`、非法版本、颜色、风格、策略长度和额外字段失败。
 - 七个或九个人物的目录均被拒绝。
-- 非法模型 ID、温度、输出上限、思考模式和 Kimi 不兼容组合失败。
-- Kimi V1 永久 Schema 当前拒绝尚未发布的 `enabled + temperature 1.0` 分支，并可在未来通过追加测试夹具证明旧非思考分支含义不变。
+- 非法模型 ID，以及供应商兼容但项目未发布的温度、输出上限和思考组合均失败，包括 DeepSeek `temperature = 1.7` / `thinkingMode = enabled` 与 Kimi `enabled + temperature 1.0`。
 - 默认配置在八个人物中完全展开，嵌套对象深冻结且不存在共享可修改引用。
 - 公开摘要不含策略、模型、Prompt、路由、Key 或 Provider 状态。
 - 规范 JSON 不受对象键插入顺序影响；内容、Payload 版本或人物字段变化会改变哈希。
-- 永久 Payload Schema 可以读取已退役但已发布的测试模型分支，Active Schema 拒绝其用于新场次。
+- 当前真实配置包通过永久与生产 Active 校验；测试局部 Active 许可集合排除该配置包后，永久 Schema 仍可读取而 Active 校验拒绝用于新场次，且生产永久 Schema 不包含虚假模型 ID。
+- `loadAndValidatePersonaCatalog()` 只在 `bootstrap()` 的 `try` 内执行，先于数据库连接和监听；校验失败被转换为脱敏启动错误，数据库初始化和监听调用次数均为零。
+- 导入人物定义模块不会执行目录解析或抛出人物校验错误。
 
 设置：
 
@@ -477,7 +555,7 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 - 合法设置读取与 UPSERT。
 - 未知版本、非法载荷和跨字段错误进入损坏分支，不回退默认值。
 - 冲突更新保留行 ID，只更新版本、载荷和时间。
-- 设置修改不更新既有 AgentRun/Attempt 固化值。
+- 设置 UPSERT 的写入目标只有 `app_settings`，不调用 AgentRun、Attempt 或其他 Repository。
 
 准备层：
 
@@ -485,6 +563,7 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 - 同 `personaId` 存在当前新版本时不自动升级旧快照。
 - 已退役配置导致整个旧阵容准入失败，数据库写入端口调用次数为零。
 - “上一场”只选择最近 ended 场次；active、readonlyDiagnostic 和客户端指定的任意旧场次均不能成为沿用来源。
+- 新场次身份图中的 Session、用户 participant 和 AI participant ID 由编排层预生成，Repository 原样消费；PokerSeat 与关系行映射一致，重复或错配 ID 被拒绝。
 
 ### 11.2 显式 PostgreSQL 集成测试
 
@@ -494,6 +573,7 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 - 修改当前源码人物定义的测试副本后，既有数据库配置快照、版本和 key 不变并可读取。
 - 篡改 Payload 镜像或 snapshot key 后读取失败；不自动修复。
 - 已退役配置的历史快照仍可读取，但不能用于新场次。
+- Owner-scoped Session 不存在或属于其他 Owner 时人物快照读取返回未找到；Session 存在但 AI 快照为零行、数量越界或座位/Agent 关系不完整时返回持久化损坏。
 - Owner A 不能按 ID 或列表观察 Owner B 的场次或人物快照。
 - 同一 `updated_at` 的多条历史记录以 UUID 降序稳定分页，无重复或遗漏。
 - 同一毫秒内但微秒不同的历史记录跨页无遗漏，游标未经过 JavaScript `Date` 截断。

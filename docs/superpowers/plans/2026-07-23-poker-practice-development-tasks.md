@@ -529,6 +529,7 @@ M1.R
 产出：
 
 - 在服务端源码中建立固定八个只读、版本化的预设人物目录，并用私有 Zod Schema 在启动时校验。
+- 永久人物 Schema 只接受项目实际发布过的完整模型配置包，当前 Active 准入是其可测试、随代码发布的子集；供应商允许的宽参数范围不自动成为历史合法值。
 - 提供列出人物和按 `personaId` 读取的内部端口，不提供人物写入或删除 Repository。
 - Player 单次尝试超时默认 15 秒、范围 5–30 秒；完整决策 deadline 默认 45 秒、范围 15–120 秒且不得小于单次超时。
 - 活动场次和历史场次的基础查询。
@@ -536,10 +537,10 @@ M1.R
 
 后端测试闭环：
 
-- 覆盖合法目录加载，以及重复 `personaId`、非法版本、头像颜色、风格参数或模型配置导致目录校验失败。
+- 覆盖合法目录加载，以及重复 `personaId`、非法版本、头像颜色、风格参数、未发布或非法的完整模型配置包导致目录校验失败；目录解析必须发生在 `bootstrap()` 错误边界内、数据库连接前。
 - 修改测试目录中的当前人物定义后，既有 `session_agents` 配置快照仍保持原版本并可读取。
 - 验证不存在人物创建、编辑、复制或删除持久化入口。
-- 设置修改只影响后续读取，不修改已有 `agent_attempt` 固化值。
+- 验证设置 UPSERT 只修改 `app_settings`，缺行读取不写数据库，损坏行不回退默认值；AgentRun/Attempt 的运行时固化行为归 M4.2。
 
 ### M2.4 实现持久化命令账本
 
@@ -662,6 +663,7 @@ M1.R
 - 校验 5–8 个不同 `personaId` 和 `1..8` 内唯一 AI 座位；本地用户领域座位隐式固定为 `0`，拒绝客户端 `userSeatNumber` 和按钮字段。当前身份适配器固定为 `local-user`。
 - DeepSeek Key 缺失时阻止创建；Kimi Key 缺失时返回警告。
 - 从当前预设人物目录或上一场配置快照创建全新的 `session_agents` 和空记忆；沿用上一场时不升级人物版本。
+- 在事务前由服务端一次性生成 Session、用户 participant 和各 AI participant UUID；PokerSeat 的 `playerId` 与对应 `session_participants.id` 完全相同，AI participant ID 同时作为 `session_agents.participant_id`，Repository 不另行生成身份。
 - 将座位 `0` 与 AI 座位合并并按座位号规范化，调用 M1.9 `initializePokerTable()` 安全随机选择首手按钮；创建版本 `0` 的内存 `betweenHands` 内容和开手检查点，再调用 `startPokerHand()` 直接开始第一手，按钮不得再次轮转。
 - 创建成功一次原子写入场次、初始累计买入、`hands.inProgress`、`sessionCreated`、`handStarted` 和最终 `inHand` 快照；最终 `stateVersion = 1`。失败不留下空场次或半手牌。
 - 创建事务依靠 `sessions(ownerId) WHERE lifecycleStatus = 'active'` 的部分唯一索引保证每个 `OwnerScope` 同一时间只有一个活动场次；不同 Owner 不互相阻塞。
@@ -672,6 +674,7 @@ M1.R
 
 - 覆盖 6–9 人合法组桌，以及人数越界、未知人物、重复人物、重复座位、AI 使用座位 `0`、AI 座位越界和客户端提交用户座位/按钮。
 - 固定随机源下首手按钮可复现，创建输入排列不影响选择；快照写入失败时场次、按钮和人物快照全部回滚。
+- 验证 PokerSeat、participant 与 Session Agent 使用同一批预生成 ID，任一 ID 重复或座位映射错配时事务写入前失败。
 - 创建响应直接是可运行的第一手；网络重试命中 `ACTIVE_SESSION_EXISTS` 后按返回的活动场次 `latestSnapshot` 恢复，不会创建或开出第二场。
 - 沿用旧版本人物的上一场阵容仍成功并保留旧配置，但不继承记忆。
 - 同一 Owner 的两个活动场次创建竞争时只有一个成功；不同 Owner 的独立场次在 Repository 合约测试中可以同时存在。
@@ -822,6 +825,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 产出：
 
 - 使用 `agent_runs`、`agent_attempts` 和 `agent_capability_invocations` 保存通用生命周期。
+- 创建 Player AgentRun 时读取当时的 Player 设置并把完整超时配置固化进运行配置；后续 Attempt 只消费该运行快照，不重新读取当前设置。
 - 实现持久化后执行、进程内 Worker、租约、fencing、取消、恢复和并发限制；Player/Coach 使用独立队列，首版各保留一个互不占用的 Worker 槽位。
 - 未来队列仅作为 Worker 唤醒，不改变数据库权威地位；首版不引入外部消息队列。
 
@@ -829,6 +833,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - 并发幂等、租约接管、旧 Worker 迟到、服务重启恢复和 fencing 拒绝。
 - 每个 `(sessionId, stateVersion, actorSeat)` 只有一个有效 Player 运行。
+- Player AgentRun 创建后修改设置不会改变既有 Run/Attempt 的固化超时；新建 Run 使用新设置。
 
 ### M4.3 实现 Context、ModelGateway、路由与有界纠错
 
@@ -922,11 +927,13 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - `player_decisions` 保存决策包和候选快照、模型选择、校验与命令结果。
 - 本场记忆确定性更新并按场次、座位隔离，最近记录和总大小有上限。
+- 按 `memoryPayloadVersion` 分派读取；发布 V2 时定义 V1 `{}` 到 V2 初始状态的确定性映射，原 revision 0 永不改写，首次持久化 V2 通过新 revision 与 `session_agents` 当前记忆镜像原子更新。
 - Audit Replay 不调用模型；历史 Re-execution 创建新运行但不能提交动作。
 
 后端测试闭环：
 
 - 调试投影可追踪 run → attempt/capability → player decision。
+- V1 revision 0 可被 V2 Runtime 读取；首次 V2 更新写入 revision 1 并原子切换当前镜像，失败时两处都不变化。
 - 历史回放和重新执行都无法二次提交扑克命令。
 
 ### M4.10 接入会话并完成 Player Eval

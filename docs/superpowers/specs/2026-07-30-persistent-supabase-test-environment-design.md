@@ -150,10 +150,15 @@ URL 通过角色策略后才提取 project ref：
 
 1. 触发当前测试运行的 abort signal。
 2. 立即关闭 6543 的主测试客户端和竞争客户端。
-3. 使当前测试任务失败。
-4. 不继续执行断言、清理或迁移。
+3. 如果 `db:test:prepare`、`db:test:migration-regression` 或其他受锁保护阶段已经启动 Drizzle migrator，将 migrator 作为受管进程组而不是单个父进程终止：
+   - 先向整个进程组发送正常终止信号。
+   - 最多等待 5 秒；仍未退出时强制终止整个进程组。
+   - 确认子进程树完全退出，使其持有的全部 5432 数据库连接关闭。
+   - 在 migrator 退出状态确定前，协调器不得返回成功、继续步骤或静默结束。
+4. 等待运行时客户端关闭和 migrator 进程组退出后，使当前任务失败。
+5. 不继续执行断言、清理或迁移。
 
-测试主体和锁丢失监测通过 `Promise.race` 绑定，保证运行时客户端不能在无锁状态继续。只有持锁连接仍是原 backend PID 时才可显式解锁；进程退出时 PostgreSQL 仍会自动释放 session lock。
+测试主体、受管 migrator 和锁丢失监测通过统一协调器及 `Promise.race` 绑定，保证运行时客户端或 DDL 子进程不能在协调器已知锁丢失后继续。POSIX 使用独立 process group，其他平台使用等价的完整进程树终止机制。该契约与 §9.2 的线上 migrator 完全一致。只有持锁连接仍是原 backend PID 时才可显式解锁；进程退出时 PostgreSQL 仍会自动释放 session lock。
 
 ## 6. 拆分后的测试命令
 
@@ -167,7 +172,7 @@ URL 通过角色策略后才提取 project ref：
 2. 通过 project ref 安全门。
 3. 取得独占 advisory lock。
 4. 若 `app_private` 已存在，执行 `prefix` 核验。
-5. 通过 `TEST_DATABASE_MIGRATION_URL` 运行 Drizzle。
+5. 通过 `TEST_DATABASE_MIGRATION_URL` 将 Drizzle 作为受管 migrator 进程组运行，并纳入 §5.2 的锁丢失终止契约。
 6. 执行 `exact` 核验。
 7. 释放独占锁并关闭控制连接。
 
@@ -197,7 +202,7 @@ Schema 已经完全一致时仍允许快速成功，但不得执行普通数据�
 1. 取得独占 advisory lock。
 2. 对当前数据库执行 `exact` 核验。
 3. 从当前不可变迁移资产复制临时目录并追加故意失败迁移。
-4. 运行测试 migrator并断言失败。
+4. 将测试 migrator 作为受管进程组运行并断言失败；锁丢失时按 §5.2 终止整个进程组并等待退出。
 5. 确认 marker DDL 不存在、迁移日志数量、`created_at` 和 hash 均保持原值。
 6. 再次执行 `exact` 核验并释放锁。
 
@@ -239,10 +244,10 @@ Schema 已经完全一致时仍允许快速成功，但不得执行普通数据�
 
 普通测试的最外层 `finally` 只使用 fixture 上下文中保存的精确 UUID：
 
-1. 删除当前运行 Owner 下的 Session。
-2. 依赖 Session 外键级联清理 participant、Hand、事件、快照、Agent 和统计数据。
-3. 删除当前运行明确登记的辅助 Owner。
-4. 删除当前运行的主测试 Owner。
+1. 在单个清理事务中读取上下文登记的全部 Owner ID，包括主 Owner 和所有辅助 Owner。
+2. 按这组精确 Owner ID 删除它们各自创建的全部 Session。
+3. 依赖 Session 外键级联清理 participant、Hand、事件、快照、Agent 和统计数据。
+4. 按同一组精确 UUID 删除全部辅助 Owner 和主 Owner。
 
 正常清理不得使用全表 `DELETE`、UUID 前缀、`LIKE` 扫描、固定 setting key、否定条件或删除 Schema。其他运行的数据不在清理目标内。
 
@@ -307,7 +312,7 @@ manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字
 8. 保存发布记录中的 manifest digest、Git commit SHA、project ref、迁移前后序列摘要和结果。
 9. 释放独占锁并关闭控制连接。
 
-发布控制连接使用与测试相同的 PID 心跳和锁丢失原则，但 production lock key 独立。控制连接丢失或 PID 改变时，必须立即终止 migrator 子进程、关闭其数据库连接并等待进程结束，当前发布失败；不得重连后从中间继续。两个发布进程即使都通过人工批准，也只能有一个进入锁内迁移阶段。
+发布控制连接使用与测试相同的 PID 心跳和锁丢失原则，但 production lock key 独立。控制连接丢失或 PID 改变时，必须按 §5.2 的同一契约终止整个 migrator 进程组：先正常终止、最多等待 5 秒、必要时强制终止，并确认全部 5432 连接关闭和进程树退出后使当前发布失败；不得重连后从中间继续。两个发布进程即使都通过人工批准，也只能有一个进入锁内迁移阶段。
 
 线上发布不从可变工作区读取迁移，不查询或复制测试业务数据，也不由测试成功自动触发。不得用“人工批准”代替数据库级并发互斥。
 
@@ -385,14 +390,14 @@ manifest digest 的输入固定为 UTF-8 编码的单行 JSON 加一个 LF。字
 12. 两个相同迁移资产的普通集成测试进程可以同时通过。
 13. prepare、迁移回归和 stale 清理必须等待共享测试锁释放。
 14. 两个线上发布进程同时获批时，production 独占锁保证只有一个执行 `prefix → migrate → exact`。
-15. 测试或线上控制连接断开、backend PID 改变时，关联客户端或 migrator 立即终止且任务失败。
+15. 测试或线上控制连接断开、backend PID 改变时，关联客户端立即关闭，整个 migrator 进程组终止；协调器等待其全部 5432 连接关闭和进程退出后使任务失败。
 16. 重新连接不会让原测试或发布在新锁上继续。
 
 ### 12.4 fixture 隔离与清理
 
 17. 两个并发进程使用不同 Owner、UUID 和 identity。
 18. 同一运行创建的主 Owner 与所有辅助 Owner 都使用包含 role 的完整保留 identity 格式。
-19. 任一正常 `finally` 只删除本次运行的精确 UUID。
+19. 任一正常 `finally` 先按本次运行登记的全部主/辅助 Owner UUID 删除其 Session，再按相同精确 UUID 删除全部 Owner。
 20. 清理失败必定使测试失败；已有断言错误时通过 `AggregateError` 同时保留断言和清理错误。
 21. 强杀遗留的主 Owner 与辅助 Owner 不影响后续测试，并可在 24 小时后由独占 stale 清理命令回收。
 22. stale 清理不会删除固定 Owner、近期 Owner 或不符合完整保留 identity 格式的 Owner。

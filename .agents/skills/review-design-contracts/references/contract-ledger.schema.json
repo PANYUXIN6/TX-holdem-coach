@@ -3,18 +3,12 @@
   "$id": "contract-ledger.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["contracts", "candidates"],
+  "required": ["contracts"],
   "properties": {
     "contracts": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/contract_entry"
-      }
-    },
-    "candidates": {
-      "type": "array",
-      "items": {
-        "$ref": "candidate-finding.schema.json#/$defs/candidate"
       }
     }
   },

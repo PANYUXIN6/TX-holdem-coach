@@ -1,18 +1,28 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "candidate-finding.schema.json",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["candidates"],
-  "properties": {
-    "candidates": {
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidates"],
+      "properties": {
+        "candidates": {
+          "$ref": "#/$defs/candidate_list"
+        }
+      }
+    },
+    {
+      "$ref": "insufficient-result.schema.json"
+    }
+  ],
+  "$defs": {
+    "candidate_list": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/candidate"
       }
-    }
-  },
-  "$defs": {
+    },
     "contract": {
       "type": "object",
       "additionalProperties": false,

@@ -54,6 +54,9 @@
           "$ref": "candidate-finding.schema.json#/$defs/candidate"
         }
       }
+    },
+    {
+      "$ref": "insufficient-result.schema.json"
     }
   ]
 }

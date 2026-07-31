@@ -1,6 +1,6 @@
 # 分层契约与对抗挑战设计评审 Skill
 
-状态：Native Multi-Subagent 摘要隔离加固设计，待书面验收
+状态：Native Multi-Subagent 摘要隔离加固已实施并通过确定性验证
 日期：2026-07-31
 
 ## 1. 背景与目标

@@ -164,6 +164,10 @@ test('prepare creates one pinned native L1 task without running a model', () => 
       'utf8',
     ),
   )
+  const instructions = readFileSync(
+    path.join(result.tasks[0].task_path, 'instructions.md'),
+    'utf8',
+  )
 
   assert.equal(task.task_id, result.tasks[0].task_id)
   assert.equal(task.stage, 'self_consistency')
@@ -172,6 +176,12 @@ test('prepare creates one pinned native L1 task without running a model', () => 
   assert.equal(input.stage, 'self_consistency')
   assert.match(input.target.content, /A completed run must be terminal/)
   assert.equal(outputSchema.properties.task_id.const, result.tasks[0].task_id)
+  assert.match(instructions, /封闭证据集/)
+  assert.match(instructions, /不得读取父任务、兄弟任务或其他 response\.json/)
+  assert.match(
+    instructions,
+    /不得主动调用 Skill、Subagent、Web、MCP、Git 或 Shell/,
+  )
   assert.equal(existsSync(result.tasks[0].response_path), false)
   assert.equal(existsSync(path.join(result.run_dir, 'human-review.md')), false)
 })
@@ -217,14 +227,128 @@ test('advance accepts a valid L1 response and creates one fresh L2 task', () => 
     JSON.parse(
       readFileSync(path.join(prepared.run_dir, 'contract-ledger.json'), 'utf8'),
     ),
-    ledger,
+    {
+      contracts: ledger.contracts,
+    },
+  )
+  assert.deepEqual(
+    JSON.parse(
+      readFileSync(path.join(prepared.run_dir, 'l1-candidates.json'), 'utf8'),
+    ),
+    {
+      candidates: ledger.candidates,
+    },
   )
   assert.match(l2Input.target.content, /A completed run must be terminal/)
   assert.deepEqual(
     l2Input.authorities.map((authority) => authority.path).sort(),
     ['docs/ARCHITECTURE.md', 'docs/REPO_MAP.md'],
   )
-  assert.deepEqual(l2Input.contract_ledger, ledger)
+  assert.deepEqual(l2Input.contract_ledger, {
+    contracts: ledger.contracts,
+  })
+  assert.equal(
+    JSON.stringify(l2Input.contract_ledger).includes('candidates'),
+    false,
+  )
+})
+
+test('L1 insufficient input fails the run without retry or partial human work', () => {
+  const repositoryRoot = createRepository()
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    task_status: 'insufficient_input',
+    missing_inputs: ['The target document does not define the state owner.'],
+  })
+
+  const failed = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const state = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'state.json'), 'utf8'),
+  )
+  const failure = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'failure.json'), 'utf8'),
+  )
+
+  assert.equal(failed.status, 'FAILED')
+  assert.deepEqual(failed.tasks, [])
+  assert.equal(state.failure_reason_code, 'INSUFFICIENT_INPUT')
+  assert.equal(state.failed_stage, 'self_consistency')
+  assert.equal(failure.reason_code, 'INSUFFICIENT_INPUT')
+  assert.deepEqual(failure.missing_inputs, [
+    'The target document does not define the state owner.',
+  ])
+  assert.equal(
+    existsSync(path.join(prepared.run_dir, 'contract-ledger.json')),
+    false,
+  )
+  assert.equal(
+    existsSync(path.join(prepared.run_dir, 'human-review.md')),
+    false,
+  )
+  assert.equal(
+    existsSync(
+      path.join(prepared.run_dir, 'tasks', 'self_consistency-attempt-2'),
+    ),
+    false,
+  )
+})
+
+test('an empty missing-input list is invalid model output rather than an insufficient-input failure', () => {
+  const repositoryRoot = createRepository()
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    task_status: 'insufficient_input',
+    missing_inputs: [],
+  })
+
+  const retried = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const state = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'state.json'), 'utf8'),
+  )
+
+  assert.equal(retried.status, 'PACKED')
+  assert.equal(retried.retry_reason, 'MODEL_OUTPUT_INVALID')
+  assert.equal(retried.tasks[0].attempt, 2)
+  assert.equal(state.failure_reason_code, undefined)
+  assert.equal(existsSync(path.join(prepared.run_dir, 'failure.json')), false)
+})
+
+test('L2 insufficient input fails the run without creating adversarial tasks', () => {
+  const repositoryRoot = createRepository()
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: [],
+  })
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  writeTaskResponse(afterL1.tasks[0], {
+    task_status: 'insufficient_input',
+    missing_inputs: ['The architecture authority omits component ownership.'],
+  })
+
+  const failed = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const state = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'state.json'), 'utf8'),
+  )
+  const failure = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'failure.json'), 'utf8'),
+  )
+
+  assert.equal(failed.status, 'FAILED')
+  assert.deepEqual(failed.tasks, [])
+  assert.equal(state.failure_reason_code, 'INSUFFICIENT_INPUT')
+  assert.equal(state.failed_stage, 'architecture')
+  assert.deepEqual(failure.missing_inputs, [
+    'The architecture authority omits component ownership.',
+  ])
+  assert.equal(
+    existsSync(path.join(prepared.run_dir, 'candidates.json')),
+    false,
+  )
+  assert.equal(
+    existsSync(path.join(prepared.run_dir, 'human-review.md')),
+    false,
+  )
 })
 
 test('advance closes without human work when L1 and L2 produce no candidates', () => {
@@ -441,6 +565,76 @@ test('L3 batches are lossless and all refuted candidates close without human wor
   assert.equal(
     rejected.every((item) => item.reason_code === 'REFUTED_BY_COUNTEREXAMPLE'),
     true,
+  )
+  assert.equal(
+    existsSync(path.join(prepared.run_dir, 'human-review.md')),
+    false,
+  )
+})
+
+test('one L3 insufficient result fails the whole batch without partial artifacts', () => {
+  const repositoryRoot = createRepository()
+  const findings = [
+    candidate(),
+    candidate({
+      claim: 'A second non-terminal completion remains reachable.',
+      trigger: {
+        ...candidate().trigger,
+        initial_state: ['A second completed run variant exists.'],
+      },
+    }),
+  ]
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: findings,
+  })
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  writeTaskResponse(afterL1.tasks[0], {
+    candidates: [],
+  })
+  const l3Batch = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  writeTaskResponse(l3Batch.tasks[0], {
+    challenge_outcome: 'refuted',
+    falsification: {
+      attempt: 'Trace the first completion transition.',
+      counterexample: 'The first alleged state is unreachable.',
+    },
+  })
+  writeTaskResponse(l3Batch.tasks[1], {
+    task_status: 'insufficient_input',
+    missing_inputs: ['The cited section does not contain the referenced rule.'],
+  })
+
+  const failed = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const state = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'state.json'), 'utf8'),
+  )
+  const failure = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'failure.json'), 'utf8'),
+  )
+
+  assert.equal(failed.status, 'FAILED')
+  assert.deepEqual(failed.tasks, [])
+  assert.equal(state.failure_reason_code, 'INSUFFICIENT_INPUT')
+  assert.equal(state.failed_stage, 'adversarial')
+  assert.deepEqual(failure.missing_inputs, [
+    'The cited section does not contain the referenced rule.',
+  ])
+  assert.deepEqual(
+    JSON.parse(
+      readFileSync(
+        path.join(prepared.run_dir, 'adversarial-results.json'),
+        'utf8',
+      ),
+    ),
+    [],
+  )
+  assert.deepEqual(
+    JSON.parse(
+      readFileSync(path.join(prepared.run_dir, 'evidence-cards.json'), 'utf8'),
+    ),
+    [],
   )
   assert.equal(
     existsSync(path.join(prepared.run_dir, 'human-review.md')),

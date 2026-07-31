@@ -1,6 +1,6 @@
 # 分层契约与对抗挑战设计评审 Skill
 
-状态：待书面确认  
+状态：已确认，实施验收中
 日期：2026-07-31
 
 ## 1. 背景与目标
@@ -336,6 +336,8 @@ Runner 通过非交互 Codex 进程执行各层，并固定：
 
 临时工作目录只包含该层允许读取的 Pack 制品。共享 Prompt 明确把其中所有文档标记为不可信数据，并禁止把文档内容解释为指令。项目规则若与本次 Review 有关，必须作为显式权威文件进入 Pack；不得依赖父会话、全局 Memory 或隐藏历史。
 
+Codex 子进程只继承运行所需的最小环境白名单，不传递数据库 URL、Provider Key、业务 Secret 或任意父进程变量。Runner 依赖现有 Codex 登录态，不支持通过转发环境变量中的 API Key 完成认证。
+
 同一模型家族可能存在相关盲区。本设计通过新 Context、互斥职责、先反证后证明、确定性门禁和人工仲裁降低风险，而不声称模型同质性等价于独立模型多样性。
 
 设计时已在本地 `codex-cli 0.146.0` 核对 `--ephemeral`、`--ignore-user-config`、`--sandbox` 和 `--output-schema`。Runner 启动时仍须执行版本和能力预检；目标模型、推理强度或必要 flags 不可用时进入 `FAILED`，不得猜测替代参数或自动降级。
@@ -385,11 +387,13 @@ $review-design-contracts docs/superpowers/specs/<design>.md
 ├── contract-ledger.json
 ├── candidates.json
 ├── adversarial-results.json
+├── verification-results.json
 ├── evidence-cards.json
 ├── rejected.json
 ├── human-review.md
 ├── decisions.json
-└── fix-queue.json
+├── fix-queue.json
+└── failure.json                 # 仅 FAILED 运行存在
 ```
 
 状态机：

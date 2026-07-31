@@ -1,6 +1,6 @@
 # 分层契约与对抗挑战设计评审 Skill
 
-状态：已确认，实施验收中
+状态：Native Multi-Subagent 重构设计，待书面验收
 日期：2026-07-31
 
 ## 1. 背景与目标
@@ -37,14 +37,14 @@ Prompt 只声明角色边界、成功条件、禁止越界项和输出 Schema。
 ### 2.2 单一事实来源
 
 - Skill 触发和阶段顺序只存在于 `SKILL.md`；
-- 模型、推理强度、超时、本机网络代理、权威来源和命令白名单只存在于 `review.config.json`；
+- 模型、推理强度、Subagent 超时、最大并发数、权威来源和命令白名单只存在于 `review.config.json`；
 - 机器字段和必填关系只存在于 JSON Schema；
 - 角色职责分别只存在于对应角色文件；
 - `review-protocol.md` 只解释字段语义，不重新定义字段。
 
 ### 2.3 渐进式披露
 
-Codex 启动时只看到 Skill 的名称和描述。Skill 触发后才读取最小工作流；每个评审层只取得完成本层所需的 Context Pack，不继承其他模型的对话或自由文本解释。
+Codex 启动时只看到 Skill 的名称和描述。Skill 触发后才读取最小工作流；每个评审 Subagent 使用 `fork_turns = "none"`，只通过 Runner 生成的任务包取得本层输入，不继承主 Agent 或其他 Subagent 的对话历史。
 
 ### 2.4 失败驱动的规则增长
 
@@ -83,6 +83,9 @@ Codex 启动时只看到 Skill 的名称和描述。Skill 触发后才读取最�
 - RAG、向量数据库、长期 Auto-memory 或跨 Review 会话记忆；
 - 自动联网搜索；
 - 未经白名单授权的验证命令；
+- 嵌套 `codex exec`、Responses API 或其他模型调用后端；
+- 无 Native Subagent 工具的纯 Node CLI、headless 或 CI 模型评审；
+- Native Subagent 不可用时自动回退到其他执行后端；
 - 面向多仓库分发的 Plugin 包装。
 
 ## 4. 总体架构
@@ -90,11 +93,11 @@ Codex 启动时只看到 Skill 的名称和描述。Skill 触发后才读取最�
 ```mermaid
 flowchart LR
     D["设计文档 + 权威事实源"] --> P["L0 确定性 Context Pack"]
-    P --> S["L1 自洽检查"]
+    P --> S["L1 Native Subagent<br/>自洽检查"]
     S --> C["Contract Ledger<br/>文档内候选问题"]
-    C --> A["L2 架构推理"]
+    C --> A["L2 Native Subagent<br/>架构推理"]
     A --> R["跨边界候选问题"]
-    R --> X["L3 对抗挑战<br/>先尝试推翻，再构造反例"]
+    R --> X["L3 Native Subagents<br/>逐候选独立对抗挑战"]
     X --> O{"挑战结果"}
     O -->|refuted| N["审计归档<br/>不进入人工"]
     O -->|survives| E["Evidence Pack"]
@@ -105,7 +108,7 @@ flowchart LR
     H -->|不存在或证据不足| N
 ```
 
-每个模型调用都运行在全新、无会话继承的 Context 中。层与层之间只传递已经过 Schema 校验的 JSON 制品。
+Skill 主 Agent 只编排 Native Subagent 和确定性 Runner，不总结、改写、排序或批准模型意见。L1 与 L2 串行；L3 按配置的并发上限分批并行，每条候选使用独立 Subagent。层与层之间只传递已经过 Runner Schema 校验的 JSON 制品。
 
 ## 5. 分层契约
 
@@ -129,12 +132,13 @@ Pack Builder：
    - L1 获得目标设计文档全文；
    - L2 获得目标设计文档全文、Contract Ledger 和所有显式声明的权威文件全文；
    - L3 获得单条候选、候选引用的完整 Markdown 章节及对应 Contract Ledger 条目。
+8. 为每次 Native Subagent 调用生成独立任务目录，其中只包含 `task.json`、`instructions.md`、`input.json`、`output.schema.json` 和待写入的 `response.json` 路径。
 
 L0 不调用模型，也不推断设计是否正确。
 
 ### 5.2 L1：自洽检查
 
-默认使用 `gpt-5.6-sol`、`high`。
+默认使用 `gpt-5.6-sol`、`high`，由一个 `fork_turns = "none"` 的 Native Subagent 执行。
 
 唯一职责：
 
@@ -151,7 +155,7 @@ L0 不调用模型，也不推断设计是否正确。
 
 ### 5.3 L2：架构推理
 
-默认使用 `gpt-5.6-sol`、`max`。
+默认使用 `gpt-5.6-sol`、`max`，由一个新的 `fork_turns = "none"` Native Subagent 执行。
 
 输入为 Contract Ledger、目标设计文档全文以及所有显式声明的权威架构文档全文。L0 不按关键词或模型判断裁剪 L2 输入。L2 的唯一职责：
 
@@ -164,7 +168,7 @@ L2 不得提交风格、命名、重构偏好或“可以更优雅”的意见�
 
 ### 5.4 L3：对抗挑战
 
-默认使用 `gpt-5.6-sol`、`max`。每条候选意见使用独立 Context。
+默认使用 `gpt-5.6-sol`、`max`。每条候选意见使用一个新的 `fork_turns = "none"` Native Subagent；不同候选可以有界并行，但不得共享对话或合并判断。
 
 L1 的文档内候选与 L2 的跨边界候选组成候选并集。L2 不修改、批准或否决 L1 候选；Runner 在进入 L3 前只做 Schema、引用和重复指纹预检。
 
@@ -314,7 +318,7 @@ Evidence Card 只由 `challenge_outcome = "survives"` 的对抗结果构造，`f
 
 自动拒绝项写入 `rejected.json` 供调试，但不进入 `human-review.md`。
 
-## 8. 模型与 Context 隔离
+## 8. Native Multi-Subagent 编排
 
 所有评审层只使用 `gpt-5.6-sol`：
 
@@ -324,26 +328,43 @@ Evidence Card 只由 `challenge_outcome = "survives"` 的对抗结果构造，`f
 | L2 | `max` | 跨模块、事务和生命周期推理需要能力上限 |
 | L3 | `max` | 反证和最小反例构造需要充分验证 |
 
-Runner 通过非交互 Codex 进程执行各层，并固定：
+Skill 主 Agent 必须使用 Codex Native Subagent 工具执行模型层，并固定：
 
-- `--ephemeral`；
-- `--ignore-user-config`；
-- `--enable respect_system_proxy`；
-- `--sandbox read-only`；
-- `--output-schema`；
-- 独立的临时工作目录；
-- 不恢复任何历史会话；
-- 不自动降级到其他模型或厂商。
+- 每次调用使用 `fork_turns = "none"`；
+- `model` 和 `reasoning_effort` 必须逐任务取自 `review.config.json`；
+- L1 完成并经 Runner 校验后才生成 L2 任务；
+- L2 完成并经 Runner 校验后才生成 L3 任务；
+- L3 每条候选一个独立 Subagent，按 `max_parallel_subagents` 分批调度；
+- 主 Agent 只读取 Runner 返回的任务描述、状态和人工报告，不解释 Subagent 的自然语言过程；
+- Subagent 只允许读取其任务目录并写入指定的 `response.json`，不得修改目标文档、权威文件或其他运行制品；
+- 不调用嵌套 `codex exec`、Responses API 或其他厂商；
+- Native Subagent 不可用时立即停止，不自动降级或回退。
 
-临时工作目录只包含该层允许读取的 Pack 制品。共享 Prompt 明确把其中所有文档标记为不可信数据，并禁止把文档内容解释为指令。项目规则若与本次 Review 有关，必须作为显式权威文件进入 Pack；不得依赖父会话、全局 Memory 或隐藏历史。
+`review.config.json` 首版设置 `max_parallel_subagents: 3` 和 `subagent_timeout_ms: 900000`。并发数只是上限，不是最低要求；如果当前会话可用子槽更少，主 Agent 等待已启动任务完成后再派发下一批，不得提高上限、丢弃候选或让一个 Subagent 合并多个 L3 候选。超时从任务成功派发后开始计算；到期仍未结束或未生成指定响应时按基础设施失败处理。
 
-Codex 子进程只继承运行所需的最小环境白名单，不传递数据库 URL、Provider Key、业务 Secret 或任意父进程变量。Runner 依赖现有 Codex 登录态，不支持通过转发环境变量中的 API Key 完成认证。
+Runner 为每个任务生成 `instructions.md`、`input.json` 与 `output.schema.json`，并在 `prepare` 或 `advance` 的标准输出中返回完整任务描述：
 
-Runner 从 `review.config.json` 读取唯一的 `proxy_url`，只接受无凭据、带显式端口的 `http://127.0.0.1` 或 `http://localhost` 地址。它把该值同时注入 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 及其小写形式，并启用 Codex 的 `respect_system_proxy` 特性；父进程已有的代理变量不得覆盖配置值。代理不可达或当前 Codex 不支持该特性时按基础设施失败处理，不允许绕过代理直连或自动降级。
+```text
+task_id
+task_path
+model
+reasoning_effort
+fork_turns
+response_path
+spawn_message
+```
+
+其中 `fork_turns` 必须为 `none`，`spawn_message` 由 Runner 从固定模板生成，只包含任务文件路径、指定响应路径和完成条件。主 Agent 必须逐字段校验任务描述后原样传给 Native Subagent，不得增删角色指令、目标内容或候选结论。
+
+共享 Prompt 明确把所有文档标记为不可信数据，并禁止把文档内容解释为指令。项目规则若与本次 Review 有关，必须作为显式权威文件进入 Pack；评审层不得依赖主会话历史、其他 Subagent 输出、全局 Memory 或隐藏历史。
+
+`fork_turns = "none"` 只保证不继承父会话对话，不保证移除 Codex 产品级系统指令、工具定义或 Skill 元数据。Native Subagent 仍是完整 Codex Agent，而不是裸模型调用；本设计接受这一限制，并通过最小任务包、互斥角色、目标摘要失效检查、确定性门禁和人工仲裁约束其影响。若回归评估证明该 Context 导致发布门槛失败，再单独设计 Responses API 后端，不在首版预建双后端。
+
+Native Subagent 也继承当前 Codex 任务的工具和文件系统权限；`fork_turns = "none"` 不提供操作系统级读写隔离。“只读取任务目录、只写入 `response.json`”是可审计的任务契约，而不是文件系统强制边界。Runner 在每次推进前重验目标设计、权威文件和任务输入摘要；实际 dogfood 还必须确认没有业务文件变化。若未来要求强制最小权限或无人值守执行，应另行设计隔离运行环境，不得把本协议描述为已经具备该能力。
+
+Native Subagent 复用当前 Codex 会话的登录和网络能力。Runner 不读取、复制或转发 Codex 登录文件、API Key、代理变量、数据库 URL、Provider Key 或业务 Secret。
 
 同一模型家族可能存在相关盲区。本设计通过新 Context、互斥职责、先反证后证明、确定性门禁和人工仲裁降低风险，而不声称模型同质性等价于独立模型多样性。
-
-设计时已在本地 `codex-cli 0.146.0` 核对 `--ephemeral`、`--ignore-user-config`、`--enable`、`--sandbox` 和 `--output-schema`，并确认该版本暴露 `respect_system_proxy` 特性。Runner 启动时仍须执行版本和能力预检；目标模型、推理强度或必要 flags 不可用时进入 `FAILED`，不得猜测替代参数或自动降级。
 
 ## 9. Skill 布局
 
@@ -377,7 +398,24 @@ Runner 从 `review.config.json` 读取唯一的 `proxy_url`，只接受无凭据
 $review-design-contracts docs/superpowers/specs/<design>.md
 ```
 
-首版采用一个 Node.js Runner，避免为单一流程建立多层内部抽象。只有出现第二个独立消费者时才拆分公共库。
+首版仍采用一个 Node.js Runner，但把原先的单次 `run` 改为多阶段协议：
+
+```text
+prepare <design> [--authority ...] [--retry-of ...]
+→ 建立运行、生成 L1 任务并返回任务描述
+
+advance <run-directory>
+→ 校验已完成 response.json、原子推进状态并返回下一批任务
+
+fail-task <run-directory> --task <task-id> --message <diagnostic>
+→ 把 Native Subagent 不可用、超时或异常记录为 FAILED
+
+decide <run-directory> --decisions <json>
+verify-queue <run-directory>
+→ 保持既有人工仲裁与队列消费协议
+```
+
+Skill 主 Agent 根据 Runner 返回的任务描述调用 Native Subagent。Runner 不调用模型、不调用 Native Subagent 工具，也不解释模型结果。只有出现第二个独立消费者时才拆分公共库。
 
 ## 10. 运行制品与状态机
 
@@ -387,6 +425,13 @@ $review-design-contracts docs/superpowers/specs/<design>.md
 .superpowers/design-reviews/<document-hash>/<run-id>/
 ├── state.json
 ├── manifest.json
+├── tasks/
+│   └── <task-id>/
+│       ├── task.json
+│       ├── instructions.md
+│       ├── input.json
+│       ├── output.schema.json
+│       └── response.json          # 由该任务的 Native Subagent 写入
 ├── contract-ledger.json
 ├── candidates.json
 ├── adversarial-results.json
@@ -399,6 +444,8 @@ $review-design-contracts docs/superpowers/specs/<design>.md
 └── failure.json                 # 仅 FAILED 运行存在
 ```
 
+`task.json` 至少包含 `task_id`、`stage`、`attempt`、`model`、`reasoning_effort`、`fork_turns`、`response_path`、`spawn_message` 和输入摘要。任务 ID、路径、消息和摘要全部由 Runner 生成；主 Agent 和 Subagent 不得自选。`state.json` 额外记录当前 `active_tasks` 及每个任务的尝试次数。
+
 状态机：
 
 ```text
@@ -408,8 +455,8 @@ CREATED
 → ARCHITECTURE_CHECKED
 → CHALLENGED
 → DETERMINISTICALLY_GATED
-→ AWAITING_HUMAN
-→ QUEUED | CLOSED
+  ├─ 零张 Evidence Card → CLOSED
+  └─ 非零 Evidence Card → AWAITING_HUMAN → QUEUED | CLOSED
 
 任一未完成阶段 → FAILED
 CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDATED
@@ -421,19 +468,22 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 
 失败或失效后重跑必须创建新 `run-id`，并通过 `retry_of` 引用旧运行；不得复用中间状态或覆盖旧制品。每次状态转换先写入临时文件，再以原子重命名替换状态制品。
 
+运行状态在等待 Native Subagent 时保持当前阶段：`PACKED` 等待 L1，`SELF_CHECKED` 等待 L2，`ARCHITECTURE_CHECKED` 等待全部 L3。只有当前阶段所有响应都通过 Schema、摘要、引用和任务归属校验后才发生下一次状态转换。`advance` 不得跳过未完成任务或接受非当前任务的响应。
+
 候选 Schema 不设置语义 Top-K 或 `maxItems`。输出因 Token、进程或解析限制而截断时按无效 Schema 处理，最终进入 `FAILED`，不得让模型自行挑选“最重要”的若干条。
 
-确定性预审后，Evidence Card 按 `contract.source → contract.heading → contract.quote_hash → finding_id` 稳定排序，每批最多 8 张。超过 8 张时记录 `REVIEW_OVERLOAD` 质量标记，但仍进入 `AWAITING_HUMAN`；`human-review.md` 明确分批，Skill 每次只展示当前批次。所有批次完成仲裁后，至少一条 `accept` 进入 `QUEUED`，否则进入 `CLOSED`。未处理完全部批次时不得宣布 Review 完成。
+确定性预审后，Evidence Card 按 `contract.source → contract.heading → contract.quote_hash → finding_id` 稳定排序。零张卡片时直接进入 `CLOSED`，在 `state.json.completion_reason` 记录 `NO_ADMISSIBLE_FINDINGS`，不生成空的人工作业；它不是自动或人工拒绝原因码。非零结果每批最多 8 张；超过 8 张时记录 `REVIEW_OVERLOAD` 质量标记，但仍进入 `AWAITING_HUMAN`。`human-review.md` 明确分批，Skill 每次只展示当前批次。所有批次完成仲裁后，至少一条 `accept` 进入 `QUEUED`，否则进入 `CLOSED`。未处理完全部批次时不得宣布 Review 完成。
 
 ## 11. 失败处理
 
 - `CREATED` 至 `AWAITING_HUMAN` 期间任一输入文件摘要变化，整次运行进入 `INVALIDATED`；
-- 模型输出不满足 Schema 时，只允许同模型、同强度、全新 Context 修复一次；
+- Native Subagent 输出不满足 Schema、任务归属或输入摘要时，Runner 归档无效响应，只允许同模型、同强度、`fork_turns = "none"` 的全新 Subagent 修复一次；
 - 第二次仍失败则整层进入 `FAILED`，不向人工提交部分结果；
-- 不允许自动换模型、降低强度或调用其他厂商；
+- 不允许自动换模型、降低强度、调用嵌套 `codex exec`、Responses API 或其他厂商；
+- Native Subagent 工具不可用、调度失败、超时或未生成指定响应时，主 Agent 必须调用 `fail-task`，Runner 记录基础设施失败；
 - 模型提出的命令默认不执行；
 - 只有与 `review.config.json` 白名单完全匹配的命令才由 Runner 执行；
-- 超时、Codex 非零退出、能力预检失败、引用失配或验证环境异常记录为基础设施失败并进入 `FAILED`；
+- Subagent 异常、引用失配、任务摘要失配或验证环境异常记录为基础设施失败并进入 `FAILED`；
 - 基础设施失败不得伪装成“没有问题”；
 - Review 阶段不修改目标文档；
 - 只有人工 `accept` 才能进入 `fix-queue.json`。
@@ -453,8 +503,17 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 - 完全重复指纹只保留一条；
 - 未授权命令绝不执行；
 - L1/L2 输入包含目标设计全文，L3 输入只包含显式引用章节；
+- `prepare` 只生成一个 L1 任务，L1 未校验前不得生成 L2；
+- L2 未校验前不得生成 L3，L3 每个任务只包含一条候选；
+- L3 任务按 `max_parallel_subagents` 分批返回且不丢失；
+- Runner 返回完整且可原样传给 Native Subagent 的任务描述；
+- 主 Agent 不得修改 Runner 生成的 `spawn_message`、模型或推理强度；
+- 非当前任务、错误摘要或错误 attempt 的响应不得推进状态；
+- 首次无效响应生成同模型同强度的第二次任务，第二次无效进入 `FAILED`；
+- Runner 不启动 `codex exec`，也不读取或传递登录、API Key 和代理环境；
 - 输入变化使运行进入 `INVALIDATED`；
 - 模型或基础设施失败使运行进入 `FAILED`；
+- 零张 Evidence Card 时不进入人工阶段并以 `NO_ADMISSIBLE_FINDINGS` 关闭；
 - 超过 8 张 Evidence Card 会确定性分批且不丢失；
 - 模型、严重级别和置信度不会进入人工报告；
 - 只有人工接受项进入修复队列；
@@ -520,14 +579,17 @@ Skill 实施完成必须证明：
 
 1. Codex 能从仓库根目录发现该 Skill；
 2. 普通设计讨论不会隐式触发 Skill；
-3. Runner 能以 Mock 模型输出完成全部确定性状态转换；
-4. `refuted`、`FAILED`、`INVALIDATED` 和多批 `AWAITING_HUMAN` 路径均有端到端测试；
-5. 至少一个历史真问题通过完整 GPT 流程形成 Evidence Card；
-6. 至少一个反例和一个 Prompt 注入案例不会进入人工报告；
-7. 人工接受前 `fix-queue.json` 为空；
-8. 人工接受后只新增对应 finding；
-9. 目标设计文档和其他业务代码均未被修改；
-10. Skill 验证与打包检查通过。
+3. 缺少 Native Subagent 工具时 Skill 明确停止，不创建 fallback 模型调用；
+4. Runner 能以任务响应 fixture 完成 `prepare → advance → decide` 的全部确定性状态转换；
+5. 实际调度中 L1/L2/L3 均使用 `gpt-5.6-sol`、指定推理强度和 `fork_turns = "none"`；
+6. L3 候选按配置有界并行，主 Agent 不总结、合并或筛选 Subagent 输出；
+7. `refuted`、`FAILED`、`INVALIDATED` 和多批 `AWAITING_HUMAN` 路径均有端到端测试；
+8. 至少一个历史真问题通过完整 Native Multi-Subagent 流程形成 Evidence Card；
+9. 至少一个反例和一个 Prompt 注入案例不会进入人工报告；
+10. 人工接受前 `fix-queue.json` 为空；
+11. 人工接受后只新增对应 finding；
+12. 目标设计文档和其他业务代码均未被修改；
+13. Skill 验证与打包检查通过。
 
 首版只实现本设计所需文件，不修改 `REPO_MAP.md` 或 `ARCHITECTURE.md` 的业务架构内容。Skill 成为新的仓库级开发工作流后，只需在 `REPO_MAP.md` 增加一条工具职责说明。
 

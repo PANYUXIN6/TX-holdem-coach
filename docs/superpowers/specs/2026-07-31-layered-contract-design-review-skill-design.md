@@ -1,6 +1,6 @@
 # 分层契约与对抗挑战设计评审 Skill
 
-状态：Native Multi-Subagent 重构设计，待书面验收
+状态：Native Multi-Subagent 重构已实施，dogfood 修复已验证
 日期：2026-07-31
 
 ## 1. 背景与目标
@@ -131,14 +131,15 @@ Pack Builder：
 7. 按以下固定规则为各层生成输入，而不是做语义“相关性”判断：
    - L1 获得目标设计文档全文；
    - L2 获得目标设计文档全文、Contract Ledger 和所有显式声明的权威文件全文；
-   - L3 获得单条候选、候选引用的完整 Markdown 章节及对应 Contract Ledger 条目。
+   - L3 处理 L1 候选时，获得单条候选、候选引用的完整 Markdown 章节及对应 Contract Ledger 条目；
+   - L3 处理 L2 架构候选时，获得单条候选、目标设计文档全文、所有显式声明的权威文件全文和完整 Contract Ledger。
 8. 为每次 Native Subagent 调用生成独立任务目录，其中只包含 `task.json`、`instructions.md`、`input.json`、`output.schema.json` 和待写入的 `response.json` 路径。
 
 L0 不调用模型，也不推断设计是否正确。
 
 ### 5.2 L1：自洽检查
 
-默认使用 `gpt-5.6-sol`、`high`，由一个 `fork_turns = "none"` 的 Native Subagent 执行。
+使用 `review.config.json.models.self_consistency` 声明的模型配置，由一个 `fork_turns = "none"` 的 Native Subagent 执行。
 
 唯一职责：
 
@@ -155,7 +156,7 @@ L0 不调用模型，也不推断设计是否正确。
 
 ### 5.3 L2：架构推理
 
-默认使用 `gpt-5.6-sol`、`max`，由一个新的 `fork_turns = "none"` Native Subagent 执行。
+使用 `review.config.json.models.architecture` 声明的模型配置，由一个新的 `fork_turns = "none"` Native Subagent 执行。
 
 输入为 Contract Ledger、目标设计文档全文以及所有显式声明的权威架构文档全文。L0 不按关键词或模型判断裁剪 L2 输入。L2 的唯一职责：
 
@@ -168,7 +169,12 @@ L2 不得提交风格、命名、重构偏好或“可以更优雅”的意见�
 
 ### 5.4 L3：对抗挑战
 
-默认使用 `gpt-5.6-sol`、`max`。每条候选意见使用一个新的 `fork_turns = "none"` Native Subagent；不同候选可以有界并行，但不得共享对话或合并判断。
+使用 `review.config.json.models.adversarial` 声明的模型配置。每条候选意见使用一个新的 `fork_turns = "none"` Native Subagent；不同候选可以有界并行，但不得共享对话或合并判断。
+
+L3 输入由候选的结构化 `layer` 字段确定，不做语义相关性裁剪：
+
+- `self_consistency` 候选只获得引用的完整章节和匹配的 Contract Ledger 条目；
+- `architecture` 候选获得目标设计文档全文、所有显式声明的权威文件全文和完整 Contract Ledger。
 
 L1 的文档内候选与 L2 的跨边界候选组成候选并集。L2 不修改、批准或否决 L1 候选；Runner 在进入 L3 前只做 Schema、引用和重复指纹预检。
 
@@ -320,13 +326,13 @@ Evidence Card 只由 `challenge_outcome = "survives"` 的对抗结果构造，`f
 
 ## 8. Native Multi-Subagent 编排
 
-所有评审层只使用 `gpt-5.6-sol`：
+三个评审层的运行配置分别取自：
 
-| 层级 | 推理强度 | 原因 |
-|---|---:|---|
-| L1 | `high` | 契约抽取和文档内一致性是有界任务 |
-| L2 | `max` | 跨模块、事务和生命周期推理需要能力上限 |
-| L3 | `max` | 反证和最小反例构造需要充分验证 |
+| 层级 | 配置键 | 任务性质 |
+|---|---|---|
+| L1 | `models.self_consistency` | 契约抽取和文档内一致性 |
+| L2 | `models.architecture` | 跨模块、事务和生命周期推理 |
+| L3 | `models.adversarial` | 反证和最小反例构造 |
 
 Skill 主 Agent 必须使用 Codex Native Subagent 工具执行模型层，并固定：
 
@@ -340,12 +346,13 @@ Skill 主 Agent 必须使用 Codex Native Subagent 工具执行模型层，并�
 - 不调用嵌套 `codex exec`、Responses API 或其他厂商；
 - Native Subagent 不可用时立即停止，不自动降级或回退。
 
-`review.config.json` 首版设置 `max_parallel_subagents: 3` 和 `subagent_timeout_ms: 900000`。并发数只是上限，不是最低要求；如果当前会话可用子槽更少，主 Agent 等待已启动任务完成后再派发下一批，不得提高上限、丢弃候选或让一个 Subagent 合并多个 L3 候选。超时从任务成功派发后开始计算；到期仍未结束或未生成指定响应时按基础设施失败处理。
+并发上限和单任务超时分别读取 `review.config.json.max_parallel_subagents` 与 `review.config.json.subagent_timeout_ms`。并发数只是上限，不是最低要求；如果当前会话可用子槽更少，主 Agent 等待已启动任务完成后再派发下一批，不得提高上限、丢弃候选或让一个 Subagent 合并多个 L3 候选。超时从任务成功派发后开始计算；到期仍未结束或未生成指定响应时按基础设施失败处理。
 
 Runner 为每个任务生成 `instructions.md`、`input.json` 与 `output.schema.json`，并在 `prepare` 或 `advance` 的标准输出中返回完整任务描述：
 
 ```text
 task_id
+agent_task_name
 task_path
 model
 reasoning_effort
@@ -444,7 +451,7 @@ Skill 主 Agent 根据 Runner 返回的任务描述调用 Native Subagent。Runn
 └── failure.json                 # 仅 FAILED 运行存在
 ```
 
-`task.json` 至少包含 `task_id`、`stage`、`attempt`、`model`、`reasoning_effort`、`fork_turns`、`response_path`、`spawn_message` 和输入摘要。任务 ID、路径、消息和摘要全部由 Runner 生成；主 Agent 和 Subagent 不得自选。`state.json` 额外记录当前 `active_tasks` 及每个任务的尝试次数。
+`task.json` 至少包含 `task_id`、供 Native 工具使用的合法 `agent_task_name`、`stage`、`attempt`、`model`、`reasoning_effort`、`fork_turns`、`response_path`、`spawn_message` 和输入摘要。任务 ID、Agent 任务名、路径、消息和摘要全部由 Runner 生成；主 Agent 和 Subagent 不得自选。`state.json` 额外记录当前 `active_tasks` 及每个任务的尝试次数。
 
 状态机：
 
@@ -502,7 +509,7 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 - 无 Oracle 必拒绝；
 - 完全重复指纹只保留一条；
 - 未授权命令绝不执行；
-- L1/L2 输入包含目标设计全文，L3 输入只包含显式引用章节；
+- L1/L2 输入包含目标设计全文；L3 的 L1 候选只包含显式引用章节，L2 架构候选包含完整评审文档与完整 Contract Ledger；
 - `prepare` 只生成一个 L1 任务，L1 未校验前不得生成 L2；
 - L2 未校验前不得生成 L3，L3 每个任务只包含一条候选；
 - L3 任务按 `max_parallel_subagents` 分批返回且不丢失；
@@ -537,9 +544,9 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 
 评估以下配置：
 
-1. `high / max / max`：默认基线；
-2. `max / max / max`；
-3. `high / high / max`。
+1. 当前 `review.config.json`：生产基线；
+2. 候选 A：只提高 L1 的推理强度；
+3. 候选 B：只降低 L2 的推理强度。
 
 模型配置不得自动切换。只有同时满足以下条件时，人工才能修改生产默认值：
 
@@ -549,7 +556,7 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 - 已知阻断级问题召回率不下降；
 - 相比基线，人工准入精确率提高至少 5 个百分点，或在召回率不下降时 Evidence Card 中位数至少减少 1。
 
-条件不足或结果不一致时保留 `high / max / max`。首版 20 案例的配置结果只作方向性记录。
+条件不足或结果不一致时保留当前生产配置。首版 20 案例的配置结果只作方向性记录。
 
 ### 12.4 首版发布门槛
 
@@ -581,7 +588,7 @@ Skill 实施完成必须证明：
 2. 普通设计讨论不会隐式触发 Skill；
 3. 缺少 Native Subagent 工具时 Skill 明确停止，不创建 fallback 模型调用；
 4. Runner 能以任务响应 fixture 完成 `prepare → advance → decide` 的全部确定性状态转换；
-5. 实际调度中 L1/L2/L3 均使用 `gpt-5.6-sol`、指定推理强度和 `fork_turns = "none"`；
+5. 实际调度中 L1/L2/L3 的模型与推理强度均逐任务匹配 `review.config.json`，并使用 `fork_turns = "none"`；
 6. L3 候选按配置有界并行，主 Agent 不总结、合并或筛选 Subagent 输出；
 7. `refuted`、`FAILED`、`INVALIDATED` 和多批 `AWAITING_HUMAN` 路径均有端到端测试；
 8. 至少一个历史真问题通过完整 Native Multi-Subagent 流程形成 Evidence Card；

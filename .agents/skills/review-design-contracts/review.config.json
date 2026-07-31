@@ -1,5 +1,4 @@
 {
-  "codex_binary": "codex",
   "models": {
     "self_consistency": {
       "model": "gpt-5.6-sol",
@@ -14,8 +13,8 @@
       "reasoning_effort": "max"
     }
   },
-  "timeout_ms": 300000,
-  "proxy_url": "http://127.0.0.1:7890",
+  "subagent_timeout_ms": 900000,
+  "max_parallel_subagents": 3,
   "authority_files": ["docs/REPO_MAP.md", "docs/ARCHITECTURE.md"],
   "command_allowlist": ["node --version"],
   "human_batch_size": 8

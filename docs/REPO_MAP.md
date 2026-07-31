@@ -15,7 +15,7 @@
 - `docs/superpowers/plans/2026-07-26-agent-module-development-tasks.md`：Agent 大模块 A0–A9 详细任务、依赖、测试闭环和完成定义。
 - `docs/superpowers/plans/2026-07-26-six-to-nine-player-code-refactor.md`：记录从 2–6 人改为 6–9 人后的 M0 Contracts 与人物目录返工范围及完成状态。
 - `docs/ARCHITECTURE.md`：M0.1 建立的 workspace 边界、入口点和依赖方向。
-- `.agents/skills/review-design-contracts/`：仓库级设计文档评审工具入口；通过显式 Skill 调用编排分层发现、独立对抗挑战、确定性证据门禁和人工二元仲裁，运行制品只写入被忽略的 `.superpowers/design-reviews/`，不属于产品运行时。
+- `.agents/skills/review-design-contracts/`：仓库级设计文档评审工具入口；主链为“显式 Skill → Runner 确定性生成任务包 → Native Subagent 串行执行 L1/L2、按配置有界分批执行单候选 L3 → Runner 推进证据门禁 → 人工二元仲裁”，运行制品只写入被忽略的 `.superpowers/design-reviews/`，不属于产品运行时。
 - `apps/web/public/poker/`：唯一的扑克牌静态资源目录，含 52 张标准牌、牌背和两张 Joker；Vite 浏览器路径为 `/poker/<filename>`，不得替换或修改资源内容。
 - `apikey.txt`：用户本地密钥文件；不作为运行时配置源，开发中不得读取或记录。
 - 根 `package.json`：pnpm workspace 的开发、构建、类型检查、格式检查与测试编排入口；`verify` 按“格式检查 → 类型检查 → 后端测试”执行，`pnpm-lock.yaml` 锁定其依赖树。

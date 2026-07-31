@@ -1,6 +1,6 @@
 # 分层契约与对抗挑战设计评审 Skill
 
-状态：Native Multi-Subagent 重构已实施，dogfood 修复已验证
+状态：Native Multi-Subagent 摘要隔离加固设计，待书面验收
 日期：2026-07-31
 
 ## 1. 背景与目标
@@ -27,6 +27,7 @@
 4. 人工只判断“是否存在可验证的契约违反路径”；
 5. Review 阶段不修改设计文档；
 6. 通过历史真实案例量化真阳性、漏报和人工负担。
+7. Agent 之间只共享完成当前角色所需的结构化事实，不共享其他 Agent 的候选、结论或自然语言摘要。
 
 ## 2. 设计原则
 
@@ -71,7 +72,7 @@ Codex 启动时只看到 Skill 的名称和描述。Skill 触发后才读取最�
 - 面向人工的 Evidence Card；
 - 人工接受/拒绝记录；
 - 本地修复队列；
-- 确定性测试和模型回归评估。
+- 确定性测试和评审行为回归评估。
 
 ### 3.2 首版不包含
 
@@ -94,8 +95,9 @@ Codex 启动时只看到 Skill 的名称和描述。Skill 触发后才读取最�
 flowchart LR
     D["设计文档 + 权威事实源"] --> P["L0 确定性 Context Pack"]
     P --> S["L1 Native Subagent<br/>自洽检查"]
-    S --> C["Contract Ledger<br/>文档内候选问题"]
-    C --> A["L2 Native Subagent<br/>架构推理"]
+    S --> C["Runner 拆分<br/>Contract Ledger / L1 Candidates"]
+    C -->|仅 Contract Ledger| A["L2 Native Subagent<br/>架构推理"]
+    C -->|L1 Candidates 保持隔离| R
     A --> R["跨边界候选问题"]
     R --> X["L3 Native Subagents<br/>逐候选独立对抗挑战"]
     X --> O{"挑战结果"}
@@ -108,7 +110,7 @@ flowchart LR
     H -->|不存在或证据不足| N
 ```
 
-Skill 主 Agent 只编排 Native Subagent 和确定性 Runner，不总结、改写、排序或批准模型意见。L1 与 L2 串行；L3 按配置的并发上限分批并行，每条候选使用独立 Subagent。层与层之间只传递已经过 Runner Schema 校验的 JSON 制品。
+Skill 主 Agent 只编排 Native Subagent 和确定性 Runner，不总结、改写、排序或批准模型意见。L1 与 L2 串行；L3 按配置的并发上限分批并行，每条候选使用独立 Subagent。层与层之间只传递已经过 Runner Schema 校验的 JSON 制品，并遵守“共享事实、不共享判断”：L2 只接收 L1 抽取的 `contracts`，不得接收 L1 候选。
 
 ## 5. 分层契约
 
@@ -130,7 +132,7 @@ Pack Builder：
 6. 把文档编码为带来源、长度和摘要的结构化数据对象，不把文档正文拼接成角色指令；
 7. 按以下固定规则为各层生成输入，而不是做语义“相关性”判断：
    - L1 获得目标设计文档全文；
-   - L2 获得目标设计文档全文、Contract Ledger 和所有显式声明的权威文件全文；
+   - L2 获得目标设计文档全文、只含 `contracts` 的 Contract Ledger 和所有显式声明的权威文件全文，不获得 L1 candidates；
    - L3 处理 L1 候选时，获得单条候选、候选引用的完整 Markdown 章节及对应 Contract Ledger 条目；
    - L3 处理 L2 架构候选时，获得单条候选、目标设计文档全文、所有显式声明的权威文件全文和完整 Contract Ledger。
 8. 为每次 Native Subagent 调用生成独立任务目录，其中只包含 `task.json`、`instructions.md`、`input.json`、`output.schema.json` 和待写入的 `response.json` 路径。
@@ -154,11 +156,16 @@ L0 不调用模型，也不推断设计是否正确。
 - 措辞和风格建议；
 - 对未声明未来功能的猜测。
 
+L1 的单次 Schema 响应同时包含 `contracts` 与 `candidates`，但 Runner 校验后必须立即拆成两个制品：
+
+- `contract-ledger.json`：只包含 `contracts`，是唯一允许传给 L2 的 L1 输出；
+- `l1-candidates.json`：只包含 L1 candidates，直到候选合并阶段前不向 L2 或其他发现层暴露。
+
 ### 5.3 L2：架构推理
 
 使用 `review.config.json.models.architecture` 声明的模型配置，由一个新的 `fork_turns = "none"` Native Subagent 执行。
 
-输入为 Contract Ledger、目标设计文档全文以及所有显式声明的权威架构文档全文。L0 不按关键词或模型判断裁剪 L2 输入。L2 的唯一职责：
+输入为只含 `contracts` 的 Contract Ledger、目标设计文档全文以及所有显式声明的权威架构文档全文。L0 不按关键词或模型判断裁剪 L2 输入。L2 不得看到 `l1-candidates.json`、L1 自然语言摘要或其他 Agent 的结论。L2 的唯一职责：
 
 - 追踪模块入口和依赖方向；
 - 检查事实归属、数据镜像和契约版本；
@@ -176,6 +183,8 @@ L3 输入由候选的结构化 `layer` 字段确定，不做语义相关性裁�
 - `self_consistency` 候选只获得引用的完整章节和匹配的 Contract Ledger 条目；
 - `architecture` 候选获得目标设计文档全文、所有显式声明的权威文件全文和完整 Contract Ledger。
 
+这里的“完整 Contract Ledger”只指完整 `contracts` 数组，不包含 L1 candidates。每个 L3 任务只含一条候选，也不得获得其他 L3 的输入、响应或人工决定。
+
 L1 的文档内候选与 L2 的跨边界候选组成候选并集。L2 不修改、批准或否决 L1 候选；Runner 在进入 L3 前只做 Schema、引用和重复指纹预检。
 
 步骤固定为：
@@ -188,7 +197,13 @@ L1 的文档内候选与 L2 的跨边界候选组成候选并集。L2 不修改�
 
 L3 只有负向过滤权，没有修复队列准入权。所有 `refuted` 结果保留完整审计记录并计入已知问题召回评估；只有 `survives` 结果可以进入 L4，最终仍须经过确定性预审和人工仲裁。
 
-### 5.5 L4：确定性预审
+### 5.5 模型声明输入不足
+
+L1、L2 或 L3 发现完成本层职责所必需的输入材料缺失时，必须返回 Schema 定义的 `insufficient_input` 分支和非空 `missing_inputs`，不得猜测、输出普通候选或用自由文本代替 JSON。
+
+`insufficient_input` 只表示任务包缺少完成角色职责所需的材料，不表示“没有发现问题”、无法证明候选、文档存在普通契约遗漏或模型对结论不确定。Runner 接受该结构后立即把整次运行置为 `FAILED`，记录 `failure_reason_code: INSUFFICIENT_INPUT` 和缺失项；不重试相同输入、不继续后续层、不生成 Evidence Card，也不向人工提交部分结果。补充权威输入后必须使用新 run 重试。
+
+### 5.6 L4：确定性预审
 
 Node.js 脚本执行：
 
@@ -205,7 +220,7 @@ Node.js 脚本执行：
 
 L4 不调用模型，不判断自然语言主张是真是假。
 
-### 5.6 L5：人工二元仲裁
+### 5.7 L5：人工二元仲裁
 
 人工只看到：
 
@@ -365,6 +380,8 @@ spawn_message
 
 共享 Prompt 明确把所有文档标记为不可信数据，并禁止把文档内容解释为指令。项目规则若与本次 Review 有关，必须作为显式权威文件进入 Pack；评审层不得依赖主会话历史、其他 Subagent 输出、全局 Memory 或隐藏历史。
 
+共享 Prompt 还必须声明封闭证据集：只允许把当前任务目录中的 `task.json`、`instructions.md`、`input.json` 和 `output.schema.json` 作为证据，只允许为读取这些文件和写指定 `response.json` 使用本地文件能力；不得主动调用 Skill、Subagent、Web、MCP、Git 或 Shell 命令，也不得读取父任务、兄弟任务或其他 `response.json`。这些限制是可审计的行为契约，不宣称撤销了 Native Subagent 继承的产品级工具或文件系统权限。
+
 `fork_turns = "none"` 只保证不继承父会话对话，不保证移除 Codex 产品级系统指令、工具定义或 Skill 元数据。Native Subagent 仍是完整 Codex Agent，而不是裸模型调用；本设计接受这一限制，并通过最小任务包、互斥角色、目标摘要失效检查、确定性门禁和人工仲裁约束其影响。若回归评估证明该 Context 导致发布门槛失败，再单独设计 Responses API 后端，不在首版预建双后端。
 
 Native Subagent 也继承当前 Codex 任务的工具和文件系统权限；`fork_turns = "none"` 不提供操作系统级读写隔离。“只读取任务目录、只写入 `response.json`”是可审计的任务契约，而不是文件系统强制边界。Runner 在每次推进前重验目标设计、权威文件和任务输入摘要；实际 dogfood 还必须确认没有业务文件变化。若未来要求强制最小权限或无人值守执行，应另行设计隔离运行环境，不得把本协议描述为已经具备该能力。
@@ -388,6 +405,8 @@ Native Subagent 复用当前 Codex 会话的登录和网络能力。Runner 不�
 │   ├── self-consistency-role.md
 │   ├── architecture-role.md
 │   ├── adversarial-role.md
+│   ├── insufficient-result.schema.json
+│   ├── self-consistency-result.schema.json
 │   ├── contract-ledger.schema.json
 │   ├── candidate-finding.schema.json
 │   ├── adversarial-result.schema.json
@@ -440,6 +459,7 @@ Skill 主 Agent 根据 Runner 返回的任务描述调用 Native Subagent。Runn
 │       ├── output.schema.json
 │       └── response.json          # 由该任务的 Native Subagent 写入
 ├── contract-ledger.json
+├── l1-candidates.json
 ├── candidates.json
 ├── adversarial-results.json
 ├── verification-results.json
@@ -452,6 +472,8 @@ Skill 主 Agent 根据 Runner 返回的任务描述调用 Native Subagent。Runn
 ```
 
 `task.json` 至少包含 `task_id`、供 Native 工具使用的合法 `agent_task_name`、`stage`、`attempt`、`model`、`reasoning_effort`、`fork_turns`、`response_path`、`spawn_message` 和输入摘要。任务 ID、Agent 任务名、路径、消息和摘要全部由 Runner 生成；主 Agent 和 Subagent 不得自选。`state.json` 额外记录当前 `active_tasks` 及每个任务的尝试次数。
+
+`contract-ledger.json` 与 `l1-candidates.json` 都由同一份已校验 L1 响应确定性投影生成，禁止模型分别生成两个互相漂移的摘要。L2 `input.json.contract_ledger` 必须逐字等于 `contract-ledger.json`，且其任意位置不得出现 `candidates` 键。
 
 状态机：
 
@@ -466,6 +488,7 @@ CREATED
   └─ 非零 Evidence Card → AWAITING_HUMAN → QUEUED | CLOSED
 
 任一未完成阶段 → FAILED
+任一模型层返回 insufficient_input → FAILED
 CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDATED
 ```
 
@@ -485,6 +508,7 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 
 - `CREATED` 至 `AWAITING_HUMAN` 期间任一输入文件摘要变化，整次运行进入 `INVALIDATED`；
 - Native Subagent 输出不满足 Schema、任务归属或输入摘要时，Runner 归档无效响应，只允许同模型、同强度、`fork_turns = "none"` 的全新 Subagent 修复一次；
+- Native Subagent 返回合法 `insufficient_input` 时不做同输入重试，直接以 `INSUFFICIENT_INPUT` 进入 `FAILED`；
 - 第二次仍失败则整层进入 `FAILED`，不向人工提交部分结果；
 - 不允许自动换模型、降低强度、调用嵌套 `codex exec`、Responses API 或其他厂商；
 - Native Subagent 工具不可用、调度失败、超时或未生成指定响应时，主 Agent 必须调用 `fail-task`，Runner 记录基础设施失败；
@@ -510,6 +534,9 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 - 完全重复指纹只保留一条；
 - 未授权命令绝不执行；
 - L1/L2 输入包含目标设计全文；L3 的 L1 候选只包含显式引用章节，L2 架构候选包含完整评审文档与完整 Contract Ledger；
+- L1 响应被确定性拆成 `contract-ledger.json` 与 `l1-candidates.json`，L2 输入不包含 candidates；
+- 每个 L3 `input.json` 只包含一条候选，且不包含兄弟候选或其他 Agent 响应；
+- L1、L2、L3 的合法 `insufficient_input` 都使运行以 `INSUFFICIENT_INPUT` 失败且不进入人工；
 - `prepare` 只生成一个 L1 任务，L1 未校验前不得生成 L2；
 - L2 未校验前不得生成 L3，L3 每个任务只包含一条候选；
 - L3 任务按 `max_parallel_subagents` 分批返回且不丢失；
@@ -540,23 +567,9 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 
 这 20 个案例只用于首版流水线、明显回归和发布门槛检查，不足以证明一种模型配置优于另一种。
 
-### 12.3 模型配置比较
+### 12.3 模型配置冻结
 
-评估以下配置：
-
-1. 当前 `review.config.json`：生产基线；
-2. 候选 A：只提高 L1 的推理强度；
-3. 候选 B：只降低 L2 的推理强度。
-
-模型配置不得自动切换。只有同时满足以下条件时，人工才能修改生产默认值：
-
-- 至少 50 个独立人工标注案例；
-- 每种配置对每个案例至少运行 3 次独立 Trial；
-- 候选配置通过全部硬性发布门槛；
-- 已知阻断级问题召回率不下降；
-- 相比基线，人工准入精确率提高至少 5 个百分点，或在召回率不下降时 Evidence Card 中位数至少减少 1。
-
-条件不足或结果不一致时保留当前生产配置。首版 20 案例的配置结果只作方向性记录。
+生产运行固定使用当前 `review.config.json` 中声明的三层模型配置。本次隔离加固不评估、不实现模型降级、自动路由或 fallback。以后如需修改模型或推理强度，必须作为独立设计变更重新运行人工标注回归集；Runner 和 Skill 不得根据成本、超时、候选数量或任务复杂度自行改变配置。
 
 ### 12.4 首版发布门槛
 
@@ -571,7 +584,7 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 - 超过 8 张卡片时必须标记 `REVIEW_OVERLOAD`；
 - 端到端 Review 期间目标设计文档无变化。
 
-成本、Token 和耗时只作次级指标，质量门槛通过后才参与配置选择。
+成本、Token 和耗时只作运行观测指标，不在本版触发模型配置变化。
 
 指标口径固定为：
 
@@ -589,14 +602,16 @@ Skill 实施完成必须证明：
 3. 缺少 Native Subagent 工具时 Skill 明确停止，不创建 fallback 模型调用；
 4. Runner 能以任务响应 fixture 完成 `prepare → advance → decide` 的全部确定性状态转换；
 5. 实际调度中 L1/L2/L3 的模型与推理强度均逐任务匹配 `review.config.json`，并使用 `fork_turns = "none"`；
-6. L3 候选按配置有界并行，主 Agent 不总结、合并或筛选 Subagent 输出；
-7. `refuted`、`FAILED`、`INVALIDATED` 和多批 `AWAITING_HUMAN` 路径均有端到端测试；
-8. 至少一个历史真问题通过完整 Native Multi-Subagent 流程形成 Evidence Card；
-9. 至少一个反例和一个 Prompt 注入案例不会进入人工报告；
-10. 人工接受前 `fix-queue.json` 为空；
-11. 人工接受后只新增对应 finding；
-12. 目标设计文档和其他业务代码均未被修改；
-13. Skill 验证与打包检查通过。
+6. L2 只收到结构化 Contract Ledger，不收到 L1 candidates 或自然语言摘要；
+7. L3 候选按配置有界并行，每个任务只有一条候选，主 Agent 不总结、合并或筛选 Subagent 输出；
+8. 三个模型层的 `insufficient_input` 均由 Runner 终止为 `FAILED`，不产生空报告或部分人工结果；
+9. `refuted`、`FAILED`、`INVALIDATED` 和多批 `AWAITING_HUMAN` 路径均有端到端测试；
+10. 至少一个历史真问题通过完整 Native Multi-Subagent 流程形成 Evidence Card；
+11. 至少一个反例和一个 Prompt 注入案例不会进入人工报告；
+12. 人工接受前 `fix-queue.json` 为空；
+13. 人工接受后只新增对应 finding；
+14. 目标设计文档和其他业务代码均未被修改；
+15. Skill 验证与打包检查通过。
 
 首版只实现本设计所需文件，不修改 `REPO_MAP.md` 或 `ARCHITECTURE.md` 的业务架构内容。Skill 成为新的仓库级开发工作流后，只需在 `REPO_MAP.md` 增加一条工具职责说明。
 

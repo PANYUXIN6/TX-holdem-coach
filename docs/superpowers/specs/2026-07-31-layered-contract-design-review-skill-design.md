@@ -37,7 +37,7 @@ Prompt 只声明角色边界、成功条件、禁止越界项和输出 Schema。
 ### 2.2 单一事实来源
 
 - Skill 触发和阶段顺序只存在于 `SKILL.md`；
-- 模型、推理强度、超时、权威来源和命令白名单只存在于 `review.config.json`；
+- 模型、推理强度、超时、本机网络代理、权威来源和命令白名单只存在于 `review.config.json`；
 - 机器字段和必填关系只存在于 JSON Schema；
 - 角色职责分别只存在于对应角色文件；
 - `review-protocol.md` 只解释字段语义，不重新定义字段。
@@ -328,6 +328,7 @@ Runner 通过非交互 Codex 进程执行各层，并固定：
 
 - `--ephemeral`；
 - `--ignore-user-config`；
+- `--enable respect_system_proxy`；
 - `--sandbox read-only`；
 - `--output-schema`；
 - 独立的临时工作目录；
@@ -338,9 +339,11 @@ Runner 通过非交互 Codex 进程执行各层，并固定：
 
 Codex 子进程只继承运行所需的最小环境白名单，不传递数据库 URL、Provider Key、业务 Secret 或任意父进程变量。Runner 依赖现有 Codex 登录态，不支持通过转发环境变量中的 API Key 完成认证。
 
+Runner 从 `review.config.json` 读取唯一的 `proxy_url`，只接受无凭据、带显式端口的 `http://127.0.0.1` 或 `http://localhost` 地址。它把该值同时注入 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 及其小写形式，并启用 Codex 的 `respect_system_proxy` 特性；父进程已有的代理变量不得覆盖配置值。代理不可达或当前 Codex 不支持该特性时按基础设施失败处理，不允许绕过代理直连或自动降级。
+
 同一模型家族可能存在相关盲区。本设计通过新 Context、互斥职责、先反证后证明、确定性门禁和人工仲裁降低风险，而不声称模型同质性等价于独立模型多样性。
 
-设计时已在本地 `codex-cli 0.146.0` 核对 `--ephemeral`、`--ignore-user-config`、`--sandbox` 和 `--output-schema`。Runner 启动时仍须执行版本和能力预检；目标模型、推理强度或必要 flags 不可用时进入 `FAILED`，不得猜测替代参数或自动降级。
+设计时已在本地 `codex-cli 0.146.0` 核对 `--ephemeral`、`--ignore-user-config`、`--enable`、`--sandbox` 和 `--output-schema`，并确认该版本暴露 `respect_system_proxy` 特性。Runner 启动时仍须执行版本和能力预检；目标模型、推理强度或必要 flags 不可用时进入 `FAILED`，不得猜测替代参数或自动降级。
 
 ## 9. Skill 布局
 

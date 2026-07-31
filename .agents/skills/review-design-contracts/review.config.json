@@ -15,6 +15,7 @@
     }
   },
   "timeout_ms": 300000,
+  "proxy_url": "http://127.0.0.1:7890",
   "authority_files": ["docs/REPO_MAP.md", "docs/ARCHITECTURE.md"],
   "command_allowlist": ["node --version"],
   "human_batch_size": 8

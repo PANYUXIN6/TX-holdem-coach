@@ -640,7 +640,7 @@ if (args[0] === "--version") {
   process.exit(0);
 }
 if (args[0] === "exec" && args[1] === "--help") {
-  process.stdout.write("--ephemeral --ignore-user-config --sandbox --output-schema --output-last-message\\n");
+  process.stdout.write("--enable --ephemeral --ignore-user-config --sandbox --output-schema --output-last-message\\n");
   process.exit(0);
 }
 if (args[0] !== "exec") process.exit(2);
@@ -652,7 +652,18 @@ const result = input.stage === "self_consistency"
   ? { contracts: [], candidates: [] }
   : { candidates: [] };
 fs.writeFileSync(output, JSON.stringify(result));
-fs.appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({ args, input }) + "\\n");
+fs.appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({
+  args,
+  input,
+  proxy: {
+    HTTP_PROXY: process.env.HTTP_PROXY,
+    HTTPS_PROXY: process.env.HTTPS_PROXY,
+    ALL_PROXY: process.env.ALL_PROXY,
+    http_proxy: process.env.http_proxy,
+    https_proxy: process.env.https_proxy,
+    all_proxy: process.env.all_proxy
+  }
+}) + "\\n");
 `,
   )
   chmodSync(fakeCodexPath, 0o755)
@@ -677,6 +688,13 @@ fs.appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({ args, input }) + 
     assert.ok(call.args.includes('--ignore-user-config'))
     assert.deepEqual(
       call.args.slice(
+        call.args.indexOf('--enable'),
+        call.args.indexOf('--enable') + 2,
+      ),
+      ['--enable', 'respect_system_proxy'],
+    )
+    assert.deepEqual(
+      call.args.slice(
         call.args.indexOf('--sandbox'),
         call.args.indexOf('--sandbox') + 2,
       ),
@@ -690,6 +708,14 @@ fs.appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({ args, input }) + 
       prompt,
       /Human decision input|Rejection ownership|State rules/,
     )
+    assert.deepEqual(call.proxy, {
+      HTTP_PROXY: 'http://127.0.0.1:7890',
+      HTTPS_PROXY: 'http://127.0.0.1:7890',
+      ALL_PROXY: 'http://127.0.0.1:7890',
+      http_proxy: 'http://127.0.0.1:7890',
+      https_proxy: 'http://127.0.0.1:7890',
+      all_proxy: 'http://127.0.0.1:7890',
+    })
   }
   assert.equal(calls[0].input.target.content.includes('A completed run'), true)
   assert.deepEqual(
@@ -843,7 +869,7 @@ if (args[0] === "--version") {
   process.exit(0);
 }
 if (args[0] === "exec" && args[1] === "--help") {
-  process.stdout.write("--ephemeral --ignore-user-config --sandbox --output-schema --output-last-message\\n");
+  process.stdout.write("--enable --ephemeral --ignore-user-config --sandbox --output-schema --output-last-message\\n");
   process.exit(0);
 }
 const cwd = args[args.indexOf("--cd") + 1];

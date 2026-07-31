@@ -425,12 +425,34 @@ function validateConfig(config) {
     config.codex_binary.length === 0 ||
     !Number.isInteger(config.timeout_ms) ||
     config.timeout_ms <= 0 ||
+    typeof config.proxy_url !== 'string' ||
+    config.proxy_url.length === 0 ||
     !Array.isArray(config.authority_files) ||
     !Array.isArray(config.command_allowlist) ||
     !Number.isInteger(config.human_batch_size) ||
     config.human_batch_size <= 0
   ) {
     throw new Error('review.config.json 结构无效')
+  }
+  let proxyUrl
+  try {
+    proxyUrl = new URL(config.proxy_url)
+  } catch {
+    throw new Error('review.config.json 的 proxy_url 不是合法 URL')
+  }
+  if (
+    proxyUrl.protocol !== 'http:' ||
+    !['127.0.0.1', 'localhost'].includes(proxyUrl.hostname) ||
+    proxyUrl.port.length === 0 ||
+    proxyUrl.username.length > 0 ||
+    proxyUrl.password.length > 0 ||
+    proxyUrl.pathname !== '/' ||
+    proxyUrl.search.length > 0 ||
+    proxyUrl.hash.length > 0
+  ) {
+    throw new Error(
+      'review.config.json 的 proxy_url 必须是无凭据、带端口的本机 HTTP 代理',
+    )
   }
   for (const [layer, effort] of Object.entries(expectedLayers)) {
     const modelConfig = config.models?.[layer]
@@ -445,7 +467,7 @@ function validateConfig(config) {
   }
 }
 
-function codexChildEnvironment() {
+function codexChildEnvironment(config) {
   const allowedKeys = [
     'PATH',
     'HOME',
@@ -465,18 +487,29 @@ function codexChildEnvironment() {
     'NODE_EXTRA_CA_CERTS',
     'FAKE_CODEX_LOG',
   ]
-  return Object.fromEntries(
+  const environment = Object.fromEntries(
     allowedKeys
       .filter((key) => process.env[key] !== undefined)
       .map((key) => [key, process.env[key]]),
   )
+  for (const key of [
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'ALL_PROXY',
+    'http_proxy',
+    'https_proxy',
+    'all_proxy',
+  ]) {
+    environment[key] = config.proxy_url
+  }
+  return environment
 }
 
 function preflightCodex(config) {
   try {
     const version = execFileSync(config.codex_binary, ['--version'], {
       encoding: 'utf8',
-      env: codexChildEnvironment(),
+      env: codexChildEnvironment(config),
       timeout: 10000,
     })
     if (!/codex-cli\s+\d+\.\d+\.\d+/.test(version)) {
@@ -484,10 +517,11 @@ function preflightCodex(config) {
     }
     const help = execFileSync(config.codex_binary, ['exec', '--help'], {
       encoding: 'utf8',
-      env: codexChildEnvironment(),
+      env: codexChildEnvironment(config),
       timeout: 10000,
     })
     for (const requiredFlag of [
+      '--enable',
       '--ephemeral',
       '--ignore-user-config',
       '--sandbox',
@@ -568,6 +602,8 @@ function invokeCodexStage({
           config.codex_binary,
           [
             'exec',
+            '--enable',
+            'respect_system_proxy',
             '--ephemeral',
             '--ignore-user-config',
             '--sandbox',
@@ -589,7 +625,7 @@ function invokeCodexStage({
           ],
           {
             encoding: 'utf8',
-            env: codexChildEnvironment(),
+            env: codexChildEnvironment(config),
             timeout: config.timeout_ms,
             maxBuffer: 10 * 1024 * 1024,
           },

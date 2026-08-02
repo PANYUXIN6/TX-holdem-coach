@@ -112,7 +112,10 @@ export type CommandRegistrationResult =
     }
 
 const preparedRegistrations = new WeakSet<object>()
-const acquiredRegistrations = new WeakSet<object>()
+const acquiredTransactions = new WeakMap<
+  AcquiredCommandRegistration,
+  TransactionSql
+>()
 const consumedAcquiredRegistrations = new WeakSet<object>()
 
 export const CommandEventRangeSchema = z
@@ -128,6 +131,34 @@ export type CommandEventRange = Readonly<
 
 function invalidLedger(): PersistenceDataCorruptionError {
   return new PersistenceDataCorruptionError('invalidCommandLedger')
+}
+
+function normalizeUuid(value: string): string {
+  return value.toLowerCase()
+}
+
+function uuidEquals(left: string, right: string): boolean {
+  return normalizeUuid(left) === normalizeUuid(right)
+}
+
+function normalizeLedgerCommand(command: LedgerCommand): LedgerCommand {
+  if (command.type !== 'aiAction') {
+    return {
+      ...command,
+      sessionId: normalizeUuid(command.sessionId),
+      commandId: normalizeUuid(command.commandId),
+    }
+  }
+  return {
+    ...command,
+    sessionId: normalizeUuid(command.sessionId),
+    commandId: normalizeUuid(command.commandId),
+    payload: {
+      ...command.payload,
+      decisionRequestId: normalizeUuid(command.payload.decisionRequestId),
+      handId: normalizeUuid(command.payload.handId),
+    },
+  }
 }
 
 function parseLedgerRow(row: unknown): LedgerRow {
@@ -153,8 +184,8 @@ function parseExistingRegistration(
 ): Exclude<CommandRegistrationResult, AcquiredCommandRegistration> {
   const row = parseLedgerRow(rowInput)
   if (
-    row.sessionId !== prepared.command.sessionId ||
-    row.commandId !== prepared.command.commandId
+    !uuidEquals(row.sessionId, prepared.command.sessionId) ||
+    !uuidEquals(row.commandId, prepared.command.commandId)
   ) {
     throw invalidLedger()
   }
@@ -194,7 +225,7 @@ function parseExistingRegistration(
       !response.success ||
       !SafeIntegerSchema.safeParse(response.data.snapshot.stateVersion)
         .success ||
-      response.data.snapshot.sessionId !== row.sessionId ||
+      !uuidEquals(response.data.snapshot.sessionId, row.sessionId) ||
       response.data.snapshot.stateVersion !== row.finalStateVersion ||
       (row.firstEventSeq === null) !== (row.lastEventSeq === null) ||
       (row.firstEventSeq !== null &&
@@ -219,7 +250,7 @@ function parseExistingRegistration(
     (latestSnapshot === undefined && row.finalStateVersion !== null) ||
     (latestSnapshot !== undefined &&
       (!SafeIntegerSchema.safeParse(latestSnapshot.stateVersion).success ||
-        latestSnapshot.sessionId !== row.sessionId ||
+        !uuidEquals(latestSnapshot.sessionId, row.sessionId) ||
         latestSnapshot.stateVersion !== row.finalStateVersion))
   ) {
     throw invalidLedger()
@@ -227,15 +258,21 @@ function parseExistingRegistration(
   return deepFreeze({ status: 'failed', response: response.data })
 }
 
-function assertAvailableAcquired(acquired: AcquiredCommandRegistration): void {
+function assertAvailableAcquired(
+  acquired: AcquiredCommandRegistration,
+  transaction: TransactionSql,
+): void {
   if (
     typeof acquired !== 'object' ||
     acquired === null ||
-    !acquiredRegistrations.has(acquired)
+    !acquiredTransactions.has(acquired)
   ) {
     throw new RepositoryInputValidationError()
   }
   if (consumedAcquiredRegistrations.has(acquired)) {
+    throw new CommandLedgerTransitionError()
+  }
+  if (acquiredTransactions.get(acquired) !== transaction) {
     throw new CommandLedgerTransitionError()
   }
 }
@@ -261,7 +298,7 @@ export function prepareCommandRegistration(
     throw new RepositoryInputValidationError()
   }
 
-  const command = deepFreeze(parsed.data)
+  const command = deepFreeze(normalizeLedgerCommand(parsed.data))
   const canonicalPayload = canonicalJson({
     type: command.type,
     expectedStateVersion: command.expectedStateVersion,
@@ -334,7 +371,7 @@ export async function registerCommand(
       canonicalPayloadDigest: prepared.canonicalPayloadDigest,
       owner,
     }) as AcquiredCommandRegistration
-    acquiredRegistrations.add(acquired)
+    acquiredTransactions.set(acquired, transaction)
     return acquired
   }
 
@@ -385,7 +422,7 @@ export async function completeCommand(
   responseInput: unknown,
   eventRangeInput: CommandEventRange | null,
 ): Promise<void> {
-  assertAvailableAcquired(acquired)
+  assertAvailableAcquired(acquired, transaction)
 
   const response = CommandResponseSchema.safeParse(responseInput)
   const eventRange = z
@@ -395,7 +432,7 @@ export async function completeCommand(
     !response.success ||
     !eventRange.success ||
     !SafeIntegerSchema.safeParse(response.data.snapshot.stateVersion).success ||
-    response.data.snapshot.sessionId !== acquired.sessionId ||
+    !uuidEquals(response.data.snapshot.sessionId, acquired.sessionId) ||
     (eventRange.data !== null &&
       eventRange.data.lastEventSeq !== response.data.snapshot.eventSeq)
   ) {
@@ -433,7 +470,7 @@ export async function failCommand(
   acquired: AcquiredCommandRegistration,
   responseInput: unknown,
 ): Promise<void> {
-  assertAvailableAcquired(acquired)
+  assertAvailableAcquired(acquired, transaction)
 
   const response = ErrorResponseSchema.safeParse(responseInput)
   const latestSnapshot = response.success
@@ -443,7 +480,7 @@ export async function failCommand(
     !response.success ||
     (latestSnapshot !== undefined &&
       (!SafeIntegerSchema.safeParse(latestSnapshot.stateVersion).success ||
-        latestSnapshot.sessionId !== acquired.sessionId))
+        !uuidEquals(latestSnapshot.sessionId, acquired.sessionId)))
   ) {
     throw new RepositoryInputValidationError()
   }

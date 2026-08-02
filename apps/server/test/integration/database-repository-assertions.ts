@@ -657,11 +657,12 @@ function commandInputs(sessionId: string) {
     },
     {
       ...base,
-      commandId: randomUUID(),
+      sessionId: sessionId.toUpperCase(),
+      commandId: randomUUID().toUpperCase(),
       type: 'aiAction' as const,
       payload: {
-        decisionRequestId: randomUUID(),
-        handId: randomUUID(),
+        decisionRequestId: randomUUID().toUpperCase(),
+        handId: randomUUID().toUpperCase(),
         actorSeatNumber: 2,
         candidateActionId: 'candidate_2',
         action: { type: 'raise' as const, targetStreetCommitment: 120 },
@@ -690,7 +691,7 @@ async function assertCommandLedgerLifecycle(sql: Sql): Promise<void> {
         index % 2 === 0
           ? {
               protocolVersion: 1 as const,
-              snapshot: createCommandSnapshot(sessionId),
+              snapshot: createCommandSnapshot(input.sessionId),
             }
           : {
               protocolVersion: 1 as const,
@@ -711,11 +712,25 @@ async function assertCommandLedgerLifecycle(sql: Sql): Promise<void> {
         FROM app_private.command_ledger
         WHERE id = ${acquired.ledgerId}::uuid
       `
-      const replay = await registerCommand(
-        transaction,
-        owner,
-        prepareCommandRegistration(input),
+      const replayInput =
+        input.type === 'aiAction'
+          ? {
+              ...input,
+              sessionId: input.sessionId.toLowerCase(),
+              commandId: input.commandId.toLowerCase(),
+              payload: {
+                ...input.payload,
+                decisionRequestId:
+                  input.payload.decisionRequestId.toLowerCase(),
+                handId: input.payload.handId.toLowerCase(),
+              },
+            }
+          : input
+      const replayPrepared = prepareCommandRegistration(replayInput)
+      expect(replayPrepared.canonicalPayloadDigest).toBe(
+        prepared.canonicalPayloadDigest,
       )
+      const replay = await registerCommand(transaction, owner, replayPrepared)
       expect(replay).toEqual({
         status: 'snapshot' in expectedResponse ? 'completed' : 'failed',
         response: expectedResponse,
@@ -850,20 +865,35 @@ async function assertCommandLedgerRollbacks(sql: Sql): Promise<void> {
       }
       return result
     })
+    await sql.begin(async (transaction) => {
+      const replay = await registerCommand(
+        transaction,
+        owner,
+        prepareCommandRegistration({
+          sessionId: processingSessionId,
+          commandId: acquired.commandId,
+          expectedStateVersion: 0,
+          type: 'endSession',
+          payload: {},
+        }),
+      )
+      expect(replay).toEqual({ status: 'processing' })
 
-    await inRollbackTransaction(sql, async (transaction) => {
-      await failCommand(transaction, acquired, {
-        protocolVersion: 1,
-        code: 'expected_failure',
-        message: '预期失败。',
-      })
+      const forged = { ...acquired } as typeof acquired
+      await expect(
+        failCommand(transaction, forged, {
+          protocolVersion: 1,
+          code: 'expected_failure',
+          message: '预期失败。',
+        }),
+      ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+      const rows = await transaction<{ readonly status: string }[]>`
+        SELECT processing_status AS status
+        FROM app_private.command_ledger
+        WHERE id = ${acquired.ledgerId}::uuid
+      `
+      expect(rows[0]?.status).toBe('processing')
     })
-    const rows = await sql<{ readonly status: string }[]>`
-      SELECT processing_status AS status
-      FROM app_private.command_ledger
-      WHERE id = ${acquired.ledgerId}::uuid
-    `
-    expect(rows[0]?.status).toBe('processing')
   } finally {
     await sql`
       DELETE FROM app_private.sessions
@@ -938,18 +968,41 @@ async function assertCandidateLedgerIdCollisions(sql: Sql): Promise<void> {
   }
 }
 
-function withFirstQueryBarrier(
+async function waitForUniqueKeyConflict(
   transaction: TransactionSql,
-  onFirstQuery: () => void,
-): TransactionSql {
-  let first = true
-  return ((template: TemplateStringsArray, ...parameters: unknown[]) => {
-    if (first) {
-      first = false
-      onFirstQuery()
+  firstBackendPid: number,
+  secondBackendPid: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const rows = await transaction<
+      {
+        readonly waitsForTransactionId: boolean
+        readonly blockedByFirst: boolean
+      }[]
+    >`
+      SELECT
+        EXISTS (
+          SELECT 1
+          FROM pg_locks AS waiting
+          JOIN pg_locks AS held
+            ON held.locktype = 'transactionid'
+            AND held.transactionid = waiting.transactionid
+            AND held.granted
+            AND held.pid = ${firstBackendPid}::int
+          WHERE waiting.pid = ${secondBackendPid}::int
+            AND waiting.locktype = 'transactionid'
+            AND NOT waiting.granted
+        ) AS "waitsForTransactionId",
+        ${firstBackendPid}::int = ANY(
+          pg_blocking_pids(${secondBackendPid}::int)
+        ) AS "blockedByFirst"
+    `
+    if (rows[0]?.waitsForTransactionId && rows[0].blockedByFirst) {
+      return
     }
-    return Reflect.apply(transaction, transaction, [template, ...parameters])
-  }) as unknown as TransactionSql
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error('未观察到第二事务等待第一事务的唯一键冲突。')
 }
 
 async function assertConcurrentCommandReplay(
@@ -978,6 +1031,11 @@ async function assertConcurrentCommandReplay(
   try {
     await insertCommittedDiagnosticSession(sql, sessionId)
     await sql.begin(async (transaction) => {
+      const firstPidRows = await transaction<{ readonly pid: number }[]>`
+        SELECT pg_backend_pid() AS pid
+      `
+      const firstBackendPid = firstPidRows[0]?.pid
+      expect(firstBackendPid).toBeDefined()
       const firstPrepared = prepareCommandRegistration(input)
       const first = await registerCommand(transaction, owner, firstPrepared)
       expect(first.status).toBe('acquired')
@@ -996,20 +1054,31 @@ async function assertConcurrentCommandReplay(
       `
       updatedAtAfterFirst = updatedRows[0]?.updatedAt ?? ''
 
-      let signalQueryStarted: (() => void) | undefined
-      const queryStarted = new Promise<void>((resolve) => {
-        signalQueryStarted = resolve
+      let signalSecondPid: ((pid: number) => void) | undefined
+      const secondPid = new Promise<number>((resolve) => {
+        signalSecondPid = resolve
       })
-      secondResult = secondSql.begin((secondTransaction) =>
-        registerCommand(
-          withFirstQueryBarrier(secondTransaction, () =>
-            signalQueryStarted?.(),
-          ),
+      secondResult = secondSql.begin(async (secondTransaction) => {
+        const pidRows = await secondTransaction<{ readonly pid: number }[]>`
+          SELECT pg_backend_pid() AS pid
+        `
+        const secondBackendPid = pidRows[0]?.pid
+        if (secondBackendPid === undefined) {
+          throw new Error('无法取得第二事务 backend PID。')
+        }
+        signalSecondPid?.(secondBackendPid)
+        return registerCommand(
+          secondTransaction,
           owner,
           prepareCommandRegistration(input),
-        ),
+        )
+      })
+      const secondBackendPid = await secondPid
+      await waitForUniqueKeyConflict(
+        transaction,
+        firstBackendPid ?? -1,
+        secondBackendPid,
       )
-      await queryStarted
     })
 
     const replay = await secondResult

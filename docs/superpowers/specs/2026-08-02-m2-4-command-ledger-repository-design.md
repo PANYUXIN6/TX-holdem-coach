@@ -1,7 +1,7 @@
 # M2.4 持久化命令账本 Repository 设计
 
 - 日期：2026-08-02
-- 状态：已确认，评审修复待实现
+- 状态：已实现并验证
 - 上位任务：[开发任务分解](../plans/2026-07-23-poker-practice-development-tasks.md)
 - 数据库边界：[M2.2 Schema 设计](./2026-07-29-m2-2-schema-design.md)
 - 事务边界：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)

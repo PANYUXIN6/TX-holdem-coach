@@ -22,6 +22,12 @@ const commandId = '33333333-3333-4333-8333-333333333333'
 const handId = '44444444-4444-4444-8444-444444444444'
 const decisionRequestId = '55555555-5555-4555-8555-555555555555'
 const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
+const uppercaseIds = {
+  sessionId: 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',
+  commandId: 'BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB',
+  decisionRequestId: 'CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC',
+  handId: 'DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD',
+} as const
 
 function command(
   type:
@@ -208,6 +214,182 @@ describe('command ledger repository', () => {
     )
   })
 
+  test('hashes every semantic field but excludes ledger location keys', () => {
+    const baseAiAction = aiActionCommand()
+    const differentDecisionRequestId = '77777777-7777-4777-8777-777777777777'
+    const differentHandId = '88888888-8888-4888-8888-888888888888'
+    const digest = (input: unknown) =>
+      prepareCommandRegistration(input).canonicalPayloadDigest
+    const pairs: readonly (readonly [unknown, unknown])[] = [
+      [command('endSession'), command('retryAgent')],
+      [
+        command('endSession'),
+        { ...command('endSession'), expectedStateVersion: 13 },
+      ],
+      [command('rebuy'), { ...command('rebuy'), payload: { amount: 2_001 } }],
+      [
+        baseAiAction,
+        {
+          ...baseAiAction,
+          payload: {
+            ...baseAiAction.payload,
+            decisionRequestId: differentDecisionRequestId,
+          },
+        },
+      ],
+      [
+        baseAiAction,
+        {
+          ...baseAiAction,
+          payload: { ...baseAiAction.payload, handId: differentHandId },
+        },
+      ],
+      [
+        baseAiAction,
+        {
+          ...baseAiAction,
+          payload: { ...baseAiAction.payload, actorSeatNumber: 3 },
+        },
+      ],
+      [
+        baseAiAction,
+        {
+          ...baseAiAction,
+          payload: {
+            ...baseAiAction.payload,
+            candidateActionId: 'candidate_3',
+          },
+        },
+      ],
+      [
+        baseAiAction,
+        {
+          ...baseAiAction,
+          payload: {
+            ...baseAiAction.payload,
+            action: { type: 'call' as const },
+          },
+        },
+      ],
+    ]
+
+    for (const [left, right] of pairs) {
+      expect(digest(left)).not.toBe(digest(right))
+    }
+    expect(digest(command('endSession'))).toBe(
+      digest({
+        ...command('endSession'),
+        sessionId: '77777777-7777-4777-8777-777777777777',
+        commandId: '88888888-8888-4888-8888-888888888888',
+      }),
+    )
+  })
+
+  test('validates then normalizes all four command UUID fields before hashing', () => {
+    const uppercase = {
+      ...aiActionCommand(),
+      sessionId: uppercaseIds.sessionId,
+      commandId: uppercaseIds.commandId,
+      payload: {
+        ...aiActionCommand().payload,
+        decisionRequestId: uppercaseIds.decisionRequestId,
+        handId: uppercaseIds.handId,
+      },
+    }
+    const lowercase = {
+      ...uppercase,
+      sessionId: uppercase.sessionId.toLowerCase(),
+      commandId: uppercase.commandId.toLowerCase(),
+      payload: {
+        ...uppercase.payload,
+        decisionRequestId: uppercase.payload.decisionRequestId.toLowerCase(),
+        handId: uppercase.payload.handId.toLowerCase(),
+      },
+    }
+
+    const preparedUppercase = prepareCommandRegistration(uppercase)
+    const preparedLowercase = prepareCommandRegistration(lowercase)
+    expect(preparedUppercase.command).toEqual(lowercase)
+    expect(preparedUppercase.canonicalPayloadDigest).toBe(
+      preparedLowercase.canonicalPayloadDigest,
+    )
+  })
+
+  test('rejects each invalid UUID field and enforces candidate id length after trim', () => {
+    const validAiAction = aiActionCommand()
+    for (const invalid of [
+      { ...command('endSession'), sessionId: 'not-a-uuid' },
+      { ...command('endSession'), commandId: 'not-a-uuid' },
+      {
+        ...validAiAction,
+        payload: { ...validAiAction.payload, decisionRequestId: 'not-a-uuid' },
+      },
+      {
+        ...validAiAction,
+        payload: { ...validAiAction.payload, handId: 'not-a-uuid' },
+      },
+      {
+        ...validAiAction,
+        payload: {
+          ...validAiAction.payload,
+          candidateActionId: 'x'.repeat(129),
+        },
+      },
+    ]) {
+      expect(() => prepareCommandRegistration(invalid)).toThrow(
+        RepositoryInputValidationError,
+      )
+    }
+
+    const boundary = prepareCommandRegistration({
+      ...validAiAction,
+      payload: {
+        ...validAiAction.payload,
+        candidateActionId: `  ${'x'.repeat(128)}  `,
+      },
+    })
+    if (boundary.command.type !== 'aiAction') {
+      throw new Error('Expected an aiAction command.')
+    }
+    expect(boundary.command.payload.candidateActionId).toHaveLength(128)
+  })
+
+  test('replays the original uppercase response using normalized UUID equality', async () => {
+    const input = {
+      ...command('endSession'),
+      sessionId: uppercaseIds.sessionId,
+      commandId: uppercaseIds.commandId,
+    }
+    const prepared = prepareCommandRegistration(input)
+    const response = {
+      ...commandResponse(),
+      snapshot: {
+        ...commandResponse().snapshot,
+        sessionId: uppercaseIds.sessionId,
+      },
+    }
+    const result = await registerCommand(
+      createTransactionMock([
+        [],
+        [
+          ledgerRow(prepared, {
+            sessionId: uppercaseIds.sessionId.toLowerCase(),
+            commandId: uppercaseIds.commandId.toLowerCase(),
+            processingStatus: 'completed',
+            finalStateVersion: response.snapshot.stateVersion,
+            responsePayloadVersion: 1,
+            responsePayload: response,
+            hasCompletedAt: true,
+          }),
+        ],
+      ]),
+      await resolvedOwner(),
+      prepared,
+    )
+
+    expect(result).toEqual({ status: 'completed', response })
+  })
+
   test('rejects unknown fields, invalid aiAction facts, and unsafe versions', () => {
     for (const invalid of [
       { ...command('endSession'), unexpected: true },
@@ -241,6 +423,51 @@ describe('command ledger repository', () => {
     await expect(
       registerCommand(transaction, owner, prepared),
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+  })
+
+  test('consumes prepared after not-found, conflict, corruption, or SQL failure', async () => {
+    const owner = await resolvedOwner()
+    for (const createResponses of [
+      (prepared: ReturnType<typeof prepareCommandRegistration>) => [[], []],
+      (prepared: ReturnType<typeof prepareCommandRegistration>) => [
+        [],
+        [ledgerRow(prepared, { canonicalPayloadDigest: 'a'.repeat(64) })],
+      ],
+      (prepared: ReturnType<typeof prepareCommandRegistration>) => [
+        [],
+        [ledgerRow(prepared, { hasCompletedAt: true })],
+      ],
+      (_prepared: ReturnType<typeof prepareCommandRegistration>) => [
+        new Error('database failed'),
+      ],
+    ]) {
+      const prepared = prepareCommandRegistration(command('endSession'))
+      await expect(
+        registerCommand(
+          createTransactionMock(createResponses(prepared)),
+          owner,
+          prepared,
+        ),
+      ).rejects.toBeDefined()
+      await expect(
+        registerCommand(
+          createTransactionMock([[{ ledgerId: prepared.ledgerId }]]),
+          owner,
+          prepared,
+        ),
+      ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+    }
+  })
+
+  test('rejects a forged prepared capability before SQL', async () => {
+    const prepared = prepareCommandRegistration(command('endSession'))
+    const forged = { ...prepared } as typeof prepared
+    const tracked = createTrackedTransaction([])
+
+    await expect(
+      registerCommand(tracked.transaction, await resolvedOwner(), forged),
+    ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+    expect(tracked.getCallCount()).toBe(0)
   })
 
   test('grants acquired only when the insert returns one row', async () => {
@@ -334,6 +561,179 @@ describe('command ledger repository', () => {
     }
   })
 
+  test('accepts every valid processing, completed, and failed field matrix', async () => {
+    const owner = await resolvedOwner()
+    const completedResponse = commandResponse()
+    const failedWithSnapshot = errorResponse(true)
+    const failedWithoutSnapshot = errorResponse(false)
+    const cases = [
+      {
+        overrides: {},
+        expected: { status: 'processing' },
+      },
+      {
+        overrides: {
+          processingStatus: 'completed',
+          finalStateVersion: 13,
+          responsePayloadVersion: 1,
+          responsePayload: completedResponse,
+          hasCompletedAt: true,
+        },
+        expected: { status: 'completed', response: completedResponse },
+      },
+      {
+        overrides: {
+          processingStatus: 'completed',
+          finalStateVersion: 13,
+          firstEventSeq: 19,
+          lastEventSeq: 20,
+          responsePayloadVersion: 1,
+          responsePayload: completedResponse,
+          hasCompletedAt: true,
+        },
+        expected: { status: 'completed', response: completedResponse },
+      },
+      {
+        overrides: {
+          processingStatus: 'failed',
+          finalStateVersion: null,
+          responsePayloadVersion: 1,
+          responsePayload: failedWithoutSnapshot,
+          hasCompletedAt: true,
+        },
+        expected: { status: 'failed', response: failedWithoutSnapshot },
+      },
+      {
+        overrides: {
+          processingStatus: 'failed',
+          finalStateVersion: 13,
+          responsePayloadVersion: 1,
+          responsePayload: failedWithSnapshot,
+          hasCompletedAt: true,
+        },
+        expected: { status: 'failed', response: failedWithSnapshot },
+      },
+    ]
+
+    for (const entry of cases) {
+      const prepared = prepareCommandRegistration(command('endSession'))
+      await expect(
+        registerCommand(
+          createTransactionMock([[], [ledgerRow(prepared, entry.overrides)]]),
+          owner,
+          prepared,
+        ),
+      ).resolves.toEqual(entry.expected)
+    }
+  })
+
+  test('rejects every invalid terminal field matrix as persistence corruption', async () => {
+    const owner = await resolvedOwner()
+    const completed = commandResponse()
+    const failed = errorResponse(false)
+    const invalidOverrides: readonly Readonly<Record<string, unknown>>[] = [
+      { finalStateVersion: 1 },
+      { firstEventSeq: 1 },
+      { lastEventSeq: 1 },
+      { responsePayloadVersion: 1, responsePayload: completed },
+      { hasCompletedAt: true },
+      {
+        processingStatus: 'completed',
+        finalStateVersion: null,
+        responsePayloadVersion: 1,
+        responsePayload: completed,
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'completed',
+        finalStateVersion: 13,
+        responsePayloadVersion: null,
+        responsePayload: null,
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'completed',
+        finalStateVersion: 13,
+        firstEventSeq: 20,
+        lastEventSeq: 19,
+        responsePayloadVersion: 1,
+        responsePayload: completed,
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'completed',
+        finalStateVersion: 13,
+        firstEventSeq: 19,
+        lastEventSeq: 19,
+        responsePayloadVersion: 1,
+        responsePayload: completed,
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'completed',
+        finalStateVersion: 13,
+        responsePayloadVersion: 1,
+        responsePayload: failed,
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'completed',
+        finalStateVersion: 13,
+        responsePayloadVersion: 1,
+        responsePayload: completed,
+        hasCompletedAt: false,
+      },
+      {
+        processingStatus: 'failed',
+        finalStateVersion: 13,
+        firstEventSeq: 1,
+        lastEventSeq: 1,
+        responsePayloadVersion: 1,
+        responsePayload: failed,
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'failed',
+        finalStateVersion: 13,
+        responsePayloadVersion: 1,
+        responsePayload: failed,
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'failed',
+        finalStateVersion: null,
+        responsePayloadVersion: 1,
+        responsePayload: errorResponse(true),
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'failed',
+        finalStateVersion: null,
+        responsePayloadVersion: 1,
+        responsePayload: completed,
+        hasCompletedAt: true,
+      },
+      {
+        processingStatus: 'failed',
+        finalStateVersion: null,
+        responsePayloadVersion: 1,
+        responsePayload: failed,
+        hasCompletedAt: false,
+      },
+    ]
+
+    for (const overrides of invalidOverrides) {
+      const prepared = prepareCommandRegistration(command('endSession'))
+      await expect(
+        registerCommand(
+          createTransactionMock([[], [ledgerRow(prepared, overrides)]]),
+          owner,
+          prepared,
+        ),
+      ).rejects.toMatchObject({ corruption: 'invalidCommandLedger' })
+    }
+  })
+
   test('distinguishes payload conflicts, missing sessions, and database failures', async () => {
     const owner = await resolvedOwner()
     const conflict = prepareCommandRegistration(command('endSession'))
@@ -363,6 +763,33 @@ describe('command ledger repository', () => {
         primaryKeyCollision,
       ),
     ).rejects.toBeInstanceOf(DatabaseOperationError)
+  })
+
+  test('does not expose SQL details in database errors', async () => {
+    const prepared = prepareCommandRegistration(command('endSession'))
+    const databaseUrl = 'postgres://secret-user:secret-password@example.test/db'
+    const rawMessage = `duplicate ${prepared.command.commandId} ${prepared.canonicalPayloadDigest} at ${databaseUrl}`
+    let caught: unknown
+    try {
+      await registerCommand(
+        createTransactionMock([new Error(rawMessage)]),
+        await resolvedOwner(),
+        prepared,
+      )
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(DatabaseOperationError)
+    expect((caught as Error).message).toBe('数据库操作失败。')
+    for (const secret of [
+      databaseUrl,
+      prepared.command.commandId,
+      prepared.canonicalPayloadDigest,
+      rawMessage,
+    ]) {
+      expect((caught as Error).message).not.toContain(secret)
+    }
   })
 
   test('distinguishes unknown response versions from corrupt terminal rows', async () => {
@@ -438,18 +865,18 @@ describe('command ledger repository', () => {
 
   test('validates complete input before consuming acquired capability', async () => {
     const prepared = prepareCommandRegistration(command('endSession'))
+    const tracked = createTrackedTransaction([
+      [{ ledgerId: prepared.ledgerId }],
+      [{ ledgerId: prepared.ledgerId }],
+    ])
     const acquired = await registerCommand(
-      createTransactionMock([[{ ledgerId: prepared.ledgerId }]]),
+      tracked.transaction,
       await resolvedOwner(),
       prepared,
     )
     if (acquired.status !== 'acquired') {
       throw new Error('Expected an acquired registration.')
     }
-    const tracked = createTrackedTransaction([
-      [{ ledgerId: acquired.ledgerId }],
-    ])
-
     await expect(
       completeCommand(
         tracked.transaction,
@@ -458,7 +885,7 @@ describe('command ledger repository', () => {
         null,
       ),
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
-    expect(tracked.getCallCount()).toBe(0)
+    expect(tracked.getCallCount()).toBe(1)
 
     await expect(
       completeCommand(tracked.transaction, acquired, commandResponse(), {
@@ -466,22 +893,23 @@ describe('command ledger repository', () => {
         lastEventSeq: 20,
       }),
     ).resolves.toBeUndefined()
-    expect(tracked.getCallCount()).toBe(1)
+    expect(tracked.getCallCount()).toBe(2)
   })
 
   test('validates failed snapshot input before consuming acquired capability', async () => {
     const prepared = prepareCommandRegistration(command('endSession'))
+    const tracked = createTrackedTransaction([
+      [{ ledgerId: prepared.ledgerId }],
+      [{ ledgerId: prepared.ledgerId }],
+    ])
     const acquired = await registerCommand(
-      createTransactionMock([[{ ledgerId: prepared.ledgerId }]]),
+      tracked.transaction,
       await resolvedOwner(),
       prepared,
     )
     if (acquired.status !== 'acquired') {
       throw new Error('Expected an acquired registration.')
     }
-    const tracked = createTrackedTransaction([
-      [{ ledgerId: acquired.ledgerId }],
-    ])
     const invalid = {
       ...errorResponse(false),
       latestSnapshot: snapshot(Number.MAX_SAFE_INTEGER + 1),
@@ -490,7 +918,7 @@ describe('command ledger repository', () => {
     await expect(
       failCommand(tracked.transaction, acquired, invalid),
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
-    expect(tracked.getCallCount()).toBe(0)
+    expect(tracked.getCallCount()).toBe(1)
     await expect(
       failCommand(tracked.transaction, acquired, {
         ...errorResponse(false),
@@ -500,11 +928,11 @@ describe('command ledger repository', () => {
         },
       }),
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
-    expect(tracked.getCallCount()).toBe(0)
+    expect(tracked.getCallCount()).toBe(1)
     await expect(
       failCommand(tracked.transaction, acquired, errorResponse(false)),
     ).resolves.toBeUndefined()
-    expect(tracked.getCallCount()).toBe(1)
+    expect(tracked.getCallCount()).toBe(2)
   })
 
   test('rejects cross-session responses and invalid event ranges before SQL', async () => {
@@ -523,16 +951,17 @@ describe('command ledger repository', () => {
       [commandResponse(), { firstEventSeq: 19, lastEventSeq: 21 }],
     ] as const) {
       const prepared = prepareCommandRegistration(command('endSession'))
+      const tracked = createTrackedTransaction([
+        [{ ledgerId: prepared.ledgerId }],
+      ])
       const acquired = await registerCommand(
-        createTransactionMock([[{ ledgerId: prepared.ledgerId }]]),
+        tracked.transaction,
         await resolvedOwner(),
         prepared,
       )
       if (acquired.status !== 'acquired') {
         throw new Error('Expected an acquired registration.')
       }
-      const tracked = createTrackedTransaction([])
-
       await expect(
         completeCommand(
           tracked.transaction,
@@ -541,15 +970,19 @@ describe('command ledger repository', () => {
           responseAndRange[1],
         ),
       ).rejects.toBeInstanceOf(RepositoryInputValidationError)
-      expect(tracked.getCallCount()).toBe(0)
+      expect(tracked.getCallCount()).toBe(1)
     }
   })
 
   test('consumes acquired after terminal SQL is attempted', async () => {
     for (const terminalRows of [[], new Error('database failed')]) {
       const prepared = prepareCommandRegistration(command('endSession'))
+      const transaction = createTransactionMock([
+        [{ ledgerId: prepared.ledgerId }],
+        terminalRows,
+      ])
       const acquired = await registerCommand(
-        createTransactionMock([[{ ledgerId: prepared.ledgerId }]]),
+        transaction,
         await resolvedOwner(),
         prepared,
       )
@@ -558,7 +991,7 @@ describe('command ledger repository', () => {
       }
 
       const firstAttempt = completeCommand(
-        createTransactionMock([terminalRows]),
+        transaction,
         acquired,
         commandResponse(),
         null,
@@ -586,8 +1019,12 @@ describe('command ledger repository', () => {
     const owner = await resolvedOwner()
 
     const completedPrepared = prepareCommandRegistration(command('endSession'))
+    const completedTransaction = createTransactionMock([
+      [{ ledgerId: completedPrepared.ledgerId }],
+      [{ ledgerId: completedPrepared.ledgerId }],
+    ])
     const completed = await registerCommand(
-      createTransactionMock([[{ ledgerId: completedPrepared.ledgerId }]]),
+      completedTransaction,
       owner,
       completedPrepared,
     )
@@ -595,7 +1032,7 @@ describe('command ledger repository', () => {
       throw new Error('Expected an acquired registration.')
     }
     await completeCommand(
-      createTransactionMock([[{ ledgerId: completed.ledgerId }]]),
+      completedTransaction,
       completed,
       commandResponse(),
       null,
@@ -613,19 +1050,19 @@ describe('command ledger repository', () => {
     ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
 
     const failedPrepared = prepareCommandRegistration(command('endSession'))
+    const failedTransaction = createTransactionMock([
+      [{ ledgerId: failedPrepared.ledgerId }],
+      [{ ledgerId: failedPrepared.ledgerId }],
+    ])
     const failed = await registerCommand(
-      createTransactionMock([[{ ledgerId: failedPrepared.ledgerId }]]),
+      failedTransaction,
       owner,
       failedPrepared,
     )
     if (failed.status !== 'acquired') {
       throw new Error('Expected an acquired registration.')
     }
-    await failCommand(
-      createTransactionMock([[{ ledgerId: failed.ledgerId }]]),
-      failed,
-      errorResponse(false),
-    )
+    await failCommand(failedTransaction, failed, errorResponse(false))
     await expect(
       failCommand(createTransactionMock([]), failed, errorResponse(false)),
     ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
@@ -637,5 +1074,60 @@ describe('command ledger repository', () => {
         null,
       ),
     ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
+  })
+
+  test('binds acquired to its registration transaction without consuming on mismatch', async () => {
+    const prepared = prepareCommandRegistration(command('endSession'))
+    const original = createTrackedTransaction([
+      [{ ledgerId: prepared.ledgerId }],
+      [{ ledgerId: prepared.ledgerId }],
+    ])
+    const other = createTrackedTransaction([[{ ledgerId: prepared.ledgerId }]])
+    const acquired = await registerCommand(
+      original.transaction,
+      await resolvedOwner(),
+      prepared,
+    )
+    if (acquired.status !== 'acquired') {
+      throw new Error('Expected an acquired registration.')
+    }
+
+    await expect(
+      completeCommand(other.transaction, acquired, commandResponse(), null),
+    ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
+    expect(other.getCallCount()).toBe(0)
+    await expect(
+      completeCommand(original.transaction, acquired, commandResponse(), null),
+    ).resolves.toBeUndefined()
+    expect(original.getCallCount()).toBe(2)
+  })
+
+  test('rejects forged acquired capabilities before response validation or SQL', async () => {
+    const prepared = prepareCommandRegistration(command('endSession'))
+    const transaction = createTrackedTransaction([
+      [{ ledgerId: prepared.ledgerId }],
+      [{ ledgerId: prepared.ledgerId }],
+    ])
+    const acquired = await registerCommand(
+      transaction.transaction,
+      await resolvedOwner(),
+      prepared,
+    )
+    if (acquired.status !== 'acquired') {
+      throw new Error('Expected an acquired registration.')
+    }
+    const forged = { ...acquired } as typeof acquired
+
+    await expect(
+      completeCommand(transaction.transaction, forged, {}, null),
+    ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+    expect(transaction.getCallCount()).toBe(1)
+    await expect(
+      failCommand(transaction.transaction, forged, {}),
+    ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+    expect(transaction.getCallCount()).toBe(1)
+    await expect(
+      failCommand(transaction.transaction, acquired, errorResponse(false)),
+    ).resolves.toBeUndefined()
   })
 })

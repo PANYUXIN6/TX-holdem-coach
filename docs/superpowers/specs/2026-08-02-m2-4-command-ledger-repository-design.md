@@ -26,24 +26,45 @@ M2.4 不实现 HTTP、SSE、Session 行锁、扑克状态推进、事件序号�
 
 ## 2. 已选方案
 
-使用一条 Owner-scoped `INSERT ... SELECT ... ON CONFLICT DO UPDATE ... RETURNING` 完成登记或取得既有行：
+使用“冲突安全插入，未插入时再读取”的两步协议。第一条语句只负责 Owner-scoped 原子登记：
 
 ```sql
-INSERT INTO app_private.command_ledger AS existing (...)
+INSERT INTO app_private.command_ledger (...)
 SELECT ...
 FROM app_private.sessions
 WHERE sessions.id = $sessionId
   AND sessions.owner_id = $databaseOwnerId
 ON CONFLICT (session_id, command_id)
-DO UPDATE SET id = existing.id
+DO NOTHING
 RETURNING ...
 ```
 
-候选 `ledgerId` 在事务外生成。返回 ID 等于候选 ID 表示本次插入并取得处理权；否则表示命中既有行。实现不得依赖 `xmax` 等 PostgreSQL 系统列。冲突分支执行一次可接受的 MVCC no-op UPDATE，但不改变业务字段或 `updated_at`。
+`RETURNING` 恰好返回一行时，数据库已经证明本次实际插入了新账本行，Repository 才返回 `acquired`。返回零行可能表示 Owner-scoped Session 不存在，也可能表示 `(session_id, command_id)` 已冲突；Repository 随后执行第二条 Owner-scoped `SELECT`，按 Session、Command 和 Owner 精确读取既有账本行：
+
+```sql
+SELECT ...
+FROM app_private.command_ledger AS ledger
+JOIN app_private.sessions AS sessions
+  ON sessions.id = ledger.session_id
+ AND sessions.owner_id = ledger.owner_id
+WHERE ledger.session_id = $sessionId
+  AND ledger.command_id = $commandId
+  AND ledger.owner_id = $databaseOwnerId
+```
+
+- 读到一行：比较摘要并按状态矩阵解析。
+- 仍为零行：Session 不存在或不属于 Owner，抛出 `ResourceNotFoundError`。
+
+候选 `ledgerId` 仍在事务外生成，但只作为待插入主键，不再作为插入分支判别信号。即使候选 ID 恰好等于同键既有行 ID，第一条语句仍返回零行，第二条语句仍按既有行处理，不会错误授予 capability。若候选 ID 与另一个定位键的行发生主键冲突，指定的 `(session_id, command_id)` 冲突目标不会吞掉该异常；SQL 失败按 `DatabaseOperationError` 处理并要求事务回滚，同样不会返回 `acquired`。
+
+这不是被禁止的无锁“先查后插”：唯一约束和 `INSERT ... ON CONFLICT DO NOTHING` 已先原子决定本次是否插入，`SELECT` 只在没有插入结果后读取冲突事实。正常 M3 路径使用 PostgreSQL 默认 `READ COMMITTED` 事务并先锁 Session；并发方会在前一事务结束后继续，冲突后的第二条语句取得新语句快照并读取已提交结果。若未来调用方改用更强隔离级别，必须把相应 serialization failure 作为整笔事务重试处理，不能据此授予 capability。
+
+该方案不依赖候选 UUID 的概率新鲜性、`xmax` 或其他 PostgreSQL 系统列；冲突重放不执行 no-op UPDATE，因此不会生成无意义的业务更新，也天然不改变既有 `updated_at`。额外数据库往返只发生在冲突或 Owner-scoped 插入源为空时。
 
 不采用以下方案：
 
-- `INSERT ... DO NOTHING` 后再 `SELECT ... FOR UPDATE`：需要额外往返和分支。
+- `ON CONFLICT DO UPDATE SET id = existing.id` 后比较返回 ID：候选 ID 与既有 ID 碰撞时无法区分插入和冲突分支。
+- 单条 CTE 组合 `DO NOTHING` 与既有行读取：并发冲突行可能不在该语句快照中，不能稳定替代冲突后的新语句读取。
 - advisory lock 或数据库函数：会新增不必要的数据库过程和迁移边界。
 - 进程内幂等缓存：无法跨实例或进程重启保持正确性。
 
@@ -138,16 +159,18 @@ OwnerScope 同样在事务外通过现有 `resolveOwnerScope(sql, ownerScope)` �
 
 `registerCommand(transaction, resolvedOwner, prepared)` 只接受 `TransactionSql`，不自行开启、提交或回滚事务。它返回：
 
-- `AcquiredCommandRegistration`：当前事务首次取得命令处理权。
-- `processing`：读取到已提交但未终结的恢复、诊断或历史兼容行。
+- `AcquiredCommandRegistration`：当前事务实际插入新账本行并首次取得命令处理权。
+- `processing`：当前事务可见一条摘要相同的既有未终结行，但本次调用没有取得处理权。
 - `completed`：二次校验并深冻结的首次成功响应。
 - `failed`：二次校验并深冻结的首次失败响应。
 
 只有 `acquired` 是运行时受保护的 capability，且只有它能传给终态函数。命中 `processing` 或终态的调用方不能构造或取得终态写入能力。
 
-返回零行表示 Session 不存在或不属于 Owner，统一抛出 `ResourceNotFoundError`。既有行摘要不同抛出 `CommandPayloadConflictError`。既有行摘要相同则按状态矩阵解析。
+冲突安全插入返回零行后，Owner-scoped 既有行读取仍返回零行，才表示 Session 不存在或不属于 Owner，并统一抛出 `ResourceNotFoundError`。既有行摘要不同抛出 `CommandPayloadConflictError`。既有行摘要相同则按状态矩阵解析。
 
-在“Session 行锁、登记和终结处于同一事务”的正常 M3 路径中，并发重复请求会等待前一事务结束，然后读取终态。`processing` 不是正常并发请求的快速返回机制；若要立即返回处理中，就必须拆分事务，这不属于本设计。
+`processing` 只描述行对当前事务可见且尚未终结，不承诺该行在本次调用前已经提交。若同一个未提交事务先用 P1 登记并取得 `acquired`，再用新的 P2 登记相同键和摘要，P2 可以读取本事务自己的写入并返回 `processing`，但不会取得第二个 capability。正常 M3 每个入站命令在一个事务中只登记一次；这条同事务重入语义用于保持 Repository 结果准确且可诊断，不把提交来源伪装成状态属性。
+
+在“Session 行锁、登记和终结处于同一事务”的正常 M3 路径中，来自另一个事务的并发重复请求会等待前一事务结束，然后读取终态。`processing` 不是正常跨事务并发请求的快速返回机制；跨事务看到它通常意味着一条已经提交但未终结的恢复、诊断或历史兼容行。若要让并发请求立即返回处理中，就必须拆分事务，这不属于本设计。
 
 ### 4.3 最终调用链
 
@@ -164,7 +187,7 @@ M3 开启 PostgreSQL 事务
    │  └─ 可安全提交的预期失败 → failCommand
    ├─ completed：校验后重放首次成功响应
    ├─ failed：校验后重放首次失败响应
-   ├─ processing：报告已提交的未终结状态
+   ├─ processing：报告当前事务可见的既有未终结状态，不授予 capability
    └─ 摘要不同：命令 ID 负载冲突
 → 仅 acquired 终结或合法重放路径正常提交
 → 提交成功后才允许 SSE 发布
@@ -195,12 +218,13 @@ const COMMAND_LEDGER_RESPONSE_PAYLOAD_VERSION = 1
 调用方输入先通过 `CommandResponseSchema` 和事件范围 Schema 校验：
 
 - `response.snapshot.sessionId` 必须等于账本 Session。
+- `response.snapshot.stateVersion` 必须是非负安全整数。
 - `finalStateVersion` 只从 `response.snapshot.stateVersion` 派生，不接受第二份参数。
 - 事件范围是 `null | { firstEventSeq, lastEventSeq }`。
 - 两个序号必须是非负安全整数。
 - 存在范围时 `firstEventSeq <= lastEventSeq`，且 `lastEventSeq === response.snapshot.eventSeq`。
 
-输入校验成功后才消费 acquired capability，随后执行终态 SQL。SQL 的 `WHERE` 必须同时匹配：
+Repository 先确认 acquired capability 真实且尚未消费，但不立即消费；Contracts Schema、私有安全整数、Session 镜像和事件范围全部校验成功后才消费 capability，随后执行终态 SQL。超界版本抛出 `RepositoryInputValidationError`，不执行 SQL，且 acquired 保持可用。SQL 的 `WHERE` 必须同时匹配：
 
 ```text
 owner_id
@@ -216,11 +240,11 @@ owner_id
 
 调用方输入先通过 `ErrorResponseSchema` 校验：
 
-- 有 `latestSnapshot` 时，其 Session 必须匹配，`final_state_version` 从快照版本派生。
+- 有 `latestSnapshot` 时，其 Session 必须匹配，`latestSnapshot.stateVersion` 必须是非负安全整数，`final_state_version` 从该版本派生。
 - 无 `latestSnapshot` 当且仅当 `final_state_version IS NULL`。
 - `failed` 永远不接受事件范围。
 
-输入校验成功后才消费 acquired capability，并使用与成功终态相同的精确 `WHERE` 推进到 `failed`。它只用于可安全提交的稳定预期失败，例如预期版本冲突、生命周期不允许或合法动作校验失败。
+与成功终态相同，Repository 先无副作用地确认 capability，再完成 Contracts Schema、私有安全整数和 Session 镜像校验；全部成功后才消费 acquired 并使用相同的精确 `WHERE` 推进到 `failed`。超界快照版本抛出 `RepositoryInputValidationError`，不执行 SQL，也不消费 acquired。它只用于可安全提交的稳定预期失败，例如预期版本冲突、生命周期不允许或合法动作校验失败。
 
 数据库连接/SQL 异常、事务已 aborted、未回滚的部分关系写入和未知内部错误不得调用 `failCommand()`；上层必须整笔回滚。终态 SQL 失败或零行后，所在事务必须结束或回滚，acquired 不得复用。
 
@@ -233,8 +257,8 @@ owner_id
 重放时重新验证全部状态字段、响应版本和 Contracts Schema，并递归深冻结解析后的响应：
 
 - `processing` 必须满足全部终态字段为空。
-- `completed` 必须满足成功响应存在、最终版本与响应快照相等、可选事件范围合法且 Session 匹配。
-- `failed` 必须满足错误响应存在、无事件范围、`latestSnapshot` 与最终版本满足双向等价且 Session 匹配。
+- `completed` 必须满足成功响应存在、响应快照版本是非负安全整数、最终版本与响应快照相等、可选事件范围合法且 Session 匹配。
+- `failed` 必须满足错误响应存在、无事件范围；若有 `latestSnapshot`，其版本必须是非负安全整数，并与最终版本满足双向等价且 Session 匹配。
 
 错误固定分类为：
 
@@ -272,7 +296,12 @@ SQL `try/catch` 只包围数据库调用。Schema 解析、冲突判断和损坏
 - 解析结果递归冻结，prepared/acquired 无法伪造。
 - prepared 在首次登记尝试时即失效，包括零行、冲突、损坏或 SQL 失败。
 - acquired 在合法终态输入准备完成后、SQL 前消费；非法输入不消费，SQL 失败或零行后失效。
+- 插入返回一行才取得 acquired；插入返回零行后读取既有行，不能通过候选 ID 相等误判分支。
+- 候选 `ledgerId` 与同键既有行 ID 相等时仍返回既有状态，不返回 acquired；候选 ID 与其他键主键冲突时只返回数据库错误。
 - acquired、`processing`、成功重放、失败重放、负载冲突和零行未找到。
+- 同一事务用两个独立 prepared 连续登记相同命令时，第一次返回 acquired，第二次返回不带 capability 的 `processing`。
+- `completeCommand()` 的 `snapshot.stateVersion` 和 `failCommand()` 的 `latestSnapshot.stateVersion` 超出非负安全整数范围时，在 SQL 前抛出 `RepositoryInputValidationError`，且 acquired 仍可用于随后一次合法终态调用。
+- 重放载荷中的对应快照版本超出非负安全整数范围时，报告 `PersistenceDataCorruptionError('invalidCommandLedger')`。
 - 重放不改变既有 `updated_at`。
 - 完整状态和 `completed_at` 矩阵。
 - 非 V1 响应与损坏载荷严格区分。
@@ -301,10 +330,11 @@ await assertM24CommandLedgerRepository(sql, runtimeUrl)
 - 六类命令的真实登记、终结与重放。
 - 使用新的 prepared 模拟服务实例重建，不依赖进程内缓存即可重放数据库原响应。
 - 相同 ID、不同摘要冲突且不改变既有行。
+- 冲突重放不执行 no-op UPDATE，既有 `updated_at` 保持不变。
 - Owner 隔离、级联删除和零行未找到。
 - 登记与终结在同一事务后整体回滚，账本行完全不存在。
 - 人工构造已提交 `processing` 行，终态更新事务回滚后仍保持 `processing`。
-- 两条真实连接的并发 UPSERT：事务 A 登记并终结但暂不提交；事务 B 使用新 prepared 登记相同命令；释放 A 提交后，B 取得终态重放。最终只有一行、只有 A 曾取得 acquired，响应和既有 `updated_at` 未被 B 改写。
+- 两条真实连接的并发冲突安全插入：事务 A 登记并终结但暂不提交；事务 B 使用新 prepared 登记相同命令；释放 A 提交后，B 的插入返回零行并通过后续 Owner-scoped 读取取得终态重放。最终只有一行、只有 A 曾取得 acquired，响应和既有 `updated_at` 未被 B 改写。
 
 并发测试只验证最终可观察结果，不使用固定 sleep 或毫秒耗时断言；不要求额外查询 PostgreSQL 锁状态。
 

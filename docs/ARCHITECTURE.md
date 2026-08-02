@@ -16,6 +16,10 @@
 
 共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。Server 已从 Contracts 导入冻结的 Card 点数/花色字面量、合法动作和人物公开摘要协议；私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路以 `positioning.ts` 为唯一物理座位拓扑，`dealing.ts` 和 `blind-posting.ts` 均依赖它；下注、推进和结算只由 `poker-engine.ts` 对上层组合。M2.3 依赖方向固定为 `sessions/roster-preparation → personas + persistence/session-repository → postgres.js`，底层 Repository 不依赖扑克引擎或 HTTP。所有浏览器可见数据必须通过 Contracts 的严格 Schema。完整会话服务、Agent Foundation 和两种 Runtime 尚未建立。
 
+## 设计评审开发工具边界
+
+`.agents/skills/review-design-contracts/` 位于产品运行时之外。Native Subagent 只产出候选和对抗结果，Runner 是状态推进、Schema、证据门禁和修复队列准入的唯一机器边界。人工交互适配属于 `SKILL.md`：它用 `human-review.md` 的短序号收集“确认存在违反路径”或带原因的“驳回此发现”，只在含义唯一时把自然语言映射到 `human-rejection-reasons.json` 的稳定枚举，并在提交前再次请求确认。Runner 不解释自然语言，只校验当前批次完整覆盖、拒绝理由非空、注册表与 Schema 一致，并把原始理由写入审计制品；只有人工确认存在违反路径的 finding 才能进入 `fix-queue.json`。
+
 ## 当前运行链路
 
 `pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 不启动服务、不联网，也不读取模型 Key 或数据库凭据。Server 入口按“加载 dotenv → 校验私有配置 → 显式加载并校验人物目录 → 创建运行时客户端 → `SELECT 1` → 只读 `exact` 核验迁移日志 → 仅监听 `127.0.0.1`”运行；任何门控失败都输出脱敏中文错误并拒绝监听。M2.3 持久化链固定为 `OwnerScope.ownerId → owners.identity_key → ResolvedOwnerScope.databaseOwnerId → Owner-scoped SQL`。当前目录阵容先展开完整人物配置并计算包含 Payload 版本的 SHA-256 key；旧阵容只从最近 ended 场次读取并保留原配置、版本和 key，两者都必须在事务前通过当前 Active 模型准入。事务写入原语不解析 Owner、不生成 ID、不开启或提交事务，只批量写入完整 roster 与 revision 0，供 M3.2 与扑克初始化、Hand、事件和权威快照继续组合。Provider 投影尚未挂载 HTTP，M3.5 才加入路由；唯一扑克行为链仍为 `PokerTableState + PokerCommand → poker-engine.ts.applyPokerAction()`。

@@ -47,9 +47,15 @@ L3 uses one fresh Subagent per candidate and returns bounded batches without com
 - `decision_source: human` is written only from an explicit L5 decision.
 - Never translate, substitute, or merge the two reason-code enums.
 
+`human-rejection-reasons.json` is the presentation registry for the human enum. Its numbers, Chinese labels, descriptions, and default reasons are user-interface data, while `rejection-record.schema.json` remains the machine authority for legal codes. The Runner must reject startup when the registry codes and human enum are not exactly equal.
+
 ## Human decision input
 
-Submit exactly the current batch:
+`human-review.md` shows the current batch with stable short labels such as `发现 1`. The complete `finding_id` appears only in the adjacent Markdown comment so the orchestration layer can map the label deterministically. Do not require the human to handle a hash or JSON.
+
+For each finding, the orchestration layer collects one of `确认存在违反路径`, `驳回此发现`, or `先解释当前证据`. An explanation request is not a decision. Rejection reasons may be selected by registry number or stated in natural language. Natural language may be mapped only when exactly one registered category fits; preserve the user's wording as `reason`. A number-only selection uses that registry entry's `default_reason`. Never synthesize an acceptance or an unregistered reason code.
+
+After the complete current batch has decisions, show a Chinese summary and wait for explicit final confirmation. Only then submit exactly the current batch:
 
 ```json
 {
@@ -61,13 +67,14 @@ Submit exactly the current batch:
     {
       "finding_id": "sha256-id",
       "decision": "reject",
-      "reason_code": "NO_CONTRACT_VIOLATION"
+      "reason_code": "BROKEN_TRANSITION",
+      "reason": "第二步依赖缓存已经写入，但前面的步骤没有保证这一点。"
     }
   ]
 }
 ```
 
-The human answers only: “是否存在可验证的契约违反路径？” A rejection requires one human reason code. An acceptance must not include one.
+An acceptance must not contain `reason_code` or `reason`. A rejection requires both one legal human `reason_code` and a `reason` whose trimmed value is non-empty. The Runner preserves the submitted `reason` unchanged in normalized `decisions.json` and as the human rejection record's `details`. Invalid or incomplete input must leave the run at `AWAITING_HUMAN` without changing existing decisions.
 
 ## State rules
 

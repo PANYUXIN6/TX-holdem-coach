@@ -19,6 +19,10 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
 const skillDirectory = path.dirname(scriptDirectory)
 const configPath = path.join(skillDirectory, 'review.config.json')
 const referencesDirectory = path.join(skillDirectory, 'references')
+const humanRejectionReasonsPath = path.join(
+  referencesDirectory,
+  'human-rejection-reasons.json',
+)
 
 const statusText = Object.freeze({
   CREATED: '评审已创建',
@@ -232,6 +236,64 @@ function assertSchema(value, schemaFileName, label) {
     throw new Error(`${label} 不满足 Schema：${errors.join('；')}`)
   }
 }
+
+function validateHumanRejectionReasons() {
+  const reasons = JSON.parse(readFileSync(humanRejectionReasonsPath, 'utf8'))
+  if (!Array.isArray(reasons) || reasons.length === 0) {
+    throw new Error('human-rejection-reasons.json 必须是非空数组')
+  }
+  const requiredFields = [
+    'code',
+    'default_reason',
+    'description',
+    'label',
+    'number',
+  ]
+  const codes = new Set()
+  for (const [index, reason] of reasons.entries()) {
+    if (
+      !reason ||
+      typeof reason !== 'object' ||
+      Array.isArray(reason) ||
+      JSON.stringify(Object.keys(reason).sort()) !==
+        JSON.stringify(requiredFields)
+    ) {
+      throw new Error(`人工拒绝原因 ${index + 1} 字段无效`)
+    }
+    if (reason.number !== index + 1) {
+      throw new Error('人工拒绝原因编号必须从 1 开始连续排列')
+    }
+    for (const field of ['code', 'label', 'description', 'default_reason']) {
+      if (
+        typeof reason[field] !== 'string' ||
+        reason[field].trim().length === 0
+      ) {
+        throw new Error(`人工拒绝原因 ${reason.number} 的 ${field} 不能为空`)
+      }
+    }
+    if (codes.has(reason.code)) {
+      throw new Error(`人工拒绝原因 code 重复：${reason.code}`)
+    }
+    codes.add(reason.code)
+  }
+
+  const rejectionSchema = bundleSchema('rejection-record.schema.json')
+  const humanBranch = rejectionSchema.oneOf?.find(
+    (branch) => branch.properties?.decision_source?.const === 'human',
+  )
+  const schemaCodes = humanBranch?.properties?.reason_code?.enum
+  if (!Array.isArray(schemaCodes)) {
+    throw new Error('rejection-record.schema.json 缺少 human reason enum')
+  }
+  if (
+    schemaCodes.length !== codes.size ||
+    schemaCodes.some((code) => !codes.has(code))
+  ) {
+    throw new Error('人工拒绝原因注册表与 human reason enum 不一致')
+  }
+}
+
+validateHumanRejectionReasons()
 
 function canonicalPath(repositoryRoot, requestedPath) {
   const absolutePath = path.resolve(repositoryRoot, requestedPath)
@@ -1549,6 +1611,7 @@ function renderHumanReview(cards, currentBatch, batchSize) {
   const startIndex = (currentBatch - 1) * batchSize
   const batch = cards.slice(startIndex, startIndex + batchSize)
   const sections = batch.map((card, index) => {
+    const findingNumber = startIndex + index + 1
     const initialState = card.trigger.initial_state
       .map((item) => `  - ${item}`)
       .join('\n')
@@ -1559,21 +1622,27 @@ function renderHumanReview(cards, currentBatch, batchSize) {
       )
       .join('\n')
     return [
-      `## ${index + 1}. ${card.finding_id}`,
+      `## 发现 ${findingNumber}`,
+      `<!-- finding_id: ${card.finding_id} -->`,
+      '',
+      `结论：${card.claim}`,
+      '',
+      `契约来源：${card.contract.source} · ${card.contract.heading}`,
       '',
       `契约原文：${card.contract.quote}`,
       '',
-      '初始状态：',
+      '触发路径：',
+      '  初始状态：',
       initialState,
-      '',
-      '触发步骤：',
+      '  触发步骤：',
       steps,
+      `  推导结果：${card.trigger.derived_outcome}`,
       '',
-      `推导结果：${card.trigger.derived_outcome}`,
+      `期望与实际：期望「${card.violation.expected}」，实际「${card.violation.actual}」`,
       '',
-      `契约违反：期望「${card.violation.expected}」，实际「${card.violation.actual}」`,
+      `对抗检查：${card.falsification.attempt}；仍未推翻的证据为「${card.falsification.remaining_evidence}」`,
       '',
-      `验证方法与 Oracle：${card.verification.procedure}；成立标志为「${card.verification.oracle}」`,
+      `验证方法：${card.verification.procedure}；成立标志为「${card.verification.oracle}」`,
     ].join('\n')
   })
   return [
@@ -1581,9 +1650,15 @@ function renderHumanReview(cards, currentBatch, batchSize) {
     '',
     `当前批次：${currentBatch}/${totalBatches}`,
     '',
-    '只回答：是否存在可验证的契约违反路径？',
-    '',
     ...sections,
+    '',
+    '请对每条发现选择：',
+    '',
+    '- 确认存在违反路径',
+    '- 驳回此发现',
+    '- 先解释当前证据',
+    '',
+    '选择“驳回此发现”后，可以回复原因编号，也可以直接说明原因。',
     '',
   ].join('\n')
 }
@@ -1762,8 +1837,11 @@ function decideReview(argumentsList) {
       throw new Error(`决策不属于当前批次：${decision.finding_id}`)
     }
     if (decision.decision === 'accept') {
-      if (decision.reason_code !== undefined) {
-        throw new Error('accept 决策不得包含 reason_code')
+      if (
+        Object.hasOwn(decision, 'reason_code') ||
+        Object.hasOwn(decision, 'reason')
+      ) {
+        throw new Error('accept 决策不得包含 reason_code 或 reason')
       }
       return {
         finding_id: decision.finding_id,
@@ -1772,11 +1850,17 @@ function decideReview(argumentsList) {
       }
     }
     if (decision.decision === 'reject') {
+      if (
+        typeof decision.reason !== 'string' ||
+        decision.reason.trim().length === 0
+      ) {
+        throw new Error('reject 决策必须包含非空 reason')
+      }
       const rejection = {
         finding_id: decision.finding_id,
         decision_source: 'human',
         reason_code: decision.reason_code,
-        details: '人工判定不存在可验证的契约违反路径',
+        details: decision.reason,
       }
       assertSchema(rejection, 'rejection-record.schema.json', '人工拒绝记录')
       rejected.push(rejection)
@@ -1784,6 +1868,7 @@ function decideReview(argumentsList) {
         finding_id: decision.finding_id,
         decision: 'reject',
         reason_code: decision.reason_code,
+        reason: decision.reason,
         decided_at: decidedAt,
       }
     }

@@ -129,6 +129,33 @@ function runTaskFixture(repositoryRoot, responses) {
   }
 }
 
+function createAwaitingHumanReview(repositoryRoot) {
+  const finding = candidate()
+  const review = runTaskFixture(repositoryRoot, {
+    l1: {
+      contracts: [],
+      candidates: [finding],
+    },
+    l2: {
+      candidates: [],
+    },
+    l3: [
+      {
+        challenge_outcome: 'survives',
+        falsification: {
+          attempt: 'Tried to refute the transition.',
+          remaining_evidence: 'The finite trigger remains reachable.',
+        },
+        refined_finding: finding,
+      },
+    ],
+  })
+  const [card] = JSON.parse(
+    readFileSync(path.join(review.run_dir, 'evidence-cards.json'), 'utf8'),
+  )
+  return { review, card }
+}
+
 test('prepare creates one pinned native L1 task without running a model', () => {
   const repositoryRoot = createRepository()
 
@@ -188,6 +215,53 @@ test('prepare creates one pinned native L1 task without running a model', () => 
   )
   assert.equal(existsSync(result.tasks[0].response_path), false)
   assert.equal(existsSync(path.join(result.run_dir, 'human-review.md')), false)
+})
+
+test('human rejection reasons use a complete stable Chinese registry', () => {
+  const referencesDirectory = path.join(scriptDirectory, '..', 'references')
+  const reasons = JSON.parse(
+    readFileSync(
+      path.join(referencesDirectory, 'human-rejection-reasons.json'),
+      'utf8',
+    ),
+  )
+  const rejectionSchema = JSON.parse(
+    readFileSync(
+      path.join(referencesDirectory, 'rejection-record.schema.json'),
+      'utf8',
+    ),
+  )
+  const humanReasonCodes = rejectionSchema.oneOf.find(
+    (branch) => branch.properties.decision_source.const === 'human',
+  ).properties.reason_code.enum
+
+  assert.deepEqual(
+    reasons.map((reason) => reason.number),
+    [1, 2, 3, 4, 5, 6],
+  )
+  assert.deepEqual(
+    reasons.map((reason) => reason.code).sort(),
+    [...humanReasonCodes].sort(),
+  )
+  assert.deepEqual(
+    reasons.map((reason) => reason.label),
+    [
+      '状态无法到达',
+      '推导链路断裂',
+      '不构成契约违反',
+      '无法客观验证',
+      '与其他发现重复',
+      '超出设计范围',
+    ],
+  )
+  assert.equal(
+    reasons.every(
+      (reason) =>
+        reason.description.trim().length > 0 &&
+        reason.default_reason.trim().length > 0,
+    ),
+    true,
+  )
 })
 
 test('advance accepts a valid L1 response and creates one fresh L2 task', () => {
@@ -693,8 +767,23 @@ test('a surviving Native L3 response becomes an evidence card for human arbitrat
     cards[0].falsification.remaining_evidence,
     'The finite active-state path remains reachable.',
   )
+  assert.match(humanReport, /## 发现 1/)
+  assert.match(
+    humanReport,
+    new RegExp(`<!-- finding_id: ${cards[0].finding_id} -->`),
+  )
+  assert.doesNotMatch(humanReport, new RegExp(`## .*${cards[0].finding_id}`))
+  assert.match(humanReport, /结论：/)
+  assert.match(humanReport, /契约来源：docs\/design\.md · State contract/)
   assert.match(humanReport, /契约原文/)
-  assert.match(humanReport, /验证方法与 Oracle/)
+  assert.match(humanReport, /触发路径：/)
+  assert.match(humanReport, /期望与实际：/)
+  assert.match(humanReport, /对抗检查：/)
+  assert.match(humanReport, /验证方法：/)
+  assert.match(humanReport, /确认存在违反路径/)
+  assert.match(humanReport, /驳回此发现/)
+  assert.match(humanReport, /先解释当前证据/)
+  assert.doesNotMatch(humanReport, /状态无法到达/)
   assert.doesNotMatch(
     humanReport,
     /gpt-5\.6|reasoning|confidence|severity|high|max/i,
@@ -899,6 +988,134 @@ test('only an explicit human acceptance creates a digest-bound fix queue item th
   })
 })
 
+test('reject requires a non-blank human reason without changing the awaiting run on failure', () => {
+  const repositoryRoot = createRepository()
+  const { review, card } = createAwaitingHumanReview(repositoryRoot)
+  const decisionsPath = path.join(repositoryRoot, 'invalid-decisions.json')
+
+  for (const invalidDecision of [
+    {
+      finding_id: card.finding_id,
+      decision: 'reject',
+      reason_code: 'NO_CONTRACT_VIOLATION',
+    },
+    {
+      finding_id: card.finding_id,
+      decision: 'reject',
+      reason_code: 'NO_CONTRACT_VIOLATION',
+      reason: '   ',
+    },
+    {
+      finding_id: card.finding_id,
+      decision: 'reject',
+      reason_code: 'UNKNOWN_REASON',
+      reason: '协议中没有这个分类。',
+    },
+  ]) {
+    writeJson(decisionsPath, { decisions: [invalidDecision] })
+    runCliExpectFailure(repositoryRoot, [
+      'decide',
+      review.run_dir,
+      '--decisions',
+      decisionsPath,
+    ])
+  }
+
+  assert.equal(
+    JSON.parse(readFileSync(path.join(review.run_dir, 'state.json'), 'utf8'))
+      .status,
+    'AWAITING_HUMAN',
+  )
+  assert.deepEqual(
+    JSON.parse(
+      readFileSync(path.join(review.run_dir, 'decisions.json'), 'utf8'),
+    ),
+    [],
+  )
+  assert.deepEqual(
+    JSON.parse(
+      readFileSync(path.join(review.run_dir, 'rejected.json'), 'utf8'),
+    ),
+    [],
+  )
+})
+
+test('accept rejects both human rejection fields without changing the awaiting run', () => {
+  const repositoryRoot = createRepository()
+  const { review, card } = createAwaitingHumanReview(repositoryRoot)
+  const decisionsPath = path.join(repositoryRoot, 'invalid-accept.json')
+
+  for (const invalidDecision of [
+    {
+      finding_id: card.finding_id,
+      decision: 'accept',
+      reason_code: 'NO_CONTRACT_VIOLATION',
+    },
+    {
+      finding_id: card.finding_id,
+      decision: 'accept',
+      reason: '不应附加到接受决定。',
+    },
+  ]) {
+    writeJson(decisionsPath, { decisions: [invalidDecision] })
+    runCliExpectFailure(repositoryRoot, [
+      'decide',
+      review.run_dir,
+      '--decisions',
+      decisionsPath,
+    ])
+  }
+
+  assert.equal(
+    JSON.parse(readFileSync(path.join(review.run_dir, 'state.json'), 'utf8'))
+      .status,
+    'AWAITING_HUMAN',
+  )
+  assert.deepEqual(
+    JSON.parse(
+      readFileSync(path.join(review.run_dir, 'decisions.json'), 'utf8'),
+    ),
+    [],
+  )
+})
+
+test('a valid rejection preserves the original human reason in both audit artifacts', () => {
+  const repositoryRoot = createRepository()
+  const { review, card } = createAwaitingHumanReview(repositoryRoot)
+  const decisionsPath = path.join(repositoryRoot, 'rejection.json')
+  const reason = '第二步依赖缓存已经写入，但前面的步骤没有保证这一点。'
+  writeJson(decisionsPath, {
+    decisions: [
+      {
+        finding_id: card.finding_id,
+        decision: 'reject',
+        reason_code: 'BROKEN_TRANSITION',
+        reason,
+      },
+    ],
+  })
+
+  const result = runCli(repositoryRoot, [
+    'decide',
+    review.run_dir,
+    '--decisions',
+    decisionsPath,
+  ])
+  const [decision] = JSON.parse(
+    readFileSync(path.join(review.run_dir, 'decisions.json'), 'utf8'),
+  )
+  const [rejection] = JSON.parse(
+    readFileSync(path.join(review.run_dir, 'rejected.json'), 'utf8'),
+  )
+
+  assert.equal(result.status, 'CLOSED')
+  assert.equal(decision.reason, reason)
+  assert.equal(decision.reason_code, 'BROKEN_TRANSITION')
+  assert.equal(rejection.details, reason)
+  assert.equal(rejection.reason_code, 'BROKEN_TRANSITION')
+  assert.equal(rejection.decision_source, 'human')
+})
+
 test('the Runner contains no nested Codex backend, proxy injection, or mock run mode', () => {
   const source = readFileSync(runnerPath, 'utf8')
 
@@ -960,6 +1177,7 @@ test('review overload remains lossless across Native L3 batches and human batche
       finding_id: card.finding_id,
       decision: 'reject',
       reason_code: 'NO_CONTRACT_VIOLATION',
+      reason: '该发现没有违反被引用的明确设计契约。',
     })),
   })
   const afterFirst = runCli(repositoryRoot, [
@@ -978,6 +1196,7 @@ test('review overload remains lossless across Native L3 batches and human batche
         finding_id: cards[8].finding_id,
         decision: 'reject',
         reason_code: 'NO_CONTRACT_VIOLATION',
+        reason: '该发现没有违反被引用的明确设计契约。',
       },
     ],
   })

@@ -47,17 +47,29 @@ node .agents/skills/review-design-contracts/scripts/review-design.mjs fail-task 
 
 Interrupt outstanding sibling tasks after the run becomes `FAILED`. Never submit their late output.
 
-7. Stop model orchestration at `AWAITING_HUMAN`, `CLOSED`, `FAILED`, or `INVALIDATED`. Use the Runner result's `human.summary` as the user-facing status; do not expose raw status, reason, or quality-flag enums unless the user explicitly asks for diagnostics. At `AWAITING_HUMAN`, read `human-review.md` and show only the current batch. Do not summarize hidden batches or recommend acceptance. At `FAILED`, explain `failure.json` in Chinese; an `INSUFFICIENT_INPUT` failure requires additional declared input and a new run, never a same-input retry.
+7. Stop model orchestration at `AWAITING_HUMAN`, `CLOSED`, `FAILED`, or `INVALIDATED`. Use the Runner result's `human.summary` as the user-facing status; do not expose raw status, reason, or quality-flag enums unless the user explicitly asks for diagnostics. At `AWAITING_HUMAN`, follow the arbitration workflow below. At `FAILED`, explain `failure.json` in Chinese; an `INSUFFICIENT_INPUT` failure requires additional declared input and a new run, never a same-input retry.
 
 ## Record human arbitration
 
-Create a decisions JSON file using the shape in `references/review-protocol.md`, then run:
+1. Read `human-review.md` and show only its current batch. Refer to each item as `发现 N`; use the adjacent Markdown comment to map that number to `finding_id`, but never require the user to quote or remember the hash. Do not summarize hidden batches or recommend a decision.
+2. Collect exactly one of these choices for every displayed finding:
+   - `确认存在违反路径` maps to machine decision `accept`.
+   - `驳回此发现` maps to machine decision `reject` and requires a rejection reason.
+   - `先解释当前证据` pauses that finding's decision. Explain only fields already present in its Evidence Card. Do not reveal model identity, effort, confidence, severity, hidden batches, or discarded candidates.
+3. When the user rejects a finding, read `references/human-rejection-reasons.json` and show its numbered Chinese labels and descriptions without exposing `code` values.
+   - If the user selects a number, use that entry's `code` and `default_reason`.
+   - If the user gives a natural-language reason that maps uniquely to one entry, preserve the user's wording exactly as `reason` and use that entry's `code`.
+   - If two or more entries plausibly match, show only the closest Chinese options and ask once which one applies. Do not guess.
+   - If no entry matches, explain that the protocol accepts only the registered categories and ask for the closest one. Do not create `OTHER`.
+4. Keep decisions as an in-memory draft until every finding in the current batch is decided. A bare rejection without a reason, an explanation request, silence, or an assistant recommendation is never an acceptance.
+5. Show a Chinese submission summary containing each `发现 N`, its choice, and any rejection reason. Wait for explicit final confirmation. If the user changes a choice, update the draft and show the revised summary again.
+6. Only after final confirmation, create a decisions JSON file using the exact shape in `references/review-protocol.md`, then run:
 
 ```bash
 node .agents/skills/review-design-contracts/scripts/review-design.mjs decide <run-directory> --decisions <decisions.json>
 ```
 
-Repeat for each batch. Only `QUEUED` produces accepted items in `fix-queue.json`; `CLOSED`, `FAILED`, and `INVALIDATED` never authorize a fix.
+Repeat this workflow for each batch. If any current-batch item is undecided, keep the run at `AWAITING_HUMAN` and do not call `decide`. Codex may translate and record the user's explicit decisions, but may never make or infer an acceptance. Only `QUEUED` produces accepted items in `fix-queue.json`; `CLOSED`, `FAILED`, and `INVALIDATED` never authorize a fix.
 
 Before consuming a queue, run:
 

@@ -1,6 +1,6 @@
 # M2.3 Code Review 残留问题修复设计
 
-- 状态：待书面复核
+- 状态：已实施并通过验证
 - 日期：2026-08-02
 - 上位规格：[M2.3 人物目录、设置与场次基础 Repository 设计](./2026-07-30-m2-3-persona-settings-session-repositories-design.md)
 

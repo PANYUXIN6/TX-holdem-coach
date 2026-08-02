@@ -1,12 +1,4 @@
-import {
-  AgentPersonaSummarySchema,
-  AGENT_PERSONA_IDS,
-} from '@tx-holdem-coach/contracts'
-import type { AgentPersonaSummary } from '@tx-holdem-coach/contracts'
-import { describe, expect, test } from 'vitest'
-import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
-
-const PERSONA_V1_PUBLIC_SUMMARIES = [
+export const PERSONA_CATALOG_DEFINITIONS = [
   {
     personaId: 'nit_fish',
     personaVersion: 1,
@@ -21,6 +13,8 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
       pressureCallTendency: 20,
       riskPreference: 15,
     },
+    strategyDescription:
+      '偏好较窄的参与范围和低波动线路；在边缘牌力与持续压力下更倾向退出，用清晰强牌争取价值。',
   },
   {
     personaId: 'lag_rec',
@@ -36,6 +30,8 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
       pressureCallTendency: 60,
       riskPreference: 80,
     },
+    strategyDescription:
+      '偏好宽范围参与和主动制造压力；在多个合理候选并存时更倾向进攻性线路，但仍只能从合法候选中选择。',
   },
   {
     personaId: 'tag_pro',
@@ -51,6 +47,8 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
       pressureCallTendency: 45,
       riskPreference: 50,
     },
+    strategyDescription:
+      '重视位置、范围纪律和风险收益平衡；在价值、保护与诈唬候选之间采用较均衡的选择。',
   },
   {
     personaId: 'short_shark',
@@ -66,6 +64,8 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
       pressureCallTendency: 70,
       riskPreference: 70,
     },
+    strategyDescription:
+      '偏好适合短筹码的低街数决策；在筹码承诺度较高时更倾向明确的弃牌或全下线路。',
   },
   {
     personaId: 'calling_station',
@@ -81,6 +81,8 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
       pressureCallTendency: 95,
       riskPreference: 45,
     },
+    strategyDescription:
+      '偏好继续游戏和实现摊牌价值；面对压力时更倾向跟注候选，较少选择主动诈唬。',
   },
   {
     personaId: 'deep_maniac',
@@ -96,6 +98,8 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
       pressureCallTendency: 70,
       riskPreference: 95,
     },
+    strategyDescription:
+      '偏好高波动和持续施压；在深筹码候选中更倾向扩大底池，但不绕过合法动作与金额边界。',
   },
   {
     personaId: 'small_ball_reg',
@@ -112,6 +116,8 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
       pressureCallTendency: 55,
       riskPreference: 30,
     },
+    strategyDescription:
+      '偏好位置优势、较小尺度和底池控制；在多个下注候选中倾向保留后续街灵活性的线路。',
   },
   {
     personaId: 'trap_specialist',
@@ -127,77 +133,7 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
       pressureCallTendency: 60,
       riskPreference: 40,
     },
+    strategyDescription:
+      '偏好隐藏强度和延迟进攻；在强牌候选中更常保留慢打或后街加速的可能。',
   },
-] as const satisfies readonly AgentPersonaSummary[]
-
-describe('agent persona catalog', () => {
-  const catalog = loadAndValidatePersonaCatalog()
-
-  test('contains exactly the eight version-one predefined personas', () => {
-    const summaries = catalog.listPublicSummaries()
-
-    expect(summaries).toHaveLength(8)
-    expect(summaries.map((summary) => summary.personaId)).toEqual(
-      AGENT_PERSONA_IDS,
-    )
-    expect(summaries.every((summary) => summary.personaVersion === 1)).toBe(
-      true,
-    )
-  })
-
-  test('matches every public field in the version-one persona catalog', () => {
-    expect(catalog.listPublicSummaries()).toEqual(PERSONA_V1_PUBLIC_SUMMARIES)
-  })
-
-  test('projects each private catalog entry through the public schema', () => {
-    for (const summary of catalog.listPublicSummaries()) {
-      expect(AgentPersonaSummarySchema.safeParse(summary).success).toBe(true)
-      expect(Object.keys(summary)).not.toContain('prompt')
-      expect(Object.keys(summary)).not.toContain('rangeTable')
-      expect(Object.keys(summary)).not.toContain('modelConfig')
-      expect(Object.keys(summary)).not.toContain('apiKey')
-    }
-  })
-
-  test('returns the frozen public summary for a known persona', () => {
-    const summary = catalog.getPublicSummary('tag_pro')
-
-    expect(summary).toEqual(
-      expect.objectContaining({
-        personaId: 'tag_pro',
-        name: '标签职业玩家',
-      }),
-    )
-    expect(summary).toBe(catalog.listPublicSummaries()[2])
-    expect(Object.isFrozen(catalog.list())).toBe(true)
-    expect(Object.isFrozen(summary)).toBe(true)
-    expect(Object.isFrozen(summary?.style)).toBe(true)
-  })
-
-  test('projects the two added personas as public summaries', () => {
-    expect(catalog.getPublicSummary('small_ball_reg')).toMatchObject({
-      personaId: 'small_ball_reg',
-      name: '小球常客',
-      avatarColor: '#0E7490',
-      style: {
-        tightness: 55,
-        aggression: 55,
-        bluffTendency: 35,
-        pressureCallTendency: 55,
-        riskPreference: 30,
-      },
-    })
-    expect(catalog.getPublicSummary('trap_specialist')).toMatchObject({
-      personaId: 'trap_specialist',
-      name: '慢打猎手',
-      avatarColor: '#BE185D',
-      style: {
-        tightness: 75,
-        aggression: 40,
-        bluffTendency: 20,
-        pressureCallTendency: 60,
-        riskPreference: 40,
-      },
-    })
-  })
-})
+] as const

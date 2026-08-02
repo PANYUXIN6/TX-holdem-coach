@@ -1,6 +1,6 @@
 # M2.3 人物目录、设置与场次基础 Repository 设计
 
-- 状态：待书面复核
+- 状态：已完成
 - 日期：2026-07-30
 - 任务来源：[M2.3 实现预设人物目录、设置和场次基础 Repository](../plans/2026-07-23-poker-practice-development-tasks.md#m23-实现预设人物目录设置和场次基础-repository)
 - 上位设计：[M2.2 完整私有 Schema](./2026-07-29-m2-2-schema-design.md)、[后端设计](./2026-07-23-poker-practice-backend-design.md)、[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)、[Player Agent Runtime](./2026-07-23-poker-practice-agent-harness-design.md)

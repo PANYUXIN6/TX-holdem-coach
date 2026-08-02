@@ -662,7 +662,7 @@ M1.R
 
 - 校验 5–8 个不同 `personaId` 和 `1..8` 内唯一 AI 座位；本地用户领域座位隐式固定为 `0`，拒绝客户端 `userSeatNumber` 和按钮字段。当前身份适配器固定为 `local-user`。
 - DeepSeek Key 缺失时阻止创建；Kimi Key 缺失时返回警告。
-- 从当前预设人物目录或上一场配置快照创建全新的 `session_agents` 和空记忆；沿用上一场时不升级人物版本。
+- 从当前预设人物目录或上一场配置快照创建全新的 `session_agents` 和空记忆；沿用上一场时不升级人物版本，但原模型配置包必须仍通过当前 Active 准入。
 - 在事务前由服务端一次性生成 Session、用户 participant 和各 AI participant UUID；PokerSeat 的 `playerId` 与对应 `session_participants.id` 完全相同，AI participant ID 同时作为 `session_agents.participant_id`，Repository 不另行生成身份。
 - 将座位 `0` 与 AI 座位合并并按座位号规范化，调用 M1.9 `initializePokerTable()` 安全随机选择首手按钮；创建版本 `0` 的内存 `betweenHands` 内容和开手检查点，再调用 `startPokerHand()` 直接开始第一手，按钮不得再次轮转。
 - 创建成功一次原子写入场次、初始累计买入、`hands.inProgress`、`sessionCreated`、`handStarted` 和最终 `inHand` 快照；最终 `stateVersion = 1`。失败不留下空场次或半手牌。

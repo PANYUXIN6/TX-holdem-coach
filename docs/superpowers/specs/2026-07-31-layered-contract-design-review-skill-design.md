@@ -496,6 +496,8 @@ CREATED 至 AWAITING_HUMAN 的任一阶段发生输入摘要失配 → INVALIDAT
 
 `QUEUED` 和 `CLOSED` 保持历史终态，不因后续文档变化而重写。每条 queue item 必须携带原始目标文档摘要；后续修复工作流在消费前重新计算摘要，不匹配时拒绝执行并要求创建新的 Review run。
 
+状态码与原因码是机器协议，必须继续以稳定英文枚举写入 `state.json` 和 Runner 的结构化结果。Runner 同时为所有人类可见结果提供确定性的中文展示文本，Skill 默认只向用户展示中文结论；例如 `CLOSED` + `NO_ADMISSIBLE_FINDINGS` 显示为“评审已结束：没有发现需要人工判断的问题”。原始枚举只在调试或用户明确要求时附带，中文展示不得反向参与状态判断、Schema 校验或制品持久化。
+
 失败或失效后重跑必须创建新 `run-id`，并通过 `retry_of` 引用旧运行；不得复用中间状态或覆盖旧制品。每次状态转换先写入临时文件，再以原子重命名替换状态制品。
 
 运行状态在等待 Native Subagent 时保持当前阶段：`PACKED` 等待 L1，`SELF_CHECKED` 等待 L2，`ARCHITECTURE_CHECKED` 等待全部 L3。只有当前阶段所有响应都通过 Schema、摘要、引用和任务归属校验后才发生下一次状态转换。`advance` 不得跳过未完成任务或接受非当前任务的响应。

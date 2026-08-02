@@ -47,7 +47,7 @@ node .agents/skills/review-design-contracts/scripts/review-design.mjs fail-task 
 
 Interrupt outstanding sibling tasks after the run becomes `FAILED`. Never submit their late output.
 
-7. Stop model orchestration at `AWAITING_HUMAN`, `CLOSED`, `FAILED`, or `INVALIDATED`. At `AWAITING_HUMAN`, read `human-review.md` and show only the current batch. Do not summarize hidden batches or recommend acceptance. At `FAILED`, report `failure.json`; an `INSUFFICIENT_INPUT` failure requires additional declared input and a new run, never a same-input retry.
+7. Stop model orchestration at `AWAITING_HUMAN`, `CLOSED`, `FAILED`, or `INVALIDATED`. Use the Runner result's `human.summary` as the user-facing status; do not expose raw status, reason, or quality-flag enums unless the user explicitly asks for diagnostics. At `AWAITING_HUMAN`, read `human-review.md` and show only the current batch. Do not summarize hidden batches or recommend acceptance. At `FAILED`, explain `failure.json` in Chinese; an `INSUFFICIENT_INPUT` failure requires additional declared input and a new run, never a same-input retry.
 
 ## Record human arbitration
 

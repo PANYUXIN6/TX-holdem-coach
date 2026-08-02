@@ -20,6 +20,28 @@ const skillDirectory = path.dirname(scriptDirectory)
 const configPath = path.join(skillDirectory, 'review.config.json')
 const referencesDirectory = path.join(skillDirectory, 'references')
 
+const statusText = Object.freeze({
+  CREATED: '评审已创建',
+  PACKED: '自洽检查任务已准备',
+  SELF_CHECKED: '自洽检查已完成',
+  ARCHITECTURE_CHECKED: '架构检查已完成',
+  CHALLENGED: '对抗验证已完成',
+  DETERMINISTICALLY_GATED: '证据门禁已完成',
+  AWAITING_HUMAN: '等待人工判断',
+  QUEUED: '已进入修复队列',
+  CLOSED: '评审已结束',
+  FAILED: '评审失败',
+  INVALIDATED: '评审已失效',
+  VALID: '修复队列校验通过',
+})
+
+const reasonText = Object.freeze({
+  NO_ADMISSIBLE_FINDINGS: '没有发现需要人工判断的问题',
+  INSUFFICIENT_INPUT: '评审材料不足',
+  MODEL_OUTPUT_INVALID: '模型输出不符合约定格式',
+  INFRASTRUCTURE_FAILURE: '评审任务执行失败',
+})
+
 function fail(message) {
   process.stderr.write(`${message}\n`)
   process.exitCode = 1
@@ -338,6 +360,31 @@ function readJsonOr(filePath, fallback) {
   return existsSync(filePath)
     ? JSON.parse(readFileSync(filePath, 'utf8'))
     : fallback
+}
+
+function addHumanReadableResult(result) {
+  const state = result.run_dir
+    ? readJsonOr(path.join(result.run_dir, 'state.json'), {})
+    : {}
+  const localizedStatus = statusText[result.status] ?? result.status
+  const reasonCode =
+    result.completion_reason ??
+    result.failure_reason_code ??
+    result.retry_reason ??
+    state.completion_reason ??
+    state.failure_reason_code
+  const localizedReason = reasonText[reasonCode]
+
+  return {
+    ...result,
+    human: {
+      status: localizedStatus,
+      ...(localizedReason ? { reason: localizedReason } : {}),
+      summary: localizedReason
+        ? `${localizedStatus}：${localizedReason}`
+        : localizedStatus,
+    },
+  }
 }
 
 function parsePrepareArguments(argumentsList) {
@@ -1840,7 +1887,7 @@ function main() {
 }
 
 try {
-  const result = main()
+  const result = addHumanReadableResult(main())
   process.stdout.write(`${JSON.stringify(result)}\n`)
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error))

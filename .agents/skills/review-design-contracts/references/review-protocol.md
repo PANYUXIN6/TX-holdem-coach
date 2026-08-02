@@ -72,3 +72,5 @@ The human answers only: “是否存在可验证的契约违反路径？” A re
 ## State rules
 
 `FAILED` and `INVALIDATED` are terminal. Retry with a new run. A valid `insufficient_input` result from L1, L2, or any L3 sibling fails the whole run before partial downstream artifacts or human work are emitted. Zero admissible Evidence Cards close with `state.json.completion_reason: NO_ADMISSIBLE_FINDINGS` and never create an empty human task. `AWAITING_HUMAN` may span multiple batches; do not declare completion until every batch has a decision. Queue items are valid only while the target document digest still matches.
+
+Runner stdout keeps the stable machine `status` and adds `human.status`, optional `human.reason`, and `human.summary`. These Chinese fields are a deterministic presentation layer only: they are never persisted to `state.json` and never participate in transitions or validation. Report `human.summary` to the user by default; show raw enums only for explicitly requested diagnostics.

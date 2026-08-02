@@ -138,6 +138,10 @@ test('prepare creates one pinned native L1 task without running a model', () => 
   )
 
   assert.equal(result.status, 'PACKED')
+  assert.deepEqual(result.human, {
+    status: '自洽检查任务已准备',
+    summary: '自洽检查任务已准备',
+  })
   assert.equal(result.tasks.length, 1)
   assert.equal(
     result.tasks[0].model,
@@ -369,8 +373,14 @@ test('advance closes without human work when L1 and L2 produce no candidates', (
   )
 
   assert.equal(completed.status, 'CLOSED')
+  assert.deepEqual(completed.human, {
+    status: '评审已结束',
+    reason: '没有发现需要人工判断的问题',
+    summary: '评审已结束：没有发现需要人工判断的问题',
+  })
   assert.deepEqual(completed.tasks, [])
   assert.equal(state.completion_reason, 'NO_ADMISSIBLE_FINDINGS')
+  assert.equal(Object.hasOwn(state, 'human'), false)
   assert.deepEqual(
     state.history.map((entry) => entry.status),
     [
@@ -674,6 +684,10 @@ test('a surviving Native L3 response becomes an evidence card for human arbitrat
   )
 
   assert.equal(completed.status, 'AWAITING_HUMAN')
+  assert.deepEqual(completed.human, {
+    status: '等待人工判断',
+    summary: '等待人工判断',
+  })
   assert.equal(cards.length, 1)
   assert.equal(
     cards[0].falsification.remaining_evidence,
@@ -812,6 +826,11 @@ test('fail-task records a Native infrastructure failure as an explicit terminal 
   )
 
   assert.equal(failed.status, 'FAILED')
+  assert.deepEqual(failed.human, {
+    status: '评审失败',
+    reason: '评审任务执行失败',
+    summary: '评审失败：评审任务执行失败',
+  })
   assert.equal(state.status, 'FAILED')
   assert.deepEqual(state.active_tasks, [])
   assert.equal(state.failed_stage, 'self_consistency')
@@ -867,9 +886,17 @@ test('only an explicit human acceptance creates a digest-bound fix queue item th
   const verified = runCli(repositoryRoot, ['verify-queue', review.run_dir])
 
   assert.equal(decided.status, 'QUEUED')
+  assert.deepEqual(decided.human, {
+    status: '已进入修复队列',
+    summary: '已进入修复队列',
+  })
   assert.equal(queue.length, 1)
   assert.equal(queue[0].finding_id, card.finding_id)
   assert.equal(verified.status, 'VALID')
+  assert.deepEqual(verified.human, {
+    status: '修复队列校验通过',
+    summary: '修复队列校验通过',
+  })
 })
 
 test('the Runner contains no nested Codex backend, proxy injection, or mock run mode', () => {
@@ -1075,6 +1102,10 @@ test('a changed input invalidates an active Native task before its response is c
   )
 
   assert.equal(result.status, 'INVALIDATED')
+  assert.deepEqual(result.human, {
+    status: '评审已失效',
+    summary: '评审已失效',
+  })
   assert.equal(state.status, 'INVALIDATED')
   assert.deepEqual(state.active_tasks, [])
   assert.match(state.invalidation_reason, /docs\/design\.md/)

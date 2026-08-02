@@ -1,7 +1,7 @@
 # M2.4 持久化命令账本 Repository 设计
 
 - 日期：2026-08-02
-- 状态：已实现并验证
+- 状态：已确认，评审修复待实现
 - 上位任务：[开发任务分解](../plans/2026-07-23-poker-practice-development-tasks.md)
 - 数据库边界：[M2.2 Schema 设计](./2026-07-29-m2-2-schema-design.md)
 - 事务边界：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
@@ -99,6 +99,13 @@ const LedgerCommandSchema = z.union([
 ])
 ```
 
+UUID 必须先通过对应 Schema 校验，随后在 Repository 命令准备边界规范化为小写。规范化范围固定为：
+
+- 顶层 `sessionId`、`commandId`。
+- 私有 `aiAction.payload.decisionRequestId`、`aiAction.payload.handId`。
+
+摘要和后续 SQL 只使用规范化后的命令。大小写不同但 UUID 值相同的命令必须得到相同摘要、相同账本定位和相同重放结果。响应载荷仍保存并重放首次写入的原始值，不为了规范化而改写其中 UUID；响应或重放载荷的 Session 镜像比较使用“双方均为合法 UUID 后转小写”的规范等价判断。
+
 公开命令也必须额外限制 `expectedStateVersion` 为非负安全整数，不能把 Contracts 当前较宽的 `number` 范围直接写入 PostgreSQL `bigint`。
 
 `candidateActionId` 是有界字符串而不是 UUID；例如已确认的候选标识可以是 `candidate_2`。`decisionSummary`、`agentRunId`、租约和 fencing token 不进入账本命令载荷：前者只属于 Agent 审计，后三者是 Commit Gate 的当前授权事实。`decisionRequestId` 在场次历史内永久唯一，并可精确关联 AgentRun；fencing token 可能在同一 Run 重新领取租约时变化，不属于扑克命令语义。
@@ -107,7 +114,7 @@ Player Commit Gate 必须在 `acquired` 路径复验 AgentRun、有效请求、�
 
 ### 3.2 规范 JSON 与摘要
 
-`prepareCommandRegistration(unknown)` 先严格解析命令，再只构造：
+`prepareCommandRegistration(unknown)` 先严格解析命令，再规范化四类 UUID，最后只从规范化命令构造：
 
 ```ts
 {
@@ -166,11 +173,22 @@ OwnerScope 同样在事务外通过现有 `resolveOwnerScope(sql, ownerScope)` �
 
 只有 `acquired` 是运行时受保护的 capability，且只有它能传给终态函数。命中 `processing` 或终态的调用方不能构造或取得终态写入能力。
 
+capability 创建时使用模块私有 `WeakMap<AcquiredCommandRegistration, TransactionSql>` 绑定实际完成登记的事务实例。`completeCommand()` / `failCommand()` 的检查顺序固定为：
+
+1. 伪造或非 Repository 创建的 capability → `RepositoryInputValidationError`。
+2. 已消费 capability → `CommandLedgerTransitionError`。
+3. 传入事务实例与登记事务不一致 → `CommandLedgerTransitionError`。
+4. 以上通过后才验证响应、Session 镜像和事件范围输入。
+
+跨事务拒绝不消费 capability，也不执行 SQL；原登记事务仍能用同一 capability 合法终结。终态 SQL 一旦开始尝试，capability 按既有规则消费。
+
 冲突安全插入返回零行后，Owner-scoped 既有行读取仍返回零行，才表示 Session 不存在或不属于 Owner，并统一抛出 `ResourceNotFoundError`。既有行摘要不同抛出 `CommandPayloadConflictError`。既有行摘要相同则按状态矩阵解析。
 
 `processing` 只描述行对当前事务可见且尚未终结，不承诺该行在本次调用前已经提交。若同一个未提交事务先用 P1 登记并取得 `acquired`，再用新的 P2 登记相同键和摘要，P2 可以读取本事务自己的写入并返回 `processing`，但不会取得第二个 capability。正常 M3 每个入站命令在一个事务中只登记一次；这条同事务重入语义用于保持 Repository 结果准确且可诊断，不把提交来源伪装成状态属性。
 
 在“Session 行锁、登记和终结处于同一事务”的正常 M3 路径中，来自另一个事务的并发重复请求会等待前一事务结束，然后读取终态。`processing` 不是正常跨事务并发请求的快速返回机制；跨事务看到它通常意味着一条已经提交但未终结的恢复、诊断或历史兼容行。若要让并发请求立即返回处理中，就必须拆分事务，这不属于本设计。
+
+已提交的 `processing` 行只能由新的 prepared 重放为 `{ status: 'processing' }`，不会重新授予 acquired capability，也不能通过伪造 capability 调用终态函数。M2.4 不提供孤儿 processing 恢复或推进 API。
 
 ### 4.3 最终调用链
 
@@ -224,7 +242,7 @@ const COMMAND_LEDGER_RESPONSE_PAYLOAD_VERSION = 1
 - 两个序号必须是非负安全整数。
 - 存在范围时 `firstEventSeq <= lastEventSeq`，且 `lastEventSeq === response.snapshot.eventSeq`。
 
-Repository 先确认 acquired capability 真实且尚未消费，但不立即消费；Contracts Schema、私有安全整数、Session 镜像和事件范围全部校验成功后才消费 capability，随后执行终态 SQL。超界版本抛出 `RepositoryInputValidationError`，不执行 SQL，且 acquired 保持可用。SQL 的 `WHERE` 必须同时匹配：
+Repository 先按固定顺序确认 acquired capability 真实、未消费且绑定当前事务，但不立即消费；Contracts Schema、私有安全整数、规范 UUID 等价的 Session 镜像和事件范围全部校验成功后才消费 capability，随后执行终态 SQL。超界版本抛出 `RepositoryInputValidationError`，不执行 SQL，且 acquired 保持可用。SQL 的 `WHERE` 必须同时匹配：
 
 ```text
 owner_id
@@ -244,7 +262,7 @@ owner_id
 - 无 `latestSnapshot` 当且仅当 `final_state_version IS NULL`。
 - `failed` 永远不接受事件范围。
 
-与成功终态相同，Repository 先无副作用地确认 capability，再完成 Contracts Schema、私有安全整数和 Session 镜像校验；全部成功后才消费 acquired 并使用相同的精确 `WHERE` 推进到 `failed`。超界快照版本抛出 `RepositoryInputValidationError`，不执行 SQL，也不消费 acquired。它只用于可安全提交的稳定预期失败，例如预期版本冲突、生命周期不允许或合法动作校验失败。
+与成功终态相同，Repository 先无副作用地确认 capability 及事务绑定，再完成 Contracts Schema、私有安全整数和规范 UUID 等价的 Session 镜像校验；全部成功后才消费 acquired 并使用相同的精确 `WHERE` 推进到 `failed`。超界快照版本抛出 `RepositoryInputValidationError`，不执行 SQL，也不消费 acquired。它只用于可安全提交的稳定预期失败，例如预期版本冲突、生命周期不允许或合法动作校验失败。
 
 数据库连接/SQL 异常、事务已 aborted、未回滚的部分关系写入和未知内部错误不得调用 `failCommand()`；上层必须整笔回滚。终态 SQL 失败或零行后，所在事务必须结束或回滚，acquired 不得复用。
 
@@ -288,14 +306,17 @@ SQL `try/catch` 只包围数据库调用。Schema 解析、冲突判断和损坏
 覆盖：
 
 - 五类公开命令和私有 `aiAction`。
-- `sessionId`、`commandId`、`decisionRequestId`、`handId` 的 UUID 校验。
+- `sessionId`、`commandId`、`decisionRequestId`、`handId` 的非法 UUID 拒绝、合法大写 UUID 接受及小写规范化。
 - `candidateActionId` trim 后 1–128 字符、AI 座位 1–8、非负安全版本、严格未知字段和动作 Schema。
+- `candidateActionId` trim 后恰好 128 字符接受，129 字符拒绝。
 - 相同语义、不同对象键顺序摘要相同。
 - 类型、金额、版本、请求、手牌、座位、候选或动作不同摘要不同。
+- 四类 UUID 仅大小写不同的命令摘要相同，真实登记与重放结果相同。
 - §3.2 的硬编码 SHA-256 黄金向量。
 - 解析结果递归冻结，prepared/acquired 无法伪造。
 - prepared 在首次登记尝试时即失效，包括零行、冲突、损坏或 SQL 失败。
 - acquired 在合法终态输入准备完成后、SQL 前消费；非法输入不消费，SQL 失败或零行后失效。
+- acquired 绑定登记事务；跨事务调用在 SQL 前拒绝且不消费，随后原事务仍可成功终结。
 - 插入返回一行才取得 acquired；插入返回零行后读取既有行，不能通过候选 ID 相等误判分支。
 - 候选 `ledgerId` 与同键既有行 ID 相等时仍返回既有状态，不返回 acquired；候选 ID 与其他键主键冲突时只返回数据库错误。
 - acquired、`processing`、成功重放、失败重放、负载冲突和零行未找到。
@@ -307,6 +328,7 @@ SQL `try/catch` 只包围数据库调用。Schema 解析、冲突判断和损坏
 - 非 V1 响应与损坏载荷严格区分。
 - 第二次 `complete`、第二次 `fail`、`complete → fail`、`fail → complete` 均拒绝且不改变首次终态。
 - SQL 原始错误脱敏，领域错误不被误转成数据库错误。
+- SQL 错误中的数据库 URL、命令 ID、摘要和原始错误文本均不得出现在公开异常中。
 
 ### 7.2 显式真实数据库测试
 
@@ -333,10 +355,10 @@ await assertM24CommandLedgerRepository(sql, runtimeUrl)
 - 冲突重放不执行 no-op UPDATE，既有 `updated_at` 保持不变。
 - Owner 隔离、级联删除和零行未找到。
 - 登记与终结在同一事务后整体回滚，账本行完全不存在。
-- 人工构造已提交 `processing` 行，终态更新事务回滚后仍保持 `processing`。
+- 人工构造已提交 `processing` 行，新的 prepared 只能得到无 capability 的 `{ status: 'processing' }`；伪造 capability 的终态尝试在 SQL 前拒绝。
 - 两条真实连接的并发冲突安全插入：事务 A 登记并终结但暂不提交；事务 B 使用新 prepared 登记相同命令；释放 A 提交后，B 的插入返回零行并通过后续 Owner-scoped 读取取得终态重放。最终只有一行、只有 A 曾取得 acquired，响应和既有 `updated_at` 未被 B 改写。
 
-并发测试只验证最终可观察结果，不使用固定 sleep 或毫秒耗时断言；不要求额外查询 PostgreSQL 锁状态。
+并发测试必须确定性证明 B 被 A 的未提交唯一键冲突阻塞：B 在同一事务连接先读取 `pg_backend_pid()`，启动 `registerCommand()` 后，测试有界轮询 `pg_locks`，确认 B 存在 `granted = false` 的 `transactionid` 锁，并使用 `pg_blocking_pids(B_PID)`（或同一 transactionid 上 A 的已授予锁）确认阻塞者就是 A。只有观察到该状态后才允许 A 提交。轮询超时只用于防止测试挂死，不以耗时作为通过判据。最终必须再次确认只有 A 获得过 capability，B 只能取得终态重放。
 
 默认 `pnpm run verify` 继续离线，不读取数据库凭据。远程完整断言只由显式 `db:test:full` 入口运行。
 

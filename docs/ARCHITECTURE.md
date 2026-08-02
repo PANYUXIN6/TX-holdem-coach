@@ -1,14 +1,16 @@
 # 架构概览
 
-更新时间：2026-08-02（M2.3 人物目录、Player 设置与场次基础 Repository 已落地；完整场次事务仍待 M3.2）
+更新时间：2026-08-02（M2.4 命令账本 Repository 已落地；完整场次事务仍待 M3.2）
 
 ## Workspace 边界
 
 - 根目录通过 pnpm 编排开发、构建、类型检查、格式检查和后端测试命令；`verify` 固定按“格式检查 → 类型检查 → 后端测试”执行，后端测试会先验证并重建 Contracts，再运行 Server 分类测试，不承载运行时业务代码。
 - `apps/web` 是 React/Vite 手机竖屏浏览器客户端，入口为 `src/main.tsx`；目标可玩宽度为 360–430px，宽屏不建立第二套布局。唯一的牌面资源位于 `public/poker/`，由 Vite 作为 `/poker/<filename>` 提供。
 - `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。`bootstrap.ts` 在配置加载后、数据库连接和监听前显式调用人物目录 loader，并把深冻结目录交给后续组合边界；人物校验失败使用脱敏错误拒绝启动。`src/personas/` 分离不执行解析的源码定义、永久/Active 私有 Schema、规范 JSON/哈希和只读目录端口。`src/persistence/` 直接使用参数化 `postgres.js` SQL：唯一 OwnerScope 解析端口、只写 `app_settings` 的 Player 超时设置 Repository，以及 Owner-scoped 场次查询、微秒 keyset 分页、人物快照完整性读取和事务内阵容批量写入。`src/sessions/roster-preparation.ts` 在事务前从当前目录或最近 ended 快照执行 Active 准入并构造稳定身份图。`src/db/schema.ts` 仍是 18 张 `app_private` 表与约束的唯一 Drizzle 入口；M2.3 不新增迁移。Hono 保持唯一入口，不安装 `supabase-js`，也不使用 Supabase Auth、Data API、Realtime、Storage 或 Edge Functions。
+- `src/persistence/command-ledger-repository.ts` 是 M2.4 命令账本边界：依赖 Contracts Schema 验证公开响应，并在服务端私有联合中补充 `aiAction`；它生成稳定摘要与一次性 capability，只消费调用方事务和已解析 Owner，不依赖扑克引擎、HTTP 或 SSE。M2.4 沿用既有 Schema，不新增迁移。
 - `apps/server/.env.example` 提供脱敏占位的线上运行/迁移连接与 Provider Key；`.env.test.example` 只提供两条测试 URL。真实值只存在于后端、Git 忽略的 `.env.test.local` 或部署环境，project ref 不由环境声明。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与 `service/` 分类。普通 `verify` 明确不收集远程数据库测试文件。日常 `db:test:integration` 只执行合法前缀核验、Drizzle 迁移和迁移后 `exact`；手动 `db:test:full` 在同一正常流程后追加 M2.2 Schema/约束断言和 M2.3 Repository 真实读写断言，覆盖阵容与 revision 0、设置 UPSERT、损坏拒绝、活动冲突回滚、微秒分页和 Owner 隔离。M2.3 新断言全部在回滚事务或精确 Session ID 范围内运行。
+- M2.4 单元测试只通过 Repository 导出 API 验证命令、摘要、capability 与状态矩阵；`db:test:full` 额外以两条真实连接验证 Owner 条件、唯一约束、回滚、候选 ID 碰撞、终态重放和 `updated_at` 不被重复登记改写。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、结构化合法动作、人物公开摘要与创建选择、Provider 健康/设置、HTTP/SSE 信封和错误响应。`LegalActionsSchema` 约束动作顺序、互斥、快捷目标顺序/唯一性/区间和普通目标与全下边界；Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。`bet`、`raise` 的命令金额固定为行动后本街总投入的 `targetStreetCommitment`。通用座位为 `0..8`，创建选择的 AI 为 `1..8`，公开快照固定唯一用户在座位 `0` 且总席数为 6–9；人物目录由八个固定标识组成。
 - 公开快照只承载当前手的最小行动时间线及两手之间的最小完成手摘要；M3 以后只能从私有事件与 M1.9 私有 `participantHands` 作可见性投影，Contracts 不导入服务器类型、评估比较等级、牌堆、burn 或未公开底牌。
 
@@ -23,6 +25,8 @@
 ## 当前运行链路
 
 `pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 不启动服务、不联网，也不读取模型 Key 或数据库凭据。Server 入口按“加载 dotenv → 校验私有配置 → 显式加载并校验人物目录 → 创建运行时客户端 → `SELECT 1` → 只读 `exact` 核验迁移日志 → 仅监听 `127.0.0.1`”运行；任何门控失败都输出脱敏中文错误并拒绝监听。M2.3 持久化链固定为 `OwnerScope.ownerId → owners.identity_key → ResolvedOwnerScope.databaseOwnerId → Owner-scoped SQL`。当前目录阵容先展开完整人物配置并计算包含 Payload 版本的 SHA-256 key；旧阵容只从最近 ended 场次读取并保留原配置、版本和 key，两者都必须在事务前通过当前 Active 模型准入。事务写入原语不解析 Owner、不生成 ID、不开启或提交事务，只批量写入完整 roster 与 revision 0，供 M3.2 与扑克初始化、Hand、事件和权威快照继续组合。Provider 投影尚未挂载 HTTP，M3.5 才加入路由；唯一扑克行为链仍为 `PokerTableState + PokerCommand → poker-engine.ts.applyPokerAction()`。
+
+M2.4 调用链固定为“事务外严格 prepare 命令与解析 Owner → 上层事务锁定 Session → `registerCommand` → 业务事实/事件/快照 → `completeCommand` 或可安全提交的 `failCommand`”。登记只以冲突安全插入实际返回一行为 acquired 判据，未插入后才读取同键既有状态；重放再次校验载荷版本、Contracts Schema、Session/版本镜像和终态矩阵。Repository 自身不开启事务、不锁 Session、不推进扑克状态、不分配事件序号，也不发布 SSE；基础设施与未知异常由上层整笔回滚。
 
 ## 已实现的 M1 门面与待实施的非 Agent 重基线
 

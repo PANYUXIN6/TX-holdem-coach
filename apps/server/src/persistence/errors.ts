@@ -13,7 +13,7 @@ export class RepositoryInputValidationError extends Error {
 }
 
 export type PayloadKind =
-  'personaConfig' | 'agentMemory' | 'playerTimeoutSettings'
+  'personaConfig' | 'agentMemory' | 'playerTimeoutSettings' | 'commandResponse'
 
 export class UnknownPayloadVersionError extends Error {
   public constructor(public readonly payloadKind: PayloadKind) {
@@ -28,6 +28,7 @@ export type DataCorruptionKind =
   | 'snapshotKeyMismatch'
   | 'invalidRoster'
   | 'invalidInitialMemory'
+  | 'invalidCommandLedger'
 
 export class PersistenceDataCorruptionError extends Error {
   public constructor(public readonly corruption: DataCorruptionKind) {
@@ -60,6 +61,20 @@ export class ActiveSessionConflictError extends Error {
   }
 }
 
+export class CommandPayloadConflictError extends Error {
+  public constructor() {
+    super('命令标识已绑定到不同负载。')
+    this.name = 'CommandPayloadConflictError'
+  }
+}
+
+export class CommandLedgerTransitionError extends Error {
+  public constructor() {
+    super('命令账本状态无法推进。')
+    this.name = 'CommandLedgerTransitionError'
+  }
+}
+
 export class DatabaseOperationError extends Error {
   public constructor() {
     super('数据库操作失败。')
@@ -76,6 +91,8 @@ export function isRepositoryDomainError(error: unknown): error is Error {
     error instanceof ResourceNotFoundError ||
     error instanceof ActiveModelConfigurationError ||
     error instanceof ActiveSessionConflictError ||
+    error instanceof CommandPayloadConflictError ||
+    error instanceof CommandLedgerTransitionError ||
     error instanceof DatabaseOperationError
   )
 }

@@ -7,12 +7,21 @@ import { createActiveModelConfigurationV1Schema } from '../../src/personas/confi
 import {
   ActiveModelConfigurationError,
   ActiveSessionConflictError,
+  CommandPayloadConflictError,
   DatabaseOperationError,
   OwnerScopeResolutionError,
   PersistenceDataCorruptionError,
   RepositoryInputValidationError,
   ResourceNotFoundError,
 } from '../../src/persistence/errors.js'
+import {
+  completeCommand,
+  failCommand,
+  prepareCommandRegistration,
+  registerCommand,
+  type CommandRegistrationResult,
+} from '../../src/persistence/command-ledger-repository.js'
+import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import {
   readPlayerTimeoutSettings,
   writePlayerTimeoutSettings,
@@ -551,4 +560,484 @@ export async function assertM23Repositories(sql: Sql): Promise<void> {
   await assertMissingOwnerBoundaries(sql)
   await assertHistoricalPaginationAndOwnerIsolation(sql)
   await assertHistoricalRefreshConvergesAfterUpdate(sql)
+}
+
+function createCommandSnapshot(sessionId: string, stateVersion = 1) {
+  return {
+    protocolVersion: 1 as const,
+    sessionId,
+    stateVersion,
+    eventSeq: 1,
+    pokerPhase: 'betweenHands' as const,
+    lifecycleStatus: 'active' as const,
+    agentRunState: 'idle' as const,
+    activeDecision: null,
+    seats: Array.from({ length: 6 }, (_, seatNumber) => ({
+      seatNumber,
+      playerId: randomUUID(),
+      displayName: seatNumber === 0 ? '玩家' : `AI ${seatNumber}`,
+      avatarColor: '#0f766e',
+      isUser: seatNumber === 0,
+      stack: 2_000,
+      status: 'active' as const,
+    })),
+    hand: null,
+    lastCompletedHandSummary: null,
+  }
+}
+
+async function insertDiagnosticSession(
+  query: Sql,
+  ownerId: string,
+  sessionId: string,
+): Promise<void> {
+  await query`
+    INSERT INTO app_private.sessions (
+      id, owner_id, lifecycle_status, state_version, next_event_seq
+    ) VALUES (
+      ${sessionId}::uuid,
+      ${ownerId}::uuid,
+      'readonlyDiagnostic',
+      0,
+      0
+    )
+  `
+}
+
+async function insertCommittedDiagnosticSession(
+  sql: Sql,
+  sessionId: string,
+): Promise<void> {
+  await sql.begin(async (transaction) => {
+    const query = transaction as unknown as Sql
+    const roster = await createRosterInput(query)
+    await insertSessionRosterSnapshot(transaction, { ...roster, sessionId })
+    await transaction`
+      UPDATE app_private.sessions
+      SET lifecycle_status = 'readonlyDiagnostic',
+          updated_at = clock_timestamp()
+      WHERE id = ${sessionId}::uuid
+        AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+    `
+  })
+}
+
+function commandInputs(sessionId: string) {
+  const base = { sessionId, expectedStateVersion: 0 }
+  return [
+    {
+      ...base,
+      commandId: randomUUID(),
+      type: 'playerAction' as const,
+      payload: { action: { type: 'check' as const } },
+    },
+    {
+      ...base,
+      commandId: randomUUID(),
+      type: 'startNextHand' as const,
+      payload: {},
+    },
+    {
+      ...base,
+      commandId: randomUUID(),
+      type: 'rebuy' as const,
+      payload: { amount: 2_000 },
+    },
+    {
+      ...base,
+      commandId: randomUUID(),
+      type: 'endSession' as const,
+      payload: {},
+    },
+    {
+      ...base,
+      commandId: randomUUID(),
+      type: 'retryAgent' as const,
+      payload: {},
+    },
+    {
+      ...base,
+      commandId: randomUUID(),
+      type: 'aiAction' as const,
+      payload: {
+        decisionRequestId: randomUUID(),
+        handId: randomUUID(),
+        actorSeatNumber: 2,
+        candidateActionId: 'candidate_2',
+        action: { type: 'raise' as const, targetStreetCommitment: 120 },
+      },
+    },
+  ]
+}
+
+async function assertCommandLedgerLifecycle(sql: Sql): Promise<void> {
+  const owner = await resolveOwnerScope(sql, ownerScope)
+
+  await inRollbackTransaction(sql, async (transaction, query) => {
+    const sessionId = randomUUID()
+    await insertDiagnosticSession(query, owner.databaseOwnerId, sessionId)
+    const inputs = commandInputs(sessionId)
+
+    for (const [index, input] of inputs.entries()) {
+      const prepared = prepareCommandRegistration(input)
+      const acquired = await registerCommand(transaction, owner, prepared)
+      expect(acquired.status).toBe('acquired')
+      if (acquired.status !== 'acquired') {
+        throw new Error('测试未取得命令处理权。')
+      }
+
+      const expectedResponse =
+        index % 2 === 0
+          ? {
+              protocolVersion: 1 as const,
+              snapshot: createCommandSnapshot(sessionId),
+            }
+          : {
+              protocolVersion: 1 as const,
+              code: 'expected_failure',
+              message: '预期失败。',
+            }
+      if ('snapshot' in expectedResponse) {
+        await completeCommand(transaction, acquired, expectedResponse, {
+          firstEventSeq: 1,
+          lastEventSeq: 1,
+        })
+      } else {
+        await failCommand(transaction, acquired, expectedResponse)
+      }
+
+      const beforeReplay = await query<{ readonly updatedAt: string }[]>`
+        SELECT updated_at::text AS "updatedAt"
+        FROM app_private.command_ledger
+        WHERE id = ${acquired.ledgerId}::uuid
+      `
+      const replay = await registerCommand(
+        transaction,
+        owner,
+        prepareCommandRegistration(input),
+      )
+      expect(replay).toEqual({
+        status: 'snapshot' in expectedResponse ? 'completed' : 'failed',
+        response: expectedResponse,
+      })
+      const afterReplay = await query<{ readonly updatedAt: string }[]>`
+        SELECT updated_at::text AS "updatedAt"
+        FROM app_private.command_ledger
+        WHERE id = ${acquired.ledgerId}::uuid
+      `
+      expect(afterReplay[0]?.updatedAt).toBe(beforeReplay[0]?.updatedAt)
+    }
+
+    const processingInput = {
+      sessionId,
+      commandId: randomUUID(),
+      expectedStateVersion: 0,
+      type: 'retryAgent' as const,
+      payload: {},
+    }
+    const first = await registerCommand(
+      transaction,
+      owner,
+      prepareCommandRegistration(processingInput),
+    )
+    const second = await registerCommand(
+      transaction,
+      owner,
+      prepareCommandRegistration(processingInput),
+    )
+    expect(first.status).toBe('acquired')
+    expect(second).toEqual({ status: 'processing' })
+
+    const conflicting = {
+      ...inputs[0],
+      expectedStateVersion: 1,
+    }
+    await expect(
+      registerCommand(
+        transaction,
+        owner,
+        prepareCommandRegistration(conflicting),
+      ),
+    ).rejects.toBeInstanceOf(CommandPayloadConflictError)
+
+    const otherOwnerId = randomUUID()
+    const otherSessionId = randomUUID()
+    await query`
+      INSERT INTO app_private.owners (id, identity_key)
+      VALUES (${otherOwnerId}::uuid, ${`test-m2-4:${otherOwnerId}`})
+    `
+    await insertDiagnosticSession(query, otherOwnerId, otherSessionId)
+    await expect(
+      registerCommand(
+        transaction,
+        owner,
+        prepareCommandRegistration({
+          sessionId: otherSessionId,
+          commandId: randomUUID(),
+          expectedStateVersion: 0,
+          type: 'endSession',
+          payload: {},
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+
+    await query`
+      DELETE FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+    const cascadedRows = await query<{ readonly count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM app_private.command_ledger
+      WHERE session_id = ${sessionId}::uuid
+    `
+    expect(cascadedRows[0]?.count).toBe(0)
+  })
+}
+
+async function assertCommandLedgerRollbacks(sql: Sql): Promise<void> {
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  const rolledBackSessionId = randomUUID()
+
+  await inRollbackTransaction(sql, async (transaction, query) => {
+    await insertDiagnosticSession(
+      query,
+      owner.databaseOwnerId,
+      rolledBackSessionId,
+    )
+    const prepared = prepareCommandRegistration({
+      sessionId: rolledBackSessionId,
+      commandId: randomUUID(),
+      expectedStateVersion: 0,
+      type: 'endSession',
+      payload: {},
+    })
+    const acquired = await registerCommand(transaction, owner, prepared)
+    if (acquired.status !== 'acquired') {
+      throw new Error('测试未取得命令处理权。')
+    }
+    await completeCommand(
+      transaction,
+      acquired,
+      {
+        protocolVersion: 1,
+        snapshot: createCommandSnapshot(rolledBackSessionId),
+      },
+      null,
+    )
+  })
+
+  const rolledBackRows = await sql<{ readonly count: number }[]>`
+    SELECT count(*)::int AS count
+    FROM app_private.sessions
+    WHERE id = ${rolledBackSessionId}::uuid
+  `
+  expect(rolledBackRows[0]?.count).toBe(0)
+
+  const processingSessionId = randomUUID()
+  try {
+    await insertCommittedDiagnosticSession(sql, processingSessionId)
+    const acquired = await sql.begin(async (transaction) => {
+      const prepared = prepareCommandRegistration({
+        sessionId: processingSessionId,
+        commandId: randomUUID(),
+        expectedStateVersion: 0,
+        type: 'endSession',
+        payload: {},
+      })
+      const result = await registerCommand(transaction, owner, prepared)
+      if (result.status !== 'acquired') {
+        throw new Error('测试未取得命令处理权。')
+      }
+      return result
+    })
+
+    await inRollbackTransaction(sql, async (transaction) => {
+      await failCommand(transaction, acquired, {
+        protocolVersion: 1,
+        code: 'expected_failure',
+        message: '预期失败。',
+      })
+    })
+    const rows = await sql<{ readonly status: string }[]>`
+      SELECT processing_status AS status
+      FROM app_private.command_ledger
+      WHERE id = ${acquired.ledgerId}::uuid
+    `
+    expect(rows[0]?.status).toBe('processing')
+  } finally {
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id = ${processingSessionId}::uuid
+    `
+  }
+}
+
+async function assertCandidateLedgerIdCollisions(sql: Sql): Promise<void> {
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  const sessionId = randomUUID()
+  try {
+    await insertCommittedDiagnosticSession(sql, sessionId)
+
+    const sameKeyInput = {
+      sessionId,
+      commandId: randomUUID(),
+      expectedStateVersion: 0,
+      type: 'retryAgent' as const,
+      payload: {},
+    }
+    const sameKey = prepareCommandRegistration(sameKeyInput)
+    await sql`
+      INSERT INTO app_private.command_ledger (
+        id, session_id, owner_id, command_id,
+        canonical_payload_digest, processing_status
+      ) VALUES (
+        ${sameKey.ledgerId}::uuid,
+        ${sessionId}::uuid,
+        ${owner.databaseOwnerId}::uuid,
+        ${sameKey.command.commandId}::uuid,
+        ${sameKey.canonicalPayloadDigest},
+        'processing'
+      )
+    `
+    await sql.begin(async (transaction) => {
+      await expect(
+        registerCommand(transaction, owner, sameKey),
+      ).resolves.toEqual({ status: 'processing' })
+    })
+    await sql`
+      DELETE FROM app_private.command_ledger
+      WHERE id = ${sameKey.ledgerId}::uuid
+    `
+
+    const otherKey = prepareCommandRegistration({
+      ...sameKeyInput,
+      commandId: randomUUID(),
+    })
+    const existingCommandId = randomUUID()
+    await sql`
+      INSERT INTO app_private.command_ledger (
+        id, session_id, owner_id, command_id,
+        canonical_payload_digest, processing_status
+      ) VALUES (
+        ${otherKey.ledgerId}::uuid,
+        ${sessionId}::uuid,
+        ${owner.databaseOwnerId}::uuid,
+        ${existingCommandId}::uuid,
+        ${'a'.repeat(64)},
+        'processing'
+      )
+    `
+    await expect(
+      sql.begin((transaction) => registerCommand(transaction, owner, otherKey)),
+    ).rejects.toBeInstanceOf(DatabaseOperationError)
+  } finally {
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+  }
+}
+
+function withFirstQueryBarrier(
+  transaction: TransactionSql,
+  onFirstQuery: () => void,
+): TransactionSql {
+  let first = true
+  return ((template: TemplateStringsArray, ...parameters: unknown[]) => {
+    if (first) {
+      first = false
+      onFirstQuery()
+    }
+    return Reflect.apply(transaction, transaction, [template, ...parameters])
+  }) as unknown as TransactionSql
+}
+
+async function assertConcurrentCommandReplay(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const postgres = (await import('postgres')).default
+  const secondSql = postgres(runtimeUrl, {
+    connect_timeout: 10,
+    max: 1,
+    prepare: false,
+    ssl: 'require',
+  })
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  const sessionId = randomUUID()
+  const input = {
+    sessionId,
+    commandId: randomUUID(),
+    expectedStateVersion: 0,
+    type: 'endSession' as const,
+    payload: {},
+  }
+  let secondResult: Promise<CommandRegistrationResult> | undefined
+  let updatedAtAfterFirst = ''
+
+  try {
+    await insertCommittedDiagnosticSession(sql, sessionId)
+    await sql.begin(async (transaction) => {
+      const firstPrepared = prepareCommandRegistration(input)
+      const first = await registerCommand(transaction, owner, firstPrepared)
+      expect(first.status).toBe('acquired')
+      if (first.status !== 'acquired') {
+        throw new Error('测试未取得命令处理权。')
+      }
+      const response = {
+        protocolVersion: 1 as const,
+        snapshot: createCommandSnapshot(sessionId),
+      }
+      await completeCommand(transaction, first, response, null)
+      const updatedRows = await transaction<{ readonly updatedAt: string }[]>`
+        SELECT updated_at::text AS "updatedAt"
+        FROM app_private.command_ledger
+        WHERE id = ${first.ledgerId}::uuid
+      `
+      updatedAtAfterFirst = updatedRows[0]?.updatedAt ?? ''
+
+      let signalQueryStarted: (() => void) | undefined
+      const queryStarted = new Promise<void>((resolve) => {
+        signalQueryStarted = resolve
+      })
+      secondResult = secondSql.begin((secondTransaction) =>
+        registerCommand(
+          withFirstQueryBarrier(secondTransaction, () =>
+            signalQueryStarted?.(),
+          ),
+          owner,
+          prepareCommandRegistration(input),
+        ),
+      )
+      await queryStarted
+    })
+
+    const replay = await secondResult
+    expect(replay?.status).toBe('completed')
+    const rows = await sql<
+      { readonly count: number; readonly updatedAt: string }[]
+    >`
+      SELECT count(*)::int AS count, max(updated_at)::text AS "updatedAt"
+      FROM app_private.command_ledger
+      WHERE session_id = ${sessionId}::uuid
+        AND command_id = ${input.commandId}::uuid
+    `
+    expect(rows[0]).toEqual({ count: 1, updatedAt: updatedAtAfterFirst })
+  } finally {
+    await secondSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+  }
+}
+
+export async function assertM24CommandLedgerRepository(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  await assertCommandLedgerLifecycle(sql)
+  await assertCommandLedgerRollbacks(sql)
+  await assertCandidateLedgerIdCollisions(sql)
+  await assertConcurrentCommandReplay(sql, runtimeUrl)
 }

@@ -51,13 +51,39 @@ const BoardSchema = z
       })
     }
   })
-const ActionTableSnapshotSchema = z.strictObject({
-  street: HandStreetSchema,
-  board: BoardSchema,
-  currentActorSeatNumber: SeatNumberSchema.nullable(),
-  pot: SafeNonnegativeIntegerSchema,
-  seats: z.array(ActionSeatSnapshotSchema).min(6).max(9),
-})
+const ActionTableSnapshotSchema = z
+  .strictObject({
+    street: HandStreetSchema,
+    board: BoardSchema,
+    currentActorSeatNumber: SeatNumberSchema.nullable(),
+    pot: SafeNonnegativeIntegerSchema,
+    seats: z.array(ActionSeatSnapshotSchema).min(6).max(9),
+  })
+  .superRefine((snapshot, context) => {
+    if (
+      snapshot.currentActorSeatNumber !== null &&
+      !snapshot.seats.some(
+        (seat) => seat.seatNumber === snapshot.currentActorSeatNumber,
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '当前行动者必须存在于快照座位集合。',
+        path: ['currentActorSeatNumber'],
+      })
+    }
+    const totalContributions = snapshot.seats.reduce(
+      (total, seat) => total + BigInt(seat.totalContribution),
+      0n,
+    )
+    if (BigInt(snapshot.pot) !== totalContributions) {
+      context.addIssue({
+        code: 'custom',
+        message: '快照底池必须等于全部座位总投入之和。',
+        path: ['pot'],
+      })
+    }
+  })
 
 const HandStartedEventSchema = z
   .strictObject({

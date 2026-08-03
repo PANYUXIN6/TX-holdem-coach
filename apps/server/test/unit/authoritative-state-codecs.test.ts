@@ -41,13 +41,16 @@ function minimalPrivateTableState() {
 }
 
 function actionSnapshotSeats(seatZeroStatus: 'active' | 'folded' = 'active') {
-  return Array.from({ length: 6 }, (_, seatNumber) => ({
-    seatNumber,
-    status: seatNumber === 0 ? seatZeroStatus : ('active' as const),
-    stack: 2_000,
-    streetContribution: 0,
-    totalContribution: 0,
-  }))
+  return Array.from({ length: 6 }, (_, seatNumber) => {
+    const contribution = seatNumber === 1 ? 10 : seatNumber === 2 ? 20 : 0
+    return {
+      seatNumber,
+      status: seatNumber === 0 ? seatZeroStatus : ('active' as const),
+      stack: 2_000 - contribution,
+      streetContribution: contribution,
+      totalContribution: contribution,
+    }
+  })
 }
 
 function actionCommittedEvent() {
@@ -265,6 +268,36 @@ describe('current authoritative-state codecs', () => {
       actorSeatNumber: 8,
       command: { ...event.command, actorSeatNumber: 8 },
       before: { ...event.before, currentActorSeatNumber: 8 },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects a snapshot current actor that is absent from its seats', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      after: { ...event.after, currentActorSeatNumber: 8 },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects a snapshot whose pot does not equal total contributions', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      after: { ...event.after, pot: 31 },
     }
 
     expect(() => encodePrivateEventV1(invalidEvent)).toThrow(

@@ -559,44 +559,47 @@ M1.R
 - 覆盖相同语义但键顺序不同的负载具有相同规范化摘要。
 - 覆盖同标识不同命令类型或金额产生冲突。
 
-### M2.5 实现统一事件与快照原子事务
+### M2.5 实现权威状态契约、当前版本 Codec 与统一原子持久化
+
+专项设计：[M2.5 权威状态契约、当前版本 Codec 与原子持久化设计](../specs/2026-08-03-m2-5-authoritative-state-codecs-atomic-persistence-design.md)。
 
 产出：
 
-- 在同一事务内完成命令账本、`session_events`、`session_snapshots` 和相关领域表写入。
-- 事务开始后先对目标 `sessions` 行执行 `SELECT ... FOR UPDATE`，再校验幂等、期望版本和领域前置条件。
-- 同一事务同步 `sessions.stateVersion` 等协调列及可重建的 `currentHandId` 指针。
-- 每场 `eventSeq` 单调递增且只在成功提交的事务中分配；失败、回滚或幂等重放不消耗新的已提交序号。每个成功改变 `PrivateTableState` 的命令最多且恰好递增一次 `stateVersion`，一条命令内部不得按子步骤重复递增。
-- 同一命令产生的所有事件共享命令级 `stateVersionBefore/After`；只改变协调状态时两者相等，创建场次统一为 `0 → 1`。
-- Player 协调运行事件可以在同一 `stateVersion` 下继续增加 `eventSeq`；Coach 事件不写 `session_events` 或占用该序列。
-- 纯 Player 协调事件只更新 `sessions` 协调字段和统一事件，不重写未变化的私有扑克快照。
+- M2.5a 定义会话层 `PrivateTableState`、运行时构造边界、精确资金守恒、最近完成手摘要私有 Schema，以及首个可写快照/事件 Codec；金额按各自领域取值域验证，合法负 `netChange` 不得被误判为损坏。
+- 私有快照的数据库行载荷版本与 `snapshotSchemaVersion`、私有事件的数据库行载荷版本与 `eventSchemaVersion` 是四条独立版本序列，不共享常量或相互比较。
+- 私有事件 V1 只包含 M1.9 已冻结的 `handStarted | actionCommitted | uncalledBetReturned | handCompleted`；后续版本为累积联合，M3 发布 Session/Accounting V2，M4 发布 Player 协调 V3。
+- M2.5b 只消费调用方现有 `TransactionSql`，通过 Owner-scoped `SELECT ... FOR UPDATE` 返回事务绑定、不可伪造、一次性的 Session 锁 capability；它不自行开启、提交事务或执行领域回调。
+- M2.5b 校验但不决定状态转换：无快照时版本不变且关系指针不变，有快照时版本恰好加一并与快照镜像一致；M3 决定最终领域状态、事件和是否写快照。
+- 每场 `eventSeq` 从锁定行的 `nextEventSeq` 开始连续，使用精确安全整数检查；失败或回滚不产生新的已提交序号。
+- 同一批次的事件共享命令级 `stateVersionBefore/After`，公开事件除各自 `eventSeq` 外必须携带相同的最终公开快照。
+- 同一事务使用调用方注入的单一 mutation 时间同步 `sessions.stateVersion`、`nextEventSeq`、生命周期、`endedAt/updatedAt`、Player 协调列和可重建的 `currentHandId`，并原子 UPSERT 可选快照、批量插入完整私有/公开事件；无快照时不改写快照时间。
 - 当前手已提交行动历史只存在于 `session_events`；快照不得保存第二份行动数组。
-- 事务提交后才能向发布层返回可发送事件。
-- Repository 与事务 API 全部异步；进程内串行执行器只降低竞争，不替代 PostgreSQL 行锁、唯一约束和事务。
+- M2.5b 与 M2.4 是并列 Repository；M3 在同一事务中组合命令账本、窄领域 Repository 与 M2.5b。外层事务成功返回后才能向发布层交付事件。
 
 后端测试闭环：
 
-- 在每个写入阶段注入失败，断言全部回滚。
-- 覆盖同一扑克版本的多条 Player 协调事件，并验证 Coach 生命周期不改变场次 `eventSeq`。
-- 覆盖并发或重复请求不能产生重复 `eventSeq`。
-- 覆盖两个连接并发提交同一场次命令，断言行锁、预期版本和唯一约束只允许一次领域推进。
-- 覆盖扑克快照、协调版本和关系指针的原子提交。
-- 断言未提交事件不会进入发布层。
+- 按 TDD 逐项覆盖 `PrivateTableState`、快照 V1 和四种事件 V1 的严格构造、round-trip、独立版本、深冻结和错误分类。
+- 使用 `TransactionSql` 替身验证写前拒绝、capability 生命周期，以及 Session 更新、快照 UPSERT、事件插入失败后立即停止且不执行后续 SQL；不为测试增加生产 failpoint。
+- 使用真实 PostgreSQL 覆盖 Owner 隔离、由 `pg_locks`/`pg_blocking_pids` 证明的行锁、创建后锁定、单/多事件连续序号、`active → ended` 无快照同版本结构分支及其 `endedAt/updatedAt`、快照时间不变和未提交不可见。
+- 使用真实可构造的外键、唯一约束、延迟约束、`completeCommand()` 与 COMMIT 失败证明 Session、快照、事件、账本和关系事实整体回滚。
+- 两个连接竞争同一 Session 时只能基于一次锁定镜像成功推进；一次性 capability 不能重复写入。
+- M3 负责验收终态命令重放跳过 M2.5b 且不增加序号；M4 负责验收 Player 协调事件在同一状态版本下增加序号且不重写快照；Coach 不占场次序号在 Agent 集成阶段验收。
 
-### M2.6 实现快照 Schema 版本与恢复迁移
+### M2.6 实现多版本识别、迁移与诊断恢复
 
 产出：
 
-- 为私有快照、开手检查点、完成手结果和私有事件负载分别定义 `snapshotSchemaVersion`、`checkpointSchemaVersion`、`handResultSchemaVersion`、`eventSchemaVersion` 及服务端私有 Zod Schema；它们均不使用对外 `protocolVersion`，也不把持久化版本写入纯 M1 类型。
-- 私有快照信封包含 `snapshotSchemaVersion` 和 `PrivateTableState`；后者由纯 `PokerTableState`、`stateVersion`、`completedHandCount`、累计买入及最近完成手摘要组成。
+- 复用 M2.5a 已发布的当前快照/事件契约，并为这两类载荷建立独立的多版本注册与分派；它们不使用对外 `protocolVersion`，也不把持久化版本写入纯 M1 类型。
+- 已知当前版本进入当前 Decoder，已知旧版本进入对应旧版 Decoder 与确定性迁移，无注册版本进入未知版本诊断；版本格式正确但载荷损坏与未知版本必须分类不同。
+- 私有快照信封中的 `PrivateTableState` 继续由纯 `PokerTableState`、`stateVersion`、`completedHandCount`、累计买入及最近完成手摘要组成。
 - `PokerTableState` 包含扑克阶段、座位筹码、按钮和当前手牌，是引擎与恢复的唯一纯扑克状态输入；最近结果摘要不放入纯引擎状态。
-- 支持当前版本读取和显式已知旧版本迁移。
 - 未知版本或损坏数据进入只读诊断状态。
+- 纯版本识别、迁移和恢复决策不依赖持久层；数据库读取、指针修复和诊断状态写入通过单向依赖纯模块的专用持久化适配器执行。
 - 禁止通过重新发牌覆盖损坏快照。
 
 后端测试闭环：
 
-- 分别覆盖各私有 JSON 信封的当前版本、每个受支持旧版本、未知版本和损坏负载。
+- 分别覆盖快照与私有事件信封的当前版本、每个受支持旧版本、未知版本和损坏负载。
 - 验证迁移后的领域状态与预期一致。
 - 覆盖 `sessions.stateVersion` 与快照版本不一致时进入只读诊断。
 - 覆盖有效快照与 `currentHandId` 不一致时从快照重建指针并记录诊断。
@@ -607,6 +610,7 @@ M1.R
 
 产出：
 
+- 作为开手检查点和完成手结果载荷的首个 writer，同时为两者发布各自独立的数据库行载荷版本、`checkpointSchemaVersion | handResultSchemaVersion`、严格当前 Codec 和测试；不得由 M2.6 预建无人写入的当前 Schema，后续版本读取沿用 M2.6 的分派规则。
 - 非 Agent 部分直接持久化 M1.9 的 `CompletedHandResult`，保存完整牌堆可重建事实、burn card、全部底牌、公共牌、起止筹码和结算，不重新运行牌型或底池算法；中止手只保存恢复所需检查点、最小中止元数据和关联失败运行，不伪造结算。
 - 保存 AgentRun、尝试、固定能力调用、Player 决策、Coach assessment、记忆版本、实际超时、路由、校验结果、Token 和延迟。
 - 丢弃隐藏推理和 `reasoning_content`。
@@ -643,6 +647,7 @@ M1.R
 
 产出：
 
+- 在首次写入 Session/Accounting 私有事件前发布累积事件 V2：完整保留 M2.5 V1 的四种 Poker 事件，并为 `sessionCreated`、`userRebuy`、`aiAutoRebuy`、`handAborted`、`sessionEnded` 定义严格私有内容契约、当前 Codec、多版本读取注册和兼容测试；发布后所有新事件统一使用 V2。
 - 同一场次一次只提交一个状态修改命令；进程内串行器可降低竞争，但数据库正确性必须由 PostgreSQL 事务、`SELECT ... FOR UPDATE` 和唯一约束保证。
 - 不同读请求不绕过权威快照。
 - 牌局引擎的当前状态输入只能来自通过私有 Zod Schema 校验及迁移的 `PrivateTableState.poker`。
@@ -653,6 +658,7 @@ M1.R
 
 - 通过两个独立 PostgreSQL 连接同时提交相同版本动作时只有一个成功推进，多实例语义与单进程一致。
 - 相同命令重复提交返回同一结果。
+- 命令账本返回已提交终态时跳过 M2.5b，不增加 `eventSeq`、不重复写入事件或快照。
 - 版本落后返回冲突和最新公开快照。
 - 覆盖普通动作、终止并结算动作、补码、开下一手和中止恢复的版本表，证明每个状态变化命令只递增一次。
 
@@ -910,6 +916,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
+- 在首次写入 Player 协调私有事件前发布累积事件 V3：完整保留 V2，并为 `agentStarted`、`agentProviderFallback`、`agentRepairAttempted`、`agentPaused` 定义严格私有内容契约、当前 Codec、多版本读取注册和兼容测试；发布后所有新事件统一使用 V3。
 - 最终失败使牌桌保持 `inHand` 并进入 `paused`，不自动 fold。
 - stale 后 SessionAgentCoordinator 重新读取权威状态；仍需 AI 时创建带 `supersedesRunId` 的新运行并重建决策包。
 - 服务重启取消旧 Player 运行并创建新运行，从 DeepSeek 开始；不复用旧 attempts 或路由检查点。
@@ -919,6 +926,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - 旧运行无法提交；新运行使用当前状态版本和新 fencing token。
 - 暂停、重试和 stale 接替不产生伪行动。
+- 覆盖同一 `stateVersion` 下连续写入多条 Player 协调事件且不重写私有扑克快照；Coach 生命周期不写 `session_events` 或占用场次 `eventSeq`。
 - 暂停中止结束后失败运行保留审计，中止手不进入历史、统计或 Coach。
 
 ### M4.9 实现 Player 审计、Replay 与有界记忆

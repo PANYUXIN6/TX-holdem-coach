@@ -7,6 +7,7 @@
 - `docs/superpowers/specs/`：已确认的 PRD 与专项设计，是产品和实现边界的事实源。
 - `docs/superpowers/specs/2026-07-29-supabase-postgres-drizzle-migration-design.md`：数据库迁移最高事实源；迁移前的 SQLite 配置、直接依赖、测试 helper 与专项集成测试均已移除。M2.1 已落实 `app_private` 基线迁移、运行时连接、显式迁移和启动兼容门控；M2.2 主迁移建立完整私有 Schema，后续纠错迁移补强 Hand 座位唯一性；M2.3 已在既有 Schema 上增加第一批 Repository，不新增迁移。
 - `docs/superpowers/specs/2026-08-02-m2-4-command-ledger-repository-design.md`：M2.4 命令账本事实源；固定公开命令与私有 `aiAction`、规范摘要、一次性 capability、冲突安全插入后读取、终态矩阵和错误分类。
+- `docs/superpowers/specs/2026-08-03-m2-5-authoritative-state-codecs-atomic-persistence-design.md`：M2.5 正式架构决策；M2.5a 定义会话权威状态、当前快照 Codec 和仅含四种 M1.9 Poker 事件的累积 V1，M2.5b 定义调用方事务内的 Session 锁 capability、批次不变量与事件/快照原子写入；M2.6 只在此基础上增加多版本迁移与诊断恢复，M3 决定领域事实并组合各 Repository。
 - `docs/superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md`：M1.7 以后非 Agent 运行时唯一重基线，定义纯引擎、会话聚合、版本、事件、持久化、公开投影和前端同步的事实归属。
 - `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md`：Agent 大模块总体事实源，定义 Foundation、Runtime、权限、运行生命周期、策略事实源、数据模型与当前/未来边界。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
@@ -54,6 +55,6 @@ M2.4 命令链为“事务外 `prepareCommandRegistration` 与 `resolveOwnerScop
 
 - `apps/server/src/poker/poker-engine.ts`：M1 对 M3 的唯一行为入口，提供 `initializePokerTable()`、`startPokerHand()` 与 `applyPokerAction()`。
 - `apps/server/src/poker/hand-result.ts`：只定义 `CompletedHandResult`、私有摘要、事件草稿及其纯构造器。
-- `apps/server/src/sessions/authoritative-state/`：M2/M3 计划落点，未来实现 `PrivateTableState`、快照迁移、版本镜像校验和公开投影；当前目录尚未建立。
+- `apps/server/src/sessions/authoritative-state/`：M2.5a 已确认的计划落点，未来实现 `PrivateTableState`、当前快照/私有事件 Codec；M2.6 在纯模块中增加多版本迁移与恢复决策，M3/M4 再分别发布累积事件 V2/V3 并构建公开投影。当前目录尚未建立。
 
 目标行动链固定为 `PokerTableState + PokerCommand → poker-engine.ts → PokerEngineResult`；开手也只通过同一模块返回 `StartedHandFacts`。M3 不得取得未结算的 `showdown/complete`，也不得自行组合发牌、庄盲、推进与结算模块；M2/M3/M5 可直接消费 `hand-result.ts` 的纯领域数据契约，但不得绕过门面调用行为原语。

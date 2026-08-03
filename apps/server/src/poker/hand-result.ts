@@ -799,11 +799,36 @@ export function createHandStartedEventDraft(
     startedHand: createStartedHandFacts(startedHand),
   })
 }
+
+function assertCommittedActionWasLegal(
+  action: PokerCommand['action'],
+  legalActions: LegalActions,
+): void {
+  if (action.type === 'bet' || action.type === 'raise') {
+    const legalAction = legalActions.find(
+      (candidate) => candidate.type === action.type,
+    )
+    if (
+      legalAction === undefined ||
+      (legalAction.type !== 'bet' && legalAction.type !== 'raise') ||
+      action.targetStreetCommitment < legalAction.minTarget ||
+      action.targetStreetCommitment > legalAction.maxTarget
+    ) {
+      throw new RangeError('已提交下注或加注必须位于行动前合法区间。')
+    }
+    return
+  }
+  if (!legalActions.some((legalAction) => legalAction.type === action.type)) {
+    throw new RangeError('已提交动作必须属于行动前合法动作集合。')
+  }
+}
+
 export function createActionCommittedEventDraft(
   input: CreateActionCommittedEventInput,
 ): PokerDomainEventDraft {
   PokerCommandSchema.parse(input.command)
   LegalActionsSchema.parse(input.legalActionsBefore)
+  assertCommittedActionWasLegal(input.command.action, input.legalActionsBefore)
   if (
     input.actorSeatNumber !== input.command.actorSeatNumber ||
     input.actorSeatNumber !== input.before.currentActorSeatNumber

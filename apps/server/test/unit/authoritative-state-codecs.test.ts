@@ -213,6 +213,33 @@ describe('current authoritative-state codecs', () => {
     expect(Object.isFrozen(encoded.payload.event)).toBe(true)
   })
 
+  test('rejects a handStarted event with a zero starting stack', () => {
+    const event = createHandStartedEventDraft({
+      handId: '10000000-0000-4000-8000-000000000001',
+      handNumber: 1,
+      participantSeatNumbers: [0, 1, 2, 3, 4, 5],
+      buttonSeatNumber: 0,
+      smallBlindSeatNumber: 1,
+      bigBlindSeatNumber: 2,
+      positions: [
+        { seatNumber: 0, position: 'BTN' },
+        { seatNumber: 1, position: 'SB' },
+        { seatNumber: 2, position: 'BB' },
+        { seatNumber: 3, position: 'UTG' },
+        { seatNumber: 4, position: 'HJ' },
+        { seatNumber: 5, position: 'CO' },
+      ],
+      startingStacks: [0, 1, 2, 3, 4, 5].map((seatNumber) => ({
+        seatNumber,
+        stack: seatNumber === 0 ? 0 : 2_000,
+      })),
+    })
+
+    expect(() => encodePrivateEventV1(event)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
   test('round-trips the actionCommitted private event through V1', () => {
     const event = actionCommittedEvent()
 
@@ -250,6 +277,80 @@ describe('current authoritative-state codecs', () => {
         seats: event.after.seats.map((seat) =>
           seat.seatNumber === 5 ? { ...seat, seatNumber: 6 } : seat,
         ),
+      },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects action snapshots that do not conserve stacks plus pot', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      after: {
+        ...event.after,
+        seats: event.after.seats.map((seat) =>
+          seat.seatNumber === 0 ? { ...seat, stack: seat.stack - 1 } : seat,
+        ),
+      },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects boardCardsAdded that is not the exact new board suffix', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      progression: {
+        ...event.progression,
+        boardCardsAdded: [{ rank: 'A' as const, suit: 'spades' as const }],
+      },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects streetTransitions that do not mirror snapshot streets', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      progression: {
+        ...event.progression,
+        streetTransitions: ['flop' as const],
+      },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects a terminationReason that does not mirror the after street', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      progression: {
+        ...event.progression,
+        terminationReason: 'complete' as const,
       },
     }
 
@@ -303,6 +404,84 @@ describe('current authoritative-state codecs', () => {
     expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
+  })
+
+  test('rejects a snapshot whose street contribution exceeds its hand contribution', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      after: {
+        ...event.after,
+        seats: event.after.seats.map((seat) =>
+          seat.seatNumber === 0 ? { ...seat, streetContribution: 1 } : seat,
+        ),
+      },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects a snapshot whose current actor cannot act', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvents = [
+      {
+        ...event,
+        after: {
+          ...event.after,
+          seats: event.after.seats.map((seat) =>
+            seat.seatNumber === 1
+              ? { ...seat, status: 'folded' as const }
+              : seat,
+          ),
+        },
+      },
+      {
+        ...event,
+        after: {
+          ...event.after,
+          seats: event.after.seats.map((seat) =>
+            seat.seatNumber === 1 ? { ...seat, stack: 0 } : seat,
+          ),
+        },
+      },
+    ]
+
+    for (const invalidEvent of invalidEvents) {
+      expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+        AuthoritativeStateValidationError,
+      )
+    }
+  })
+
+  test('rejects snapshot actor presence that contradicts its street', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvents = [
+      {
+        ...event,
+        after: { ...event.after, currentActorSeatNumber: null },
+      },
+      {
+        ...event,
+        after: { ...event.after, street: 'complete' as const },
+      },
+    ]
+
+    for (const invalidEvent of invalidEvents) {
+      expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+        AuthoritativeStateValidationError,
+      )
+    }
   })
 
   test('round-trips the uncalledBetReturned private event through V1', () => {

@@ -1,4 +1,4 @@
-import type { Card } from '@tx-holdem-coach/contracts'
+import type { Card, LegalActions } from '@tx-holdem-coach/contracts'
 import { describe, expect, test } from 'vitest'
 import {
   CompletedHandSummarySchema,
@@ -128,12 +128,13 @@ describe('hand result facts', () => {
       isVoluntaryPreflopFullRaise: boolean
       canMakeFullRaiseBeforeAction: boolean
     },
+    legalActionsBefore?: LegalActions,
   ) {
     return createActionCommittedEventDraft({
       handId: '10000000-0000-4000-8000-000000000001',
       actorSeatNumber: 0,
       command: { actorSeatNumber: 0, action },
-      legalActionsBefore: [
+      legalActionsBefore: legalActionsBefore ?? [
         { type: 'fold' },
         ...(action.type === 'call'
           ? [{ type: 'call' as const, amount: 10 }]
@@ -613,6 +614,46 @@ describe('hand result facts', () => {
         facts: facts(),
         state: wrongButton,
       }),
+    ).toThrow(RangeError)
+  })
+
+  test('rejects a committed command whose action type was not legal', () => {
+    expect(() =>
+      actionDraft(
+        'preflop',
+        { type: 'check' },
+        {
+          isVoluntaryPreflopContribution: false,
+          isPreflopRaise: false,
+          isVoluntaryPreflopFullRaise: false,
+          canMakeFullRaiseBeforeAction: true,
+        },
+        [{ type: 'fold' }],
+      ),
+    ).toThrow(RangeError)
+  })
+
+  test('rejects a committed bet or raise outside its saved legal range', () => {
+    expect(() =>
+      actionDraft(
+        'preflop',
+        { type: 'bet', targetStreetCommitment: 19 },
+        {
+          isVoluntaryPreflopContribution: true,
+          isPreflopRaise: true,
+          isVoluntaryPreflopFullRaise: true,
+          canMakeFullRaiseBeforeAction: true,
+        },
+        [
+          { type: 'fold' },
+          {
+            type: 'bet',
+            minTarget: 20,
+            maxTarget: 40,
+            suggestedTargets: [{ kind: 'minimum', targetStreetCommitment: 20 }],
+          },
+        ],
+      ),
     ).toThrow(RangeError)
   })
 

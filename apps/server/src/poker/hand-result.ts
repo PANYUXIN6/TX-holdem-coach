@@ -423,6 +423,21 @@ export const CompletedHandSummarySchema: z.ZodType<CompletedHandSummary> = z
         })
       }
     })
+    const startingStackTotal = summary.seats.reduce(
+      (total, seat) => total + BigInt(seat.startingStack),
+      0n,
+    )
+    const endingStackTotal = summary.seats.reduce(
+      (total, seat) => total + BigInt(seat.endingStack),
+      0n,
+    )
+    if (startingStackTotal !== endingStackTotal) {
+      context.addIssue({
+        code: 'custom',
+        message: '完成手前后的座位筹码总额必须守恒。',
+        path: ['seats'],
+      })
+    }
 
     if (
       new Set(summary.uncalledBetReturns.map((item) => item.seatNumber))
@@ -435,6 +450,22 @@ export const CompletedHandSummarySchema: z.ZodType<CompletedHandSummary> = z
         code: 'custom',
         message: '未跟注返还必须来自唯一的参与座位。',
         path: ['uncalledBetReturns'],
+      })
+    }
+    const contributionTotal = summary.seats.reduce(
+      (total, seat) => total + BigInt(seat.totalContribution),
+      0n,
+    )
+    const distributedTotal =
+      summary.uncalledBetReturns.reduce(
+        (total, returned) => total + BigInt(returned.amount),
+        0n,
+      ) + summary.pots.reduce((total, pot) => total + BigInt(pot.amount), 0n)
+    if (contributionTotal !== distributedTotal) {
+      context.addIssue({
+        code: 'custom',
+        message: '总投入必须等于未跟注返还与全部底池金额之和。',
+        path: ['seats'],
       })
     }
 

@@ -40,6 +40,51 @@ function minimalPrivateTableState() {
   })
 }
 
+function actionSnapshotSeats(seatZeroStatus: 'active' | 'folded' = 'active') {
+  return Array.from({ length: 6 }, (_, seatNumber) => ({
+    seatNumber,
+    status: seatNumber === 0 ? seatZeroStatus : ('active' as const),
+    stack: 2_000,
+    streetContribution: 0,
+    totalContribution: 0,
+  }))
+}
+
+function actionCommittedEvent() {
+  return createActionCommittedEventDraft({
+    handId: '10000000-0000-4000-8000-000000000001',
+    actorSeatNumber: 0,
+    command: { actorSeatNumber: 0, action: { type: 'fold' } },
+    legalActionsBefore: [{ type: 'fold' }],
+    before: {
+      street: 'preflop',
+      board: [],
+      currentActorSeatNumber: 0,
+      pot: 30,
+      seats: actionSnapshotSeats(),
+    },
+    after: {
+      street: 'preflop',
+      board: [],
+      currentActorSeatNumber: 1,
+      pot: 30,
+      seats: actionSnapshotSeats('folded'),
+    },
+    progression: {
+      streetTransitions: [],
+      burnedCardsAdded: [],
+      boardCardsAdded: [],
+      terminationReason: null,
+    },
+    statistics: {
+      isVoluntaryPreflopContribution: false,
+      isPreflopRaise: false,
+      isVoluntaryPreflopFullRaise: false,
+      canMakeFullRaiseBeforeAction: true,
+    },
+  })
+}
+
 describe('current authoritative-state codecs', () => {
   test('publishes four independently named current version constants', () => {
     expect({
@@ -166,59 +211,65 @@ describe('current authoritative-state codecs', () => {
   })
 
   test('round-trips the actionCommitted private event through V1', () => {
-    const event = createActionCommittedEventDraft({
-      handId: '10000000-0000-4000-8000-000000000001',
-      actorSeatNumber: 0,
-      command: { actorSeatNumber: 0, action: { type: 'fold' } },
-      legalActionsBefore: [{ type: 'fold' }],
-      before: {
-        street: 'preflop',
-        board: [],
-        currentActorSeatNumber: 0,
-        pot: 30,
-        seats: [
-          {
-            seatNumber: 0,
-            status: 'active',
-            stack: 2_000,
-            streetContribution: 0,
-            totalContribution: 0,
-          },
-        ],
-      },
-      after: {
-        street: 'preflop',
-        board: [],
-        currentActorSeatNumber: 1,
-        pot: 30,
-        seats: [
-          {
-            seatNumber: 0,
-            status: 'folded',
-            stack: 2_000,
-            streetContribution: 0,
-            totalContribution: 0,
-          },
-        ],
-      },
-      progression: {
-        streetTransitions: [],
-        burnedCardsAdded: [],
-        boardCardsAdded: [],
-        terminationReason: null,
-      },
-      statistics: {
-        isVoluntaryPreflopContribution: false,
-        isPreflopRaise: false,
-        isVoluntaryPreflopFullRaise: false,
-        canMakeFullRaiseBeforeAction: true,
-      },
-    })
+    const event = actionCommittedEvent()
 
     expect(
       decodeCurrentPrivateEventV1(structuredClone(encodePrivateEventV1(event)))
         .payload.event,
     ).toEqual(event)
+  })
+
+  test('rejects action snapshots with fewer than six table seats', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      before: { ...event.before, seats: event.before.seats.slice(0, 1) },
+      after: { ...event.after, seats: event.after.seats.slice(0, 1) },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects action snapshots with different before and after seat sets', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      after: {
+        ...event.after,
+        seats: event.after.seats.map((seat) =>
+          seat.seatNumber === 5 ? { ...seat, seatNumber: 6 } : seat,
+        ),
+      },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects an action actor that is absent from the before snapshot', () => {
+    const event = actionCommittedEvent()
+    if (event.type !== 'actionCommitted') {
+      throw new Error('Expected an actionCommitted event.')
+    }
+    const invalidEvent = {
+      ...event,
+      actorSeatNumber: 8,
+      command: { ...event.command, actorSeatNumber: 8 },
+      before: { ...event.before, currentActorSeatNumber: 8 },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
   })
 
   test('round-trips the uncalledBetReturned private event through V1', () => {
@@ -363,54 +414,7 @@ describe('current authoritative-state codecs', () => {
         ),
       },
     }
-    const actionEvent = createActionCommittedEventDraft({
-      handId: '10000000-0000-4000-8000-000000000001',
-      actorSeatNumber: 0,
-      command: { actorSeatNumber: 0, action: { type: 'fold' } },
-      legalActionsBefore: [{ type: 'fold' }],
-      before: {
-        street: 'preflop',
-        board: [],
-        currentActorSeatNumber: 0,
-        pot: 30,
-        seats: [
-          {
-            seatNumber: 0,
-            status: 'active',
-            stack: 2_000,
-            streetContribution: 0,
-            totalContribution: 0,
-          },
-        ],
-      },
-      after: {
-        street: 'preflop',
-        board: [],
-        currentActorSeatNumber: 1,
-        pot: 30,
-        seats: [
-          {
-            seatNumber: 0,
-            status: 'folded',
-            stack: 2_000,
-            streetContribution: 0,
-            totalContribution: 0,
-          },
-        ],
-      },
-      progression: {
-        streetTransitions: [],
-        burnedCardsAdded: [],
-        boardCardsAdded: [],
-        terminationReason: null,
-      },
-      statistics: {
-        isVoluntaryPreflopContribution: false,
-        isPreflopRaise: false,
-        isVoluntaryPreflopFullRaise: false,
-        canMakeFullRaiseBeforeAction: true,
-      },
-    })
+    const actionEvent = actionCommittedEvent()
     if (actionEvent.type !== 'actionCommitted') {
       throw new Error('Expected an actionCommitted event.')
     }

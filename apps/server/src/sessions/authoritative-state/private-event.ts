@@ -56,7 +56,7 @@ const ActionTableSnapshotSchema = z.strictObject({
   board: BoardSchema,
   currentActorSeatNumber: SeatNumberSchema.nullable(),
   pot: SafeNonnegativeIntegerSchema,
-  seats: z.array(ActionSeatSnapshotSchema),
+  seats: z.array(ActionSeatSnapshotSchema).min(6).max(9),
 })
 
 const HandStartedEventSchema = z
@@ -103,27 +103,53 @@ const HandStartedEventSchema = z
     }
   })
 
-const ActionCommittedEventSchema = z.strictObject({
-  type: z.literal('actionCommitted'),
-  handId: z.uuid(),
-  actorSeatNumber: SeatNumberSchema,
-  command: PokerCommandSchema,
-  legalActionsBefore: LegalActionsSchema,
-  before: ActionTableSnapshotSchema,
-  after: ActionTableSnapshotSchema,
-  progression: z.strictObject({
-    streetTransitions: z.array(HandStreetSchema),
-    burnedCardsAdded: z.array(CardSchema),
-    boardCardsAdded: z.array(CardSchema),
-    terminationReason: z.enum(['showdown', 'complete']).nullable(),
-  }),
-  statistics: z.strictObject({
-    isVoluntaryPreflopContribution: z.boolean(),
-    isPreflopRaise: z.boolean(),
-    isVoluntaryPreflopFullRaise: z.boolean(),
-    canMakeFullRaiseBeforeAction: z.boolean(),
-  }),
-})
+const ActionCommittedEventSchema = z
+  .strictObject({
+    type: z.literal('actionCommitted'),
+    handId: z.uuid(),
+    actorSeatNumber: SeatNumberSchema,
+    command: PokerCommandSchema,
+    legalActionsBefore: LegalActionsSchema,
+    before: ActionTableSnapshotSchema,
+    after: ActionTableSnapshotSchema,
+    progression: z.strictObject({
+      streetTransitions: z.array(HandStreetSchema),
+      burnedCardsAdded: z.array(CardSchema),
+      boardCardsAdded: z.array(CardSchema),
+      terminationReason: z.enum(['showdown', 'complete']).nullable(),
+    }),
+    statistics: z.strictObject({
+      isVoluntaryPreflopContribution: z.boolean(),
+      isPreflopRaise: z.boolean(),
+      isVoluntaryPreflopFullRaise: z.boolean(),
+      canMakeFullRaiseBeforeAction: z.boolean(),
+    }),
+  })
+  .superRefine((event, context) => {
+    const beforeSeatNumbers = new Set(
+      event.before.seats.map((seat) => seat.seatNumber),
+    )
+    const afterSeatNumbers = new Set(
+      event.after.seats.map((seat) => seat.seatNumber),
+    )
+    if (!beforeSeatNumbers.has(event.actorSeatNumber)) {
+      context.addIssue({
+        code: 'custom',
+        message: '行动者必须存在于行动前快照座位集合。',
+        path: ['actorSeatNumber'],
+      })
+    }
+    if (
+      event.before.seats.length !== event.after.seats.length ||
+      event.before.seats.some((seat) => !afterSeatNumbers.has(seat.seatNumber))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '行动前后快照必须具有相同座位集合。',
+        path: ['after', 'seats'],
+      })
+    }
+  })
 
 const UncalledBetReturnedEventSchema = z.strictObject({
   type: z.literal('uncalledBetReturned'),

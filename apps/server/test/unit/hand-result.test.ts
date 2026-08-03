@@ -310,6 +310,63 @@ describe('hand result facts', () => {
     )
   })
 
+  test('rejects a completed-hand summary that creates chips across seat stacks', () => {
+    const summary = createCompletedHandResult({
+      ...started(),
+      facts: facts(),
+      state: finalState(),
+    }).summary
+    const invalidSummary = {
+      ...summary,
+      seats: summary.seats.map((seat) =>
+        seat.seatNumber === 0
+          ? {
+              ...seat,
+              endingStack: seat.endingStack + 1,
+              netChange: seat.netChange + 1,
+            }
+          : seat,
+      ),
+    }
+
+    expect(CompletedHandSummarySchema.safeParse(invalidSummary).success).toBe(
+      false,
+    )
+  })
+
+  test('rejects a completed-hand summary whose contributions do not equal returns plus pots', () => {
+    const baseFacts = facts()
+    const summary = createCompletedHandResult({
+      ...started(),
+      facts: {
+        ...baseFacts,
+        hand: {
+          ...baseFacts.hand,
+          pot: 610,
+          seats: baseFacts.hand.seats.map((seat) =>
+            seat.seatNumber === 0
+              ? {
+                  ...seat,
+                  streetContribution: 110,
+                  totalContribution: 110,
+                }
+              : seat,
+          ),
+        },
+        uncalledBetReturns: [{ seatNumber: 0, amount: 10 }],
+      },
+      state: finalState(),
+    }).summary
+    const invalidSummary = {
+      ...summary,
+      uncalledBetReturns: [{ seatNumber: 0, amount: 11 }],
+    }
+
+    expect(CompletedHandSummarySchema.safeParse(invalidSummary).success).toBe(
+      false,
+    )
+  })
+
   test('rejects damaged stack deltas, blind positions and starting-hand mirrors', () => {
     const summary = createCompletedHandResult({
       ...started(),

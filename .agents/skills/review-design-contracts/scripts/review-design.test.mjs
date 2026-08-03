@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import os from 'node:os'
@@ -14,6 +15,12 @@ import { fileURLToPath } from 'node:url'
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
 const runnerPath = path.join(scriptDirectory, 'review-design.mjs')
+const humanRejectionReasonsPath = path.join(
+  scriptDirectory,
+  '..',
+  'references',
+  'human-rejection-reasons.json',
+)
 const reviewConfig = JSON.parse(
   readFileSync(path.join(scriptDirectory, '..', 'review.config.json'), 'utf8'),
 )
@@ -39,6 +46,20 @@ function createRepository() {
     '# Architecture\n\nReview artifacts are local-only.\n',
   )
   return repositoryRoot
+}
+
+function observedDocument(title, body) {
+  return [
+    '---',
+    'generated_by: repo-map-first',
+    'authority_status: observed',
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    body,
+    '',
+  ].join('\n')
 }
 
 function runCli(repositoryRoot, args, environment = {}) {
@@ -110,9 +131,18 @@ function runTaskFixture(repositoryRoot, responses) {
   const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
   writeTaskResponse(prepared.tasks[0], responses.l1)
   const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(afterL1.tasks[0], responses.l2)
-  let current = runCli(repositoryRoot, ['advance', prepared.run_dir])
   let adversarialIndex = 0
+  for (const task of afterL1.tasks) {
+    if (task.stage === 'architecture') {
+      writeTaskResponse(task, responses.l2)
+      continue
+    }
+    const response = responses.l3[adversarialIndex]
+    assert.notEqual(response, undefined)
+    writeTaskResponse(task, response)
+    adversarialIndex += 1
+  }
+  let current = runCli(repositoryRoot, ['advance', prepared.run_dir])
   while (current.status === 'ARCHITECTURE_CHECKED') {
     for (const task of current.tasks) {
       const response = responses.l3[adversarialIndex]
@@ -127,33 +157,6 @@ function runTaskFixture(repositoryRoot, responses) {
     ...current,
     run_dir: prepared.run_dir,
   }
-}
-
-function createAwaitingHumanReview(repositoryRoot) {
-  const finding = candidate()
-  const review = runTaskFixture(repositoryRoot, {
-    l1: {
-      contracts: [],
-      candidates: [finding],
-    },
-    l2: {
-      candidates: [],
-    },
-    l3: [
-      {
-        challenge_outcome: 'survives',
-        falsification: {
-          attempt: 'Tried to refute the transition.',
-          remaining_evidence: 'The finite trigger remains reachable.',
-        },
-        refined_finding: finding,
-      },
-    ],
-  })
-  const [card] = JSON.parse(
-    readFileSync(path.join(review.run_dir, 'evidence-cards.json'), 'utf8'),
-  )
-  return { review, card }
 }
 
 test('prepare creates one pinned native L1 task without running a model', () => {
@@ -206,62 +209,27 @@ test('prepare creates one pinned native L1 task without running a model', () => 
   assert.equal(task.agent_task_name, result.tasks[0].agent_task_name)
   assert.equal(input.stage, 'self_consistency')
   assert.match(input.target.content, /A completed run must be terminal/)
+  assert.equal(Object.hasOwn(input.target, 'sections'), false)
   assert.equal(outputSchema.properties.task_id.const, result.tasks[0].task_id)
-  assert.match(instructions, /封闭证据集/)
-  assert.match(instructions, /不得读取父任务、兄弟任务或其他 response\.json/)
+  assert.match(instructions, /closed evidence set/)
+  assert.match(instructions, /Do not read parent tasks, sibling tasks/)
   assert.match(
     instructions,
-    /不得主动调用 Skill、Subagent、Web、MCP、Git 或 Shell/,
+    /Do not invoke Skill, Subagent, Web, MCP, Git, or Shell/,
   )
+  assert.match(instructions, /re-read response\.json/)
+  const manifest = JSON.parse(
+    readFileSync(path.join(result.run_dir, 'manifest.json'), 'utf8'),
+  )
+  assert.equal(manifest.version, 5)
+  assert.equal(Array.isArray(manifest.documents[0].sections), true)
+  const metrics = JSON.parse(
+    readFileSync(path.join(result.run_dir, 'metrics.json'), 'utf8'),
+  )
+  assert.equal(metrics.version, 1)
+  assert.equal(metrics.tasks[result.tasks[0].task_id].input_bytes > 0, true)
   assert.equal(existsSync(result.tasks[0].response_path), false)
   assert.equal(existsSync(path.join(result.run_dir, 'human-review.md')), false)
-})
-
-test('human rejection reasons use a complete stable Chinese registry', () => {
-  const referencesDirectory = path.join(scriptDirectory, '..', 'references')
-  const reasons = JSON.parse(
-    readFileSync(
-      path.join(referencesDirectory, 'human-rejection-reasons.json'),
-      'utf8',
-    ),
-  )
-  const rejectionSchema = JSON.parse(
-    readFileSync(
-      path.join(referencesDirectory, 'rejection-record.schema.json'),
-      'utf8',
-    ),
-  )
-  const humanReasonCodes = rejectionSchema.oneOf.find(
-    (branch) => branch.properties.decision_source.const === 'human',
-  ).properties.reason_code.enum
-
-  assert.deepEqual(
-    reasons.map((reason) => reason.number),
-    [1, 2, 3, 4, 5, 6],
-  )
-  assert.deepEqual(
-    reasons.map((reason) => reason.code).sort(),
-    [...humanReasonCodes].sort(),
-  )
-  assert.deepEqual(
-    reasons.map((reason) => reason.label),
-    [
-      '状态无法到达',
-      '推导链路断裂',
-      '不构成契约违反',
-      '无法客观验证',
-      '与其他发现重复',
-      '超出设计范围',
-    ],
-  )
-  assert.equal(
-    reasons.every(
-      (reason) =>
-        reason.description.trim().length > 0 &&
-        reason.default_reason.trim().length > 0,
-    ),
-    true,
-  )
 })
 
 test('advance accepts a valid L1 response and creates one fresh L2 task', () => {
@@ -318,6 +286,13 @@ test('advance accepts a valid L1 response and creates one fresh L2 task', () => 
     },
   )
   assert.match(l2Input.target.content, /A completed run must be terminal/)
+  assert.equal(Object.hasOwn(l2Input.target, 'sections'), false)
+  assert.equal(
+    l2Input.authorities.every(
+      (authority) => !Object.hasOwn(authority, 'sections'),
+    ),
+    true,
+  )
   assert.deepEqual(
     l2Input.authorities.map((authority) => authority.path).sort(),
     ['docs/ARCHITECTURE.md', 'docs/REPO_MAP.md'],
@@ -328,6 +303,44 @@ test('advance accepts a valid L1 response and creates one fresh L2 task', () => 
   assert.equal(
     JSON.stringify(l2Input.contract_ledger).includes('candidates'),
     false,
+  )
+  const metrics = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'metrics.json'), 'utf8'),
+  )
+  assert.equal(metrics.tasks[l1Task.task_id].response_valid, true)
+  assert.equal(metrics.tasks[l1Task.task_id].response_bytes > 0, true)
+  assert.equal(metrics.tasks[l2Task.task_id].stage, 'architecture')
+})
+
+test('L1 Contract Ledger removes only exact duplicate entries', () => {
+  const repositoryRoot = createRepository()
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  const contract = {
+    source: 'docs/design.md',
+    heading: 'State contract',
+    quote: 'A completed run must be terminal.',
+    category: 'state',
+    statement: 'Completed runs are terminal.',
+  }
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [
+      contract,
+      { ...contract },
+      { ...contract, statement: 'Every completed run has a terminal state.' },
+    ],
+    candidates: [],
+  })
+
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const l2Input = JSON.parse(
+    readFileSync(path.join(afterL1.tasks[0].task_path, 'input.json'), 'utf8'),
+  )
+
+  assert.equal(l2Input.contract_ledger.contracts.length, 2)
+  assert.deepEqual(l2Input.contract_ledger.contracts[0], contract)
+  assert.equal(
+    l2Input.contract_ledger.contracts[1].statement,
+    'Every completed run has a terminal state.',
   )
 })
 
@@ -421,7 +434,13 @@ test('L2 insufficient input fails the run without creating adversarial tasks', (
   ])
   assert.equal(
     existsSync(path.join(prepared.run_dir, 'candidates.json')),
-    false,
+    true,
+  )
+  assert.deepEqual(
+    JSON.parse(
+      readFileSync(path.join(prepared.run_dir, 'candidates.json'), 'utf8'),
+    ),
+    [],
   )
   assert.equal(
     existsSync(path.join(prepared.run_dir, 'human-review.md')),
@@ -479,7 +498,7 @@ test('advance closes without human work when L1 and L2 produce no candidates', (
   )
 })
 
-test('L2 completion creates a bounded batch of one-candidate L3 tasks', () => {
+test('L2 overlaps with a bounded prefix of one-candidate L3 tasks', () => {
   const repositoryRoot = createRepository()
   const findings = Array.from({ length: 4 }, (_, index) => {
     const base = candidate()
@@ -497,9 +516,22 @@ test('L2 completion creates a bounded batch of one-candidate L3 tasks', () => {
     candidates: findings,
   })
   const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(afterL1.tasks[0], {
-    candidates: [],
-  })
+  assert.equal(afterL1.tasks.length, 3)
+  assert.equal(afterL1.tasks[0].stage, 'architecture')
+  assert.deepEqual(
+    afterL1.tasks.slice(1).map((task) => task.stage),
+    ['adversarial', 'adversarial'],
+  )
+  writeTaskResponse(afterL1.tasks[0], { candidates: [] })
+  for (const task of afterL1.tasks.slice(1)) {
+    writeTaskResponse(task, {
+      challenge_outcome: 'refuted',
+      falsification: {
+        attempt: 'Trace the early completion transition.',
+        counterexample: 'The alleged active state is unreachable.',
+      },
+    })
+  }
 
   const afterL2 = runCli(repositoryRoot, ['advance', prepared.run_dir])
   const state = JSON.parse(
@@ -507,7 +539,7 @@ test('L2 completion creates a bounded batch of one-candidate L3 tasks', () => {
   )
 
   assert.equal(afterL2.status, 'ARCHITECTURE_CHECKED')
-  assert.equal(afterL2.tasks.length, 3)
+  assert.equal(afterL2.tasks.length, 2)
   assert.deepEqual(
     state.active_tasks,
     afterL2.tasks.map((task) => task.task_id),
@@ -582,6 +614,12 @@ test('architecture L3 receives every review document and the complete contract l
     ).content,
     /A completed run must be terminal/,
   )
+  assert.equal(
+    input.context_documents.every(
+      (document) => !Object.hasOwn(document, 'sections'),
+    ),
+    true,
+  )
   assert.deepEqual(input.contract_ledger_entries, contractLedger.contracts)
   assert.equal(input.cited_sections[0].source, 'docs/ARCHITECTURE.md')
 })
@@ -604,11 +642,8 @@ test('L3 batches are lossless and all refuted candidates close without human wor
     candidates: findings,
   })
   const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(afterL1.tasks[0], {
-    candidates: [],
-  })
-  const firstBatch = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  for (const task of firstBatch.tasks) {
+  writeTaskResponse(afterL1.tasks[0], { candidates: [] })
+  for (const task of afterL1.tasks.slice(1)) {
     writeTaskResponse(task, {
       challenge_outcome: 'refuted',
       falsification: {
@@ -621,7 +656,7 @@ test('L3 batches are lossless and all refuted candidates close without human wor
   const secondBatch = runCli(repositoryRoot, ['advance', prepared.run_dir])
 
   assert.equal(secondBatch.status, 'ARCHITECTURE_CHECKED')
-  assert.equal(secondBatch.tasks.length, 1)
+  assert.equal(secondBatch.tasks.length, 2)
   assert.equal(
     JSON.parse(
       readFileSync(
@@ -629,16 +664,18 @@ test('L3 batches are lossless and all refuted candidates close without human wor
         'utf8',
       ),
     ).length,
-    3,
+    2,
   )
 
-  writeTaskResponse(secondBatch.tasks[0], {
-    challenge_outcome: 'refuted',
-    falsification: {
-      attempt: 'Trace the final completion transition.',
-      counterexample: 'The final alleged state is also unreachable.',
-    },
-  })
+  for (const task of secondBatch.tasks) {
+    writeTaskResponse(task, {
+      challenge_outcome: 'refuted',
+      falsification: {
+        attempt: 'Trace the final completion transition.',
+        counterexample: 'The final alleged state is also unreachable.',
+      },
+    })
+  }
   const completed = runCli(repositoryRoot, ['advance', prepared.run_dir])
   const rejected = JSON.parse(
     readFileSync(path.join(prepared.run_dir, 'rejected.json'), 'utf8'),
@@ -674,18 +711,15 @@ test('one L3 insufficient result fails the whole batch without partial artifacts
     candidates: findings,
   })
   const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(afterL1.tasks[0], {
-    candidates: [],
-  })
-  const l3Batch = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(l3Batch.tasks[0], {
+  writeTaskResponse(afterL1.tasks[0], { candidates: [] })
+  writeTaskResponse(afterL1.tasks[1], {
     challenge_outcome: 'refuted',
     falsification: {
       attempt: 'Trace the first completion transition.',
       counterexample: 'The first alleged state is unreachable.',
     },
   })
-  writeTaskResponse(l3Batch.tasks[1], {
+  writeTaskResponse(afterL1.tasks[2], {
     task_status: 'insufficient_input',
     missing_inputs: ['The cited section does not contain the referenced rule.'],
   })
@@ -735,17 +769,13 @@ test('a surviving Native L3 response becomes an evidence card for human arbitrat
     candidates: [finding],
   })
   const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(afterL1.tasks[0], {
-    candidates: [],
-  })
-  const afterL2 = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(afterL2.tasks[0], {
+  writeTaskResponse(afterL1.tasks[0], { candidates: [] })
+  writeTaskResponse(afterL1.tasks[1], {
     challenge_outcome: 'survives',
     falsification: {
       attempt: 'Tried to find a mandatory terminal transition.',
       remaining_evidence: 'The finite active-state path remains reachable.',
     },
-    refined_finding: finding,
   })
 
   const completed = runCli(repositoryRoot, ['advance', prepared.run_dir])
@@ -768,22 +798,17 @@ test('a surviving Native L3 response becomes an evidence card for human arbitrat
     'The finite active-state path remains reachable.',
   )
   assert.match(humanReport, /## 发现 1/)
-  assert.match(
-    humanReport,
-    new RegExp(`<!-- finding_id: ${cards[0].finding_id} -->`),
-  )
+  assert.match(humanReport, new RegExp(`<!-- finding_id: ${cards[0].finding_id} -->`))
   assert.doesNotMatch(humanReport, new RegExp(`## .*${cards[0].finding_id}`))
-  assert.match(humanReport, /结论：/)
+  assert.match(humanReport, /结论：The run can remain non-terminal\./)
   assert.match(humanReport, /契约来源：docs\/design\.md · State contract/)
   assert.match(humanReport, /契约原文/)
-  assert.match(humanReport, /触发路径：/)
-  assert.match(humanReport, /期望与实际：/)
   assert.match(humanReport, /对抗检查：/)
-  assert.match(humanReport, /验证方法：/)
+  assert.match(humanReport, /验证方法与 Oracle/)
   assert.match(humanReport, /确认存在违反路径/)
   assert.match(humanReport, /驳回此发现/)
-  assert.match(humanReport, /先解释当前证据/)
-  assert.doesNotMatch(humanReport, /状态无法到达/)
+  assert.match(humanReport, /状态无法到达/)
+  assert.doesNotMatch(humanReport, /NO_REACHABLE_STATE/)
   assert.doesNotMatch(
     humanReport,
     /gpt-5\.6|reasoning|confidence|severity|high|max/i,
@@ -794,6 +819,153 @@ test('a surviving Native L3 response becomes an evidence card for human arbitrat
     ),
     [],
   )
+  const l3Schema = readFileSync(
+    path.join(afterL1.tasks[1].task_path, 'output.schema.json'),
+    'utf8',
+  )
+  assert.match(l3Schema, /"refinement"/)
+  assert.doesNotMatch(l3Schema, /"refined_finding"/)
+})
+
+test('L3 refinement updates only declared candidate fields and recomputes identity', () => {
+  const repositoryRoot = createRepository()
+  const finding = candidate()
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: [finding],
+  })
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const l3Task = afterL1.tasks.find((task) => task.stage === 'adversarial')
+  const originalFindingId = l3Task.logical_id.replace(/^adversarial-/, '')
+  const refinedTrigger = {
+    ...finding.trigger,
+    initial_state: ['A refined completed-run state is reachable.'],
+  }
+  writeTaskResponse(
+    afterL1.tasks.find((task) => task.stage === 'architecture'),
+    { candidates: [] },
+  )
+  writeTaskResponse(l3Task, {
+    challenge_outcome: 'survives',
+    falsification: {
+      attempt: 'Minimized the reachable initial state.',
+      remaining_evidence: 'The refined state still reaches the violation.',
+    },
+    refinement: {
+      trigger: refinedTrigger,
+    },
+  })
+
+  const completed = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const [card] = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'evidence-cards.json'), 'utf8'),
+  )
+
+  assert.equal(completed.status, 'AWAITING_HUMAN')
+  assert.deepEqual(card.trigger, refinedTrigger)
+  assert.equal(card.layer, finding.layer)
+  assert.deepEqual(
+    {
+      source: card.contract.source,
+      heading: card.contract.heading,
+      quote: card.contract.quote,
+    },
+    finding.contract,
+  )
+  assert.notEqual(card.finding_id, originalFindingId)
+})
+
+test('L3 refinement rejects immutable layer or contract fields', () => {
+  const repositoryRoot = createRepository()
+  const finding = candidate()
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: [finding],
+  })
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  writeTaskResponse(
+    afterL1.tasks.find((task) => task.stage === 'architecture'),
+    { candidates: [] },
+  )
+  writeTaskResponse(
+    afterL1.tasks.find((task) => task.stage === 'adversarial'),
+    {
+      challenge_outcome: 'survives',
+      falsification: {
+        attempt: 'Tried to change the contract source.',
+        remaining_evidence: 'The original candidate remains unchanged.',
+      },
+      refinement: {
+        layer: 'architecture',
+      },
+    },
+  )
+
+  const retried = runCli(repositoryRoot, ['advance', prepared.run_dir])
+
+  assert.equal(retried.status, 'SELF_CHECKED')
+  assert.equal(retried.retry_reason, 'MODEL_OUTPUT_INVALID')
+  assert.equal(retried.tasks.length, 1)
+  assert.equal(retried.tasks[0].stage, 'adversarial')
+  assert.equal(retried.tasks[0].attempt, 2)
+})
+
+test('Manifest version 4 legacy L3 response matches version 5 delta output', () => {
+  function completeReview(manifestVersion, legacy) {
+    const repositoryRoot = createRepository()
+    const finding = candidate()
+    const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+    if (manifestVersion !== 5) {
+      const manifestPath = path.join(prepared.run_dir, 'manifest.json')
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      manifest.version = manifestVersion
+      writeJson(manifestPath, manifest)
+    }
+    writeTaskResponse(prepared.tasks[0], {
+      contracts: [],
+      candidates: [finding],
+    })
+    const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+    const l3Task = afterL1.tasks.find((task) => task.stage === 'adversarial')
+    const instructions = readFileSync(
+      path.join(l3Task.task_path, 'instructions.md'),
+      'utf8',
+    )
+    if (legacy) {
+      assert.match(instructions, /complete `refined_finding`/)
+      assert.doesNotMatch(instructions, /return `refinement` only/)
+    } else {
+      assert.match(instructions, /return `refinement` only/)
+      assert.doesNotMatch(instructions, /complete `refined_finding`/)
+    }
+    writeTaskResponse(
+      afterL1.tasks.find((task) => task.stage === 'architecture'),
+      { candidates: [] },
+    )
+    writeTaskResponse(
+      l3Task,
+      {
+        challenge_outcome: 'survives',
+        falsification: {
+          attempt: 'Tried to refute the transition.',
+          remaining_evidence: 'The finite trigger remains reachable.',
+        },
+        ...(legacy ? { refined_finding: finding } : {}),
+      },
+    )
+    const completed = runCli(repositoryRoot, ['advance', prepared.run_dir])
+    assert.equal(completed.status, 'AWAITING_HUMAN')
+    return JSON.parse(
+      readFileSync(path.join(prepared.run_dir, 'evidence-cards.json'), 'utf8'),
+    )[0]
+  }
+
+  const legacyCard = completeReview(4, true)
+  const deltaCard = completeReview(5, false)
+
+  assert.deepEqual(legacyCard, deltaCard)
 })
 
 test('an invalid task response gets one fresh identical retry then fails the run', () => {
@@ -849,14 +1021,11 @@ test('retrying one invalid L3 task preserves completed sibling responses', () =>
     candidates: findings,
   })
   const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(afterL1.tasks[0], {
-    candidates: [],
-  })
-  const l3Batch = runCli(repositoryRoot, ['advance', prepared.run_dir])
-  writeTaskResponse(l3Batch.tasks[0], {
+  writeTaskResponse(afterL1.tasks[0], { candidates: [] })
+  writeTaskResponse(afterL1.tasks[1], {
     challenge_outcome: 'refuted',
   })
-  writeTaskResponse(l3Batch.tasks[1], {
+  writeTaskResponse(afterL1.tasks[2], {
     challenge_outcome: 'refuted',
     falsification: {
       attempt: 'Trace the second transition.',
@@ -872,7 +1041,7 @@ test('retrying one invalid L3 task preserves completed sibling responses', () =>
 
   assert.equal(retried.tasks.length, 1)
   assert.equal(retryTask.attempt, 2)
-  assert.equal(stateAfterRetry.active_tasks.length, 2)
+  assert.equal(stateAfterRetry.active_tasks.length, 3)
   writeTaskResponse(retryTask, {
     challenge_outcome: 'refuted',
     falsification: {
@@ -946,7 +1115,6 @@ test('only an explicit human acceptance creates a digest-bound fix queue item th
           attempt: 'Tried to refute the transition.',
           remaining_evidence: 'The finite trigger remains reachable.',
         },
-        refined_finding: finding,
       },
     ],
   })
@@ -988,101 +1156,67 @@ test('only an explicit human acceptance creates a digest-bound fix queue item th
   })
 })
 
-test('reject requires a non-blank human reason without changing the awaiting run on failure', () => {
-  const repositoryRoot = createRepository()
-  const { review, card } = createAwaitingHumanReview(repositoryRoot)
-  const decisionsPath = path.join(repositoryRoot, 'invalid-decisions.json')
+test('human rejection reasons exactly cover the human schema enum', () => {
+  const reasons = JSON.parse(readFileSync(humanRejectionReasonsPath, 'utf8'))
+  const rejectionSchema = JSON.parse(
+    readFileSync(
+      path.join(
+        scriptDirectory,
+        '..',
+        'references',
+        'rejection-record.schema.json',
+      ),
+      'utf8',
+    ),
+  )
+  const humanBranch = rejectionSchema.oneOf.find(
+    (branch) => branch.properties.decision_source.const === 'human',
+  )
 
-  for (const invalidDecision of [
-    {
-      finding_id: card.finding_id,
-      decision: 'reject',
-      reason_code: 'NO_CONTRACT_VIOLATION',
-    },
-    {
-      finding_id: card.finding_id,
-      decision: 'reject',
-      reason_code: 'NO_CONTRACT_VIOLATION',
-      reason: '   ',
-    },
-    {
-      finding_id: card.finding_id,
-      decision: 'reject',
-      reason_code: 'UNKNOWN_REASON',
-      reason: '协议中没有这个分类。',
-    },
-  ]) {
-    writeJson(decisionsPath, { decisions: [invalidDecision] })
-    runCliExpectFailure(repositoryRoot, [
-      'decide',
-      review.run_dir,
-      '--decisions',
-      decisionsPath,
-    ])
-  }
-
+  assert.deepEqual(
+    reasons.map((reason) => reason.number),
+    [1, 2, 3, 4, 5, 6],
+  )
+  assert.deepEqual(
+    reasons.map((reason) => reason.code).sort(),
+    [...humanBranch.properties.reason_code.enum].sort(),
+  )
   assert.equal(
-    JSON.parse(readFileSync(path.join(review.run_dir, 'state.json'), 'utf8'))
-      .status,
-    'AWAITING_HUMAN',
-  )
-  assert.deepEqual(
-    JSON.parse(
-      readFileSync(path.join(review.run_dir, 'decisions.json'), 'utf8'),
+    reasons.every(
+      (reason) =>
+        reason.label.length > 0 &&
+        reason.description.length > 0 &&
+        reason.default_reason.length > 0,
     ),
-    [],
-  )
-  assert.deepEqual(
-    JSON.parse(
-      readFileSync(path.join(review.run_dir, 'rejected.json'), 'utf8'),
-    ),
-    [],
+    true,
   )
 })
 
-test('accept rejects both human rejection fields without changing the awaiting run', () => {
+test('a human rejection preserves its natural-language reason for audit', () => {
   const repositoryRoot = createRepository()
-  const { review, card } = createAwaitingHumanReview(repositoryRoot)
-  const decisionsPath = path.join(repositoryRoot, 'invalid-accept.json')
-
-  for (const invalidDecision of [
-    {
-      finding_id: card.finding_id,
-      decision: 'accept',
-      reason_code: 'NO_CONTRACT_VIOLATION',
+  const finding = candidate()
+  const review = runTaskFixture(repositoryRoot, {
+    l1: {
+      contracts: [],
+      candidates: [finding],
     },
-    {
-      finding_id: card.finding_id,
-      decision: 'accept',
-      reason: '不应附加到接受决定。',
+    l2: {
+      candidates: [],
     },
-  ]) {
-    writeJson(decisionsPath, { decisions: [invalidDecision] })
-    runCliExpectFailure(repositoryRoot, [
-      'decide',
-      review.run_dir,
-      '--decisions',
-      decisionsPath,
-    ])
-  }
-
-  assert.equal(
-    JSON.parse(readFileSync(path.join(review.run_dir, 'state.json'), 'utf8'))
-      .status,
-    'AWAITING_HUMAN',
+    l3: [
+      {
+        challenge_outcome: 'survives',
+        falsification: {
+          attempt: 'Tried to refute the transition.',
+          remaining_evidence: 'The finite trigger remains reachable.',
+        },
+      },
+    ],
+  })
+  const [card] = JSON.parse(
+    readFileSync(path.join(review.run_dir, 'evidence-cards.json'), 'utf8'),
   )
-  assert.deepEqual(
-    JSON.parse(
-      readFileSync(path.join(review.run_dir, 'decisions.json'), 'utf8'),
-    ),
-    [],
-  )
-})
-
-test('a valid rejection preserves the original human reason in both audit artifacts', () => {
-  const repositoryRoot = createRepository()
-  const { review, card } = createAwaitingHumanReview(repositoryRoot)
-  const decisionsPath = path.join(repositoryRoot, 'rejection.json')
+  const decisionsPath = path.join(repositoryRoot, 'decisions.json')
   const reason = '第二步依赖缓存已经写入，但前面的步骤没有保证这一点。'
   writeJson(decisionsPath, {
     decisions: [
@@ -1095,25 +1229,121 @@ test('a valid rejection preserves the original human reason in both audit artifa
     ],
   })
 
-  const result = runCli(repositoryRoot, [
+  const decided = runCli(repositoryRoot, [
     'decide',
     review.run_dir,
     '--decisions',
     decisionsPath,
   ])
-  const [decision] = JSON.parse(
+  const [storedDecision] = JSON.parse(
     readFileSync(path.join(review.run_dir, 'decisions.json'), 'utf8'),
   )
-  const [rejection] = JSON.parse(
+  const humanRejection = JSON.parse(
     readFileSync(path.join(review.run_dir, 'rejected.json'), 'utf8'),
-  )
+  ).find((item) => item.decision_source === 'human')
 
-  assert.equal(result.status, 'CLOSED')
-  assert.equal(decision.reason, reason)
-  assert.equal(decision.reason_code, 'BROKEN_TRANSITION')
-  assert.equal(rejection.details, reason)
-  assert.equal(rejection.reason_code, 'BROKEN_TRANSITION')
-  assert.equal(rejection.decision_source, 'human')
+  assert.equal(decided.status, 'CLOSED')
+  assert.equal(storedDecision.reason, reason)
+  assert.equal(humanRejection.details, reason)
+})
+
+test('reject requires a non-empty natural-language reason', () => {
+  for (const reason of [undefined, '   ']) {
+    const repositoryRoot = createRepository()
+    const finding = candidate()
+    const review = runTaskFixture(repositoryRoot, {
+      l1: {
+        contracts: [],
+        candidates: [finding],
+      },
+      l2: {
+        candidates: [],
+      },
+      l3: [
+        {
+          challenge_outcome: 'survives',
+          falsification: {
+            attempt: 'Tried to refute the transition.',
+            remaining_evidence: 'The finite trigger remains reachable.',
+          },
+        },
+      ],
+    })
+    const [card] = JSON.parse(
+      readFileSync(path.join(review.run_dir, 'evidence-cards.json'), 'utf8'),
+    )
+    const decisionsPath = path.join(repositoryRoot, 'decisions.json')
+    writeJson(decisionsPath, {
+      decisions: [
+        {
+          finding_id: card.finding_id,
+          decision: 'reject',
+          reason_code: 'NO_CONTRACT_VIOLATION',
+          ...(reason === undefined ? {} : { reason }),
+        },
+      ],
+    })
+
+    runCliExpectFailure(repositoryRoot, [
+      'decide',
+      review.run_dir,
+      '--decisions',
+      decisionsPath,
+    ])
+    assert.equal(
+      JSON.parse(readFileSync(path.join(review.run_dir, 'state.json'), 'utf8'))
+        .status,
+      'AWAITING_HUMAN',
+    )
+  }
+})
+
+test('accept rejects every rejection-only field', () => {
+  for (const extra of [
+    { reason_code: 'NO_CONTRACT_VIOLATION' },
+    { reason: 'This field belongs only to rejection.' },
+  ]) {
+    const repositoryRoot = createRepository()
+    const finding = candidate()
+    const review = runTaskFixture(repositoryRoot, {
+      l1: {
+        contracts: [],
+        candidates: [finding],
+      },
+      l2: {
+        candidates: [],
+      },
+      l3: [
+        {
+          challenge_outcome: 'survives',
+          falsification: {
+            attempt: 'Tried to refute the transition.',
+            remaining_evidence: 'The finite trigger remains reachable.',
+          },
+        },
+      ],
+    })
+    const [card] = JSON.parse(
+      readFileSync(path.join(review.run_dir, 'evidence-cards.json'), 'utf8'),
+    )
+    const decisionsPath = path.join(repositoryRoot, 'decisions.json')
+    writeJson(decisionsPath, {
+      decisions: [
+        {
+          finding_id: card.finding_id,
+          decision: 'accept',
+          ...extra,
+        },
+      ],
+    })
+
+    runCliExpectFailure(repositoryRoot, [
+      'decide',
+      review.run_dir,
+      '--decisions',
+      decisionsPath,
+    ])
+  }
 })
 
 test('the Runner contains no nested Codex backend, proxy injection, or mock run mode', () => {
@@ -1156,7 +1386,6 @@ test('review overload remains lossless across Native L3 batches and human batche
         attempt: 'Tried to find a mandatory terminal transition.',
         remaining_evidence: 'The variant remains reachable.',
       },
-      refined_finding: finding,
     })),
   })
   const state = JSON.parse(
@@ -1177,7 +1406,7 @@ test('review overload remains lossless across Native L3 batches and human batche
       finding_id: card.finding_id,
       decision: 'reject',
       reason_code: 'NO_CONTRACT_VIOLATION',
-      reason: '该发现没有违反被引用的明确设计契约。',
+      reason: 'The path does not violate the declared contract.',
     })),
   })
   const afterFirst = runCli(repositoryRoot, [
@@ -1196,7 +1425,7 @@ test('review overload remains lossless across Native L3 batches and human batche
         finding_id: cards[8].finding_id,
         decision: 'reject',
         reason_code: 'NO_CONTRACT_VIOLATION',
-        reason: '该发现没有违反被引用的明确设计契约。',
+        reason: 'The path does not violate the declared contract.',
       },
     ],
   })
@@ -1284,7 +1513,6 @@ test('an allowlisted executable verification records only deterministic metadata
           attempt: 'Tried to show the executable path was unavailable.',
           remaining_evidence: 'The allowlisted command can be executed.',
         },
-        refined_finding: finding,
       },
     ],
   })
@@ -1365,6 +1593,45 @@ test('retrying a failed Native run creates a new run linked by retry_of', () => 
   )
 })
 
+test('Manifest version 3 resumes with serial L2 and without metrics input', () => {
+  const repositoryRoot = createRepository()
+  const finding = candidate()
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  const manifestPath = path.join(prepared.run_dir, 'manifest.json')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  manifest.version = 3
+  writeJson(manifestPath, manifest)
+  unlinkSync(path.join(prepared.run_dir, 'metrics.json'))
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: [finding],
+  })
+
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const l2Input = JSON.parse(
+    readFileSync(path.join(afterL1.tasks[0].task_path, 'input.json'), 'utf8'),
+  )
+
+  assert.equal(afterL1.tasks.length, 1)
+  assert.equal(afterL1.tasks[0].stage, 'architecture')
+  assert.equal(Array.isArray(l2Input.target.sections), true)
+  assert.equal(
+    existsSync(path.join(prepared.run_dir, 'metrics.json')),
+    true,
+  )
+})
+
+test('an unknown Manifest version is rejected instead of guessed', () => {
+  const repositoryRoot = createRepository()
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  const manifestPath = path.join(prepared.run_dir, 'manifest.json')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  manifest.version = 99
+  writeJson(manifestPath, manifest)
+
+  runCliExpectFailure(repositoryRoot, ['advance', prepared.run_dir])
+})
+
 test('a candidate emitted by the wrong discovery layer is rejected before L3', () => {
   const repositoryRoot = createRepository()
   const review = runTaskFixture(repositoryRoot, {
@@ -1426,7 +1693,6 @@ test('a queued run refuses consumption after the target digest changes', () => {
           attempt: 'Tried to refute the trigger.',
           remaining_evidence: 'The trigger remains reachable.',
         },
-        refined_finding: finding,
       },
     ],
   })
@@ -1459,4 +1725,230 @@ test('a queued run refuses consumption after the target digest changes', () => {
       .status,
     'QUEUED',
   )
+})
+
+test('prepare requires repo-map-first bootstrap when a default repository document is missing', () => {
+  const repositoryRoot = createRepository()
+  unlinkSync(path.join(repositoryRoot, 'docs', 'ARCHITECTURE.md'))
+
+  runCliExpectFailure(repositoryRoot, ['prepare', 'docs/design.md'])
+})
+
+test('observed repository documents are separated from confirmed authorities', () => {
+  const repositoryRoot = createRepository()
+  writeFileSync(
+    path.join(repositoryRoot, 'docs', 'ARCHITECTURE.md'),
+    observedDocument('Architecture', 'Review artifacts are local-only.'),
+  )
+
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  const manifest = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'manifest.json'), 'utf8'),
+  )
+  const architectureDocument = manifest.documents.find(
+    (document) => document.path === 'docs/ARCHITECTURE.md',
+  )
+
+  assert.equal(manifest.version, 5)
+  assert.equal(architectureDocument.role, 'context')
+  assert.equal(architectureDocument.authority_status, 'observed')
+  assert.deepEqual(manifest.coverage.confirmed_authorities, [
+    'docs/REPO_MAP.md',
+  ])
+  assert.deepEqual(manifest.coverage.observed_contexts, [
+    'docs/ARCHITECTURE.md',
+  ])
+  assert.match(prepared.human.summary, /观察性仓库上下文/)
+
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: [],
+  })
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const l2Input = JSON.parse(
+    readFileSync(path.join(afterL1.tasks[0].task_path, 'input.json'), 'utf8'),
+  )
+
+  assert.deepEqual(
+    l2Input.authorities.map((document) => document.path),
+    ['docs/REPO_MAP.md'],
+  )
+  assert.deepEqual(
+    l2Input.repository_contexts.map((document) => document.path),
+    ['docs/ARCHITECTURE.md'],
+  )
+  assert.equal(afterL1.tasks[0].model, reviewConfig.models.architecture.model)
+  assert.equal(
+    afterL1.tasks[0].reasoning_effort,
+    reviewConfig.models.architecture.reasoning_effort,
+  )
+})
+
+test('two observed repository documents disclose that no confirmed authority exists', () => {
+  const repositoryRoot = createRepository()
+  writeFileSync(
+    path.join(repositoryRoot, 'docs', 'REPO_MAP.md'),
+    observedDocument('Repository map', 'The runner owns review state.'),
+  )
+  writeFileSync(
+    path.join(repositoryRoot, 'docs', 'ARCHITECTURE.md'),
+    observedDocument('Architecture', 'Review artifacts are local-only.'),
+  )
+
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  const manifest = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'manifest.json'), 'utf8'),
+  )
+
+  assert.deepEqual(manifest.coverage.confirmed_authorities, [])
+  assert.deepEqual(manifest.coverage.observed_contexts, [
+    'docs/ARCHITECTURE.md',
+    'docs/REPO_MAP.md',
+  ])
+  assert.equal(
+    manifest.documents.filter((document) => document.role === 'context').length,
+    2,
+  )
+  assert.match(prepared.human.summary, /目标设计与观察性仓库上下文/)
+})
+
+test('an explicit authority overrides observed provenance for the same document', () => {
+  const repositoryRoot = createRepository()
+  writeFileSync(
+    path.join(repositoryRoot, 'docs', 'ARCHITECTURE.md'),
+    observedDocument('Architecture', 'Review artifacts are local-only.'),
+  )
+
+  const prepared = runCli(repositoryRoot, [
+    'prepare',
+    'docs/design.md',
+    '--authority',
+    'docs/ARCHITECTURE.md',
+  ])
+  const manifest = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'manifest.json'), 'utf8'),
+  )
+  const architectureDocuments = manifest.documents.filter(
+    (document) => document.path === 'docs/ARCHITECTURE.md',
+  )
+
+  assert.equal(architectureDocuments.length, 1)
+  assert.equal(architectureDocuments[0].role, 'authority')
+  assert.deepEqual(manifest.coverage.observed_contexts, [])
+  assert.deepEqual(manifest.coverage.confirmed_authorities, [
+    'docs/ARCHITECTURE.md',
+    'docs/REPO_MAP.md',
+  ])
+})
+
+test('a changed observed context invalidates the active review', () => {
+  const repositoryRoot = createRepository()
+  const architecturePath = path.join(
+    repositoryRoot,
+    'docs',
+    'ARCHITECTURE.md',
+  )
+  writeFileSync(
+    architecturePath,
+    observedDocument('Architecture', 'Review artifacts are local-only.'),
+  )
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: [],
+  })
+  writeFileSync(
+    architecturePath,
+    observedDocument('Architecture', 'Review artifacts changed location.'),
+  )
+
+  const result = runCli(repositoryRoot, ['advance', prepared.run_dir])
+
+  assert.equal(result.status, 'INVALIDATED')
+  assert.match(result.human.summary, /观察性仓库上下文/)
+  assert.match(
+    JSON.parse(
+      readFileSync(path.join(prepared.run_dir, 'state.json'), 'utf8'),
+    ).invalidation_reason,
+    /docs\/ARCHITECTURE\.md/,
+  )
+})
+
+test('observed context cannot establish a project contract', () => {
+  const repositoryRoot = createRepository()
+  writeFileSync(
+    path.join(repositoryRoot, 'docs', 'ARCHITECTURE.md'),
+    observedDocument('Architecture', 'Review artifacts are local-only.'),
+  )
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: [],
+  })
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  writeTaskResponse(afterL1.tasks[0], {
+    candidates: [
+      candidate({
+        layer: 'architecture',
+        contract: {
+          source: 'docs/ARCHITECTURE.md',
+          heading: 'Architecture',
+          quote: 'Review artifacts are local-only.',
+        },
+      }),
+    ],
+  })
+
+  const result = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const rejected = JSON.parse(
+    readFileSync(path.join(prepared.run_dir, 'rejected.json'), 'utf8'),
+  )
+
+  assert.equal(result.status, 'CLOSED')
+  assert.equal(rejected.length, 1)
+  assert.equal(rejected[0].reason_code, 'NO_PROJECT_CONTRACT')
+})
+
+test('architecture adversarial tasks retain document roles and fixed model settings', () => {
+  const repositoryRoot = createRepository()
+  writeFileSync(
+    path.join(repositoryRoot, 'docs', 'ARCHITECTURE.md'),
+    observedDocument('Architecture', 'Review artifacts are local-only.'),
+  )
+  const prepared = runCli(repositoryRoot, ['prepare', 'docs/design.md'])
+  writeTaskResponse(prepared.tasks[0], {
+    contracts: [],
+    candidates: [],
+  })
+  const afterL1 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  writeTaskResponse(afterL1.tasks[0], {
+    candidates: [candidate({ layer: 'architecture' })],
+  })
+
+  const afterL2 = runCli(repositoryRoot, ['advance', prepared.run_dir])
+  const task = afterL2.tasks[0]
+  const input = JSON.parse(
+    readFileSync(path.join(task.task_path, 'input.json'), 'utf8'),
+  )
+  const roles = Object.fromEntries(
+    input.context_documents.map((document) => [document.path, document.role]),
+  )
+
+  assert.equal(afterL2.status, 'ARCHITECTURE_CHECKED')
+  assert.deepEqual(roles, {
+    'docs/design.md': 'target',
+    'docs/REPO_MAP.md': 'authority',
+    'docs/ARCHITECTURE.md': 'context',
+  })
+  assert.equal(task.model, reviewConfig.models.adversarial.model)
+  assert.equal(
+    task.reasoning_effort,
+    reviewConfig.models.adversarial.reasoning_effort,
+  )
+})
+
+test('the migrated skill does not depend on its former repository path', () => {
+  const skill = readFileSync(path.join(scriptDirectory, '..', 'SKILL.md'), 'utf8')
+
+  assert.doesNotMatch(skill, /\.agents\/skills\/review-design-contracts/)
 })

@@ -267,6 +267,49 @@ describe('hand result facts', () => {
     ).toThrow()
   })
 
+  test('rejects an award whose amount does not mirror its base and odd-chip amounts', () => {
+    const summary = createCompletedHandResult({
+      ...started(),
+      facts: facts(),
+      state: finalState(),
+    }).summary
+    const invalidSummary = {
+      ...summary,
+      pots: summary.pots.map((pot, potIndex) =>
+        potIndex === 0
+          ? {
+              ...pot,
+              awards: pot.awards.map((award, awardIndex) =>
+                awardIndex === 0 ? { ...award, baseAmount: 599 } : award,
+              ),
+            }
+          : pot,
+      ),
+    }
+
+    expect(CompletedHandSummarySchema.safeParse(invalidSummary).success).toBe(
+      false,
+    )
+  })
+
+  test('rejects a pot whose awards do not sum to its amount', () => {
+    const summary = createCompletedHandResult({
+      ...started(),
+      facts: facts(),
+      state: finalState(),
+    }).summary
+    const invalidSummary = {
+      ...summary,
+      pots: summary.pots.map((pot, potIndex) =>
+        potIndex === 0 ? { ...pot, amount: 599 } : pot,
+      ),
+    }
+
+    expect(CompletedHandSummarySchema.safeParse(invalidSummary).success).toBe(
+      false,
+    )
+  })
+
   test('rejects damaged stack deltas, blind positions and starting-hand mirrors', () => {
     const summary = createCompletedHandResult({
       ...started(),

@@ -539,6 +539,30 @@ export const CompletedHandSummarySchema: z.ZodType<CompletedHandSummary> = z
           path: ['pots', potIndex],
         })
       }
+      pot.awards.forEach((award, awardIndex) => {
+        if (
+          BigInt(award.amount) !==
+          BigInt(award.baseAmount) + BigInt(award.oddChipAmount)
+        ) {
+          context.addIssue({
+            code: 'custom',
+            message: '派奖金额必须等于基础金额与奇数筹码之和。',
+            path: ['pots', potIndex, 'awards', awardIndex, 'amount'],
+          })
+        }
+      })
+      if (
+        pot.awards.reduce(
+          (total, award) => total + BigInt(award.amount),
+          0n,
+        ) !== BigInt(pot.amount)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: '底池派奖总额必须等于底池金额。',
+          path: ['pots', potIndex, 'amount'],
+        })
+      }
     })
   })
 function freeze<Value>(value: Value): Value {

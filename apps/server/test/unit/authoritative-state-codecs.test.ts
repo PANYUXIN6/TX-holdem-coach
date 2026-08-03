@@ -224,16 +224,26 @@ describe('current authoritative-state codecs', () => {
   test('round-trips the uncalledBetReturned private event through V1', () => {
     const event = createUncalledBetReturnedEventDraft(
       '10000000-0000-4000-8000-000000000001',
-      [
-        { seatNumber: 5, amount: 10 },
-        { seatNumber: 1, amount: 20 },
-      ],
+      [{ seatNumber: 5, amount: 10 }],
     )
 
     expect(
       decodeCurrentPrivateEventV1(structuredClone(encodePrivateEventV1(event)))
         .payload.event,
     ).toEqual(event)
+  })
+
+  test('rejects more than one uncalled-bet return in a V1 private event', () => {
+    expect(() =>
+      encodePrivateEventV1({
+        type: 'uncalledBetReturned',
+        handId: '10000000-0000-4000-8000-000000000001',
+        returns: [
+          { seatNumber: 1, amount: 10 },
+          { seatNumber: 5, amount: 20 },
+        ],
+      }),
+    ).toThrow(AuthoritativeStateValidationError)
   })
 
   test('round-trips the handCompleted private event through V1', () => {

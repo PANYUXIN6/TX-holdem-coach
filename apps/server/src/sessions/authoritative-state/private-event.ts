@@ -128,12 +128,14 @@ const ActionCommittedEventSchema = z.strictObject({
 const UncalledBetReturnedEventSchema = z.strictObject({
   type: z.literal('uncalledBetReturned'),
   handId: z.uuid(),
-  returns: z.array(
-    z.strictObject({
-      seatNumber: SeatNumberSchema,
-      amount: SafeNonnegativeIntegerSchema.positive(),
-    }),
-  ),
+  returns: z
+    .array(
+      z.strictObject({
+        seatNumber: SeatNumberSchema,
+        amount: SafeNonnegativeIntegerSchema.positive(),
+      }),
+    )
+    .max(1),
 })
 
 const HandCompletedEventSchema = z

@@ -214,7 +214,7 @@ persistSessionMutation(
 
 M2.5b 不接受 `expectedStateVersion`。M3 使用锁定事实判断稳定版本冲突，决定调用 M2.4 `failCommand()` 或继续生成提交批次。
 
-批次包含最终版本、`active | ended` 生命周期、最终关系指针、最终 Player 协调状态、可空当前快照、至少一条完整事件，以及由注入时钟生成的单一 `mutationAt`。每条事件由 M3 提供 ID、序号、可空 Hand/命令账本关联、命令级版本前后值、私有编码事件、完整公开 SSE 事件和注入时钟产生的时间。Owner 与 Session 不由批次重复输入，从锁 capability 派生。
+批次以 `finalStateVersion` 表示本次命令唯一的最终状态版本，并包含 `active | ended` 生命周期、最终关系指针、最终 Player 协调状态、可空当前快照、至少一条完整事件，以及由注入时钟生成的单一 `mutationAt`。每条事件由 M3 提供 ID、序号、可空 Hand/命令账本关联、命令级版本前后值、私有编码事件、完整公开 SSE 事件和注入时钟产生的时间。Owner 与 Session 不由批次重复输入，从锁 capability 派生。
 
 ## 6. 写前批次不变量
 
@@ -232,8 +232,8 @@ locked readonlyDiagnostic → 拒绝
 
 锁定的 `active` Session 必须仍有空 `endedAt`，否则属于持久化损坏。批次 `mutationAt` 必须是规范 UTC ISO 字符串 `YYYY-MM-DDTHH:mm:ss.sssZ`。最终仍为 `active` 时 `endedAt` 保持为空；转为 `ended` 时由 M2.5b 把 `endedAt` 派生为 `mutationAt`，并要求清空 `currentHandId`、Player 协调状态为 `idle`、两个活动指针为空。进入或修复 `readonlyDiagnostic` 只走 M2.6 专用适配器。
 
-- 无快照时，最终状态版本必须等于锁定版本，`currentHandId` 不得改变。
-- 有快照时，使用 `bigint` 验证锁定版本小于安全整数上限，最终版本恰好为锁定版本加一，快照版本等于最终版本。
+- 无快照时，`batch.finalStateVersion === locked.stateVersion`，`currentHandId` 不得改变。
+- 有快照时，使用 `bigint` 验证锁定版本小于安全整数上限，`batch.finalStateVersion === locked.stateVersion + 1`，且私有快照的状态版本等于 `batch.finalStateVersion`。
 - `inHand` 快照的 `handId` 必须等于最终 `currentHandId`；`betweenHands` 的最终指针必须为空。
 
 M2.5b 不根据事件类型判断领域状态是否应该改变；M3 决定是否写快照和最终事实，M2.5b 只证明该选择满足结构性提交协议。
@@ -241,7 +241,7 @@ M2.5b 不根据事件类型判断领域状态是否应该改变；M3 决定是�
 ### 6.2 事件批次
 
 - 批次至少包含一条完整事件；稳定失败命令不调用本接口。
-- 全部事件共享 `stateVersionBefore === locked.stateVersion` 和同一个 `stateVersionAfter`。
+- 每条事件都满足 `event.stateVersionBefore === locked.stateVersion` 和 `event.stateVersionAfter === batch.finalStateVersion`；后一个等式同时保证全部事件共享本次命令唯一的最终状态版本。
 - 数组物理顺序与 `eventSeq` 顺序一致，首条从 `locked.nextEventSeq` 开始，后续严格连续。
 - 使用 `bigint` 精确计算 `nextEventSeqAfter = locked.nextEventSeq + events.length`，结果不得超过安全整数上限。
 - `eventId` 按规范 UUID 在批次内唯一；历史冲突由数据库唯一约束裁决。
@@ -259,7 +259,7 @@ M2.5b 不根据事件类型判断领域状态是否应该改变；M3 决定是�
 
 ```text
 snapshot.eventSeq === 当前事件 eventSeq
-snapshot.stateVersion === stateVersionAfter
+snapshot.stateVersion === 当前事件 stateVersionAfter === batch.finalStateVersion
 ```
 
 为证明同一命令只有一个最终公开业务状态，对每条 `SseEvent.payload.snapshot` 移除顶层 `eventSeq` 后使用规范 JSON 比较，其余字段必须完全一致。
@@ -366,7 +366,7 @@ M3 只能把显式封闭联合中的预期业务结果映射为 `failCommand()`�
 
 1. `createPrivateTableState()`：验证会话层状态不变量，包括合法负 `netChange`、非法越界净变化和精确资金守恒，不重复测试 Poker 内部规则。
 2. 四个当前 Codec API：验证独立版本、round-trip、深冻结、四种 V1 事件和纯错误分类。
-3. `lockSessionForMutation()` / `persistSessionMutation()` 的 Repository 单元合约：`TransactionSql` 只作为外部数据库边界替身，验证写前拒绝、capability 和三阶段错误转换；不测试私有 WeakMap/WeakSet 或完整 SQL 文本。
+3. `lockSessionForMutation()` / `persistSessionMutation()` 的 Repository 单元合约：`TransactionSql` 只作为外部数据库边界替身，验证写前拒绝、capability 和三阶段错误转换；其中必须覆盖锁定版本为 7、携带版本 8 私有快照且 `batch.finalStateVersion` 为 8，但事件及公开快照仍声明版本 7 的批次在第一条写 SQL 前被拒绝；不测试私有 WeakMap/WeakSet 或完整 SQL 文本。
 4. 真实 PostgreSQL：分为 M2.5b 合约与显式的 `M2.4 + M2.5b + PostgreSQL transaction` 组合合约。
 
 真实数据库覆盖 Owner 隔离、由 `pg_locks`/`pg_blocking_pids` 证明的行锁、创建后锁定、单/多事件、`active → ended` 无快照同版本分支及其时间列、序号、未提交不可见、真实可构造的外键/唯一/延迟约束回滚和双连接竞争。组合合约覆盖账本、关系事实、快照、事件的原子提交，以及 `completeCommand()` 或 COMMIT 失败时整体回滚。

@@ -569,9 +569,9 @@ M1.R
 - 私有快照的数据库行载荷版本与 `snapshotSchemaVersion`、私有事件的数据库行载荷版本与 `eventSchemaVersion` 是四条独立版本序列，不共享常量或相互比较。
 - 私有事件 V1 只包含 M1.9 已冻结的 `handStarted | actionCommitted | uncalledBetReturned | handCompleted`；后续版本为累积联合，M3 发布 Session/Accounting V2，M4 发布 Player 协调 V3。
 - M2.5b 只消费调用方现有 `TransactionSql`，通过 Owner-scoped `SELECT ... FOR UPDATE` 返回事务绑定、不可伪造、一次性的 Session 锁 capability；它不自行开启、提交事务或执行领域回调。
-- M2.5b 校验但不决定状态转换：无快照时版本不变且关系指针不变，有快照时版本恰好加一并与快照镜像一致；M3 决定最终领域状态、事件和是否写快照。
+- M2.5b 校验但不决定状态转换：无快照时批次最终版本不变且关系指针不变，有快照时批次最终版本恰好加一并与私有快照镜像一致；M3 决定最终领域状态、事件和是否写快照。
 - 每场 `eventSeq` 从锁定行的 `nextEventSeq` 开始连续，使用精确安全整数检查；失败或回滚不产生新的已提交序号。
-- 同一批次的事件共享命令级 `stateVersionBefore/After`，公开事件除各自 `eventSeq` 外必须携带相同的最终公开快照。
+- 每条事件的 `stateVersionBefore` 等于锁定版本，`stateVersionAfter` 等于批次唯一最终版本；每条公开快照的 `stateVersion` 也等于该批次最终版本，且公开事件除各自 `eventSeq` 外必须携带相同的最终公开快照。
 - 同一事务使用调用方注入的单一 mutation 时间同步 `sessions.stateVersion`、`nextEventSeq`、生命周期、`endedAt/updatedAt`、Player 协调列和可重建的 `currentHandId`，并原子 UPSERT 可选快照、批量插入完整私有/公开事件；无快照时不改写快照时间。
 - 当前手已提交行动历史只存在于 `session_events`；快照不得保存第二份行动数组。
 - M2.5b 与 M2.4 是并列 Repository；M3 在同一事务中组合命令账本、窄领域 Repository 与 M2.5b。外层事务成功返回后才能向发布层交付事件。
@@ -579,7 +579,7 @@ M1.R
 后端测试闭环：
 
 - 按 TDD 逐项覆盖 `PrivateTableState`、快照 V1 和四种事件 V1 的严格构造、round-trip、独立版本、深冻结和错误分类。
-- 使用 `TransactionSql` 替身验证写前拒绝、capability 生命周期，以及 Session 更新、快照 UPSERT、事件插入失败后立即停止且不执行后续 SQL；不为测试增加生产 failpoint。
+- 使用 `TransactionSql` 替身验证写前拒绝、capability 生命周期，以及 Session 更新、快照 UPSERT、事件插入失败后立即停止且不执行后续 SQL；显式覆盖批次/私有快照最终版本为 8、事件及公开快照最终版本为 7 的反例在第一条写 SQL 前被拒绝；不为测试增加生产 failpoint。
 - 使用真实 PostgreSQL 覆盖 Owner 隔离、由 `pg_locks`/`pg_blocking_pids` 证明的行锁、创建后锁定、单/多事件连续序号、`active → ended` 无快照同版本结构分支及其 `endedAt/updatedAt`、快照时间不变和未提交不可见。
 - 使用真实可构造的外键、唯一约束、延迟约束、`completeCommand()` 与 COMMIT 失败证明 Session、快照、事件、账本和关系事实整体回滚。
 - 两个连接竞争同一 Session 时只能基于一次锁定镜像成功推进；一次性 capability 不能重复写入。

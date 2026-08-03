@@ -157,6 +157,8 @@ handCompleted
 
 它们对应既有 `PokerDomainEventDraft`，但读取时必须通过严格 Schema，拒绝额外字段、非法 UUID、非安全整数和损坏的嵌套领域事实。数据库信封字段不复制进私有 JSON。
 
+`actionCommitted.progression.burnedCardsAdded` 必须与已经过前后街道镜像校验的 `streetTransitions` 精确对应：每经过 `flop`、`turn`、`river` 各增加一张 burn card，`showdown` 和 `complete` 不增加。因此 `burnedCardsAdded.length` 必须等于 `streetTransitions` 中 `flop | turn | river` 的数量；当前版本只校验可由现有字段证明的数量镜像，不重新运行发牌，也不扩展 V1 快照以复制完整 burn card 历史。
+
 V1 明确排除：
 
 - SSE 校准 `snapshot`，因为校准不创建 `session_event`；

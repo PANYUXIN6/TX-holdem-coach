@@ -271,6 +271,21 @@ const ActionCommittedEventSchema = z
         path: ['progression', 'streetTransitions'],
       })
     }
+    const expectedBurnedCardsAddedCount =
+      event.progression.streetTransitions.filter(
+        (street) =>
+          street === 'flop' || street === 'turn' || street === 'river',
+      ).length
+    if (
+      event.progression.burnedCardsAdded.length !==
+      expectedBurnedCardsAddedCount
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '新增 burn card 数量必须与经过的公共牌街道精确一致。',
+        path: ['progression', 'burnedCardsAdded'],
+      })
+    }
     const expectedTerminationReason =
       event.after.street === 'showdown' || event.after.street === 'complete'
         ? event.after.street

@@ -11,6 +11,12 @@ import {
   createUncalledBetReturnedEventDraft,
 } from '../../src/poker/hand-result.js'
 import {
+  applyPokerAction,
+  initializePokerTable,
+  startPokerHand,
+} from '../../src/poker/poker-engine.js'
+import { createPokerTableState } from '../../src/poker/state.js'
+import {
   EVENT_SCHEMA_VERSION,
   PRIVATE_EVENT_PAYLOAD_VERSION,
   decodeCurrentPrivateEventV1,
@@ -86,6 +92,44 @@ function actionCommittedEvent() {
       canMakeFullRaiseBeforeAction: true,
     },
   })
+}
+
+function preflopRunoutEvent() {
+  const seats = Array.from({ length: 6 }, (_, seatNumber) => ({
+    seatNumber,
+    playerId: `00000000-0000-4000-8000-00000000000${seatNumber + 1}`,
+    isUser: seatNumber === 0,
+    stack: 1_000,
+    status: 'active' as const,
+    streetContribution: 0,
+    totalContribution: 0,
+  }))
+  const randomSource = { nextInt: () => 0 }
+  const started = startPokerHand(initializePokerTable(seats, randomSource), {
+    handId: '10000000-0000-4000-8000-000000000001',
+    completedHandCountBeforeStart: 0,
+    randomSource,
+  }).state
+  const state = createPokerTableState({
+    ...started,
+    seats: started.seats.map((seat) => {
+      if (seat.seatNumber === 2) {
+        return { ...seat, status: 'allIn' as const, stack: 0 }
+      }
+      if (seat.seatNumber === 3) {
+        return seat
+      }
+      return { ...seat, status: 'folded' as const }
+    }),
+  })
+  const event = applyPokerAction(state, {
+    actorSeatNumber: 3,
+    action: { type: 'call' },
+  }).eventDrafts[0]
+  if (event?.type !== 'actionCommitted') {
+    throw new Error('Expected a preflop runout actionCommitted event.')
+  }
+  return event
 }
 
 describe('current authoritative-state codecs', () => {
@@ -316,6 +360,18 @@ describe('current authoritative-state codecs', () => {
         ...event.progression,
         boardCardsAdded: [{ rank: 'A' as const, suit: 'spades' as const }],
       },
+    }
+
+    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      AuthoritativeStateValidationError,
+    )
+  })
+
+  test('rejects missing burned cards for runout street transitions', () => {
+    const event = preflopRunoutEvent()
+    const invalidEvent = {
+      ...event,
+      progression: { ...event.progression, burnedCardsAdded: [] },
     }
 
     expect(() => encodePrivateEventV1(invalidEvent)).toThrow(

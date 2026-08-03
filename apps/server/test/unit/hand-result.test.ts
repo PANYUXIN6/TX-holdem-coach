@@ -1,6 +1,7 @@
 import type { Card } from '@tx-holdem-coach/contracts'
 import { describe, expect, test } from 'vitest'
 import {
+  CompletedHandSummarySchema,
   classifyStartingHand,
   createActionCommittedEventDraft,
   createCompletedHandResult,
@@ -249,6 +250,61 @@ describe('hand result facts', () => {
     ])
     expect(Object.isFrozen(result)).toBe(true)
     expect(Object.isFrozen(result.pots)).toBe(true)
+  })
+
+  test('strictly parses a completed-hand summary owned by the poker domain', () => {
+    const result = createCompletedHandResult({
+      ...started(),
+      facts: facts(),
+      state: finalState(),
+    })
+
+    expect(CompletedHandSummarySchema.parse(result.summary)).toEqual(
+      result.summary,
+    )
+    expect(() =>
+      CompletedHandSummarySchema.parse({ ...result.summary, extra: true }),
+    ).toThrow()
+  })
+
+  test('rejects damaged stack deltas, blind positions and starting-hand mirrors', () => {
+    const summary = createCompletedHandResult({
+      ...started(),
+      facts: facts(),
+      state: finalState(),
+    }).summary
+    const invalidSummaries = [
+      {
+        ...summary,
+        seats: summary.seats.map((seat) =>
+          seat.seatNumber === 0 ? { ...seat, netChange: 1_277 } : seat,
+        ),
+      },
+      {
+        ...summary,
+        positions: summary.positions.map((position) =>
+          position.seatNumber === summary.buttonSeatNumber
+            ? { ...position, position: 'SB' as const }
+            : position.seatNumber === summary.smallBlindSeatNumber
+              ? { ...position, position: 'BTN' as const }
+              : position,
+        ),
+      },
+      {
+        ...summary,
+        seats: summary.seats.map((seat) =>
+          seat.seatNumber === 0
+            ? { ...seat, startingHandCategory: '22' as const }
+            : seat,
+        ),
+      },
+    ]
+
+    for (const invalidSummary of invalidSummaries) {
+      expect(CompletedHandSummarySchema.safeParse(invalidSummary).success).toBe(
+        false,
+      )
+    }
   })
 
   test('rejects an evaluation for a folded showdown participant', () => {

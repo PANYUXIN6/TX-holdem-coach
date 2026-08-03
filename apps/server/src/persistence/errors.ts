@@ -29,6 +29,7 @@ export type DataCorruptionKind =
   | 'invalidRoster'
   | 'invalidInitialMemory'
   | 'invalidCommandLedger'
+  | 'invalidSessionMutationState'
 
 export class PersistenceDataCorruptionError extends Error {
   public constructor(public readonly corruption: DataCorruptionKind) {
@@ -75,6 +76,13 @@ export class CommandLedgerTransitionError extends Error {
   }
 }
 
+export class SessionMutationTransitionError extends Error {
+  public constructor() {
+    super('场次持久化状态无法推进。')
+    this.name = 'SessionMutationTransitionError'
+  }
+}
+
 export class DatabaseOperationError extends Error {
   public constructor() {
     super('数据库操作失败。')
@@ -93,6 +101,7 @@ export function isRepositoryDomainError(error: unknown): error is Error {
     error instanceof ActiveSessionConflictError ||
     error instanceof CommandPayloadConflictError ||
     error instanceof CommandLedgerTransitionError ||
+    error instanceof SessionMutationTransitionError ||
     error instanceof DatabaseOperationError
   )
 }

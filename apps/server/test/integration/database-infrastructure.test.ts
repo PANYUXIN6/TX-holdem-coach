@@ -10,8 +10,10 @@ import { loadDatabaseTestMode } from '../../src/db/database-test-mode.js'
 import { loadTestDatabaseConnections } from '../../src/db/test-database-safety.js'
 import { assertM22DatabaseSchema } from './database-schema-assertions.js'
 import {
+  assertM24M25AtomicComposition,
   assertM23Repositories,
   assertM24CommandLedgerRepository,
+  assertM25SessionMutationRepository,
 } from './database-repository-assertions.js'
 
 const databaseTestMode = loadDatabaseTestMode(process.env)
@@ -69,6 +71,8 @@ async function runIntegrationTest(): Promise<void> {
       await assertM22DatabaseSchema(sql, runtimeUrl)
       await assertM23Repositories(sql)
       await assertM24CommandLedgerRepository(sql, runtimeUrl)
+      await assertM25SessionMutationRepository(sql, runtimeUrl)
+      await assertM24M25AtomicComposition(sql)
     }
   } finally {
     await sql.end({ timeout: 0 })

@@ -1,6 +1,6 @@
 # M2.5 权威状态契约、当前版本 Codec 与原子持久化设计
 
-- 状态：已逐段确认，待书面复核
+- 状态：已批准并实现
 - 日期：2026-08-03
 - 上位架构：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
 - 数据库边界：[M2.2 Schema 设计](./2026-07-29-m2-2-schema-design.md)

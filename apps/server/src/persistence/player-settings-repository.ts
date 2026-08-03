@@ -12,6 +12,7 @@ import { resolveOwnerScope, type OwnerScope } from './owner-scope.js'
 
 export const PLAYER_TIMEOUT_SETTING_KEY = 'player-timeouts'
 export const SETTING_PAYLOAD_VERSION = 1
+const POSTGRES_TEXT_OID = 25
 
 export const PlayerTimeoutSettingsPayloadV1Schema = z
   .strictObject({
@@ -101,6 +102,10 @@ export async function writePlayerTimeoutSettings(
   }
 
   const resolvedOwner = await resolveOwnerScope(sql, ownerScope)
+  const settingPayload = sql.typed(
+    JSON.stringify(result.data),
+    POSTGRES_TEXT_OID,
+  )
   try {
     await sql`
       INSERT INTO app_private.app_settings (
@@ -115,7 +120,7 @@ export async function writePlayerTimeoutSettings(
         ${resolvedOwner.databaseOwnerId}::uuid,
         ${PLAYER_TIMEOUT_SETTING_KEY},
         ${SETTING_PAYLOAD_VERSION},
-        ${JSON.stringify(result.data)}::jsonb,
+        ${settingPayload}::jsonb,
         clock_timestamp()
       )
       ON CONFLICT (owner_id, setting_key) DO UPDATE SET

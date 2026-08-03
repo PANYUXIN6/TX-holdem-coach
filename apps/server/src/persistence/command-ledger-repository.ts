@@ -61,6 +61,7 @@ export const LedgerCommandSchema = z.union([
 export type LedgerCommand = z.infer<typeof LedgerCommandSchema>
 
 export const COMMAND_LEDGER_RESPONSE_PAYLOAD_VERSION = 1 as const
+const POSTGRES_TEXT_OID = 25
 
 const LedgerRowSchema = z.strictObject({
   ledgerId: z.string().uuid(),
@@ -438,6 +439,10 @@ export async function completeCommand(
   ) {
     throw new RepositoryInputValidationError()
   }
+  const responsePayload = transaction.typed(
+    JSON.stringify(response.data),
+    POSTGRES_TEXT_OID,
+  )
 
   consumeAcquired(acquired)
   let rows: readonly { readonly ledgerId: string }[]
@@ -449,7 +454,7 @@ export async function completeCommand(
           first_event_seq = ${eventRange.data?.firstEventSeq ?? null}::bigint,
           last_event_seq = ${eventRange.data?.lastEventSeq ?? null}::bigint,
           response_payload_version = ${COMMAND_LEDGER_RESPONSE_PAYLOAD_VERSION},
-          response_payload = ${JSON.stringify(response.data)}::jsonb,
+          response_payload = ${responsePayload}::jsonb,
           completed_at = clock_timestamp(),
           updated_at = clock_timestamp()
       WHERE owner_id = ${acquired.owner.databaseOwnerId}::uuid
@@ -484,6 +489,10 @@ export async function failCommand(
   ) {
     throw new RepositoryInputValidationError()
   }
+  const responsePayload = transaction.typed(
+    JSON.stringify(response.data),
+    POSTGRES_TEXT_OID,
+  )
 
   consumeAcquired(acquired)
   let rows: readonly { readonly ledgerId: string }[]
@@ -495,7 +504,7 @@ export async function failCommand(
           first_event_seq = NULL,
           last_event_seq = NULL,
           response_payload_version = ${COMMAND_LEDGER_RESPONSE_PAYLOAD_VERSION},
-          response_payload = ${JSON.stringify(response.data)}::jsonb,
+          response_payload = ${responsePayload}::jsonb,
           completed_at = clock_timestamp(),
           updated_at = clock_timestamp()
       WHERE owner_id = ${acquired.owner.databaseOwnerId}::uuid

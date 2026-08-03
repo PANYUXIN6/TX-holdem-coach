@@ -69,7 +69,10 @@ function createTransactionMock(): {
     calls.push({ text: first.join('?'), parameters })
     return Promise.resolve([])
   }) as unknown as TransactionSql
-  Object.assign(transaction, { json: (value: unknown) => value })
+  Object.assign(transaction, {
+    json: (value: unknown) => value,
+    typed: (value: string) => JSON.parse(value) as unknown,
+  })
   return { transaction, calls }
 }
 
@@ -361,7 +364,22 @@ describe('session repository', () => {
       expect.stringContaining('app_private.session_agents'),
       expect.stringContaining('app_private.agent_memory_revisions'),
     ])
-    expect(calls.every((call) => !call.text.includes('SELECT'))).toBe(true)
+    const agentRows = calls[2]?.parameters[0] as
+      | readonly {
+          readonly config_payload: unknown
+          readonly memory_payload: unknown
+        }[]
+      | undefined
+    const memoryRows = calls[3]?.parameters[0] as
+      | readonly {
+          readonly memory_payload: unknown
+        }[]
+      | undefined
+    expect(agentRows?.[0]?.config_payload).toEqual(
+      input.agents[0]?.configPayload,
+    )
+    expect(agentRows?.[0]?.memory_payload).toEqual({})
+    expect(memoryRows?.[0]?.memory_payload).toEqual({})
   })
 
   test('rejects duplicate stable identities before the transaction writes', async () => {

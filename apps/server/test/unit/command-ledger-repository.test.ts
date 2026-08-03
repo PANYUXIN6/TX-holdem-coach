@@ -60,20 +60,6 @@ function aiActionCommand() {
 
 function createTransactionMock(responses: readonly unknown[]): TransactionSql {
   const pending = [...responses]
-  return ((template: TemplateStringsArray, ..._parameters: unknown[]) => {
-    if (!('raw' in template)) {
-      throw new Error('Unexpected helper call.')
-    }
-    const response = pending.shift()
-    return response instanceof Error
-      ? Promise.reject(response)
-      : Promise.resolve(response)
-  }) as unknown as TransactionSql
-}
-
-function createTrackedTransaction(responses: readonly unknown[]) {
-  const pending = [...responses]
-  let callCount = 0
   const transaction = ((
     template: TemplateStringsArray,
     ..._parameters: unknown[]
@@ -81,13 +67,45 @@ function createTrackedTransaction(responses: readonly unknown[]) {
     if (!('raw' in template)) {
       throw new Error('Unexpected helper call.')
     }
-    callCount += 1
     const response = pending.shift()
     return response instanceof Error
       ? Promise.reject(response)
       : Promise.resolve(response)
   }) as unknown as TransactionSql
-  return { transaction, getCallCount: () => callCount }
+  Object.assign(transaction, {
+    json: (value: unknown) => value,
+    typed: (value: string) => JSON.parse(value) as unknown,
+  })
+  return transaction
+}
+
+function createTrackedTransaction(responses: readonly unknown[]) {
+  const pending = [...responses]
+  let callCount = 0
+  const parameterLists: unknown[][] = []
+  const transaction = ((
+    template: TemplateStringsArray,
+    ...parameters: unknown[]
+  ) => {
+    if (!('raw' in template)) {
+      throw new Error('Unexpected helper call.')
+    }
+    callCount += 1
+    parameterLists.push(parameters)
+    const response = pending.shift()
+    return response instanceof Error
+      ? Promise.reject(response)
+      : Promise.resolve(response)
+  }) as unknown as TransactionSql
+  Object.assign(transaction, {
+    json: (value: unknown) => value,
+    typed: (value: string) => JSON.parse(value) as unknown,
+  })
+  return {
+    transaction,
+    getCallCount: () => callCount,
+    getParameterLists: () => parameterLists,
+  }
 }
 
 async function resolvedOwner() {
@@ -894,6 +912,7 @@ describe('command ledger repository', () => {
       }),
     ).resolves.toBeUndefined()
     expect(tracked.getCallCount()).toBe(2)
+    expect(tracked.getParameterLists().flat()).toContainEqual(commandResponse())
   })
 
   test('validates failed snapshot input before consuming acquired capability', async () => {
@@ -933,6 +952,9 @@ describe('command ledger repository', () => {
       failCommand(tracked.transaction, acquired, errorResponse(false)),
     ).resolves.toBeUndefined()
     expect(tracked.getCallCount()).toBe(2)
+    expect(tracked.getParameterLists().flat()).toContainEqual(
+      errorResponse(false),
+    )
   })
 
   test('rejects cross-session responses and invalid event ranges before SQL', async () => {

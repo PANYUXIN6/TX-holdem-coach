@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-08-02（M2.4 命令账本 Repository 已完成；完整场次事务待 M3.2）
+更新时间：2026-08-03（M2.5 权威状态、当前 Codec 与原子持久化已完成；领域命令组合待 M3）
 
 ## 当前目录与职责
 
@@ -32,12 +32,12 @@
 - `apps/server/.env.example` 与 `.env.test.example`：前者只描述线上运行/迁移 URL 与 Provider Key，后者只描述两条测试 URL；project ref 只存在于非秘密注册表，不接受环境覆盖，真实 `.env.test.local` 被 Git 忽略。
 - `apps/server/scripts/run-database-integration-tests.mjs`：本地只解析 `.env.test.local`，CI 只接受已注入的两条测试 URL；构造子进程 allowlist，剔除线上 URL 和 ref 环境变量，并注入显式数据库测试入口标记。无参数时运行快速迁移流程，只有受控 `--full` 参数才注入 full scope；普通 Server 集成测试脚本明确排除远程数据库测试文件。
 - `apps/server/scripts/managed-child-process.mjs`、`copy-migrations.mjs`、`verify-migration-assets.mjs`、`migrate-production.mjs`：受管子进程模块统一把取消信号转发到完整进程组并等待退出，父进程一旦收到取消信号就不会因子进程退出码为 0 而误报成功；其余脚本依次负责构建迁移/注册表制品、核对源与 `dist` 资产及 digest、在联网前用制品生产 ref 校验合法迁移 URL并启动 `drizzle.release.config.ts`。
-- `apps/server/test/`：`unit/` 覆盖统一 URL 策略、固定注册表安全门、环境 ref 无法覆盖、错误项目拒绝、迁移 `exact|prefix` 状态矩阵、制品 digest、显式数据库测试模式、运行级 fixture 和受管子进程；`integration/database-infrastructure.test.ts` 面向长期保留的测试 Supabase，只有显式入口标记存在时才运行。日常 `db:test:integration` 只执行 `prefix → migrate → exact`；手动 `db:test:full` 复用 `database-schema-assertions.ts` 验收 M2.2 结构、提交时约束、双真实连接并发唯一性和级联清理，并复用 `database-repository-assertions.ts` 验收 M2.3 Owner 隔离、历史分页、损坏分类、Active 复用门与分阶段事务回滚。两组断言均以运行级 Owner/UUID 隔离并在成功或失败后精确清理。远程测试不构造无效迁移反例；正常迁移命令失败会直接使测试失败。默认 `verify` 的集成测试脚本不收集该远程文件，因此即使父环境存在测试 URL 或入口标记也保持离线。
+- `apps/server/test/`：`unit/` 覆盖统一 URL 与迁移安全门、M2.3/M2.4 Repository，以及 M2.5 权威状态、当前 Codec、写前批次拒绝、锁 capability 和三阶段错误转换；`integration/database-infrastructure.test.ts` 面向长期保留的测试 Supabase，只有显式入口标记存在时才运行。日常 `db:test:integration` 只执行 `prefix → migrate → exact`；手动 `db:test:full` 复用 Schema 与 Repository 断言，额外验收 M2.5 的 Owner 隔离、真实行锁与双连接竞争、未提交不可见、单/多事件、无快照结束态、真实约束回滚，以及 M2.4+M2.5 成功和失败的原子组合。断言以运行级 Owner/UUID 隔离并在成功或失败后精确清理。默认 `verify` 不收集远程数据库文件，保持离线。
 - `apps/server/test/unit/command-ledger-repository.test.ts` 与 `database-repository-assertions.ts` 的 M2.4 入口：分别验证导出 Repository API，以及真实 PostgreSQL 的 Owner 隔离、整体回滚、已提交 processing 只读重放、候选 ID 碰撞和双连接并发重放；仅 `db:test:full` 运行远程部分。
 - `apps/server/src/poker/hand-result.ts`：仅定义、校验、排序和冻结手牌领域结果与事件草稿；不编排行为。
 - `apps/server/src/poker/poker-engine.ts`：M1 对会话层唯一可调用的行为入口，编排初始化、开手、行动推进与同步结算，绝不返回内部终止状态。
 - `apps/server/src/personas/`：M2.3 人物私有配置落点；原始定义模块不得在求值期解析，配置模块承载永久 Payload Schema、Active 准入、规范 JSON 与快照哈希，目录模块只由 `bootstrap()` 显式加载并生成深冻结的私有目录和公开摘要。
-- `apps/server/src/persistence/`：M2.3 PostgreSQL Repository 落点；`owner-scope.ts` 统一把外部固定 OwnerScope 解析为内部数据库 Owner，设置 Repository 只读写 `app_settings`，场次 Repository 提供 Owner-scoped 基础查询、微秒 keyset 分页、人物快照完整性读取和事务内阵容写入原语。
+- `apps/server/src/persistence/`：PostgreSQL Repository 落点；`owner-scope.ts` 统一把外部固定 OwnerScope 解析为内部数据库 Owner，设置与场次基础 Repository 提供 Owner-scoped 查询、人物快照完整性读取和事务内阵容原语，`command-ledger-repository.ts` 提供 M2.4 命令账本 capability，`session-mutation-repository.ts` 提供 M2.5 事务绑定 Session 行锁 capability 与 Session/快照/完整事件三阶段写入协议。各 Repository 只消费调用方事务，彼此不依赖。
 - `apps/server/src/persistence/command-ledger-repository.ts`：M2.4 命令账本 Repository；负责严格命令准备、UUID 规范化、SHA-256 语义摘要、一次性 prepared capability、绑定登记事务的 acquired capability、Owner-scoped 幂等登记和终态重放，不拥有事务或 Session 锁。
 - `apps/server/src/sessions/roster-preparation.ts`：M2.3 阵容事务前准备边界；从当前目录或最近 ended 场次构造稳定 Session/Participant 身份图，执行永久校验、Active 准入、人物/座位唯一性和初始记忆准备，但不开始数据库事务。
 - `packages/contracts/src/index.ts`：公开协议唯一 Schema 边界；当前手时间线嵌入公开手牌快照，最近完成手摘要为独立严格投影，均不依赖服务器私有类型。
@@ -45,16 +45,19 @@
 
 ## 当前主链路
 
-本节描述 M1.9 完成后的代码现状；版本只属于后续会话级 `PrivateTableState`，纯扑克规则不读取或修改它。
+本节描述 M2.5 完成后的代码现状；版本属于会话级 `PrivateTableState`，纯扑克规则不读取或修改它。
 
 根 pnpm 脚本编排三个 workspace；`verify` 固定执行格式检查、类型检查与后端分类测试，且不读取模型 Key、数据库凭据或联网。根 `test:backend` 会在 Contracts 测试通过后重建 Contracts，再运行 Server 分类测试。Server 启动时先校验私有配置，再在数据库连接前显式加载人物目录；目录失败、数据库失败或迁移不兼容均不监听端口。数据库启动门继续执行 `SELECT 1` 和迁移 `exact` 比对，绝不自动 DDL。M2.3 当前数据链为 `OwnerScope → resolveOwnerScope → 参数化 Owner-scoped SQL`；当前目录或最近 ended 快照在事务前完成永久 Schema、Active 准入、镜像、哈希、座位/人物唯一性和稳定 ID 图准备，`insertSessionRosterSnapshot` 再只消费已解析 Owner 与调用方事务，批量写入 Session、6–9 个 Participant、5–8 个 Agent 和 revision 0 记忆。历史列表以数据库微秒文本生成 `(updatedAt,id)` keyset 游标。Server 从 Contracts 的冻结 Card 字面量生成标准 52 张牌，并映射到 `apps/web/public/poker/`；M1 行为继续只通过 `poker-engine.ts` 推进和结算。供应商 Key、数据库连接串、人物模型配置与策略说明始终留在服务端私有边界，公开人物摘要仍只通过 Contracts 投影。HTTP/SSE、完整场次创建事务和 Agent 调用仍未实现。
 
 M2.4 命令链为“事务外 `prepareCommandRegistration` 与 `resolveOwnerScope` → 未来 M3 锁定 Session → `registerCommand` → `completeCommand` 或安全的 `failCommand`”。登记先由唯一约束和 `ON CONFLICT DO NOTHING` 决定是否实际插入，未插入时才以新语句读取既有状态；只有实际插入返回 acquired capability。Repository 不推进扑克状态、不分配事件序号、不发布 SSE。
 
+M2.5 数据链为 `PokerTableState / CompletedHandSummary → createPrivateTableState → snapshot-codec-v1` 与 `PokerDomainEventDraft → private-event-codec-v1` 两条纯分支，再由 `lockSessionForMutation → persistSessionMutation` 在调用方事务中验证唯一最终版本、Session/指针/协调镜像、连续事件序号和相同最终公开状态，依次更新 Session、可选 UPSERT 快照、批量插入完整事件。M2.5b 不依赖 M2.4、不决定领域迁移、不提交事务；M3 才在同一外层事务中组合二者及 Hand 等关系事实，并只在提交成功后发布事件。
+
 ## 已实现的非 Agent 文件边界
 
 - `apps/server/src/poker/poker-engine.ts`：M1 对 M3 的唯一行为入口，提供 `initializePokerTable()`、`startPokerHand()` 与 `applyPokerAction()`。
 - `apps/server/src/poker/hand-result.ts`：只定义 `CompletedHandResult`、私有摘要、事件草稿及其纯构造器。
-- `apps/server/src/sessions/authoritative-state/`：M2.5a 已确认的计划落点，未来实现 `PrivateTableState`、当前快照/私有事件 Codec；M2.6 在纯模块中增加多版本迁移与恢复决策，M3/M4 再分别发布累积事件 V2/V3 并构建公开投影。当前目录尚未建立。
+- `apps/server/src/sessions/authoritative-state/`：M2.5a 已实现的纯权威状态边界；`private-table-state.ts` 严格构造并深冻结会话状态，两个当前 Codec 分别维护独立的行版本和信封版本，私有事件 V1 只包含四种 M1.9 Poker 事件。M2.6 在此纯模块上增加多版本迁移与恢复决策，M3/M4 再分别发布累积事件 V2/V3。
+- `apps/server/src/persistence/session-mutation-repository.ts`：M2.5b 事务内持久化边界；Owner-scoped `SELECT ... FOR UPDATE` 产生事务绑定、一次性锁 capability，写前重新解码并验证批次，随后按 Session → 可选快照 → 完整事件固定顺序写入；不开启或提交事务，也不调用命令账本或扑克引擎。
 
 目标行动链固定为 `PokerTableState + PokerCommand → poker-engine.ts → PokerEngineResult`；开手也只通过同一模块返回 `StartedHandFacts`。M3 不得取得未结算的 `showdown/complete`，也不得自行组合发牌、庄盲、推进与结算模块；M2/M3/M5 可直接消费 `hand-result.ts` 的纯领域数据契约，但不得绕过门面调用行为原语。

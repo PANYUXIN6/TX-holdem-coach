@@ -30,6 +30,7 @@ import {
 } from './owner-scope.js'
 
 const UuidSchema = z.string().uuid()
+const POSTGRES_TEXT_OID = 25
 const SessionLifecycleStatusSchema = z.enum([
   'active',
   'ended',
@@ -586,9 +587,9 @@ export async function insertSessionRosterSnapshot(
     config_snapshot_key: agent.configSnapshotKey,
     current_memory_revision: agent.initialMemory.currentRevision,
     config_payload_version: agent.configPayloadVersion,
-    config_payload: JSON.stringify(agent.configPayload),
+    config_payload: agent.configPayload,
     memory_payload_version: agent.initialMemory.currentPayloadVersion,
-    memory_payload: JSON.stringify(agent.initialMemory.currentPayload),
+    memory_payload: agent.initialMemory.currentPayload,
   }))
   const memoryRows = input.agents.map((agent) => ({
     participant_id: agent.agentParticipantId,
@@ -596,8 +597,16 @@ export async function insertSessionRosterSnapshot(
     owner_id: ownerId,
     revision: agent.initialMemory.revision,
     memory_payload_version: agent.initialMemory.revisionPayloadVersion,
-    memory_payload: JSON.stringify(agent.initialMemory.revisionPayload),
+    memory_payload: agent.initialMemory.revisionPayload,
   }))
+  const agentRowsJson = transaction.typed(
+    JSON.stringify(agentRows),
+    POSTGRES_TEXT_OID,
+  )
+  const memoryRowsJson = transaction.typed(
+    JSON.stringify(memoryRows),
+    POSTGRES_TEXT_OID,
+  )
 
   try {
     await transaction`
@@ -636,33 +645,60 @@ export async function insertSessionRosterSnapshot(
       )}
     `
     await transaction`
-      INSERT INTO app_private.session_agents ${transaction(
-        agentRows,
-        'participant_id',
-        'session_id',
-        'owner_id',
-        'display_name',
-        'avatar_color',
-        'persona_id',
-        'persona_version',
-        'config_snapshot_key',
-        'current_memory_revision',
-        'config_payload_version',
-        'config_payload',
-        'memory_payload_version',
-        'memory_payload',
-      )}
+      INSERT INTO app_private.session_agents (
+        participant_id,
+        session_id,
+        owner_id,
+        display_name,
+        avatar_color,
+        persona_id,
+        persona_version,
+        config_snapshot_key,
+        current_memory_revision,
+        config_payload_version,
+        config_payload,
+        memory_payload_version,
+        memory_payload
+      )
+      SELECT
+        participant_id,
+        session_id,
+        owner_id,
+        display_name,
+        avatar_color,
+        persona_id,
+        persona_version,
+        config_snapshot_key,
+        current_memory_revision,
+        config_payload_version,
+        config_payload,
+        memory_payload_version,
+        memory_payload
+      FROM jsonb_populate_recordset(
+        NULL::app_private.session_agents,
+        ${agentRowsJson}::jsonb
+      )
     `
     await transaction`
-      INSERT INTO app_private.agent_memory_revisions ${transaction(
-        memoryRows,
-        'participant_id',
-        'session_id',
-        'owner_id',
-        'revision',
-        'memory_payload_version',
-        'memory_payload',
-      )}
+      INSERT INTO app_private.agent_memory_revisions (
+        participant_id,
+        session_id,
+        owner_id,
+        revision,
+        memory_payload_version,
+        memory_payload
+      )
+      SELECT
+        participant_id,
+        session_id,
+        owner_id,
+        revision,
+        memory_payload_version,
+        memory_payload
+      FROM jsonb_populate_recordset(
+        NULL::app_private.agent_memory_revisions,
+        ${memoryRowsJson}::jsonb
+      )
     `
   } catch (error) {
     if (getPostgresConstraint(error) === 'sessions_one_active_per_owner') {

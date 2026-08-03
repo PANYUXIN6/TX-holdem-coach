@@ -31,7 +31,10 @@ function createSqlMock(responses: readonly unknown[]): {
     }
     return Promise.resolve(response)
   }) as unknown as Sql
-  Object.assign(tag, { json: (value: unknown) => value })
+  Object.assign(tag, {
+    json: (value: unknown) => value,
+    typed: (value: string) => JSON.parse(value) as unknown,
+  })
   return { sql: tag, calls }
 }
 
@@ -178,6 +181,10 @@ describe('player timeout settings repository', () => {
     const writeCalls = calls.filter((call) => call.text.includes('INSERT'))
     expect(writeCalls).toHaveLength(1)
     expect(writeCalls[0]?.text).toContain('app_private.app_settings')
+    expect(writeCalls[0]?.parameters).toContainEqual({
+      attemptTimeoutSeconds: 10,
+      decisionDeadlineSeconds: 30,
+    })
     expect(writeCalls[0]?.text).not.toMatch(/agent_runs|agent_attempts/)
   })
 })

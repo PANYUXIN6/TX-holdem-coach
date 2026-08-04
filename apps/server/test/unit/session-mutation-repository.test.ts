@@ -88,6 +88,8 @@ function lockedRow(overrides: Readonly<Record<string, unknown>> = {}) {
     stateVersion: 7,
     nextEventSeq: 20,
     currentHandId: null,
+    diagnosticCode: null,
+    diagnosedAt: null,
     agentRunState: 'idle' as const,
     activePlayerRunId: null,
     activeDecisionRequestId: null,
@@ -268,6 +270,8 @@ describe('session mutation repository', () => {
       stateVersion: 7,
       nextEventSeq: 20,
       currentHandId: null,
+      diagnosticCode: null,
+      diagnosedAt: null,
       agentRunState: 'idle',
       activePlayerRunId: null,
       activeDecisionRequestId: null,
@@ -674,7 +678,11 @@ describe('session mutation repository', () => {
         lifecycleStatus: 'ended',
         endedAt: '2026-08-03T08:00:00.000000Z',
       }),
-      lockedRow({ lifecycleStatus: 'readonlyDiagnostic' }),
+      lockedRow({
+        lifecycleStatus: 'readonlyDiagnostic',
+        diagnosticCode: 'snapshotMissing',
+        diagnosedAt: '2026-08-03T08:00:00.000000Z',
+      }),
     ]) {
       const tracked = createTrackedTransaction([[row]])
       const locked = await lockSessionForMutation(
@@ -780,6 +788,14 @@ describe('session mutation repository', () => {
         activePlayerRunId: null,
         activeDecisionRequestId: null,
       },
+      {
+        endedAt: null,
+        agentRunState: 'idle',
+        activePlayerRunId: null,
+        activeDecisionRequestId: null,
+        diagnosticCode: 'snapshotMissing',
+        diagnosedAt: '2026-08-03T09:00:00.000000Z',
+      },
     ] as const) {
       const transaction = createTransactionMock([
         [
@@ -789,6 +805,8 @@ describe('session mutation repository', () => {
             stateVersion: 7,
             nextEventSeq: 20,
             currentHandId: null,
+            diagnosticCode: null,
+            diagnosedAt: null,
             ...corruptRow,
           },
         ],

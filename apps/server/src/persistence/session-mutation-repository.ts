@@ -9,6 +9,10 @@ import {
   decodeCurrentSnapshotV1,
   type StoredTableSnapshotV1,
 } from '../sessions/authoritative-state/snapshot-codec-v1.js'
+import {
+  SESSION_DIAGNOSTIC_CODES,
+  type SessionDiagnosticCode,
+} from '../sessions/authoritative-state/recovery-decision.js'
 import { canonicalJson, type JsonValue } from '../personas/config.js'
 import {
   DatabaseOperationError,
@@ -35,14 +39,19 @@ const CanonicalUtcTimestampSchema = z
       new Date(milliseconds).toISOString() === value
     )
   })
+const DatabaseUtcTimestampSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
 
 const LockedSessionRowSchema = z.strictObject({
   sessionId: z.uuid(),
   lifecycleStatus: z.enum(['active', 'ended', 'readonlyDiagnostic']),
-  endedAt: z.string().nullable(),
+  endedAt: DatabaseUtcTimestampSchema.nullable(),
   stateVersion: SafeNonnegativeIntegerSchema,
   nextEventSeq: SafeNonnegativeIntegerSchema,
   currentHandId: z.uuid().nullable(),
+  diagnosticCode: z.enum(SESSION_DIAGNOSTIC_CODES).nullable(),
+  diagnosedAt: DatabaseUtcTimestampSchema.nullable(),
   agentRunState: z.enum(['idle', 'thinking', 'paused']),
   activePlayerRunId: z.uuid().nullable(),
   activeDecisionRequestId: z.uuid().nullable(),
@@ -57,6 +66,8 @@ export interface LockedSessionMutation {
   readonly stateVersion: number
   readonly nextEventSeq: number
   readonly currentHandId: string | null
+  readonly diagnosticCode: SessionDiagnosticCode | null
+  readonly diagnosedAt: string | null
   readonly agentRunState: 'idle' | 'thinking' | 'paused'
   readonly activePlayerRunId: string | null
   readonly activeDecisionRequestId: string | null
@@ -209,6 +220,10 @@ export async function lockSessionForMutation(
         state_version::float8 AS "stateVersion",
         next_event_seq::float8 AS "nextEventSeq",
         current_hand_id::text AS "currentHandId",
+        diagnostic_code AS "diagnosticCode",
+        CASE WHEN diagnosed_at IS NULL THEN NULL ELSE
+          to_char(diagnosed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+        END AS "diagnosedAt",
         agent_run_state AS "agentRunState",
         active_player_run_id::text AS "activePlayerRunId",
         active_decision_request_id::text AS "activeDecisionRequestId"
@@ -233,9 +248,16 @@ export async function lockSessionForMutation(
     row.activePlayerRunId !== null && row.activeDecisionRequestId !== null
   const hasNeitherPlayerPointer =
     row.activePlayerRunId === null && row.activeDecisionRequestId === null
+  const hasBothDiagnosticFields =
+    row.diagnosticCode !== null && row.diagnosedAt !== null
+  const hasNeitherDiagnosticField =
+    row.diagnosticCode === null && row.diagnosedAt === null
   if (
     (row.lifecycleStatus === 'active' && row.endedAt !== null) ||
     (row.lifecycleStatus === 'ended' && row.endedAt === null) ||
+    (row.lifecycleStatus === 'readonlyDiagnostic'
+      ? !hasBothDiagnosticFields
+      : !hasNeitherDiagnosticField) ||
     (row.agentRunState === 'thinking'
       ? !hasBothPlayerPointers
       : !hasNeitherPlayerPointer)
@@ -393,6 +415,8 @@ export async function persistSessionMutation(
         AND owner_id = ${metadata.owner.databaseOwnerId}::uuid
         AND lifecycle_status = 'active'
         AND ended_at IS NULL
+        AND diagnostic_code IS NULL
+        AND diagnosed_at IS NULL
         AND state_version = ${locked.stateVersion}::bigint
         AND next_event_seq = ${locked.nextEventSeq}::bigint
       RETURNING id::text AS "sessionId"

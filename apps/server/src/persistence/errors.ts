@@ -83,6 +83,13 @@ export class SessionMutationTransitionError extends Error {
   }
 }
 
+export class SessionRecoveryTransitionError extends Error {
+  public constructor() {
+    super('场次恢复状态无法推进。')
+    this.name = 'SessionRecoveryTransitionError'
+  }
+}
+
 export class DatabaseOperationError extends Error {
   public constructor() {
     super('数据库操作失败。')
@@ -102,6 +109,7 @@ export function isRepositoryDomainError(error: unknown): error is Error {
     error instanceof CommandPayloadConflictError ||
     error instanceof CommandLedgerTransitionError ||
     error instanceof SessionMutationTransitionError ||
+    error instanceof SessionRecoveryTransitionError ||
     error instanceof DatabaseOperationError
   )
 }

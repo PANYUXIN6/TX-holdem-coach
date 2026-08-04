@@ -625,6 +625,60 @@ async function assertOwnerPayloadAndBigintConstraints(sql: Sql): Promise<void> {
   await sql`DELETE FROM app_private.sessions WHERE id = ${graph.sessionId}`
 }
 
+async function assertSessionDiagnosticConstraints(sql: Sql): Promise<void> {
+  const graph = await sql.begin((transaction) =>
+    insertSessionGraph(transaction, 1_850, { lifecycle: 'ended' }),
+  )
+
+  await expect(sql`
+    UPDATE app_private.sessions
+    SET lifecycle_status = 'readonlyDiagnostic'
+    WHERE id = ${graph.sessionId}::uuid
+  `).rejects.toThrow()
+  await expect(sql`
+    UPDATE app_private.sessions
+    SET diagnostic_code = 'snapshotMissing'
+    WHERE id = ${graph.sessionId}::uuid
+  `).rejects.toThrow()
+  await expect(sql`
+    UPDATE app_private.sessions
+    SET lifecycle_status = 'readonlyDiagnostic',
+        diagnostic_code = 'notAStableDiagnosticCode',
+        diagnosed_at = clock_timestamp()
+    WHERE id = ${graph.sessionId}::uuid
+  `).rejects.toThrow()
+  await expect(sql`
+    UPDATE app_private.sessions
+    SET lifecycle_status = 'active'
+    WHERE id = ${graph.sessionId}::uuid
+  `).rejects.toThrow()
+
+  await sql`
+    UPDATE app_private.sessions
+    SET lifecycle_status = 'readonlyDiagnostic',
+        diagnostic_code = 'snapshotMissing',
+        diagnosed_at = clock_timestamp()
+    WHERE id = ${graph.sessionId}::uuid
+  `
+  const rows = await sql<
+    {
+      readonly diagnosticCode: string | null
+      readonly diagnosedAt: string | null
+      readonly endedAt: string | null
+    }[]
+  >`
+    SELECT
+      diagnostic_code AS "diagnosticCode",
+      diagnosed_at::text AS "diagnosedAt",
+      ended_at::text AS "endedAt"
+    FROM app_private.sessions
+    WHERE id = ${graph.sessionId}::uuid
+  `
+  expect(rows[0]?.diagnosticCode).toBe('snapshotMissing')
+  expect(rows[0]?.diagnosedAt).not.toBeNull()
+  expect(rows[0]?.endedAt).not.toBeNull()
+}
+
 async function assertRosterConstraints(sql: Sql): Promise<void> {
   await expect(
     sql.begin(async (tx) => {
@@ -1668,6 +1722,7 @@ export async function assertM22DatabaseSchema(
 
     await assertSchemaStructure(sql)
     await assertOwnerPayloadAndBigintConstraints(sql)
+    await assertSessionDiagnosticConstraints(sql)
     await assertRosterConstraints(sql)
     await assertHandParticipantSeats(sql)
     await assertActiveSessionConcurrency(sql, testDatabaseUrl)

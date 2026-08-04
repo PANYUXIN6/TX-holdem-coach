@@ -16,6 +16,10 @@ import {
   ResourceNotFoundError,
 } from '../../src/persistence/errors.js'
 import {
+  recoverSessionForMutation,
+  retryReadonlySessionRecovery,
+} from '../../src/persistence/session-recovery-repository.js'
+import {
   completeCommand,
   failCommand,
   prepareCommandRegistration,
@@ -43,8 +47,10 @@ import {
   prepareCurrentCatalogRoster,
 } from '../../src/sessions/roster-preparation.js'
 import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
+import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 import { createDatabaseFixtureContext } from './database-fixture-context.js'
 
@@ -609,13 +615,21 @@ async function insertDiagnosticSession(
 ): Promise<void> {
   await query`
     INSERT INTO app_private.sessions (
-      id, owner_id, lifecycle_status, state_version, next_event_seq
+      id,
+      owner_id,
+      lifecycle_status,
+      state_version,
+      next_event_seq,
+      diagnostic_code,
+      diagnosed_at
     ) VALUES (
       ${sessionId}::uuid,
       ${ownerId}::uuid,
       'readonlyDiagnostic',
       0,
-      0
+      0,
+      'snapshotMissing',
+      clock_timestamp()
     )
   `
 }
@@ -631,6 +645,8 @@ async function insertCommittedDiagnosticSession(
     await transaction`
       UPDATE app_private.sessions
       SET lifecycle_status = 'readonlyDiagnostic',
+          diagnostic_code = 'snapshotMissing',
+          diagnosed_at = clock_timestamp(),
           updated_at = clock_timestamp()
       WHERE id = ${sessionId}::uuid
         AND owner_id = ${roster.owner.databaseOwnerId}::uuid
@@ -1893,6 +1909,661 @@ export async function assertM25SessionMutationRepository(
   await assertEndedMutationWithoutSnapshot(sql)
   await assertMutationRollbacks(sql)
   await assertConcurrentSessionMutations(sql, runtimeUrl)
+}
+
+const recoveryRegistries = {
+  snapshot: productionSnapshotVersionRegistry,
+  privateEvent: productionPrivateEventVersionRegistry,
+}
+
+async function insertRecoverableSession(
+  sql: Sql,
+  sessionId: string,
+  handId: string,
+  eventId: string,
+): Promise<void> {
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  await insertCommittedActiveSession(sql, sessionId, handId)
+  await sql.begin(async (transaction) => {
+    const locked = await lockSessionForMutation(transaction, owner, sessionId)
+    await persistSessionMutation(
+      transaction,
+      locked,
+      createMutationBatch({
+        sessionId,
+        handId,
+        eventIds: [eventId],
+        lockedStateVersion: 0,
+        nextEventSeq: 0,
+        mutationAt: '2026-08-04T10:00:00.000Z',
+      }),
+    )
+    await transaction`
+      UPDATE app_private.hands
+      SET status = 'aborted',
+          abort_reason = 'M2.6 recovery fixture',
+          aborted_at = '2026-08-04T10:00:00.000Z'::timestamptz,
+          updated_at = '2026-08-04T10:00:00.000Z'::timestamptz
+      WHERE id = ${handId}::uuid
+        AND session_id = ${sessionId}::uuid
+        AND owner_id = ${owner.databaseOwnerId}::uuid
+    `
+  })
+}
+
+async function assertRecoveryRepairAndCapability(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const fixture = createDatabaseFixtureContext()
+  const sessionId = fixture.id(26_100)
+  const handId = fixture.id(26_101)
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  const postgres = (await import('postgres')).default
+  const observerSql = postgres(runtimeUrl, {
+    connect_timeout: 10,
+    max: 1,
+    prepare: false,
+    ssl: 'require',
+  })
+  try {
+    await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_102))
+    await sql`
+      UPDATE app_private.sessions
+      SET current_hand_id = ${handId}::uuid
+      WHERE id = ${sessionId}::uuid
+    `
+    await sql`
+      UPDATE app_private.session_events
+      SET public_event_payload = '{"invalid":"public-only"}'::jsonb
+      WHERE session_id = ${sessionId}::uuid
+    `
+
+    await sql.begin(async (transaction) => {
+      const recovered = await recoverSessionForMutation(
+        transaction,
+        owner,
+        sessionId,
+        '2026-08-04T10:01:00.000Z',
+        recoveryRegistries,
+      )
+      expect(recovered).toMatchObject({
+        kind: 'ready',
+        pointerRepair: { from: handId, to: null },
+      })
+      if (recovered.kind !== 'ready') {
+        throw new Error('Expected active recovery capability.')
+      }
+      const invisible = await observerSql<
+        { readonly currentHandId: string | null }[]
+      >`
+        SELECT current_hand_id::text AS "currentHandId"
+        FROM app_private.sessions
+        WHERE id = ${sessionId}::uuid
+      `
+      expect(invisible[0]?.currentHandId).toBe(handId)
+
+      await persistSessionMutation(
+        transaction,
+        recovered.locked,
+        createMutationBatch({
+          sessionId,
+          handId,
+          eventIds: [fixture.id(26_103)],
+          lockedStateVersion: 1,
+          nextEventSeq: 1,
+          mutationAt: '2026-08-04T10:02:00.000Z',
+          writeSnapshot: false,
+        }),
+      )
+    })
+
+    const rows = await sql<
+      { readonly currentHandId: string | null; readonly nextEventSeq: number }[]
+    >`
+      SELECT
+        current_hand_id::text AS "currentHandId",
+        next_event_seq::int AS "nextEventSeq"
+      FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+    expect(rows[0]).toEqual({ currentHandId: null, nextEventSeq: 2 })
+  } finally {
+    await observerSql.end({ timeout: 0 })
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertRecoveryDiagnosticAndRetry(sql: Sql): Promise<void> {
+  const fixture = createDatabaseFixtureContext()
+  const sessionId = fixture.id(26_200)
+  const handId = fixture.id(26_201)
+  const eventId = fixture.id(26_202)
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  try {
+    await insertRecoverableSession(sql, sessionId, handId, eventId)
+    await sql`
+      UPDATE app_private.session_snapshots
+      SET private_table_state_payload_version = 2
+      WHERE session_id = ${sessionId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        recoverSessionForMutation(
+          transaction,
+          owner,
+          sessionId,
+          '2026-08-04T10:03:00.000Z',
+          recoveryRegistries,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      kind: 'readonlyDiagnostic',
+      code: 'snapshotVersionUnknown',
+    })
+
+    const diagnosticRows = await sql<
+      {
+        readonly lifecycleStatus: string
+        readonly diagnosticCode: string | null
+        readonly diagnosedAt: string | null
+      }[]
+    >`
+      SELECT
+        lifecycle_status AS "lifecycleStatus",
+        diagnostic_code AS "diagnosticCode",
+        diagnosed_at::text AS "diagnosedAt"
+      FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+    expect(diagnosticRows[0]).toMatchObject({
+      lifecycleStatus: 'readonlyDiagnostic',
+      diagnosticCode: 'snapshotVersionUnknown',
+    })
+    expect(diagnosticRows[0]?.diagnosedAt).not.toBeNull()
+
+    const currentSnapshot = createMutationBatch({
+      sessionId,
+      handId,
+      eventIds: [eventId],
+      lockedStateVersion: 0,
+      nextEventSeq: 0,
+      mutationAt: '2026-08-04T10:00:00.000Z',
+    }).snapshot
+    if (currentSnapshot === null) {
+      throw new Error('Expected current snapshot fixture.')
+    }
+    await sql`
+      UPDATE app_private.session_snapshots
+      SET private_table_state_payload_version = ${currentSnapshot.payloadVersion},
+          private_table_state_payload = ${JSON.stringify(currentSnapshot.payload)}::jsonb
+      WHERE session_id = ${sessionId}::uuid
+    `
+
+    await expect(
+      sql.begin((transaction) =>
+        recoverSessionForMutation(
+          transaction,
+          owner,
+          sessionId,
+          '2026-08-04T10:04:00.000Z',
+          recoveryRegistries,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      kind: 'readonlyDiagnostic',
+      code: 'snapshotVersionUnknown',
+    })
+    await expect(
+      sql.begin((transaction) =>
+        retryReadonlySessionRecovery(
+          transaction,
+          owner,
+          sessionId,
+          '2026-08-04T10:05:00.000Z',
+          recoveryRegistries,
+        ),
+      ),
+    ).resolves.toMatchObject({ kind: 'ready', lifecycleStatus: 'active' })
+
+    const recoveredRows = await sql<
+      {
+        readonly lifecycleStatus: string
+        readonly diagnosticCode: string | null
+        readonly diagnosedAt: string | null
+      }[]
+    >`
+      SELECT
+        lifecycle_status AS "lifecycleStatus",
+        diagnostic_code AS "diagnosticCode",
+        diagnosed_at::text AS "diagnosedAt"
+      FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+    expect(recoveredRows[0]).toEqual({
+      lifecycleStatus: 'active',
+      diagnosticCode: null,
+      diagnosedAt: null,
+    })
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertRecoveryDiagnosticCase(
+  sql: Sql,
+  fixtureValue: number,
+  corrupt: (query: Sql, sessionId: string) => Promise<void>,
+  expectedCode: string,
+): Promise<void> {
+  const fixture = createDatabaseFixtureContext()
+  const sessionId = fixture.id(fixtureValue)
+  const handId = fixture.id(fixtureValue + 1)
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  try {
+    await insertRecoverableSession(
+      sql,
+      sessionId,
+      handId,
+      fixture.id(fixtureValue + 2),
+    )
+    await corrupt(sql, sessionId)
+
+    await expect(
+      sql.begin((transaction) =>
+        recoverSessionForMutation(
+          transaction,
+          owner,
+          sessionId,
+          '2026-08-04T10:05:30.000Z',
+          recoveryRegistries,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      kind: 'readonlyDiagnostic',
+      code: expectedCode,
+    })
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertRecoveryDiagnosticMatrix(sql: Sql): Promise<void> {
+  await assertRecoveryDiagnosticCase(
+    sql,
+    26_500,
+    async (query, sessionId) => {
+      await query`
+        UPDATE app_private.session_events
+        SET private_event_payload_version = 2
+        WHERE session_id = ${sessionId}::uuid
+      `
+    },
+    'eventVersionUnknown',
+  )
+  await assertRecoveryDiagnosticCase(
+    sql,
+    26_510,
+    async (query, sessionId) => {
+      await query`
+        UPDATE app_private.session_events
+        SET private_event_payload = '{"eventSchemaVersion":1,"event":{}}'::jsonb
+        WHERE session_id = ${sessionId}::uuid
+      `
+    },
+    'eventPayloadInvalid',
+  )
+  await assertRecoveryDiagnosticCase(
+    sql,
+    26_520,
+    async (query, sessionId) => {
+      await query`
+        DELETE FROM app_private.session_events
+        WHERE session_id = ${sessionId}::uuid
+      `
+    },
+    'eventSequenceInvalid',
+  )
+  await assertRecoveryDiagnosticCase(
+    sql,
+    26_530,
+    async (query, sessionId) => {
+      await query`
+        UPDATE app_private.session_events
+        SET hand_id = NULL
+        WHERE session_id = ${sessionId}::uuid
+      `
+    },
+    'eventRowMismatch',
+  )
+  await assertRecoveryDiagnosticCase(
+    sql,
+    26_540,
+    async (query, sessionId) => {
+      await query`
+        UPDATE app_private.session_events
+        SET state_version_before = 1,
+            state_version_after = 1
+        WHERE session_id = ${sessionId}::uuid
+      `
+    },
+    'eventRowMismatch',
+  )
+  await assertRecoveryDiagnosticCase(
+    sql,
+    26_550,
+    async (query, sessionId) => {
+      await query`
+        UPDATE app_private.session_events
+        SET state_version_after = 0
+        WHERE session_id = ${sessionId}::uuid
+      `
+    },
+    'stateVersionMismatch',
+  )
+  await assertRecoveryDiagnosticCase(
+    sql,
+    26_560,
+    async (query, sessionId) => {
+      await query`
+        UPDATE app_private.session_snapshots
+        SET private_table_state_payload =
+          '{"snapshotSchemaVersion":1,"state":{}}'::jsonb
+        WHERE session_id = ${sessionId}::uuid
+      `
+    },
+    'snapshotPayloadInvalid',
+  )
+}
+
+async function assertLegacyDiagnosticRetry(sql: Sql): Promise<void> {
+  const fixture = createDatabaseFixtureContext()
+  const sessionId = fixture.id(26_600)
+  const handId = fixture.id(26_601)
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  const diagnosedAt = '2026-08-04T10:06:00.000000Z'
+  try {
+    await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_602))
+    await sql`
+      UPDATE app_private.sessions
+      SET lifecycle_status = 'readonlyDiagnostic',
+          diagnostic_code = 'legacyDiagnosticState',
+          diagnosed_at = ${diagnosedAt}::timestamptz
+      WHERE id = ${sessionId}::uuid
+    `
+    await sql`
+      UPDATE app_private.session_snapshots
+      SET private_table_state_payload_version = 2
+      WHERE session_id = ${sessionId}::uuid
+    `
+
+    await expect(
+      sql.begin((transaction) =>
+        retryReadonlySessionRecovery(
+          transaction,
+          owner,
+          sessionId,
+          '2026-08-04T10:07:00.000Z',
+          recoveryRegistries,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      kind: 'readonlyDiagnostic',
+      code: 'snapshotVersionUnknown',
+      diagnosedAt,
+    })
+
+    const rows = await sql<
+      {
+        readonly diagnosticCode: string | null
+        readonly retainedDiagnosedAt: boolean
+      }[]
+    >`
+      SELECT
+        diagnostic_code AS "diagnosticCode",
+        diagnosed_at = ${diagnosedAt}::timestamptz AS "retainedDiagnosedAt"
+      FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+    expect(rows[0]).toEqual({
+      diagnosticCode: 'snapshotVersionUnknown',
+      retainedDiagnosedAt: true,
+    })
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertEndedDiagnosticRetry(sql: Sql): Promise<void> {
+  const fixture = createDatabaseFixtureContext()
+  const sessionId = fixture.id(26_650)
+  const handId = fixture.id(26_651)
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  const endedAt = '2026-08-04T10:07:30.000Z'
+  try {
+    await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_652))
+    await sql`
+      UPDATE app_private.sessions
+      SET lifecycle_status = 'readonlyDiagnostic',
+          ended_at = ${endedAt}::timestamptz,
+          diagnostic_code = 'snapshotMissing',
+          diagnosed_at = '2026-08-04T10:07:31.000Z'::timestamptz
+      WHERE id = ${sessionId}::uuid
+    `
+
+    const result = await sql.begin((transaction) =>
+      retryReadonlySessionRecovery(
+        transaction,
+        owner,
+        sessionId,
+        '2026-08-04T10:08:00.000Z',
+        recoveryRegistries,
+      ),
+    )
+    expect(result).toMatchObject({ kind: 'ended', pointerRepair: null })
+    expect('locked' in result).toBe(false)
+
+    const rows = await sql<
+      {
+        readonly lifecycleStatus: string
+        readonly endedAtPreserved: boolean
+        readonly diagnosticCode: string | null
+        readonly diagnosedAt: string | null
+      }[]
+    >`
+      SELECT
+        lifecycle_status AS "lifecycleStatus",
+        ended_at = ${endedAt}::timestamptz AS "endedAtPreserved",
+        diagnostic_code AS "diagnosticCode",
+        diagnosed_at::text AS "diagnosedAt"
+      FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+    expect(rows[0]).toEqual({
+      lifecycleStatus: 'ended',
+      endedAtPreserved: true,
+      diagnosticCode: null,
+      diagnosedAt: null,
+    })
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertRecoveryOwnerIsolation(sql: Sql): Promise<void> {
+  const fixture = createDatabaseFixtureContext()
+  const owner = await resolveOwnerScope(sql, ownerScope)
+
+  await inRollbackTransaction(sql, async (transaction, query) => {
+    const otherOwner = fixture.mainOwner
+    const otherSessionId = fixture.id(26_700)
+    await query`
+      INSERT INTO app_private.owners (id, identity_key)
+      VALUES (${otherOwner.id}::uuid, ${otherOwner.identityKey})
+    `
+    await insertDiagnosticSession(query, otherOwner.id, otherSessionId)
+
+    await expect(
+      recoverSessionForMutation(
+        transaction,
+        owner,
+        otherSessionId,
+        '2026-08-04T10:08:00.000Z',
+        recoveryRegistries,
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+  })
+}
+
+async function assertRecoveryActiveConflictRollback(sql: Sql): Promise<void> {
+  const fixture = createDatabaseFixtureContext()
+  const sessionId = fixture.id(26_300)
+  const handId = fixture.id(26_301)
+  const otherSessionId = fixture.id(26_303)
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  try {
+    await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_302))
+    await sql`
+      UPDATE app_private.sessions
+      SET lifecycle_status = 'readonlyDiagnostic',
+          diagnostic_code = 'snapshotMissing',
+          diagnosed_at = '2026-08-04T10:06:00.000Z'::timestamptz,
+          current_hand_id = ${handId}::uuid
+      WHERE id = ${sessionId}::uuid
+    `
+    await insertCommittedActiveSession(sql, otherSessionId)
+
+    await expect(
+      sql.begin((transaction) =>
+        retryReadonlySessionRecovery(
+          transaction,
+          owner,
+          sessionId,
+          '2026-08-04T10:07:00.000Z',
+          recoveryRegistries,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(ActiveSessionConflictError)
+
+    const rows = await sql<
+      {
+        readonly lifecycleStatus: string
+        readonly diagnosticCode: string | null
+        readonly currentHandId: string | null
+      }[]
+    >`
+      SELECT
+        lifecycle_status AS "lifecycleStatus",
+        diagnostic_code AS "diagnosticCode",
+        current_hand_id::text AS "currentHandId"
+      FROM app_private.sessions
+      WHERE id = ${sessionId}::uuid
+    `
+    expect(rows[0]).toEqual({
+      lifecycleStatus: 'readonlyDiagnostic',
+      diagnosticCode: 'snapshotMissing',
+      currentHandId: handId,
+    })
+  } finally {
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (${sessionId}::uuid, ${otherSessionId}::uuid)
+    `
+  }
+}
+
+async function assertConcurrentRecoveryAfterMutation(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const fixture = createDatabaseFixtureContext()
+  const sessionId = fixture.id(26_400)
+  const handId = fixture.id(26_401)
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  const postgres = (await import('postgres')).default
+  const secondSql = postgres(runtimeUrl, {
+    connect_timeout: 10,
+    max: 1,
+    prepare: false,
+    ssl: 'require',
+  })
+  let secondRecovery:
+    Promise<Awaited<ReturnType<typeof recoverSessionForMutation>>> | undefined
+  try {
+    await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_402))
+    const secondPidRows = await secondSql<{ readonly backendPid: number }[]>`
+      SELECT pg_backend_pid() AS "backendPid"
+    `
+    const secondBackendPid = secondPidRows[0]!.backendPid
+
+    await sql.begin(async (transaction) => {
+      const firstPidRows = await transaction<{ readonly backendPid: number }[]>`
+        SELECT pg_backend_pid() AS "backendPid"
+      `
+      const firstBackendPid = firstPidRows[0]!.backendPid
+      const firstRecovery = await recoverSessionForMutation(
+        transaction,
+        owner,
+        sessionId,
+        '2026-08-04T10:08:00.000Z',
+        recoveryRegistries,
+      )
+      if (firstRecovery.kind !== 'ready') {
+        throw new Error('Expected first active recovery.')
+      }
+
+      secondRecovery = secondSql.begin((secondTransaction) =>
+        recoverSessionForMutation(
+          secondTransaction,
+          owner,
+          sessionId,
+          '2026-08-04T10:09:00.000Z',
+          recoveryRegistries,
+        ),
+      )
+      await waitForTransactionBlock(
+        transaction,
+        firstBackendPid,
+        secondBackendPid,
+      )
+      await persistSessionMutation(
+        transaction,
+        firstRecovery.locked,
+        createMutationBatch({
+          sessionId,
+          handId,
+          eventIds: [fixture.id(26_403)],
+          lockedStateVersion: 1,
+          nextEventSeq: 1,
+          mutationAt: '2026-08-04T10:10:00.000Z',
+          writeSnapshot: false,
+        }),
+      )
+    })
+
+    await expect(secondRecovery).resolves.toMatchObject({
+      kind: 'ready',
+      locked: { nextEventSeq: 2 },
+    })
+  } finally {
+    await secondRecovery?.catch(() => undefined)
+    await secondSql.end({ timeout: 0 })
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+export async function assertM26SessionRecoveryRepository(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  await assertRecoveryRepairAndCapability(sql, runtimeUrl)
+  await assertRecoveryDiagnosticAndRetry(sql)
+  await assertRecoveryDiagnosticMatrix(sql)
+  await assertLegacyDiagnosticRetry(sql)
+  await assertEndedDiagnosticRetry(sql)
+  await assertRecoveryOwnerIsolation(sql)
+  await assertRecoveryActiveConflictRollback(sql)
+  await assertConcurrentRecoveryAfterMutation(sql, runtimeUrl)
 }
 
 export async function assertM24M25AtomicComposition(sql: Sql): Promise<void> {

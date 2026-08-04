@@ -58,6 +58,8 @@ export const sessions = appPrivateSchema.table(
     activeDecisionRequestId: uuid('active_decision_request_id'),
     createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
     endedAt: zonedTimestamp('ended_at'),
+    diagnosticCode: text('diagnostic_code'),
+    diagnosedAt: zonedTimestamp('diagnosed_at'),
     updatedAt: zonedTimestamp('updated_at').notNull().defaultNow(),
   },
   (table) => [
@@ -100,8 +102,36 @@ export const sessions = appPrivateSchema.table(
     ),
     check(
       'sessions_ended_at_check',
-      sql`(${table.lifecycleStatus} = 'ended' AND ${table.endedAt} IS NOT NULL)
-        OR (${table.lifecycleStatus} <> 'ended')`,
+      sql`(${table.lifecycleStatus} = 'active' AND ${table.endedAt} IS NULL)
+        OR (${table.lifecycleStatus} = 'ended' AND ${table.endedAt} IS NOT NULL)
+        OR (${table.lifecycleStatus} = 'readonlyDiagnostic')`,
+    ),
+    check(
+      'sessions_diagnostic_fields_check',
+      sql`(
+        ${table.lifecycleStatus} = 'readonlyDiagnostic'
+        AND ${table.diagnosticCode} IS NOT NULL
+        AND ${table.diagnosedAt} IS NOT NULL
+      ) OR (
+        ${table.lifecycleStatus} <> 'readonlyDiagnostic'
+        AND ${table.diagnosticCode} IS NULL
+        AND ${table.diagnosedAt} IS NULL
+      )`,
+    ),
+    check(
+      'sessions_diagnostic_code_check',
+      sql`${table.diagnosticCode} IS NULL OR ${table.diagnosticCode} IN (
+        'legacyDiagnosticState',
+        'eventSequenceInvalid',
+        'eventVersionUnknown',
+        'eventPayloadInvalid',
+        'eventRowMismatch',
+        'snapshotMissing',
+        'snapshotVersionUnknown',
+        'snapshotPayloadInvalid',
+        'stateVersionMismatch',
+        'handRelationshipInvalid'
+      )`,
     ),
   ],
 )

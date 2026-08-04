@@ -24,3 +24,10 @@ export class CurrentPayloadValidationError extends Error {
     this.name = 'CurrentPayloadValidationError'
   }
 }
+
+export class VersionRegistryConfigurationError extends Error {
+  public constructor() {
+    super('持久化版本注册表配置无效。')
+    this.name = 'VersionRegistryConfigurationError'
+  }
+}

@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-08-03（M2.5 权威状态、当前 Codec 与原子持久化已落地；领域命令组合仍待 M3）
+更新时间：2026-08-04（M2.6 多版本恢复与诊断事务已落地；领域命令组合仍待 M3）
 
 ## Workspace 边界
 
@@ -9,15 +9,16 @@
 - `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/app.ts`。`bootstrap.ts` 在配置加载后、数据库连接和监听前显式调用人物目录 loader，并把深冻结目录交给后续组合边界；人物校验失败使用脱敏错误拒绝启动。`src/personas/` 分离不执行解析的源码定义、永久/Active 私有 Schema、规范 JSON/哈希和只读目录端口。`src/persistence/` 直接使用参数化 `postgres.js` SQL：唯一 OwnerScope 解析端口、只写 `app_settings` 的 Player 超时设置 Repository，以及 Owner-scoped 场次查询、微秒 keyset 分页、人物快照完整性读取和事务内阵容批量写入。`src/sessions/roster-preparation.ts` 在事务前从当前目录或最近 ended 快照执行 Active 准入并构造稳定身份图。`src/db/schema.ts` 仍是 18 张 `app_private` 表与约束的唯一 Drizzle 入口；M2.3 不新增迁移。Hono 保持唯一入口，不安装 `supabase-js`，也不使用 Supabase Auth、Data API、Realtime、Storage 或 Edge Functions。
 - `src/persistence/command-ledger-repository.ts` 是 M2.4 命令账本边界：依赖 Contracts Schema 验证公开响应，并在服务端私有联合中补充 `aiAction`；它在 Schema 验证后规范化命令 UUID，生成稳定摘要与一次性 capability，并把 acquired capability 绑定到登记事务，只消费调用方事务和已解析 Owner，不依赖扑克引擎、HTTP 或 SSE。M2.4 沿用既有 Schema，不新增迁移。
 - M2.5 已实现“权威状态契约与当前版本 Codec → 事务内原子持久化”分层：`src/sessions/authoritative-state/` 不依赖数据库，严格构造 `PrivateTableState`，并以四条独立版本序列编码当前快照及只含四种 M1.9 Poker 事件的累积私有事件 V1；`src/persistence/session-mutation-repository.ts` 只消费调用方事务，通过 Owner-scoped Session 行锁 capability 验证并按 Session、可选快照、完整事件三阶段写入。M2.5b 与 M2.4 并列且互不依赖，M3 才负责领域命令和事务组合。详细事实源见 [M2.5 设计](./superpowers/specs/2026-08-03-m2-5-authoritative-state-codecs-atomic-persistence-design.md)。
+- M2.6 已在同一纯模块边界增加完全独立的快照/私有事件复合版本注册表和确定性恢复核心；`src/persistence/session-recovery-repository.ts` 复用 M2.5 Session 行锁，在调用方事务内读取完整私有恢复事实，只修复可重建 `currentHandId` 或写入当前阻断性诊断，并提供保留首次诊断语义的显式重试。诊断字段与生命周期由 `0003_modern_supreme_intelligence.sql` 的回填和互斥约束闭合。详细事实源见 [M2.6 设计](./superpowers/specs/2026-08-03-m2-6-multiversion-recovery-design.md)。
 - `apps/server/.env.example` 提供脱敏占位的线上运行/迁移连接与 Provider Key；`.env.test.example` 只提供两条测试 URL。真实值只存在于后端、Git 忽略的 `.env.test.local` 或部署环境，project ref 不由环境声明。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与 `service/` 分类。普通 `verify` 明确不收集远程数据库测试文件。日常 `db:test:integration` 只执行合法前缀核验、Drizzle 迁移和迁移后 `exact`；手动 `db:test:full` 在同一正常流程后追加 M2.2 Schema/约束断言和 M2.3 Repository 真实读写断言，覆盖阵容与 revision 0、设置 UPSERT、损坏拒绝、活动冲突回滚、微秒分页和 Owner 隔离。M2.3 新断言全部在回滚事务或精确 Session ID 范围内运行。
-- M2.4/M2.5 单元测试只通过公开构造器、Codec 和 Repository API 验证领域契约、capability、写前拒绝及错误转换；`db:test:full` 额外以真实 PostgreSQL 验证 Owner 条件、唯一/外键/延迟约束、未提交不可见、`FOR UPDATE` 阻塞、双连接竞争、连续事件和无快照结束态，并验证 M2.4+M2.5 成功提交或在完成账本/COMMIT 失败时整体回滚。
+- M2.4/M2.5/M2.6 单元测试只通过公开构造器、Codec、纯恢复决策和 Repository API 验证领域契约、capability、写前拒绝及错误转换；`db:test:full` 额外以真实 PostgreSQL 验证 Owner 条件、唯一/外键/诊断约束、未提交不可见、`FOR UPDATE` 阻塞、双连接竞争、指针修复、诊断重试和活动冲突回滚，并在测试账号允许时用可丢弃数据库验证 M2.5→M2.6 旧 Schema 升级。默认离线验证不执行该远程文件。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、结构化合法动作、人物公开摘要与创建选择、Provider 健康/设置、HTTP/SSE 信封和错误响应。`LegalActionsSchema` 约束动作顺序、互斥、快捷目标顺序/唯一性/区间和普通目标与全下边界；Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。`bet`、`raise` 的命令金额固定为行动后本街总投入的 `targetStreetCommitment`。通用座位为 `0..8`，创建选择的 AI 为 `1..8`，公开快照固定唯一用户在座位 `0` 且总席数为 6–9；人物目录由八个固定标识组成。
 - 公开快照只承载当前手的最小行动时间线及两手之间的最小完成手摘要；M3 以后只能从私有事件与 M1.9 私有 `participantHands` 作可见性投影，Contracts 不导入服务器类型、评估比较等级、牌堆、burn 或未公开底牌。
 
 ## 依赖方向
 
-共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。Server 已从 Contracts 导入冻结的 Card 点数/花色字面量、合法动作和人物公开摘要协议；私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路以 `positioning.ts` 为唯一物理座位拓扑，下注、推进和结算只由 `poker-engine.ts` 对上层组合。M2.5 依赖方向固定为 `poker/state + hand-result → sessions/authoritative-state → persistence/session-mutation-repository → postgres.js`；M2.5a 不依赖持久层，M2.5b 与 M2.4 互不依赖。所有浏览器可见数据必须通过 Contracts 的严格 Schema。完整会话服务、Agent Foundation 和两种 Runtime 尚未建立。
+共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。Server 已从 Contracts 导入冻结的 Card 点数/花色字面量、合法动作和人物公开摘要协议；私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路以 `positioning.ts` 为唯一物理座位拓扑，下注、推进和结算只由 `poker-engine.ts` 对上层组合。M2.5/M2.6 依赖方向固定为 `poker/state + hand-result → sessions/authoritative-state Codec/registry/recovery-decision → persistence/session-mutation-repository + session-recovery-repository → postgres.js`；纯状态、Codec、注册表和恢复决策不依赖持久层，恢复 Repository 只复用 M2.5 的锁入口而不持有版本分支。M2.4 仍与二者并列，M3 才组合命令账本和恢复后 capability。所有浏览器可见数据必须通过 Contracts 的严格 Schema。完整会话服务、Agent Foundation 和两种 Runtime 尚未建立。
 
 ## 设计评审开发工具边界
 
@@ -30,6 +31,8 @@
 M2.4 调用链固定为“事务外严格 prepare 命令与解析 Owner → 上层事务锁定 Session → `registerCommand` → 业务事实/事件/快照 → `completeCommand` 或可安全提交的 `failCommand`”。登记只以冲突安全插入实际返回一行为 acquired 判据，未插入后才读取同键既有状态；重放再次校验载荷版本、Contracts Schema、Session/版本镜像和终态矩阵。Repository 自身不开启事务、不锁 Session、不推进扑克状态、不分配事件序号，也不发布 SSE；基础设施与未知异常由上层整笔回滚。
 
 M2.5 调用链固定为“上层事务 → `lockSessionForMutation` → M3 生成最终领域事实与公开投影 → 当前 Codec 编码 → `persistSessionMutation`”。写入边界先重新解码并证明状态版本、关系指针、协调状态、事件行字段与公开快照相互一致，再固定更新 Session、可选 UPSERT 快照、批量插入事件；返回值只表示事务内写入完成。只有外层事务成功返回后，M3 才能发布事件。
+
+M2.6 调用链固定为“上层事务 → `recoverSessionForMutation` → M2.5 行锁 → 完整读取私有事件/快照/Hand 摘要 → 纯恢复决策 → 可选指针修复或诊断转换 → 必要时重新锁定”。普通入口遇到既有诊断直接返回首次码和时间；`retryReadonlySessionRecovery` 才重新扫描并在成功时按保留的 `endedAt` 恢复生命周期、清空诊断。M3 必须在恢复返回活动 `ready` 后才登记命令并使用其 capability，提交前不得把修复或诊断对外宣称为持久化成功。
 
 ## 已实现的 M1 门面、M2.5 权威状态与待实施的非 Agent 重基线
 

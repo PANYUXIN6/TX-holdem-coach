@@ -11,6 +11,7 @@ import {
   createDatabaseFixtureContext,
   type DatabaseFixtureContext,
 } from './database-fixture-context.js'
+import { createDatabaseTestSqlForRole } from './database-test-runtime.js'
 
 const BUSINESS_TABLES = [
   'agent_attempts',
@@ -787,13 +788,10 @@ async function assertActiveSessionConcurrency(
   sql: Sql,
   testDatabaseUrl: string,
 ): Promise<void> {
-  const postgres = (await import('postgres')).default
-  const competingSql = postgres(testDatabaseUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const competingSql = createDatabaseTestSqlForRole(
+    testDatabaseUrl,
+    'm22-active-concurrent',
+  )
 
   try {
     await competingSql`SELECT 1`
@@ -859,13 +857,10 @@ async function assertPlayerCoordination(
   sql: Sql,
   testDatabaseUrl: string,
 ): Promise<void> {
-  const postgres = (await import('postgres')).default
-  const competingSql = postgres(testDatabaseUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const competingSql = createDatabaseTestSqlForRole(
+    testDatabaseUrl,
+    'm22-player-concurrent',
+  )
   let competingSessionId: string | undefined
 
   try {

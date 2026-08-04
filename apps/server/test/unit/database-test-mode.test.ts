@@ -9,7 +9,13 @@ describe('database integration test mode', () => {
         TEST_DATABASE_MIGRATION_URL: 'postgresql://migration.example',
         DATABASE_TEST_SCOPE: 'full',
       }),
-    ).toEqual({ enabled: false, full: false })
+    ).toEqual({
+      enabled: false,
+      full: false,
+      milestone: null,
+      cleanupStale: false,
+      runId: null,
+    })
   })
 
   test.each([
@@ -20,7 +26,58 @@ describe('database integration test mode', () => {
       loadDatabaseTestMode({
         DATABASE_TEST_ENTRYPOINT: 'run-database-integration-tests',
         DATABASE_TEST_SCOPE: scope,
+        DATABASE_TEST_RUN_ID: '0123456789abcdef',
       }),
-    ).toEqual({ enabled: true, full })
+    ).toEqual({
+      enabled: true,
+      full,
+      milestone: null,
+      cleanupStale: false,
+      runId: '0123456789abcdef',
+    })
+  })
+
+  test('accepts one explicit allowlisted milestone', () => {
+    expect(
+      loadDatabaseTestMode({
+        DATABASE_TEST_ENTRYPOINT: 'run-database-integration-tests',
+        DATABASE_TEST_SCOPE: 'milestone',
+        DATABASE_TEST_MILESTONE: 'm27',
+        DATABASE_TEST_RUN_ID: '0123456789abcdef',
+      }),
+    ).toEqual({
+      enabled: true,
+      full: false,
+      milestone: 'm27',
+      cleanupStale: false,
+      runId: '0123456789abcdef',
+    })
+  })
+
+  test.each([
+    [{ DATABASE_TEST_SCOPE: 'full' }, '数据库测试 Run ID 无效。'],
+    [
+      {
+        DATABASE_TEST_SCOPE: 'milestone',
+        DATABASE_TEST_MILESTONE: 'm28',
+        DATABASE_TEST_RUN_ID: '0123456789abcdef',
+      },
+      '数据库测试里程碑无效。',
+    ],
+    [
+      {
+        DATABASE_TEST_SCOPE: 'full',
+        DATABASE_TEST_MILESTONE: 'm27',
+        DATABASE_TEST_RUN_ID: '0123456789abcdef',
+      },
+      '数据库测试里程碑只能用于 milestone scope。',
+    ],
+  ])('rejects an invalid explicit launcher environment', (input, message) => {
+    expect(() =>
+      loadDatabaseTestMode({
+        DATABASE_TEST_ENTRYPOINT: 'run-database-integration-tests',
+        ...input,
+      }),
+    ).toThrow(message)
   })
 })

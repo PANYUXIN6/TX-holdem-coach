@@ -68,6 +68,11 @@ import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapsho
 import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 import { createDatabaseFixtureContext } from './database-fixture-context.js'
+import {
+  createDatabaseTestSqlForRole,
+  readTransactionBackendPid,
+  serializeJsonbFixture,
+} from './database-test-runtime.js'
 
 const ownerScope = { ownerId: 'local-user' } as const
 
@@ -250,10 +255,10 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
     )
     await query`
       UPDATE app_private.app_settings
-      SET setting_payload = ${JSON.stringify({
+      SET setting_payload = ${serializeJsonbFixture({
         attemptTimeoutSeconds: 30,
         decisionDeadlineSeconds: 15,
-      })}::jsonb
+      })}::text::jsonb
       WHERE owner_id = ${roster.owner.databaseOwnerId}::uuid
         AND setting_key = 'player-timeouts'
     `
@@ -543,8 +548,8 @@ async function assertHistoricalRefreshConvergesAfterUpdate(
       await transaction`
         UPDATE app_private.sessions
         SET lifecycle_status = 'ended',
-            ended_at = ${updatedAt}::timestamptz,
-            updated_at = ${updatedAt}::timestamptz
+            ended_at = ${updatedAt}::text::timestamptz,
+            updated_at = ${updatedAt}::text::timestamptz
         WHERE id = ${sessionId}::uuid
           AND owner_id = ${roster.owner.databaseOwnerId}::uuid
       `
@@ -1074,13 +1079,7 @@ async function assertConcurrentCommandReplay(
   sql: Sql,
   runtimeUrl: string,
 ): Promise<void> {
-  const postgres = (await import('postgres')).default
-  const secondSql = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const secondSql = createDatabaseTestSqlForRole(runtimeUrl, 'm24-replay')
   const owner = await resolveOwnerScope(sql, ownerScope)
   const sessionId = randomUUID()
   const input = {
@@ -1096,11 +1095,7 @@ async function assertConcurrentCommandReplay(
   try {
     await insertCommittedDiagnosticSession(sql, sessionId)
     await sql.begin(async (transaction) => {
-      const firstPidRows = await transaction<{ readonly pid: number }[]>`
-        SELECT pg_backend_pid() AS pid
-      `
-      const firstBackendPid = firstPidRows[0]?.pid
-      expect(firstBackendPid).toBeDefined()
+      const firstBackendPid = await readTransactionBackendPid(transaction)
       const firstPrepared = prepareCommandRegistration(input)
       const first = await registerCommand(transaction, owner, firstPrepared)
       expect(first.status).toBe('acquired')
@@ -1124,13 +1119,8 @@ async function assertConcurrentCommandReplay(
         signalSecondPid = resolve
       })
       secondResult = secondSql.begin(async (secondTransaction) => {
-        const pidRows = await secondTransaction<{ readonly pid: number }[]>`
-          SELECT pg_backend_pid() AS pid
-        `
-        const secondBackendPid = pidRows[0]?.pid
-        if (secondBackendPid === undefined) {
-          throw new Error('无法取得第二事务 backend PID。')
-        }
+        const secondBackendPid =
+          await readTransactionBackendPid(secondTransaction)
         signalSecondPid?.(secondBackendPid)
         return registerCommand(
           secondTransaction,
@@ -1141,7 +1131,7 @@ async function assertConcurrentCommandReplay(
       const secondBackendPid = await secondPid
       await waitForTransactionBlock(
         transaction,
-        firstBackendPid ?? -1,
+        firstBackendPid,
         secondBackendPid,
       )
     })
@@ -1433,13 +1423,7 @@ async function assertSingleEventVisibility(
   const handId = fixture.id(25_101)
   const eventId = fixture.id(25_102)
   const owner = await resolveOwnerScope(sql, ownerScope)
-  const postgres = (await import('postgres')).default
-  const observerSql = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const observerSql = createDatabaseTestSqlForRole(runtimeUrl, 'm25-visibility')
 
   try {
     await insertCommittedActiveSession(sql, sessionId, handId)
@@ -1820,26 +1804,14 @@ async function assertConcurrentSessionMutations(
   const sessionId = fixture.id(25_500)
   const handId = fixture.id(25_501)
   const owner = await resolveOwnerScope(sql, ownerScope)
-  const postgres = (await import('postgres')).default
-  const secondSql = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const secondSql = createDatabaseTestSqlForRole(runtimeUrl, 'm25-concurrent')
   let secondMutation: Promise<unknown> | undefined
 
   try {
     await insertCommittedActiveSession(sql, sessionId, handId)
     await secondSql`SELECT 1`
     await sql.begin(async (transaction) => {
-      const firstPidRows = await transaction<{ readonly pid: number }[]>`
-        SELECT pg_backend_pid() AS pid
-      `
-      const firstBackendPid = firstPidRows[0]?.pid
-      if (firstBackendPid === undefined) {
-        throw new Error('无法取得第一事务 backend PID。')
-      }
+      const firstBackendPid = await readTransactionBackendPid(transaction)
       const firstLocked = await lockSessionForMutation(
         transaction,
         owner,
@@ -1851,13 +1823,8 @@ async function assertConcurrentSessionMutations(
         signalSecondPid = resolve
       })
       secondMutation = secondSql.begin(async (secondTransaction) => {
-        const pidRows = await secondTransaction<{ readonly pid: number }[]>`
-          SELECT pg_backend_pid() AS pid
-        `
-        const secondBackendPid = pidRows[0]?.pid
-        if (secondBackendPid === undefined) {
-          throw new Error('无法取得第二事务 backend PID。')
-        }
+        const secondBackendPid =
+          await readTransactionBackendPid(secondTransaction)
         signalSecondPid?.(secondBackendPid)
         const secondLocked = await lockSessionForMutation(
           secondTransaction,
@@ -1992,13 +1959,10 @@ async function assertRecoveryRepairAndCapability(
   const sessionId = fixture.id(26_100)
   const handId = fixture.id(26_101)
   const owner = await resolveOwnerScope(sql, ownerScope)
-  const postgres = (await import('postgres')).default
-  const observerSql = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const observerSql = createDatabaseTestSqlForRole(
+    runtimeUrl,
+    'm26-repair-observer',
+  )
   try {
     await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_102))
     await sql`
@@ -2129,7 +2093,7 @@ async function assertRecoveryDiagnosticAndRetry(sql: Sql): Promise<void> {
     await sql`
       UPDATE app_private.session_snapshots
       SET private_table_state_payload_version = ${currentSnapshot.payloadVersion},
-          private_table_state_payload = ${JSON.stringify(currentSnapshot.payload)}::text::jsonb
+          private_table_state_payload = ${serializeJsonbFixture(currentSnapshot.payload)}::text::jsonb
       WHERE session_id = ${sessionId}::uuid
     `
 
@@ -2513,23 +2477,14 @@ async function assertConcurrentRecoveryAfterMutation(
   const sessionId = fixture.id(26_400)
   const handId = fixture.id(26_401)
   const owner = await resolveOwnerScope(sql, ownerScope)
-  const postgres = (await import('postgres')).default
-  const secondSql = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const secondSql = createDatabaseTestSqlForRole(runtimeUrl, 'm26-concurrent')
   let secondRecovery:
     Promise<Awaited<ReturnType<typeof recoverSessionForMutation>>> | undefined
   try {
     await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_402))
 
     await sql.begin(async (transaction) => {
-      const firstPidRows = await transaction<{ readonly backendPid: number }[]>`
-        SELECT pg_backend_pid() AS "backendPid"
-      `
-      const firstBackendPid = firstPidRows[0]!.backendPid
+      const firstBackendPid = await readTransactionBackendPid(transaction)
       const firstRecovery = await recoverSessionForMutation(
         transaction,
         owner,
@@ -2546,15 +2501,8 @@ async function assertConcurrentRecoveryAfterMutation(
         signalSecondPid = resolve
       })
       secondRecovery = secondSql.begin(async (secondTransaction) => {
-        const secondPidRows = await secondTransaction<
-          { readonly backendPid: number }[]
-        >`
-          SELECT pg_backend_pid() AS "backendPid"
-        `
-        const secondBackendPid = secondPidRows[0]?.backendPid
-        if (secondBackendPid === undefined) {
-          throw new Error('无法取得第二恢复事务 backend PID。')
-        }
+        const secondBackendPid =
+          await readTransactionBackendPid(secondTransaction)
         signalSecondPid?.(secondBackendPid)
         return recoverSessionForMutation(
           secondTransaction,
@@ -3205,13 +3153,10 @@ async function assertM27HandRollbackAndVisibility(
   const handId = randomUUID()
   const owner = await insertCommittedM27Session(sql, sessionId)
   const fixture = createM27HandAuditFixture(handId)
-  const postgres = (await import('postgres')).default
-  const observerSql = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const observerSql = createDatabaseTestSqlForRole(
+    runtimeUrl,
+    'm27-hand-observer',
+  )
 
   try {
     await observerSql`SELECT 1`
@@ -3247,13 +3192,10 @@ async function assertM27HandRestartReadback(
   const sessionId = randomUUID()
   const handId = randomUUID()
   const fixture = createM27HandAuditFixture(handId)
-  const postgres = (await import('postgres')).default
-  let writerSql: Sql | undefined = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  let writerSql: Sql | undefined = createDatabaseTestSqlForRole(
+    runtimeUrl,
+    'm27-hand-writer',
+  )
   let readerSql: Sql | undefined
 
   try {
@@ -3274,12 +3216,7 @@ async function assertM27HandRestartReadback(
     await writerSql.end({ timeout: 0 })
     writerSql = undefined
 
-    readerSql = postgres(runtimeUrl, {
-      connect_timeout: 10,
-      max: 1,
-      prepare: false,
-      ssl: 'require',
-    })
+    readerSql = createDatabaseTestSqlForRole(runtimeUrl, 'm27-hand-reader')
     const readerOwner = await resolveOwnerScope(readerSql, ownerScope)
     await expect(
       readerSql.begin((transaction) =>
@@ -4086,13 +4023,10 @@ async function assertM27AgentRestartReadback(
   const sessionId = randomUUID()
   const handId = randomUUID()
   const agentRunId = randomUUID()
-  const postgres = (await import('postgres')).default
-  let writerSql: Sql | undefined = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  let writerSql: Sql | undefined = createDatabaseTestSqlForRole(
+    runtimeUrl,
+    'm27-agent-writer',
+  )
   let readerSql: Sql | undefined
 
   try {
@@ -4134,12 +4068,7 @@ async function assertM27AgentRestartReadback(
     await writerSql.end({ timeout: 0 })
     writerSql = undefined
 
-    readerSql = postgres(runtimeUrl, {
-      connect_timeout: 10,
-      max: 1,
-      prepare: false,
-      ssl: 'require',
-    })
+    readerSql = createDatabaseTestSqlForRole(runtimeUrl, 'm27-agent-reader')
     const readerOwner = await resolveOwnerScope(readerSql, ownerScope)
     const readerRepository = createAgentFoundationAuditRepository({
       runtimeAuditDecoders: {},
@@ -4272,7 +4201,7 @@ async function assertM27AgentUnknownAndCorruptRows(sql: Sql): Promise<void> {
 
     await sql`
       UPDATE app_private.agent_runs
-      SET run_config_payload = ${JSON.stringify(original.runConfigurationPayload)}::text::jsonb,
+      SET run_config_payload = ${serializeJsonbFixture(original.runConfigurationPayload)}::text::jsonb,
           budget_payload_version = 999
       WHERE id = ${agentRunId}::uuid
     `
@@ -4299,7 +4228,7 @@ async function assertM27AgentUnknownAndCorruptRows(sql: Sql): Promise<void> {
 
     await sql`
       UPDATE app_private.agent_runs
-      SET budget_payload = ${JSON.stringify(original.budgetPayload)}::text::jsonb,
+      SET budget_payload = ${serializeJsonbFixture(original.budgetPayload)}::text::jsonb,
           checkpoint_payload_version = 777,
           checkpoint_payload = '{}'::jsonb
       WHERE id = ${agentRunId}::uuid
@@ -4389,7 +4318,7 @@ async function assertM27AgentUnknownAndCorruptRows(sql: Sql): Promise<void> {
 
     await sql`
       UPDATE app_private.agent_attempts
-      SET attempt_payload = ${JSON.stringify(original.attemptPayload)}::text::jsonb
+      SET attempt_payload = ${serializeJsonbFixture(original.attemptPayload)}::text::jsonb
       WHERE id = ${attempt.attemptId}::uuid
     `
     await sql`
@@ -4441,13 +4370,10 @@ async function assertM27AgentSequenceConcurrency(
   const sessionId = randomUUID()
   const handId = randomUUID()
   const agentRunId = randomUUID()
-  const postgres = (await import('postgres')).default
-  const secondSql = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const secondSql = createDatabaseTestSqlForRole(
+    runtimeUrl,
+    'm27-agent-concurrent',
+  )
   let secondAttempt:
     | Promise<{ readonly attemptId: string; readonly attemptNumber: number }>
     | undefined
@@ -4468,13 +4394,7 @@ async function assertM27AgentSequenceConcurrency(
     await secondSql`SELECT 1`
 
     await sql.begin(async (firstTransaction) => {
-      const firstPidRows = await firstTransaction<{ readonly pid: number }[]>`
-        SELECT pg_backend_pid() AS pid
-      `
-      const firstBackendPid = firstPidRows[0]?.pid
-      if (firstBackendPid === undefined) {
-        throw new Error('无法取得 Attempt 第一事务 backend PID。')
-      }
+      const firstBackendPid = await readTransactionBackendPid(firstTransaction)
       const firstAttempt = await repository.startAgentAttemptAudit(
         firstTransaction,
         owner,
@@ -4487,13 +4407,8 @@ async function assertM27AgentSequenceConcurrency(
         signalSecondPid = resolve
       })
       secondAttempt = secondSql.begin(async (secondTransaction) => {
-        const pidRows = await secondTransaction<{ readonly pid: number }[]>`
-          SELECT pg_backend_pid() AS pid
-        `
-        const secondBackendPid = pidRows[0]?.pid
-        if (secondBackendPid === undefined) {
-          throw new Error('无法取得 Attempt 第二事务 backend PID。')
-        }
+        const secondBackendPid =
+          await readTransactionBackendPid(secondTransaction)
         signalSecondPid?.(secondBackendPid)
         return repository.startAgentAttemptAudit(
           secondTransaction,
@@ -4511,13 +4426,7 @@ async function assertM27AgentSequenceConcurrency(
     await expect(secondAttempt).resolves.toMatchObject({ attemptNumber: 1 })
 
     await inRollbackTransaction(sql, async (firstTransaction) => {
-      const firstPidRows = await firstTransaction<{ readonly pid: number }[]>`
-        SELECT pg_backend_pid() AS pid
-      `
-      const firstBackendPid = firstPidRows[0]?.pid
-      if (firstBackendPid === undefined) {
-        throw new Error('无法取得 Invocation 第一事务 backend PID。')
-      }
+      const firstBackendPid = await readTransactionBackendPid(firstTransaction)
       const firstInvocation = await repository.appendCapabilityInvocationAudit(
         firstTransaction,
         owner,
@@ -4530,13 +4439,8 @@ async function assertM27AgentSequenceConcurrency(
         signalSecondPid = resolve
       })
       secondInvocation = secondSql.begin(async (secondTransaction) => {
-        const pidRows = await secondTransaction<{ readonly pid: number }[]>`
-          SELECT pg_backend_pid() AS pid
-        `
-        const secondBackendPid = pidRows[0]?.pid
-        if (secondBackendPid === undefined) {
-          throw new Error('无法取得 Invocation 第二事务 backend PID。')
-        }
+        const secondBackendPid =
+          await readTransactionBackendPid(secondTransaction)
         signalSecondPid?.(secondBackendPid)
         return repository.appendCapabilityInvocationAudit(
           secondTransaction,

@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import type { Sql } from 'postgres'
 import { expect, test } from 'vitest'
 import {
   assertExactMigrationSequence,
@@ -19,24 +20,33 @@ import {
   assertM26SessionRecoveryRepository,
   assertM27HandAgentAuditRepositories,
 } from './database-repository-assertions.js'
+import {
+  assertNoConflictingDatabaseTestConnections,
+  createDatabaseTestSql,
+  runTimedDatabasePhase,
+  shouldRunDatabaseMilestone,
+  terminateConflictingDatabaseTestConnections,
+} from './database-test-runtime.js'
 
 const databaseTestMode = loadDatabaseTestMode(process.env)
-const runFullSchemaValidation = databaseTestMode.full
+let persistentDatabasePrepared = false
 
-async function runIntegrationTest(): Promise<void> {
+function requireDatabaseTestRunId(): string {
+  if (databaseTestMode.runId === null) {
+    throw new Error('数据库测试缺少 Run ID。')
+  }
+  return databaseTestMode.runId
+}
+
+async function preparePersistentTestDatabase(): Promise<void> {
   const { runtimeUrl } = loadTestDatabaseConnections(process.env)
-
-  const postgres = (await import('postgres')).default
+  const runId = requireDatabaseTestRunId()
   const { execFile } = await import('node:child_process')
   const { promisify } = await import('node:util')
-  const sql = postgres(runtimeUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
+  const sql = createDatabaseTestSql(runtimeUrl, runId, 'migration')
 
   try {
+    await assertNoConflictingDatabaseTestConnections(sql, runId)
     const sourceDirectory = join(process.cwd(), 'src/db/migrations')
     const expected = await buildExpectedMigrationSequence(sourceDirectory)
     const existingSchema = await sql<{ readonly schema: string | null }[]>`
@@ -70,38 +80,99 @@ async function runIntegrationTest(): Promise<void> {
 
     const actual = await readActualMigrationSequence(sql)
     expect(() => assertExactMigrationSequence(expected, actual)).not.toThrow()
-
-    if (runFullSchemaValidation) {
-      await assertM22DatabaseSchema(sql, runtimeUrl)
-      await assertM23Repositories(sql)
-      await assertM24CommandLedgerRepository(sql, runtimeUrl)
-      await assertM25SessionMutationRepository(sql, runtimeUrl)
-      await assertM24M25AtomicComposition(sql)
-      await assertM26SessionRecoveryRepository(sql, runtimeUrl)
-      await assertM27HandAgentAuditRepositories(sql, runtimeUrl)
-    }
   } finally {
     await sql.end({ timeout: 0 })
   }
 }
 
-test(
-  runFullSchemaValidation
-    ? 'prepares the persistent test database and validates its full schema'
-    : 'prepares the persistent test database',
-  async (context) => {
-    if (!databaseTestMode.enabled) {
+test('prepares the persistent test database', async (context) => {
+  if (!databaseTestMode.enabled || databaseTestMode.cleanupStale) {
+    context.skip()
+    return
+  }
+  await runTimedDatabasePhase(
+    'migration compatibility',
+    preparePersistentTestDatabase,
+  )
+  persistentDatabasePrepared = true
+}, 180_000)
+
+function registerMilestoneTest(
+  milestone: NonNullable<typeof databaseTestMode.milestone>,
+  label: string,
+  assertion: (sql: Sql, runtimeUrl: string) => Promise<void>,
+): void {
+  test(`validates ${label} against PostgreSQL`, async (context) => {
+    if (
+      !databaseTestMode.enabled ||
+      !shouldRunDatabaseMilestone(
+        databaseTestMode,
+        milestone,
+        persistentDatabasePrepared,
+      )
+    ) {
       context.skip()
       return
     }
+    const { runtimeUrl } = loadTestDatabaseConnections(process.env)
+    const runId = requireDatabaseTestRunId()
+    const sql = createDatabaseTestSql(runtimeUrl, runId, `${milestone}-primary`)
+    try {
+      await assertNoConflictingDatabaseTestConnections(sql, runId)
+      await runTimedDatabasePhase(label, () => assertion(sql, runtimeUrl))
+    } finally {
+      await sql.end({ timeout: 0 })
+    }
+  }, 180_000)
+}
 
-    await runIntegrationTest()
+registerMilestoneTest('m22', 'M2.2 schema', assertM22DatabaseSchema)
+registerMilestoneTest('m23', 'M2.3 repositories', (sql) =>
+  assertM23Repositories(sql),
+)
+registerMilestoneTest('m24', 'M2.4 command ledger', (sql, runtimeUrl) =>
+  assertM24CommandLedgerRepository(sql, runtimeUrl),
+)
+registerMilestoneTest(
+  'm25',
+  'M2.5 mutation and composition',
+  async (sql, runtimeUrl) => {
+    await assertM25SessionMutationRepository(sql, runtimeUrl)
+    await assertM24M25AtomicComposition(sql)
   },
-  480_000,
+)
+registerMilestoneTest('m26', 'M2.6 recovery', (sql, runtimeUrl) =>
+  assertM26SessionRecoveryRepository(sql, runtimeUrl),
+)
+registerMilestoneTest('m27', 'M2.7 audit persistence', (sql, runtimeUrl) =>
+  assertM27HandAgentAuditRepositories(sql, runtimeUrl),
 )
 
+test('cleans stale tagged database test transactions', async (context) => {
+  if (!databaseTestMode.enabled || !databaseTestMode.cleanupStale) {
+    context.skip()
+    return
+  }
+  const { runtimeUrl } = loadTestDatabaseConnections(process.env)
+  const runId = requireDatabaseTestRunId()
+  const sql = createDatabaseTestSql(runtimeUrl, runId, 'cleanup')
+  try {
+    const terminatedPids = await terminateConflictingDatabaseTestConnections(
+      sql,
+      runId,
+    )
+    process.stderr.write(
+      `[database-test] CLEANUP terminated ${terminatedPids.length} transaction(s)${
+        terminatedPids.length === 0 ? '' : `: ${terminatedPids.join(', ')}`
+      }\n`,
+    )
+  } finally {
+    await sql.end({ timeout: 0 })
+  }
+})
+
 async function applySqlMigrationFile(
-  sql: import('postgres').Sql,
+  sql: Sql,
   migrationPath: string,
 ): Promise<void> {
   const contents = await readFile(migrationPath, 'utf8')
@@ -113,66 +184,66 @@ async function applySqlMigrationFile(
 }
 
 test('upgrades an isolated M2.5 database containing a legacy diagnostic Session', async (context) => {
-  if (!runFullSchemaValidation) {
+  if (
+    !databaseTestMode.enabled ||
+    databaseTestMode.cleanupStale ||
+    !persistentDatabasePrepared ||
+    (!databaseTestMode.full && databaseTestMode.milestone !== 'm26')
+  ) {
     context.skip()
     return
   }
 
-  const { migrationUrl } = loadTestDatabaseConnections(process.env)
-  const postgres = (await import('postgres')).default
-  const adminSql = postgres(migrationUrl, {
-    connect_timeout: 10,
-    max: 1,
-    prepare: false,
-    ssl: 'require',
-  })
-  const databaseName = `m26_upgrade_${randomBytes(8).toString('hex')}`
-  let databaseCreated = false
-  let disposableSql: import('postgres').Sql | undefined
-  try {
+  await runTimedDatabasePhase('M2.6 legacy schema upgrade', async () => {
+    const { migrationUrl } = loadTestDatabaseConnections(process.env)
+    const runId = requireDatabaseTestRunId()
+    const adminSql = createDatabaseTestSql(migrationUrl, runId, 'upgrade-admin')
+    const databaseName = `m26_upgrade_${randomBytes(8).toString('hex')}`
+    let databaseCreated = false
+    let disposableSql: Sql | undefined
     try {
-      await adminSql.unsafe(`CREATE DATABASE "${databaseName}"`)
-      databaseCreated = true
-    } catch (error) {
-      if (
-        typeof error === 'object' &&
-        error !== null &&
-        'code' in error &&
-        error.code === '42501'
-      ) {
-        context.skip('测试数据库账号没有创建隔离数据库的权限。')
-        return
+      try {
+        await adminSql.unsafe(`CREATE DATABASE "${databaseName}"`)
+        databaseCreated = true
+      } catch (error) {
+        if (
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          error.code === '42501'
+        ) {
+          context.skip('测试数据库账号没有创建隔离数据库的权限。')
+          return
+        }
+        throw error
       }
-      throw error
-    }
 
-    const disposableUrl = new URL(migrationUrl)
-    disposableUrl.pathname = `/${databaseName}`
-    disposableSql = postgres(disposableUrl.toString(), {
-      connect_timeout: 10,
-      max: 1,
-      prepare: false,
-      ssl: 'require',
-    })
-    const migrationDirectory = join(process.cwd(), 'src/db/migrations')
-    for (const migrationName of [
-      '0000_app_private_baseline.sql',
-      '0001_cheerful_johnny_blaze.sql',
-      '0002_unusual_rocket_racer.sql',
-    ]) {
-      await applySqlMigrationFile(
-        disposableSql,
-        join(migrationDirectory, migrationName),
+      const disposableUrl = new URL(migrationUrl)
+      disposableUrl.pathname = `/${databaseName}`
+      disposableSql = createDatabaseTestSql(
+        disposableUrl.toString(),
+        runId,
+        'upgrade-target',
       )
-    }
+      const migrationDirectory = join(process.cwd(), 'src/db/migrations')
+      for (const migrationName of [
+        '0000_app_private_baseline.sql',
+        '0001_cheerful_johnny_blaze.sql',
+        '0002_unusual_rocket_racer.sql',
+      ]) {
+        await applySqlMigrationFile(
+          disposableSql,
+          join(migrationDirectory, migrationName),
+        )
+      }
 
-    const ownerId = '11111111-1111-4111-8111-111111111111'
-    const sessionId = '22222222-2222-4222-8222-222222222222'
-    await disposableSql`
+      const ownerId = '11111111-1111-4111-8111-111111111111'
+      const sessionId = '22222222-2222-4222-8222-222222222222'
+      await disposableSql`
         ALTER TABLE app_private.sessions
         DISABLE TRIGGER sessions_roster_integrity
       `
-    await disposableSql`
+      await disposableSql`
         INSERT INTO app_private.sessions (
           id,
           owner_id,
@@ -187,22 +258,22 @@ test('upgrades an isolated M2.5 database containing a legacy diagnostic Session'
           '2026-08-02T09:30:00.000Z'::timestamptz
         )
       `
-    await disposableSql`
+      await disposableSql`
         ALTER TABLE app_private.sessions
         ENABLE TRIGGER sessions_roster_integrity
       `
 
-    await applySqlMigrationFile(
-      disposableSql,
-      join(migrationDirectory, '0003_modern_supreme_intelligence.sql'),
-    )
-    const rows = await disposableSql<
-      {
-        readonly diagnosticCode: string | null
-        readonly diagnosedAt: string | null
-        readonly endedAt: string | null
-      }[]
-    >`
+      await applySqlMigrationFile(
+        disposableSql,
+        join(migrationDirectory, '0003_modern_supreme_intelligence.sql'),
+      )
+      const rows = await disposableSql<
+        {
+          readonly diagnosticCode: string | null
+          readonly diagnosedAt: string | null
+          readonly endedAt: string | null
+        }[]
+      >`
         SELECT
           diagnostic_code AS "diagnosticCode",
           diagnosed_at::text AS "diagnosedAt",
@@ -210,20 +281,21 @@ test('upgrades an isolated M2.5 database containing a legacy diagnostic Session'
         FROM app_private.sessions
         WHERE id = ${sessionId}::uuid
       `
-    expect(rows[0]?.diagnosticCode).toBe('legacyDiagnosticState')
-    expect(rows[0]?.diagnosedAt).toContain('2026-08-02 09:30:00')
-    expect(rows[0]?.endedAt).toContain('2026-08-01 08:00:00')
+      expect(rows[0]?.diagnosticCode).toBe('legacyDiagnosticState')
+      expect(rows[0]?.diagnosedAt).toContain('2026-08-02 09:30:00')
+      expect(rows[0]?.endedAt).toContain('2026-08-01 08:00:00')
 
-    await expect(disposableSql`
+      await expect(disposableSql`
         UPDATE app_private.sessions
         SET diagnostic_code = NULL
         WHERE id = ${sessionId}::uuid
       `).rejects.toThrow()
-  } finally {
-    await disposableSql?.end({ timeout: 0 })
-    if (databaseCreated) {
-      await adminSql.unsafe(`DROP DATABASE "${databaseName}" WITH (FORCE)`)
+    } finally {
+      await disposableSql?.end({ timeout: 0 })
+      if (databaseCreated) {
+        await adminSql.unsafe(`DROP DATABASE "${databaseName}" WITH (FORCE)`)
+      }
+      await adminSql.end({ timeout: 0 })
     }
-    await adminSql.end({ timeout: 0 })
-  }
+  })
 }, 180_000)

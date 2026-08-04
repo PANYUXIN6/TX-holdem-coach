@@ -16,7 +16,9 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "pnpm run build && node scripts/migrate-production.mjs",
     "db:test:integration": "node scripts/run-database-integration-tests.mjs",
+    "db:test:milestone": "node scripts/run-database-integration-tests.mjs",
     "db:test:full": "node scripts/run-database-integration-tests.mjs --full",
+    "db:test:cleanup": "node scripts/run-database-integration-tests.mjs --cleanup-stale",
     "verify:migration-assets": "node scripts/verify-migration-assets.mjs"
   },
   "dependencies": {

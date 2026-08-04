@@ -1,5 +1,10 @@
+import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { parseEnv } from 'node:util'
+import {
+  createDatabaseTestPlanEnvironment,
+  parseDatabaseTestArguments,
+} from './database-test-plan.mjs'
 import { runManagedChildProcess } from './managed-child-process.mjs'
 
 const TEST_ENVIRONMENT_KEYS = [
@@ -24,15 +29,7 @@ const CHILD_ENVIRONMENT_KEYS = [
   'NO_COLOR',
 ]
 const commandArguments = process.argv.slice(2)
-
-if (
-  commandArguments.length > 1 ||
-  (commandArguments.length === 1 && commandArguments[0] !== '--full')
-) {
-  throw new Error('数据库测试启动参数无效。')
-}
-
-const runFullSchemaValidation = commandArguments[0] === '--full'
+const testPlan = parseDatabaseTestArguments(commandArguments)
 
 async function loadTestEnvironment() {
   try {
@@ -77,11 +74,10 @@ const childEnvironment = Object.fromEntries(
 )
 
 Object.assign(childEnvironment, testEnvironment)
-childEnvironment.DATABASE_TEST_ENTRYPOINT = 'run-database-integration-tests'
-
-if (runFullSchemaValidation) {
-  childEnvironment.DATABASE_TEST_SCOPE = 'full'
-}
+Object.assign(
+  childEnvironment,
+  createDatabaseTestPlanEnvironment(testPlan, randomBytes(8).toString('hex')),
+)
 
 const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const { completion } = runManagedChildProcess(

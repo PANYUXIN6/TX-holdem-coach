@@ -258,8 +258,8 @@ export async function listHistoricalSessions(
           WHERE owner_id = ${owner.databaseOwnerId}::uuid
             AND lifecycle_status IN ('ended', 'readonlyDiagnostic')
             AND (
-              updated_at < ${cursor.updatedAt}::timestamptz
-              OR (updated_at = ${cursor.updatedAt}::timestamptz AND id < ${cursor.id}::uuid)
+              updated_at < ${cursor.updatedAt}::text::timestamptz
+              OR (updated_at = ${cursor.updatedAt}::text::timestamptz AND id < ${cursor.id}::uuid)
             )
           ORDER BY updated_at DESC, id DESC
           LIMIT ${rowLimit}

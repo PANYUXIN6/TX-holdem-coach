@@ -267,7 +267,8 @@ describe('session repository', () => {
       limit: 1,
       cursor: page.nextCursor ?? undefined,
     })
-    expect(next.calls[1]?.text).toContain('updated_at < ?::timestamptz')
+    expect(next.calls[1]?.text).toContain('updated_at < ?::text::timestamptz')
+    expect(next.calls[1]?.text).toContain('updated_at = ?::text::timestamptz')
     expect(next.calls[1]?.parameters).toContain('2026-08-01T00:00:00.123456Z')
   })
 

@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { expect } from 'vitest'
-import type { Sql, TransactionSql } from 'postgres'
+import type { JSONValue, Sql, TransactionSql } from 'postgres'
 import { createHandStartedEventDraft } from '../../src/poker/hand-result.js'
+import {
+  applyPokerAction,
+  initializePokerTable,
+  startPokerHand,
+} from '../../src/poker/poker-engine.js'
+import { createPokerTableState } from '../../src/poker/state.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import { PERSONA_CATALOG_DEFINITIONS } from '../../src/personas/catalog-definitions.js'
 import { createActiveModelConfigurationV1Schema } from '../../src/personas/config.js'
@@ -10,11 +16,20 @@ import {
   ActiveSessionConflictError,
   CommandPayloadConflictError,
   DatabaseOperationError,
+  HandAuditTransitionError,
   OwnerScopeResolutionError,
   PersistenceDataCorruptionError,
   RepositoryInputValidationError,
   ResourceNotFoundError,
+  UnknownPayloadVersionError,
 } from '../../src/persistence/errors.js'
+import { createAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
+import {
+  abortHandAudit,
+  completeHandAudit,
+  insertInProgressHandAudit,
+  readHandAudit,
+} from '../../src/persistence/hand-audit-repository.js'
 import {
   recoverSessionForMutation,
   retryReadonlySessionRecovery,
@@ -1004,6 +1019,7 @@ async function waitForTransactionBlock(
   transaction: TransactionSql,
   firstBackendPid: number,
   secondBackendPid: number,
+  requireAgentRunParentLockQuery = false,
 ): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const rows = await transaction<
@@ -1030,7 +1046,24 @@ async function waitForTransactionBlock(
         ) AS "blockedByFirst"
     `
     if (rows[0]?.waitsForTransactionId && rows[0].blockedByFirst) {
-      return
+      if (!requireAgentRunParentLockQuery) {
+        return
+      }
+      const activityRows = await transaction<
+        { readonly waitsOnAgentRunParentLockQuery: boolean }[]
+      >`
+        SELECT EXISTS (
+          SELECT 1
+          FROM pg_stat_activity AS activity
+          WHERE activity.pid = ${secondBackendPid}::int
+            AND activity.state = 'active'
+            AND activity.query LIKE '%FROM app_private.agent_runs%'
+            AND activity.query LIKE '%FOR UPDATE%'
+        ) AS "waitsOnAgentRunParentLockQuery"
+      `
+      if (activityRows[0]?.waitsOnAgentRunParentLockQuery) {
+        return
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
@@ -2096,7 +2129,7 @@ async function assertRecoveryDiagnosticAndRetry(sql: Sql): Promise<void> {
     await sql`
       UPDATE app_private.session_snapshots
       SET private_table_state_payload_version = ${currentSnapshot.payloadVersion},
-          private_table_state_payload = ${JSON.stringify(currentSnapshot.payload)}::jsonb
+          private_table_state_payload = ${JSON.stringify(currentSnapshot.payload)}::text::jsonb
       WHERE session_id = ${sessionId}::uuid
     `
 
@@ -2491,10 +2524,6 @@ async function assertConcurrentRecoveryAfterMutation(
     Promise<Awaited<ReturnType<typeof recoverSessionForMutation>>> | undefined
   try {
     await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_402))
-    const secondPidRows = await secondSql<{ readonly backendPid: number }[]>`
-      SELECT pg_backend_pid() AS "backendPid"
-    `
-    const secondBackendPid = secondPidRows[0]!.backendPid
 
     await sql.begin(async (transaction) => {
       const firstPidRows = await transaction<{ readonly backendPid: number }[]>`
@@ -2512,19 +2541,33 @@ async function assertConcurrentRecoveryAfterMutation(
         throw new Error('Expected first active recovery.')
       }
 
-      secondRecovery = secondSql.begin((secondTransaction) =>
-        recoverSessionForMutation(
+      let signalSecondPid: ((pid: number) => void) | undefined
+      const secondPid = new Promise<number>((resolve) => {
+        signalSecondPid = resolve
+      })
+      secondRecovery = secondSql.begin(async (secondTransaction) => {
+        const secondPidRows = await secondTransaction<
+          { readonly backendPid: number }[]
+        >`
+          SELECT pg_backend_pid() AS "backendPid"
+        `
+        const secondBackendPid = secondPidRows[0]?.backendPid
+        if (secondBackendPid === undefined) {
+          throw new Error('无法取得第二恢复事务 backend PID。')
+        }
+        signalSecondPid?.(secondBackendPid)
+        return recoverSessionForMutation(
           secondTransaction,
           owner,
           sessionId,
           '2026-08-04T10:09:00.000Z',
           recoveryRegistries,
-        ),
-      )
+        )
+      })
       await waitForTransactionBlock(
         transaction,
         firstBackendPid,
-        secondBackendPid,
+        await secondPid,
       )
       await persistSessionMutation(
         transaction,
@@ -2918,4 +2961,1706 @@ export async function assertM24M25AtomicComposition(sql: Sql): Promise<void> {
       WHERE id = ${commitFailureSessionId}::uuid
     `
   }
+}
+
+const M27_RANDOM_SOURCE = Object.freeze({
+  nextInt: (maximum: number) => 0 % maximum,
+})
+
+function createM27PokerSeats(rebuySeatNumber?: number) {
+  return Array.from({ length: 6 }, (_, seatNumber) => ({
+    seatNumber,
+    playerId: `00000000-0000-4000-8000-${(seatNumber + 1)
+      .toString()
+      .padStart(12, '0')}`,
+    isUser: seatNumber === 0,
+    stack: seatNumber === rebuySeatNumber ? 1_250 : 1_000,
+    status: 'active' as const,
+    streetContribution: 0,
+    totalContribution: 0,
+  }))
+}
+
+function createM27HandAuditFixture(
+  handId: string,
+  options: { readonly rebuySeatNumber?: number } = {},
+) {
+  const stateBeforeStartPoker = initializePokerTable(
+    createM27PokerSeats(),
+    M27_RANDOM_SOURCE,
+  )
+  const pokerForStart = initializePokerTable(
+    createM27PokerSeats(options.rebuySeatNumber),
+    M27_RANDOM_SOURCE,
+  )
+  const started = startPokerHand(pokerForStart, {
+    handId,
+    completedHandCountBeforeStart: 0,
+    randomSource: M27_RANDOM_SOURCE,
+  })
+  const terminalState = createPokerTableState({
+    ...started.state,
+    seats: started.state.seats.map((seat) => ({
+      ...seat,
+      status:
+        seat.seatNumber === 2 || seat.seatNumber === 3
+          ? ('active' as const)
+          : ('folded' as const),
+    })),
+  })
+  const completed = applyPokerAction(terminalState, {
+    actorSeatNumber: 3,
+    action: { type: 'fold' },
+  }).completedHand
+  if (completed === null) {
+    throw new Error('M2.7 Hand fixture 未产生完成结果。')
+  }
+
+  return Object.freeze({
+    checkpoint: {
+      stateBeforeStartCommand: createPrivateTableState({
+        stateVersion: 7,
+        poker: stateBeforeStartPoker,
+        completedHandCount: 0,
+        seatAccounting: stateBeforeStartPoker.seats.map((seat) => ({
+          seatNumber: seat.seatNumber,
+          cumulativeBuyIn: 1_000,
+        })),
+        lastCompletedHandSummary: null,
+      }),
+      startedHand: started.startedHand,
+    },
+    completed,
+  })
+}
+
+async function insertCommittedM27Session(sql: Sql, sessionId: string) {
+  const roster = await sql.begin(async (transaction) => {
+    const input = await createRosterInput(transaction as unknown as Sql)
+    await insertSessionRosterSnapshot(transaction, { ...input, sessionId })
+    return input
+  })
+  return roster.owner
+}
+
+async function assertM27HandPublicRoundTrips(sql: Sql): Promise<void> {
+  const completedSessionId = randomUUID()
+  const completedHandId = randomUUID()
+  const rebuySessionId = randomUUID()
+  const rebuyHandId = randomUUID()
+
+  try {
+    const completedOwner = await insertCommittedM27Session(
+      sql,
+      completedSessionId,
+    )
+    const completedFixture = createM27HandAuditFixture(completedHandId)
+    await sql.begin(async (transaction) => {
+      await expect(
+        insertInProgressHandAudit(transaction, completedOwner, {
+          sessionId: completedSessionId,
+          checkpoint: completedFixture.checkpoint,
+          startedAt: '2026-08-04T12:00:00.000Z',
+        }),
+      ).resolves.toEqual({ handId: completedHandId, handNumber: 1 })
+
+      const inProgress = await readHandAudit(
+        transaction,
+        completedOwner,
+        completedSessionId,
+        completedHandId,
+      )
+      expect(inProgress).toMatchObject({
+        ownerId: 'local-user',
+        sessionId: completedSessionId,
+        handId: completedHandId,
+        handNumber: 1,
+        status: 'inProgress',
+        checkpoint: completedFixture.checkpoint,
+        result: null,
+      })
+
+      const completed = await completeHandAudit(transaction, completedOwner, {
+        sessionId: completedSessionId,
+        handId: completedHandId,
+        result: completedFixture.completed,
+        completedAt: '2026-08-04T12:05:00.000Z',
+      })
+      expect(completed).toMatchObject({
+        ownerId: 'local-user',
+        sessionId: completedSessionId,
+        handId: completedHandId,
+        status: 'completed',
+        checkpoint: completedFixture.checkpoint,
+        result: completedFixture.completed,
+        completedAt: '2026-08-04T12:05:00.000000Z',
+      })
+      expect(Object.isFrozen(completed)).toBe(true)
+      expect(Object.isFrozen(completed.result)).toBe(true)
+    })
+
+    await expect(
+      sql.begin(async (transaction) =>
+        readHandAudit(
+          transaction,
+          completedOwner,
+          completedSessionId,
+          completedHandId,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      result: completedFixture.completed,
+    })
+
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id = ${completedSessionId}::uuid
+    `
+
+    const rebuyOwner = await insertCommittedM27Session(sql, rebuySessionId)
+    const rebuyFixture = createM27HandAuditFixture(rebuyHandId, {
+      rebuySeatNumber: 1,
+    })
+    await sql.begin(async (transaction) => {
+      await insertInProgressHandAudit(transaction, rebuyOwner, {
+        sessionId: rebuySessionId,
+        checkpoint: rebuyFixture.checkpoint,
+        startedAt: '2026-08-04T12:10:00.000Z',
+      })
+      const audit = await readHandAudit(
+        transaction,
+        rebuyOwner,
+        rebuySessionId,
+        rebuyHandId,
+      )
+      const beforeSeat =
+        audit.checkpoint.stateBeforeStartCommand.poker.seats.find(
+          (seat) => seat.seatNumber === 1,
+        )
+      const startedSeat = audit.checkpoint.startedHand.startingStacks.find(
+        (seat) => seat.seatNumber === 1,
+      )
+      expect(beforeSeat?.stack).toBe(1_000)
+      expect(startedSeat?.stack).toBe(1_250)
+    })
+  } finally {
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (${completedSessionId}::uuid, ${rebuySessionId}::uuid)
+    `
+  }
+}
+
+async function assertM27HandOwnerAndAssociationBoundaries(
+  sql: Sql,
+): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const missingSessionId = randomUUID()
+  const missingHandId = randomUUID()
+  const owner = await insertCommittedM27Session(sql, sessionId)
+  const fixture = createM27HandAuditFixture(handId)
+
+  try {
+    await sql.begin((transaction) =>
+      insertInProgressHandAudit(transaction, owner, {
+        sessionId,
+        checkpoint: fixture.checkpoint,
+        startedAt: '2026-08-04T12:20:00.000Z',
+      }),
+    )
+
+    await expect(
+      sql.begin((transaction) =>
+        readHandAudit(transaction, owner, missingSessionId, handId),
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+    await expect(
+      sql.begin((transaction) =>
+        readHandAudit(transaction, owner, sessionId, missingHandId),
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+
+    const missingAssociation = createM27HandAuditFixture(randomUUID())
+    await expect(
+      sql.begin((transaction) =>
+        insertInProgressHandAudit(transaction, owner, {
+          sessionId: missingSessionId,
+          checkpoint: missingAssociation.checkpoint,
+          startedAt: '2026-08-04T12:21:00.000Z',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM27HandRollbackAndVisibility(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const owner = await insertCommittedM27Session(sql, sessionId)
+  const fixture = createM27HandAuditFixture(handId)
+  const postgres = (await import('postgres')).default
+  const observerSql = postgres(runtimeUrl, {
+    connect_timeout: 10,
+    max: 1,
+    prepare: false,
+    ssl: 'require',
+  })
+
+  try {
+    await observerSql`SELECT 1`
+    await inRollbackTransaction(sql, async (transaction) => {
+      await insertInProgressHandAudit(transaction, owner, {
+        sessionId,
+        checkpoint: fixture.checkpoint,
+        startedAt: '2026-08-04T12:30:00.000Z',
+      })
+      const observerOwner = await resolveOwnerScope(observerSql, ownerScope)
+      await expect(
+        observerSql.begin((observerTransaction) =>
+          readHandAudit(observerTransaction, observerOwner, sessionId, handId),
+        ),
+      ).rejects.toBeInstanceOf(ResourceNotFoundError)
+    })
+
+    await expect(
+      sql.begin((transaction) =>
+        readHandAudit(transaction, owner, sessionId, handId),
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+  } finally {
+    await observerSql.end({ timeout: 0 })
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM27HandRestartReadback(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const fixture = createM27HandAuditFixture(handId)
+  const postgres = (await import('postgres')).default
+  let writerSql: Sql | undefined = postgres(runtimeUrl, {
+    connect_timeout: 10,
+    max: 1,
+    prepare: false,
+    ssl: 'require',
+  })
+  let readerSql: Sql | undefined
+
+  try {
+    const owner = await insertCommittedM27Session(writerSql, sessionId)
+    await writerSql.begin(async (transaction) => {
+      await insertInProgressHandAudit(transaction, owner, {
+        sessionId,
+        checkpoint: fixture.checkpoint,
+        startedAt: '2026-08-04T12:40:00.000Z',
+      })
+      await completeHandAudit(transaction, owner, {
+        sessionId,
+        handId,
+        result: fixture.completed,
+        completedAt: '2026-08-04T12:45:00.000Z',
+      })
+    })
+    await writerSql.end({ timeout: 0 })
+    writerSql = undefined
+
+    readerSql = postgres(runtimeUrl, {
+      connect_timeout: 10,
+      max: 1,
+      prepare: false,
+      ssl: 'require',
+    })
+    const readerOwner = await resolveOwnerScope(readerSql, ownerScope)
+    await expect(
+      readerSql.begin((transaction) =>
+        readHandAudit(transaction, readerOwner, sessionId, handId),
+      ),
+    ).resolves.toMatchObject({
+      ownerId: 'local-user',
+      sessionId,
+      handId,
+      status: 'completed',
+      checkpoint: fixture.checkpoint,
+      result: fixture.completed,
+    })
+  } finally {
+    await writerSql?.end({ timeout: 0 })
+    await readerSql?.end({ timeout: 0 })
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM27HandSecretBoundaries(sql: Sql): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const sentinel = `M27_SECRET_SENTINEL_${randomUUID()}`
+  const owner = await insertCommittedM27Session(sql, sessionId)
+  const fixture = createM27HandAuditFixture(handId)
+
+  try {
+    await expect(
+      sql.begin((transaction) =>
+        insertInProgressHandAudit(transaction, owner, {
+          sessionId,
+          checkpoint: {
+            ...fixture.checkpoint,
+            reasoning_content: sentinel,
+          } as never,
+          startedAt: '2026-08-04T12:50:00.000Z',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+
+    const rejectedRows = await sql<{ readonly count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM app_private.hands
+      WHERE session_id = ${sessionId}::uuid
+    `
+    expect(rejectedRows[0]?.count).toBe(0)
+
+    await sql.begin(async (transaction) => {
+      await insertInProgressHandAudit(transaction, owner, {
+        sessionId,
+        checkpoint: fixture.checkpoint,
+        startedAt: '2026-08-04T12:51:00.000Z',
+      })
+      await completeHandAudit(transaction, owner, {
+        sessionId,
+        handId,
+        result: fixture.completed,
+        completedAt: '2026-08-04T12:56:00.000Z',
+      })
+    })
+
+    const persistedRows = await sql<{ readonly persisted: string }[]>`
+      SELECT to_jsonb(hand)::text AS persisted
+      FROM app_private.hands AS hand
+      WHERE hand.id = ${handId}::uuid
+        AND hand.session_id = ${sessionId}::uuid
+        AND hand.owner_id = ${owner.databaseOwnerId}::uuid
+    `
+    expect(persistedRows).toHaveLength(1)
+    expect(persistedRows[0]?.persisted).not.toContain(sentinel)
+    expect(persistedRows[0]?.persisted).not.toContain('reasoning_content')
+    expect(persistedRows[0]?.persisted).not.toContain('api_key')
+    expect(persistedRows[0]?.persisted).not.toContain('database_url')
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM27HandAbortRoundTripAndRollback(sql: Sql): Promise<void> {
+  const playerSessionId = randomUUID()
+  const playerHandId = randomUUID()
+  const playerRunId = randomUUID()
+  const decisionRequestId = randomUUID()
+  const coachSessionId = randomUUID()
+  const coachHandId = randomUUID()
+  const coachRunId = randomUUID()
+
+  try {
+    const playerOwner = await insertCommittedM27Session(sql, playerSessionId)
+    const playerAgents = await readSessionAgentSnapshots(
+      sql,
+      ownerScope,
+      playerSessionId,
+    )
+    const actor = playerAgents[0]
+    if (actor === undefined) {
+      throw new Error('M2.7 Player 中止 fixture 缺少 Agent。')
+    }
+    const playerFixture = createM27HandAuditFixture(playerHandId)
+    const repository = createAgentFoundationAuditRepository({
+      runtimeAuditDecoders: {},
+    })
+
+    await sql.begin(async (transaction) => {
+      const locked = await lockSessionForMutation(
+        transaction,
+        playerOwner,
+        playerSessionId,
+      )
+      await insertInProgressHandAudit(transaction, playerOwner, {
+        sessionId: playerSessionId,
+        checkpoint: playerFixture.checkpoint,
+        startedAt: '2026-08-04T13:00:00.000Z',
+      })
+      await repository.insertAgentRunAudit(
+        transaction,
+        playerOwner,
+        createM27PlayerRunInput(
+          playerSessionId,
+          playerHandId,
+          playerRunId,
+          actor.participantId,
+          decisionRequestId,
+        ),
+      )
+      await persistSessionMutation(
+        transaction,
+        locked,
+        createM27ThinkingMutationBatch({
+          sessionId: playerSessionId,
+          handId: playerHandId,
+          agentRunId: playerRunId,
+          decisionRequestId,
+          actorSeatNumber: actor.seatNumber,
+        }),
+      )
+      const aborted = await abortHandAudit(transaction, playerOwner, {
+        sessionId: playerSessionId,
+        handId: playerHandId,
+        failedAgentRunId: playerRunId,
+        reasonCode: 'provider_timeout',
+        abortedAt: '2026-08-04T13:00:20.000Z',
+      })
+      expect(aborted).toMatchObject({
+        status: 'aborted',
+        failedAgentRunId: playerRunId,
+        abortReasonCode: 'provider_timeout',
+        result: null,
+        completedAt: null,
+        abortedAt: '2026-08-04T13:00:20.000000Z',
+      })
+    })
+
+    await expect(
+      sql.begin((transaction) =>
+        readHandAudit(transaction, playerOwner, playerSessionId, playerHandId),
+      ),
+    ).resolves.toMatchObject({
+      status: 'aborted',
+      failedAgentRunId: playerRunId,
+      checkpoint: playerFixture.checkpoint,
+    })
+
+    await sql`
+      INSERT INTO app_private.player_decisions (
+        id,
+        agent_run_id,
+        owner_id,
+        session_id,
+        hand_id,
+        participant_id,
+        source_state_version,
+        decision_request_id,
+        memory_revision,
+        runtime,
+        submission_status,
+        decision_packet_payload_version,
+        decision_packet_payload,
+        candidate_set_payload_version,
+        candidate_set_payload,
+        validator_result_payload_version,
+        validator_result_payload,
+        created_at
+      ) VALUES (
+        ${randomUUID()}::uuid,
+        ${playerRunId}::uuid,
+        ${playerOwner.databaseOwnerId}::uuid,
+        ${playerSessionId}::uuid,
+        ${playerHandId}::uuid,
+        ${actor.participantId}::uuid,
+        1,
+        ${decisionRequestId}::uuid,
+        0,
+        'player',
+        'pending',
+        701,
+        '{}'::jsonb,
+        702,
+        '{}'::jsonb,
+        703,
+        '{}'::jsonb,
+        '2026-08-04T13:00:21.000Z'::timestamptz
+      )
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(
+          transaction,
+          playerOwner,
+          playerSessionId,
+          playerRunId,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      name: UnknownPayloadVersionError.name,
+      payloadKind: 'playerDecisionPacket',
+    })
+
+    await sql`DELETE FROM app_private.sessions WHERE id = ${playerSessionId}::uuid`
+
+    const coachOwner = await insertCommittedM27Session(sql, coachSessionId)
+    const coachFixture = createM27HandAuditFixture(coachHandId)
+    await expect(
+      sql.begin(async (transaction) => {
+        await insertInProgressHandAudit(transaction, coachOwner, {
+          sessionId: coachSessionId,
+          checkpoint: coachFixture.checkpoint,
+          startedAt: '2026-08-04T13:01:00.000Z',
+        })
+        await repository.insertAgentRunAudit(
+          transaction,
+          coachOwner,
+          createM27CoachRunInput(coachSessionId, coachHandId, coachRunId),
+        )
+        await abortHandAudit(transaction, coachOwner, {
+          sessionId: coachSessionId,
+          handId: coachHandId,
+          failedAgentRunId: coachRunId,
+          reasonCode: 'provider_timeout',
+          abortedAt: '2026-08-04T13:01:20.000Z',
+        })
+      }),
+    ).rejects.toBeInstanceOf(HandAuditTransitionError)
+
+    const rolledBackRows = await sql<
+      { readonly handCount: number; readonly runCount: number }[]
+    >`
+      SELECT
+        (
+          SELECT count(*)::int
+          FROM app_private.hands
+          WHERE session_id = ${coachSessionId}::uuid
+        ) AS "handCount",
+        (
+          SELECT count(*)::int
+          FROM app_private.agent_runs
+          WHERE session_id = ${coachSessionId}::uuid
+        ) AS "runCount"
+    `
+    expect(rolledBackRows[0]).toEqual({ handCount: 0, runCount: 0 })
+  } finally {
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (${playerSessionId}::uuid, ${coachSessionId}::uuid)
+    `
+  }
+}
+
+function createM27RunConfiguration(runtime: 'player' | 'coach') {
+  return {
+    runtime,
+    runtimeDefinitionVersion: 4,
+    contextSchemaVersion: 2,
+    promptModules: [{ id: `prompt/${runtime}`, version: 3 }],
+    capabilityManifest: { id: `capability/${runtime}`, version: 5 },
+    capabilities: [{ id: 'capability/equity', version: 2 }],
+    routePolicy: { id: `route/${runtime}`, version: 3 },
+    outputSchema: { id: `output/${runtime}`, version: 2 },
+    validator: { id: `validator/${runtime}`, version: 6 },
+    commitGate: { id: `commit/${runtime}`, version: 3 },
+    recoveryPolicy: { id: `recovery/${runtime}`, version: 1 },
+    dataDependencies: [{ id: 'strategy/preflop', version: 8 }],
+  }
+}
+
+function createM27ExecutionBudget() {
+  return {
+    maxAttempts: 4,
+    maxInputTokens: 20_000,
+    maxOutputTokens: 1_000,
+    maxWallClockMs: 45_000,
+    maxCapabilityInvocations: 4,
+    maxCostMicrounits: 2_000,
+  }
+}
+
+function createM27CoachRunInput(
+  sessionId: string,
+  handId: string,
+  agentRunId: string,
+) {
+  return {
+    agentRunId,
+    sessionId,
+    handId,
+    runtime: 'coach' as const,
+    triggerType: 'hand_completed',
+    idempotencyKey: `coach/${agentRunId}`,
+    participantId: null,
+    sourceStateVersion: null,
+    decisionRequestId: null,
+    parentRunId: null,
+    deadlineAt: '2026-08-04T13:01:00.000Z',
+    runtimeDefinitionVersion: 4,
+    runConfiguration: createM27RunConfiguration('coach'),
+    budget: createM27ExecutionBudget(),
+    createdAt: '2026-08-04T13:00:00.000Z',
+  }
+}
+
+function createM27PlayerRunInput(
+  sessionId: string,
+  handId: string,
+  agentRunId: string,
+  participantId: string,
+  decisionRequestId: string,
+) {
+  return {
+    agentRunId,
+    sessionId,
+    handId,
+    runtime: 'player' as const,
+    triggerType: 'action_required',
+    idempotencyKey: `player/${agentRunId}`,
+    participantId,
+    sourceStateVersion: 1,
+    decisionRequestId,
+    parentRunId: null,
+    deadlineAt: '2026-08-04T13:01:00.000Z',
+    runtimeDefinitionVersion: 4,
+    runConfiguration: createM27RunConfiguration('player'),
+    budget: createM27ExecutionBudget(),
+    createdAt: '2026-08-04T13:00:00.000Z',
+  }
+}
+
+function createM27ThinkingMutationBatch(input: {
+  readonly sessionId: string
+  readonly handId: string
+  readonly agentRunId: string
+  readonly decisionRequestId: string
+  readonly actorSeatNumber: number
+}): SessionMutationBatch {
+  const base = createMutationBatch({
+    sessionId: input.sessionId,
+    handId: input.handId,
+    eventIds: [randomUUID()],
+    lockedStateVersion: 0,
+    nextEventSeq: 0,
+    mutationAt: '2026-08-04T13:00:00.000Z',
+  })
+  return {
+    ...base,
+    agentRunState: 'thinking',
+    activePlayerRunId: input.agentRunId,
+    activeDecisionRequestId: input.decisionRequestId,
+    events: base.events.map((event) => ({
+      ...event,
+      publicEvent: {
+        ...event.publicEvent,
+        payload: {
+          snapshot: {
+            ...event.publicEvent.payload.snapshot,
+            agentRunState: 'thinking',
+            activeDecision: {
+              decisionRequestId: input.decisionRequestId,
+              actorSeatNumber: input.actorSeatNumber,
+            },
+          },
+        },
+      },
+    })),
+  }
+}
+
+function createM27AttemptInput(
+  sessionId: string,
+  agentRunId: string,
+  sequence: number,
+) {
+  const hashCharacter = sequence % 2 === 0 ? 'a' : 'b'
+  return {
+    sessionId,
+    agentRunId,
+    stage: 'model_selection',
+    provider: 'openai',
+    model: 'gpt-5.6',
+    attemptType: sequence === 0 ? 'primary' : 'retry',
+    routingReasonCode: sequence === 0 ? 'primary_route' : 'retry_route',
+    actualTimeoutMs: 15_000,
+    remainingDeadlineMsAtStart: 45_000 - sequence * 1_000,
+    requestProjectionHash: hashCharacter.repeat(64),
+    startedAt: new Date(
+      Date.parse('2026-08-04T13:00:01.000Z') + sequence * 1_000,
+    ).toISOString(),
+  }
+}
+
+function createM27InvocationInput(
+  sessionId: string,
+  agentRunId: string,
+  sequence: number,
+) {
+  const inputHashCharacter = sequence % 2 === 0 ? 'c' : 'e'
+  const outputHashCharacter = sequence % 2 === 0 ? 'd' : 'f'
+  const startedAt = Date.parse('2026-08-04T13:00:10.000Z') + sequence * 1_000
+  return {
+    sessionId,
+    agentRunId,
+    capabilityName: 'equity.calculate',
+    capabilityVersion: 2,
+    authorized: true,
+    inputSchemaVersion: 3,
+    inputHash: inputHashCharacter.repeat(64),
+    outputSchemaVersion: 4,
+    outputHash: outputHashCharacter.repeat(64),
+    budgetCost: 1,
+    durationMs: 125,
+    errorCode: null,
+    startedAt: new Date(startedAt).toISOString(),
+    completedAt: new Date(startedAt + 125).toISOString(),
+  }
+}
+
+async function insertCommittedM27CompletedHand(
+  sql: Sql,
+  sessionId: string,
+  handId: string,
+) {
+  const owner = await insertCommittedM27Session(sql, sessionId)
+  const fixture = createM27HandAuditFixture(handId)
+  await sql.begin(async (transaction) => {
+    await insertInProgressHandAudit(transaction, owner, {
+      sessionId,
+      checkpoint: fixture.checkpoint,
+      startedAt: '2026-08-04T12:58:00.000Z',
+    })
+    await completeHandAudit(transaction, owner, {
+      sessionId,
+      handId,
+      result: fixture.completed,
+      completedAt: '2026-08-04T12:59:00.000Z',
+    })
+  })
+  return owner
+}
+
+async function insertCommittedM27CoachRun(
+  sql: Sql,
+  sessionId: string,
+  handId: string,
+  agentRunId: string,
+) {
+  const owner = await insertCommittedM27CompletedHand(sql, sessionId, handId)
+  const repository = createAgentFoundationAuditRepository({
+    runtimeAuditDecoders: {},
+  })
+  await sql.begin((transaction) =>
+    repository.insertAgentRunAudit(
+      transaction,
+      owner,
+      createM27CoachRunInput(sessionId, handId, agentRunId),
+    ),
+  )
+  return { owner, repository }
+}
+
+async function finishM27CompletedAttempt(
+  sql: Sql,
+  context: {
+    readonly sessionId: string
+    readonly agentRunId: string
+    readonly attemptId: string
+    readonly sequence: number
+    readonly repository: ReturnType<typeof createAgentFoundationAuditRepository>
+    readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
+  },
+): Promise<void> {
+  await sql.begin((transaction) =>
+    context.repository.finishAgentAttemptAudit(transaction, context.owner, {
+      sessionId: context.sessionId,
+      agentRunId: context.agentRunId,
+      attemptId: context.attemptId,
+      lifecycle: 'completed',
+      accepted: true,
+      stale: false,
+      interrupted: false,
+      inputTokens: 100 + context.sequence,
+      outputTokens: 20 + context.sequence,
+      costMicrounits: 800 + context.sequence,
+      durationMs: 1_250 + context.sequence,
+      errorCode: null,
+      responseProjectionHash: (context.sequence % 2 === 0 ? '8' : '9').repeat(
+        64,
+      ),
+      validationStatus: 'valid',
+      completedAt: new Date(
+        Date.parse('2026-08-04T13:00:05.000Z') + context.sequence * 1_000,
+      ).toISOString(),
+    }),
+  )
+}
+
+async function assertM27AgentPublicAggregateRoundTrip(sql: Sql): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const agentRunId = randomUUID()
+
+  try {
+    const { owner, repository } = await insertCommittedM27CoachRun(
+      sql,
+      sessionId,
+      handId,
+      agentRunId,
+    )
+    const attemptZero = await sql.begin((transaction) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 0),
+      ),
+    )
+    const invocationZero = await sql.begin((transaction) =>
+      repository.appendCapabilityInvocationAudit(
+        transaction,
+        owner,
+        createM27InvocationInput(sessionId, agentRunId, 0),
+      ),
+    )
+    const attemptOne = await sql.begin((transaction) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 1),
+      ),
+    )
+    const invocationOne = await sql.begin((transaction) =>
+      repository.appendCapabilityInvocationAudit(
+        transaction,
+        owner,
+        createM27InvocationInput(sessionId, agentRunId, 1),
+      ),
+    )
+    const invocationWithoutOutput = await sql.begin((transaction) =>
+      repository.appendCapabilityInvocationAudit(transaction, owner, {
+        ...createM27InvocationInput(sessionId, agentRunId, 2),
+        outputSchemaVersion: null,
+        outputHash: null,
+      }),
+    )
+    const unauthorizedInvocation = await sql.begin((transaction) =>
+      repository.appendCapabilityInvocationAudit(transaction, owner, {
+        ...createM27InvocationInput(sessionId, agentRunId, 3),
+        authorized: false,
+        outputSchemaVersion: null,
+        outputHash: null,
+        errorCode: 'capability_not_authorized',
+      }),
+    )
+    const failedInvocation = await sql.begin((transaction) =>
+      repository.appendCapabilityInvocationAudit(transaction, owner, {
+        ...createM27InvocationInput(sessionId, agentRunId, 4),
+        outputSchemaVersion: null,
+        outputHash: null,
+        errorCode: 'capability_failed',
+      }),
+    )
+    await finishM27CompletedAttempt(sql, {
+      sessionId,
+      agentRunId,
+      attemptId: attemptOne.attemptId,
+      sequence: 1,
+      repository,
+      owner,
+    })
+    await finishM27CompletedAttempt(sql, {
+      sessionId,
+      agentRunId,
+      attemptId: attemptZero.attemptId,
+      sequence: 0,
+      repository,
+      owner,
+    })
+    const failedAttempt = await sql.begin((transaction) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 2),
+      ),
+    )
+    await sql.begin((transaction) =>
+      repository.finishAgentAttemptAudit(transaction, owner, {
+        sessionId,
+        agentRunId,
+        attemptId: failedAttempt.attemptId,
+        lifecycle: 'failed',
+        accepted: false,
+        stale: false,
+        interrupted: false,
+        inputTokens: 102,
+        outputTokens: 22,
+        costMicrounits: 802,
+        durationMs: 1_252,
+        errorCode: 'provider_failed',
+        responseProjectionHash: null,
+        validationStatus: 'invalid',
+        completedAt: '2026-08-04T13:00:07.000Z',
+      }),
+    )
+    const cancelledAttempt = await sql.begin((transaction) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 3),
+      ),
+    )
+    await sql.begin((transaction) =>
+      repository.finishAgentAttemptAudit(transaction, owner, {
+        sessionId,
+        agentRunId,
+        attemptId: cancelledAttempt.attemptId,
+        lifecycle: 'cancelled',
+        accepted: false,
+        stale: false,
+        interrupted: true,
+        inputTokens: 103,
+        outputTokens: 23,
+        costMicrounits: 803,
+        durationMs: 1_253,
+        errorCode: 'run_cancelled',
+        responseProjectionHash: null,
+        validationStatus: 'notRun',
+        completedAt: '2026-08-04T13:00:08.000Z',
+      }),
+    )
+    const staleAttempt = await sql.begin((transaction) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 4),
+      ),
+    )
+    await sql.begin((transaction) =>
+      repository.finishAgentAttemptAudit(transaction, owner, {
+        sessionId,
+        agentRunId,
+        attemptId: staleAttempt.attemptId,
+        lifecycle: 'stale',
+        accepted: false,
+        stale: true,
+        interrupted: false,
+        inputTokens: 104,
+        outputTokens: 24,
+        costMicrounits: 804,
+        durationMs: 1_254,
+        errorCode: null,
+        responseProjectionHash: '7'.repeat(64),
+        validationStatus: 'valid',
+        completedAt: '2026-08-04T13:00:09.000Z',
+      }),
+    )
+
+    const audit = await sql.begin((transaction) =>
+      repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+    )
+    expect(audit).toMatchObject({
+      ownerId: 'local-user',
+      agentRunId,
+      sessionId,
+      handId,
+      runtime: 'coach',
+      lifecycle: 'queued',
+      participantId: null,
+      sourceStateVersion: null,
+      decisionRequestId: null,
+      runConfiguration: createM27RunConfiguration('coach'),
+      budget: createM27ExecutionBudget(),
+      attempts: [
+        {
+          attemptId: attemptZero.attemptId,
+          attemptNumber: 0,
+          lifecycle: 'completed',
+        },
+        {
+          attemptId: attemptOne.attemptId,
+          attemptNumber: 1,
+          lifecycle: 'completed',
+        },
+        {
+          attemptId: failedAttempt.attemptId,
+          attemptNumber: 2,
+          lifecycle: 'failed',
+          errorCode: 'provider_failed',
+        },
+        {
+          attemptId: cancelledAttempt.attemptId,
+          attemptNumber: 3,
+          lifecycle: 'cancelled',
+          inputTokens: 103,
+          outputTokens: 23,
+          costMicrounits: 803,
+        },
+        {
+          attemptId: staleAttempt.attemptId,
+          attemptNumber: 4,
+          lifecycle: 'stale',
+          validationStatus: 'valid',
+        },
+      ],
+      invocations: [
+        {
+          invocationId: invocationZero.invocationId,
+          invocationNumber: 0,
+        },
+        {
+          invocationId: invocationOne.invocationId,
+          invocationNumber: 1,
+        },
+        {
+          invocationId: invocationWithoutOutput.invocationId,
+          invocationNumber: 2,
+          outputSchemaVersion: null,
+          outputHash: null,
+          errorCode: null,
+        },
+        {
+          invocationId: unauthorizedInvocation.invocationId,
+          invocationNumber: 3,
+          authorized: false,
+          errorCode: 'capability_not_authorized',
+        },
+        {
+          invocationId: failedInvocation.invocationId,
+          invocationNumber: 4,
+          authorized: true,
+          errorCode: 'capability_failed',
+        },
+      ],
+      runtimeAudit: {
+        checkpoint: null,
+        result: null,
+        review: null,
+      },
+    })
+    expect(audit.attempts).toHaveLength(5)
+    expect(audit.invocations).toHaveLength(5)
+    expect(new Set(audit.attempts.map(({ attemptId }) => attemptId)).size).toBe(
+      5,
+    )
+    expect(
+      new Set(audit.invocations.map(({ invocationId }) => invocationId)).size,
+    ).toBe(5)
+    expect(Object.isFrozen(audit)).toBe(true)
+    expect(Object.isFrozen(audit.attempts)).toBe(true)
+    expect(Object.isFrozen(audit.invocations)).toBe(true)
+
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(
+          transaction,
+          owner,
+          randomUUID(),
+          agentRunId,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+    await expect(
+      sql.begin((transaction) =>
+        repository.startAgentAttemptAudit(transaction, owner, {
+          ...createM27AttemptInput(sessionId, randomUUID(), 2),
+          sessionId,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+    await expect(
+      sql.begin((transaction) =>
+        repository.insertAgentRunAudit(
+          transaction,
+          owner,
+          createM27CoachRunInput(sessionId, randomUUID(), randomUUID()),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError)
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM27AgentRestartReadback(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const agentRunId = randomUUID()
+  const postgres = (await import('postgres')).default
+  let writerSql: Sql | undefined = postgres(runtimeUrl, {
+    connect_timeout: 10,
+    max: 1,
+    prepare: false,
+    ssl: 'require',
+  })
+  let readerSql: Sql | undefined
+
+  try {
+    const { owner, repository } = await insertCommittedM27CoachRun(
+      writerSql,
+      sessionId,
+      handId,
+      agentRunId,
+    )
+    const attempt = await writerSql.begin((transaction) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 0),
+      ),
+    )
+    await finishM27CompletedAttempt(writerSql, {
+      sessionId,
+      agentRunId,
+      attemptId: attempt.attemptId,
+      sequence: 0,
+      repository,
+      owner,
+    })
+    const startedAttempt = await writerSql.begin((transaction) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 1),
+      ),
+    )
+    const invocation = await writerSql.begin((transaction) =>
+      repository.appendCapabilityInvocationAudit(
+        transaction,
+        owner,
+        createM27InvocationInput(sessionId, agentRunId, 0),
+      ),
+    )
+    await writerSql.end({ timeout: 0 })
+    writerSql = undefined
+
+    readerSql = postgres(runtimeUrl, {
+      connect_timeout: 10,
+      max: 1,
+      prepare: false,
+      ssl: 'require',
+    })
+    const readerOwner = await resolveOwnerScope(readerSql, ownerScope)
+    const readerRepository = createAgentFoundationAuditRepository({
+      runtimeAuditDecoders: {},
+    })
+    const [handAudit, runAudit] = await readerSql.begin(async (transaction) => {
+      const hand = await readHandAudit(
+        transaction,
+        readerOwner,
+        sessionId,
+        handId,
+      )
+      const run = await readerRepository.readAgentRunAudit(
+        transaction,
+        readerOwner,
+        sessionId,
+        agentRunId,
+      )
+      return [hand, run] as const
+    })
+    expect(handAudit).toMatchObject({
+      sessionId,
+      handId,
+      status: 'completed',
+    })
+    expect(runAudit).toMatchObject({
+      sessionId,
+      handId,
+      agentRunId,
+      lifecycle: 'queued',
+      attempts: [
+        {
+          attemptId: attempt.attemptId,
+          attemptNumber: 0,
+          lifecycle: 'completed',
+        },
+        {
+          attemptId: startedAttempt.attemptId,
+          attemptNumber: 1,
+          lifecycle: 'started',
+          completedAt: null,
+        },
+      ],
+      invocations: [
+        {
+          invocationId: invocation.invocationId,
+          invocationNumber: 0,
+        },
+      ],
+    })
+  } finally {
+    await writerSql?.end({ timeout: 0 })
+    await readerSql?.end({ timeout: 0 })
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM27AgentUnknownAndCorruptRows(sql: Sql): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const agentRunId = randomUUID()
+
+  try {
+    const { owner, repository } = await insertCommittedM27CoachRun(
+      sql,
+      sessionId,
+      handId,
+      agentRunId,
+    )
+    const attempt = await sql.begin((transaction) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 0),
+      ),
+    )
+    const invocation = await sql.begin((transaction) =>
+      repository.appendCapabilityInvocationAudit(
+        transaction,
+        owner,
+        createM27InvocationInput(sessionId, agentRunId, 0),
+      ),
+    )
+    const originalRows = await sql<
+      {
+        readonly runConfigurationPayload: JSONValue
+        readonly budgetPayload: JSONValue
+        readonly attemptPayload: JSONValue
+      }[]
+    >`
+      SELECT
+        run.run_config_payload AS "runConfigurationPayload",
+        run.budget_payload AS "budgetPayload",
+        attempt.attempt_payload AS "attemptPayload"
+      FROM app_private.agent_runs AS run
+      JOIN app_private.agent_attempts AS attempt
+        ON attempt.agent_run_id = run.id
+      WHERE run.id = ${agentRunId}::uuid
+        AND attempt.id = ${attempt.attemptId}::uuid
+    `
+    const original = originalRows[0]
+    if (original === undefined) {
+      throw new Error('M2.7 异常读取 fixture 缺少原始载荷。')
+    }
+
+    await sql`
+      UPDATE app_private.agent_runs
+      SET run_config_payload_version = 999
+      WHERE id = ${agentRunId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toMatchObject({
+      name: UnknownPayloadVersionError.name,
+      payloadKind: 'agentRunConfiguration',
+    })
+
+    await sql`
+      UPDATE app_private.agent_runs
+      SET run_config_payload_version = 1,
+          run_config_payload = '{}'::jsonb
+      WHERE id = ${agentRunId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
+
+    await sql`
+      UPDATE app_private.agent_runs
+      SET run_config_payload = ${JSON.stringify(original.runConfigurationPayload)}::text::jsonb,
+          budget_payload_version = 999
+      WHERE id = ${agentRunId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toMatchObject({
+      name: UnknownPayloadVersionError.name,
+      payloadKind: 'agentExecutionBudget',
+    })
+
+    await sql`
+      UPDATE app_private.agent_runs
+      SET budget_payload_version = 1,
+          budget_payload = '{}'::jsonb
+      WHERE id = ${agentRunId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
+
+    await sql`
+      UPDATE app_private.agent_runs
+      SET budget_payload = ${JSON.stringify(original.budgetPayload)}::text::jsonb,
+          checkpoint_payload_version = 777,
+          checkpoint_payload = '{}'::jsonb
+      WHERE id = ${agentRunId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toMatchObject({
+      name: UnknownPayloadVersionError.name,
+      payloadKind: 'agentRunCheckpoint',
+    })
+
+    await sql`
+      UPDATE app_private.agent_runs
+      SET checkpoint_payload_version = NULL,
+          checkpoint_payload = NULL
+      WHERE id = ${agentRunId}::uuid
+    `
+    await sql`
+      UPDATE app_private.agent_runs
+      SET result_payload_version = 778,
+          result_payload = '{}'::jsonb
+      WHERE id = ${agentRunId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toMatchObject({
+      name: UnknownPayloadVersionError.name,
+      payloadKind: 'agentRunResult',
+    })
+
+    await sql`
+      UPDATE app_private.agent_runs
+      SET result_payload_version = NULL,
+          result_payload = NULL
+      WHERE id = ${agentRunId}::uuid
+    `
+    await sql`
+      UPDATE app_private.agent_capability_invocations
+      SET invocation_payload_version = 888,
+          invocation_payload = '{}'::jsonb
+      WHERE id = ${invocation.invocationId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toMatchObject({
+      name: UnknownPayloadVersionError.name,
+      payloadKind: 'capabilityInvocationPayload',
+    })
+
+    await sql`
+      UPDATE app_private.agent_capability_invocations
+      SET invocation_payload_version = NULL,
+          invocation_payload = NULL
+      WHERE id = ${invocation.invocationId}::uuid
+    `
+    await sql`
+      UPDATE app_private.agent_attempts
+      SET attempt_payload_version = 999
+      WHERE id = ${attempt.attemptId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toMatchObject({
+      name: UnknownPayloadVersionError.name,
+      payloadKind: 'agentAttempt',
+    })
+
+    await sql`
+      UPDATE app_private.agent_attempts
+      SET attempt_payload_version = 1,
+          attempt_payload = '{}'::jsonb
+      WHERE id = ${attempt.attemptId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
+
+    await sql`
+      UPDATE app_private.agent_attempts
+      SET attempt_payload = ${JSON.stringify(original.attemptPayload)}::text::jsonb
+      WHERE id = ${attempt.attemptId}::uuid
+    `
+    await sql`
+      INSERT INTO app_private.coach_reviews (
+        id,
+        agent_run_id,
+        owner_id,
+        session_id,
+        hand_id,
+        runtime,
+        request_id,
+        status,
+        frozen_context_payload_version,
+        frozen_context_payload,
+        requested_at,
+        updated_at
+      ) VALUES (
+        ${randomUUID()}::uuid,
+        ${agentRunId}::uuid,
+        ${owner.databaseOwnerId}::uuid,
+        ${sessionId}::uuid,
+        ${handId}::uuid,
+        'coach',
+        ${randomUUID()}::uuid,
+        'pending',
+        777,
+        '{}'::jsonb,
+        '2026-08-04T13:00:20.000Z'::timestamptz,
+        '2026-08-04T13:00:20.000Z'::timestamptz
+      )
+    `
+    await expect(
+      sql.begin((transaction) =>
+        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+      ),
+    ).rejects.toMatchObject({
+      name: UnknownPayloadVersionError.name,
+      payloadKind: 'coachFrozenContext',
+    })
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM27AgentSequenceConcurrency(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const agentRunId = randomUUID()
+  const postgres = (await import('postgres')).default
+  const secondSql = postgres(runtimeUrl, {
+    connect_timeout: 10,
+    max: 1,
+    prepare: false,
+    ssl: 'require',
+  })
+  let secondAttempt:
+    | Promise<{ readonly attemptId: string; readonly attemptNumber: number }>
+    | undefined
+  let secondInvocation:
+    | Promise<{
+        readonly invocationId: string
+        readonly invocationNumber: number
+      }>
+    | undefined
+
+  try {
+    const { owner, repository } = await insertCommittedM27CoachRun(
+      sql,
+      sessionId,
+      handId,
+      agentRunId,
+    )
+    await secondSql`SELECT 1`
+
+    await sql.begin(async (firstTransaction) => {
+      const firstPidRows = await firstTransaction<{ readonly pid: number }[]>`
+        SELECT pg_backend_pid() AS pid
+      `
+      const firstBackendPid = firstPidRows[0]?.pid
+      if (firstBackendPid === undefined) {
+        throw new Error('无法取得 Attempt 第一事务 backend PID。')
+      }
+      const firstAttempt = await repository.startAgentAttemptAudit(
+        firstTransaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 0),
+      )
+      expect(firstAttempt.attemptNumber).toBe(0)
+
+      let signalSecondPid: ((pid: number) => void) | undefined
+      const secondPid = new Promise<number>((resolve) => {
+        signalSecondPid = resolve
+      })
+      secondAttempt = secondSql.begin(async (secondTransaction) => {
+        const pidRows = await secondTransaction<{ readonly pid: number }[]>`
+          SELECT pg_backend_pid() AS pid
+        `
+        const secondBackendPid = pidRows[0]?.pid
+        if (secondBackendPid === undefined) {
+          throw new Error('无法取得 Attempt 第二事务 backend PID。')
+        }
+        signalSecondPid?.(secondBackendPid)
+        return repository.startAgentAttemptAudit(
+          secondTransaction,
+          owner,
+          createM27AttemptInput(sessionId, agentRunId, 1),
+        )
+      })
+      await waitForTransactionBlock(
+        firstTransaction,
+        firstBackendPid,
+        await secondPid,
+        true,
+      )
+    })
+    await expect(secondAttempt).resolves.toMatchObject({ attemptNumber: 1 })
+
+    await inRollbackTransaction(sql, async (firstTransaction) => {
+      const firstPidRows = await firstTransaction<{ readonly pid: number }[]>`
+        SELECT pg_backend_pid() AS pid
+      `
+      const firstBackendPid = firstPidRows[0]?.pid
+      if (firstBackendPid === undefined) {
+        throw new Error('无法取得 Invocation 第一事务 backend PID。')
+      }
+      const firstInvocation = await repository.appendCapabilityInvocationAudit(
+        firstTransaction,
+        owner,
+        createM27InvocationInput(sessionId, agentRunId, 0),
+      )
+      expect(firstInvocation.invocationNumber).toBe(0)
+
+      let signalSecondPid: ((pid: number) => void) | undefined
+      const secondPid = new Promise<number>((resolve) => {
+        signalSecondPid = resolve
+      })
+      secondInvocation = secondSql.begin(async (secondTransaction) => {
+        const pidRows = await secondTransaction<{ readonly pid: number }[]>`
+          SELECT pg_backend_pid() AS pid
+        `
+        const secondBackendPid = pidRows[0]?.pid
+        if (secondBackendPid === undefined) {
+          throw new Error('无法取得 Invocation 第二事务 backend PID。')
+        }
+        signalSecondPid?.(secondBackendPid)
+        return repository.appendCapabilityInvocationAudit(
+          secondTransaction,
+          owner,
+          createM27InvocationInput(sessionId, agentRunId, 1),
+        )
+      })
+      await waitForTransactionBlock(
+        firstTransaction,
+        firstBackendPid,
+        await secondPid,
+        true,
+      )
+    })
+    await expect(secondInvocation).resolves.toMatchObject({
+      invocationNumber: 0,
+    })
+
+    const audit = await sql.begin((transaction) =>
+      repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
+    )
+    expect(audit.attempts.map(({ attemptNumber }) => attemptNumber)).toEqual([
+      0, 1,
+    ])
+    expect(
+      audit.invocations.map(({ invocationNumber }) => invocationNumber),
+    ).toEqual([0])
+  } finally {
+    await secondAttempt?.catch(() => undefined)
+    await secondInvocation?.catch(() => undefined)
+    await secondSql.end({ timeout: 0 })
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM27AgentSecretBoundaries(sql: Sql): Promise<void> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const agentRunId = randomUUID()
+  const sentinel = `M27_AGENT_SECRET_${randomUUID()}`
+
+  try {
+    const owner = await insertCommittedM27CompletedHand(sql, sessionId, handId)
+    const repository = createAgentFoundationAuditRepository({
+      runtimeAuditDecoders: {},
+    })
+    const input = createM27CoachRunInput(sessionId, handId, agentRunId)
+    await expect(
+      sql.begin((transaction) =>
+        repository.insertAgentRunAudit(transaction, owner, {
+          ...input,
+          runConfiguration: {
+            ...input.runConfiguration,
+            reasoning_content: sentinel,
+          } as never,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+
+    const rejectedRows = await sql<{ readonly count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM app_private.agent_runs
+      WHERE id = ${agentRunId}::uuid
+    `
+    expect(rejectedRows[0]?.count).toBe(0)
+
+    await sql.begin((transaction) =>
+      repository.insertAgentRunAudit(transaction, owner, input),
+    )
+    await sql.begin(async (transaction) => {
+      await repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        createM27AttemptInput(sessionId, agentRunId, 0),
+      )
+      await repository.appendCapabilityInvocationAudit(
+        transaction,
+        owner,
+        createM27InvocationInput(sessionId, agentRunId, 0),
+      )
+    })
+
+    const persistedRows = await sql<{ readonly persisted: string }[]>`
+      SELECT concat_ws(
+        ' ',
+        to_jsonb(run)::text,
+        COALESCE((
+          SELECT jsonb_agg(to_jsonb(attempt))::text
+          FROM app_private.agent_attempts AS attempt
+          WHERE attempt.agent_run_id = run.id
+        ), ''),
+        COALESCE((
+          SELECT jsonb_agg(to_jsonb(invocation))::text
+          FROM app_private.agent_capability_invocations AS invocation
+          WHERE invocation.agent_run_id = run.id
+        ), '')
+      ) AS persisted
+      FROM app_private.agent_runs AS run
+      WHERE run.id = ${agentRunId}::uuid
+        AND run.owner_id = ${owner.databaseOwnerId}::uuid
+    `
+    expect(persistedRows).toHaveLength(1)
+    expect(persistedRows[0]?.persisted).not.toContain(sentinel)
+    expect(persistedRows[0]?.persisted).not.toContain('reasoning_content')
+    expect(persistedRows[0]?.persisted).not.toContain('api_key')
+    expect(persistedRows[0]?.persisted).not.toContain('database_url')
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+export async function assertM27HandAgentAuditRepositories(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  await assertM27HandPublicRoundTrips(sql)
+  await assertM27HandOwnerAndAssociationBoundaries(sql)
+  await assertM27HandRollbackAndVisibility(sql, runtimeUrl)
+  await assertM27HandRestartReadback(sql, runtimeUrl)
+  await assertM27HandSecretBoundaries(sql)
+  await assertM27HandAbortRoundTripAndRollback(sql)
+  await assertM27AgentPublicAggregateRoundTrip(sql)
+  await assertM27AgentRestartReadback(sql, runtimeUrl)
+  await assertM27AgentUnknownAndCorruptRows(sql)
+  await assertM27AgentSequenceConcurrency(sql, runtimeUrl)
+  await assertM27AgentSecretBoundaries(sql)
 }

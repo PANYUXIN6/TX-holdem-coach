@@ -17,6 +17,7 @@ import type {
   SettledPot,
   UncalledBetReturn,
 } from './settlement.js'
+import { STANDARD_DECK } from './cards.js'
 import type { PokerTableState } from './state.js'
 
 export interface SeatPosition {
@@ -189,35 +190,67 @@ const LogicalPositionSchema = z.enum([
   'SB',
   'BB',
 ])
-const HandEvaluationSchema = z.strictObject({
-  category: z.enum([
-    'highCard',
-    'onePair',
-    'twoPair',
-    'threeOfAKind',
-    'straight',
-    'flush',
-    'fullHouse',
-    'fourOfAKind',
-    'straightFlush',
-  ]),
-  comparisonGrade: z.tuple([
-    SafeNonnegativeIntegerSchema,
-    SafeNonnegativeIntegerSchema,
-    SafeNonnegativeIntegerSchema,
-    SafeNonnegativeIntegerSchema,
-    SafeNonnegativeIntegerSchema,
-    SafeNonnegativeIntegerSchema,
-  ]),
-  bestFive: z.tuple([
-    CardSchema,
-    CardSchema,
-    CardSchema,
-    CardSchema,
-    CardSchema,
-  ]),
-  displayName: z.string().min(1),
-})
+const HandEvaluationSchema = z
+  .strictObject({
+    category: z.enum([
+      'highCard',
+      'onePair',
+      'twoPair',
+      'threeOfAKind',
+      'straight',
+      'flush',
+      'fullHouse',
+      'fourOfAKind',
+      'straightFlush',
+    ]),
+    comparisonGrade: z.tuple([
+      SafeNonnegativeIntegerSchema,
+      SafeNonnegativeIntegerSchema,
+      SafeNonnegativeIntegerSchema,
+      SafeNonnegativeIntegerSchema,
+      SafeNonnegativeIntegerSchema,
+      SafeNonnegativeIntegerSchema,
+    ]),
+    bestFive: z.tuple([
+      CardSchema,
+      CardSchema,
+      CardSchema,
+      CardSchema,
+      CardSchema,
+    ]),
+    displayName: z.enum([
+      '高牌',
+      '一对',
+      '两对',
+      '三条',
+      '顺子',
+      '同花',
+      '葫芦',
+      '四条',
+      '同花顺',
+      '皇家同花顺',
+    ]),
+  })
+  .superRefine((evaluation, context) => {
+    const expectedDisplayNames = {
+      highCard: ['高牌'],
+      onePair: ['一对'],
+      twoPair: ['两对'],
+      threeOfAKind: ['三条'],
+      straight: ['顺子'],
+      flush: ['同花'],
+      fullHouse: ['葫芦'],
+      fourOfAKind: ['四条'],
+      straightFlush: ['同花顺', '皇家同花顺'],
+    }[evaluation.category] as readonly string[]
+    if (!expectedDisplayNames.includes(evaluation.displayName)) {
+      context.addIssue({
+        code: 'custom',
+        message: '牌型展示名必须与牌型类别镜像。',
+        path: ['displayName'],
+      })
+    }
+  })
 
 function isStartingHandCategory(value: unknown): value is StartingHandCategory {
   if (typeof value !== 'string') return false
@@ -278,8 +311,8 @@ function cardKey(card: Card): string {
   return `${card.rank}:${card.suit}`
 }
 
-export const CompletedHandSummarySchema: z.ZodType<CompletedHandSummary> = z
-  .strictObject({
+const CompletedHandSummaryBaseSchema: z.ZodType<CompletedHandSummary> =
+  z.strictObject({
     handId: z.uuid(),
     terminationReason: z.enum(['showdown', 'complete']),
     participantSeatNumbers: z.array(SeatNumberSchema).min(6).max(9),
@@ -293,309 +326,480 @@ export const CompletedHandSummarySchema: z.ZodType<CompletedHandSummary> = z
     pots: z.array(SettledPotSchema).min(1),
     participantHands: z.array(CompletedHandParticipantHandSchema),
   })
-  .superRefine((summary, context) => {
-    const participants = summary.participantSeatNumbers
-    const participantSet = new Set(participants)
-    const isAscending = (values: readonly number[]) =>
-      values.every(
-        (value, index) => index === 0 || value > (values[index - 1] as number),
-      )
-    const requireExactParticipantSeats = (
-      values: readonly { readonly seatNumber: number }[],
-      path: 'positions' | 'seats' | 'participantHands',
-    ) => {
-      if (
-        values.length !== participants.length ||
-        new Set(values.map((value) => value.seatNumber)).size !==
-          participants.length ||
-        values.some((value) => !participantSet.has(value.seatNumber))
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message: '座位集合必须与本手参与座位完全一致。',
-          path: [path],
-        })
-      }
-    }
 
-    if (
-      participantSet.size !== participants.length ||
-      !isAscending(participants)
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '本手参与座位必须唯一并按座位号升序。',
-        path: ['participantSeatNumbers'],
-      })
-    }
+const SettlementParticipantContextSchema = z.strictObject({
+  seatNumber: SeatNumberSchema,
+  holeCards: z.tuple([CardSchema, CardSchema]),
+})
+const SettledHandEvaluationSchema = z.strictObject({
+  seatNumber: SeatNumberSchema,
+  evaluation: HandEvaluationSchema,
+})
 
-    const blindSeats = [
-      summary.buttonSeatNumber,
-      summary.smallBlindSeatNumber,
-      summary.bigBlindSeatNumber,
+const CompletedHandResultBaseSchema: z.ZodType<CompletedHandResult> = z
+  .strictObject({
+    handId: z.uuid(),
+    terminationReason: z.enum(['showdown', 'complete']),
+    participantSeatNumbers: z.array(SeatNumberSchema).min(6).max(9),
+    buttonSeatNumber: SeatNumberSchema,
+    smallBlindSeatNumber: SeatNumberSchema,
+    bigBlindSeatNumber: SeatNumberSchema,
+    positions: z.array(SeatPositionSchema),
+    remainingDeck: z.array(CardSchema),
+    burnedCards: z.array(CardSchema),
+    board: z.array(CardSchema).max(5),
+    holeCards: z.array(SettlementParticipantContextSchema),
+    seats: z.array(CompletedHandSeatResultSchema),
+    uncalledBetReturns: z.array(UncalledBetReturnSchema).max(1),
+    pots: z.array(SettledPotSchema).min(1),
+    handEvaluations: z.array(SettledHandEvaluationSchema),
+    participantHands: z.array(CompletedHandParticipantHandSchema),
+    summary: CompletedHandSummaryBaseSchema,
+  })
+  .superRefine((result, context) => {
+    const equal = (left: unknown, right: unknown) =>
+      JSON.stringify(left) === JSON.stringify(right)
+    const summaryMirrors = [
+      result.handId === result.summary.handId,
+      result.terminationReason === result.summary.terminationReason,
+      equal(
+        result.participantSeatNumbers,
+        result.summary.participantSeatNumbers,
+      ),
+      result.buttonSeatNumber === result.summary.buttonSeatNumber,
+      result.smallBlindSeatNumber === result.summary.smallBlindSeatNumber,
+      result.bigBlindSeatNumber === result.summary.bigBlindSeatNumber,
+      equal(result.positions, result.summary.positions),
+      equal(result.board, result.summary.board),
+      equal(result.seats, result.summary.seats),
+      equal(result.uncalledBetReturns, result.summary.uncalledBetReturns),
+      equal(result.pots, result.summary.pots),
+      equal(result.participantHands, result.summary.participantHands),
     ]
-    if (
-      new Set(blindSeats).size !== blindSeats.length ||
-      blindSeats.some((seatNumber) => !participantSet.has(seatNumber))
-    ) {
+    if (summaryMirrors.some((mirrors) => !mirrors)) {
       context.addIssue({
         code: 'custom',
-        message: '按钮和庄盲必须是不同的参与座位。',
-        path: ['buttonSeatNumber'],
+        message: '完整完成手结果必须与摘要精确镜像。',
+        path: ['summary'],
       })
     }
 
-    requireExactParticipantSeats(summary.positions, 'positions')
-    requireExactParticipantSeats(summary.seats, 'seats')
-    requireExactParticipantSeats(summary.participantHands, 'participantHands')
-
-    for (const [path, values] of [
-      ['positions', summary.positions],
-      ['seats', summary.seats],
-      ['participantHands', summary.participantHands],
-      ['uncalledBetReturns', summary.uncalledBetReturns],
-    ] as const) {
-      if (!isAscending(values.map((value) => value.seatNumber))) {
-        context.addIssue({
-          code: 'custom',
-          message: '座位数组必须按座位号升序。',
-          path: [path],
-        })
-      }
-    }
-
-    if (
-      new Set(summary.positions.map((position) => position.position)).size !==
-      summary.positions.length
-    ) {
+    const participantSeats = result.participantSeatNumbers
+    const participantSet = new Set(participantSeats)
+    const isExactSortedSeatSet = (
+      values: readonly { readonly seatNumber: number }[],
+    ) =>
+      values.length === participantSeats.length &&
+      new Set(values.map((value) => value.seatNumber)).size ===
+        participantSeats.length &&
+      values.every(
+        (value, index) =>
+          participantSet.has(value.seatNumber) &&
+          (index === 0 ||
+            value.seatNumber > (values[index - 1]?.seatNumber ?? -1)),
+      )
+    if (!isExactSortedSeatSet(result.holeCards)) {
       context.addIssue({
         code: 'custom',
-        message: '每个参与座位必须具有唯一逻辑位置。',
-        path: ['positions'],
+        message: '完整底牌必须与参与座位一一对应并排序。',
+        path: ['holeCards'],
       })
     }
-    const positionBySeat = new Map(
-      summary.positions.map((position) => [
-        position.seatNumber,
-        position.position,
-      ]),
+
+    const evaluationBySeat = new Map(
+      result.handEvaluations.map((item) => [item.seatNumber, item.evaluation]),
     )
     if (
-      positionBySeat.get(summary.buttonSeatNumber) !== 'BTN' ||
-      positionBySeat.get(summary.smallBlindSeatNumber) !== 'SB' ||
-      positionBySeat.get(summary.bigBlindSeatNumber) !== 'BB'
+      evaluationBySeat.size !== result.handEvaluations.length ||
+      result.handEvaluations.some(
+        (item, index) =>
+          !participantSet.has(item.seatNumber) ||
+          (index > 0 &&
+            item.seatNumber <=
+              (result.handEvaluations[index - 1]?.seatNumber ?? -1)),
+      )
     ) {
       context.addIssue({
         code: 'custom',
-        message: '按钮和庄盲座位必须与逻辑位置镜像一致。',
-        path: ['positions'],
-      })
-    }
-
-    if (
-      new Set(summary.seats.map((seat) => seat.playerId)).size !==
-        summary.seats.length ||
-      summary.seats.filter((seat) => seat.isUser).length !== 1 ||
-      summary.seats.some((seat) => seat.isUser !== (seat.seatNumber === 0))
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '完成手座位结果必须保留唯一玩家和固定用户座位。',
-        path: ['seats'],
+        message: '完整牌型评估必须来自唯一参与座位并排序。',
+        path: ['handEvaluations'],
       })
     }
     const participantHandBySeat = new Map(
-      summary.participantHands.map((hand) => [hand.seatNumber, hand]),
+      result.participantHands.map((hand) => [hand.seatNumber, hand]),
     )
-    summary.seats.forEach((seat, index) => {
-      const participantHand = participantHandBySeat.get(seat.seatNumber)
-      if (
-        BigInt(seat.netChange) !==
-          BigInt(seat.endingStack) - BigInt(seat.startingStack) ||
-        participantHand === undefined ||
-        seat.startingHandCategory !==
-          classifyStartingHand(participantHand.holeCards)
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message: '完成手座位结果必须与筹码和底牌事实镜像一致。',
-          path: ['seats', index],
-        })
-      }
-    })
-    const startingStackTotal = summary.seats.reduce(
-      (total, seat) => total + BigInt(seat.startingStack),
-      0n,
-    )
-    const endingStackTotal = summary.seats.reduce(
-      (total, seat) => total + BigInt(seat.endingStack),
-      0n,
-    )
-    if (startingStackTotal !== endingStackTotal) {
-      context.addIssue({
-        code: 'custom',
-        message: '完成手前后的座位筹码总额必须守恒。',
-        path: ['seats'],
-      })
-    }
-
     if (
-      new Set(summary.uncalledBetReturns.map((item) => item.seatNumber))
-        .size !== summary.uncalledBetReturns.length ||
-      summary.uncalledBetReturns.some(
-        (item) => !participantSet.has(item.seatNumber),
-      )
+      result.holeCards.some((holeCards) => {
+        const participantHand = participantHandBySeat.get(holeCards.seatNumber)
+        return (
+          participantHand === undefined ||
+          !equal(participantHand.holeCards, holeCards.holeCards) ||
+          !equal(
+            participantHand.handEvaluation,
+            evaluationBySeat.get(holeCards.seatNumber) ?? null,
+          )
+        )
+      })
     ) {
       context.addIssue({
         code: 'custom',
-        message: '未跟注返还必须来自唯一的参与座位。',
-        path: ['uncalledBetReturns'],
-      })
-    }
-    const contributionTotal = summary.seats.reduce(
-      (total, seat) => total + BigInt(seat.totalContribution),
-      0n,
-    )
-    const distributedTotal =
-      summary.uncalledBetReturns.reduce(
-        (total, returned) => total + BigInt(returned.amount),
-        0n,
-      ) + summary.pots.reduce((total, pot) => total + BigInt(pot.amount), 0n)
-    if (contributionTotal !== distributedTotal) {
-      context.addIssue({
-        code: 'custom',
-        message: '总投入必须等于未跟注返还与全部底池金额之和。',
-        path: ['seats'],
-      })
-    }
-
-    const boardAndHoleCardKeys = [
-      ...summary.board,
-      ...summary.participantHands.flatMap((hand) => hand.holeCards),
-    ].map(cardKey)
-    if (new Set(boardAndHoleCardKeys).size !== boardAndHoleCardKeys.length) {
-      context.addIssue({
-        code: 'custom',
-        message: '公共牌和参与者底牌不得重复。',
+        message: '完整底牌和牌型必须与参与者手牌镜像。',
         path: ['participantHands'],
       })
     }
 
-    const evaluatedSeatNumbers = new Set<number>()
-    summary.participantHands.forEach((hand, index) => {
-      const evaluation = hand.handEvaluation
-      if (evaluation === null) return
-      evaluatedSeatNumbers.add(hand.seatNumber)
-      const availableCards = new Set(
-        [...summary.board, ...hand.holeCards].map(cardKey),
-      )
-      const bestFiveKeys = evaluation.bestFive.map(cardKey)
+    result.seats.forEach((seat, index) => {
+      const returnedAmount = result.uncalledBetReturns
+        .filter((returned) => returned.seatNumber === seat.seatNumber)
+        .reduce((total, returned) => total + BigInt(returned.amount), 0n)
+      const awardedAmount = result.pots
+        .flatMap((pot) => pot.awards)
+        .filter((award) => award.seatNumber === seat.seatNumber)
+        .reduce((total, award) => total + BigInt(award.amount), 0n)
       if (
-        new Set(bestFiveKeys).size !== bestFiveKeys.length ||
-        bestFiveKeys.some((key) => !availableCards.has(key))
+        BigInt(seat.endingStack) !==
+        BigInt(seat.startingStack) -
+          BigInt(seat.totalContribution) +
+          returnedAmount +
+          awardedAmount
       ) {
         context.addIssue({
           code: 'custom',
-          message: '最佳五张牌必须来自该参与者可用牌且不得重复。',
-          path: ['participantHands', index, 'handEvaluation', 'bestFive'],
+          message: '每个座位的结束筹码必须与已存投入、返还和派奖一致。',
+          path: ['seats', index, 'endingStack'],
         })
       }
     })
 
-    if (summary.terminationReason === 'complete') {
-      if (evaluatedSeatNumbers.size !== 0) {
-        context.addIssue({
-          code: 'custom',
-          message: '未摊牌完成手不得包含牌型评估。',
-          path: ['participantHands'],
-        })
-      }
-    } else {
-      const eligibleSeatNumbers = new Set(
-        summary.pots.flatMap((pot) => pot.eligibleSeatNumbers),
-      )
-      if (
-        summary.board.length !== 5 ||
-        evaluatedSeatNumbers.size !== eligibleSeatNumbers.size ||
-        [...eligibleSeatNumbers].some(
-          (seatNumber) => !evaluatedSeatNumbers.has(seatNumber),
-        )
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message: '摊牌评估必须与全部有资格参与底池的座位一致。',
-          path: ['participantHands'],
-        })
-      }
-    }
-
-    summary.pots.forEach((pot, potIndex) => {
-      const isUniqueParticipantSubset = (values: readonly number[]) =>
-        new Set(values).size === values.length &&
-        values.every((seatNumber) => participantSet.has(seatNumber))
-      const contributingSet = new Set(pot.contributingSeatNumbers)
-      const eligibleSet = new Set(pot.eligibleSeatNumbers)
-      if (
-        pot.potIndex !== potIndex ||
-        pot.kind !== (potIndex === 0 ? 'main' : 'side') ||
-        !isUniqueParticipantSubset(pot.contributingSeatNumbers) ||
-        !isUniqueParticipantSubset(pot.eligibleSeatNumbers) ||
-        !isUniqueParticipantSubset(pot.winningSeatNumbers) ||
-        pot.eligibleSeatNumbers.some(
-          (seatNumber) => !contributingSet.has(seatNumber),
-        ) ||
-        pot.winningSeatNumbers.some(
-          (seatNumber) => !eligibleSet.has(seatNumber),
-        )
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message: '底池座位集合和顺序必须一致。',
-          path: ['pots', potIndex],
-        })
-      }
-      if (
-        !isAscending(pot.contributingSeatNumbers) ||
-        !isAscending(pot.eligibleSeatNumbers) ||
-        !isAscending(pot.winningSeatNumbers) ||
-        new Set(pot.awards.map((award) => award.seatNumber)).size !==
-          pot.winningSeatNumbers.length ||
-        pot.awards.some(
-          (award) => !pot.winningSeatNumbers.includes(award.seatNumber),
-        )
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message: '底池参与者、赢家和派奖集合必须规范。',
-          path: ['pots', potIndex],
-        })
-      }
-      pot.awards.forEach((award, awardIndex) => {
-        if (
-          BigInt(award.amount) !==
-          BigInt(award.baseAmount) + BigInt(award.oddChipAmount)
-        ) {
-          context.addIssue({
-            code: 'custom',
-            message: '派奖金额必须等于基础金额与奇数筹码之和。',
-            path: ['pots', potIndex, 'awards', awardIndex, 'amount'],
-          })
-        }
+    const allCardKeys = [
+      ...result.remainingDeck,
+      ...result.burnedCards,
+      ...result.board,
+      ...result.holeCards.flatMap((hand) => hand.holeCards),
+    ].map(cardKey)
+    const standardCardKeys = new Set(STANDARD_DECK.map(cardKey))
+    if (
+      allCardKeys.length !== standardCardKeys.size ||
+      new Set(allCardKeys).size !== standardCardKeys.size ||
+      allCardKeys.some((key) => !standardCardKeys.has(key))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '完整完成手结果必须恰好保存标准 52 张牌。',
+        path: ['remainingDeck'],
       })
+    }
+  })
+
+function refineCompletedHandSummary(
+  summary: CompletedHandSummary,
+  context: z.RefinementCtx,
+): void {
+  const participants = summary.participantSeatNumbers
+  const participantSet = new Set(participants)
+  const isAscending = (values: readonly number[]) =>
+    values.every(
+      (value, index) => index === 0 || value > (values[index - 1] as number),
+    )
+  const requireExactParticipantSeats = (
+    values: readonly { readonly seatNumber: number }[],
+    path: 'positions' | 'seats' | 'participantHands',
+  ) => {
+    if (
+      values.length !== participants.length ||
+      new Set(values.map((value) => value.seatNumber)).size !==
+        participants.length ||
+      values.some((value) => !participantSet.has(value.seatNumber))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '座位集合必须与本手参与座位完全一致。',
+        path: [path],
+      })
+    }
+  }
+
+  if (
+    participantSet.size !== participants.length ||
+    !isAscending(participants)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: '本手参与座位必须唯一并按座位号升序。',
+      path: ['participantSeatNumbers'],
+    })
+  }
+
+  const blindSeats = [
+    summary.buttonSeatNumber,
+    summary.smallBlindSeatNumber,
+    summary.bigBlindSeatNumber,
+  ]
+  if (
+    new Set(blindSeats).size !== blindSeats.length ||
+    blindSeats.some((seatNumber) => !participantSet.has(seatNumber))
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: '按钮和庄盲必须是不同的参与座位。',
+      path: ['buttonSeatNumber'],
+    })
+  }
+
+  requireExactParticipantSeats(summary.positions, 'positions')
+  requireExactParticipantSeats(summary.seats, 'seats')
+  requireExactParticipantSeats(summary.participantHands, 'participantHands')
+
+  for (const [path, values] of [
+    ['positions', summary.positions],
+    ['seats', summary.seats],
+    ['participantHands', summary.participantHands],
+    ['uncalledBetReturns', summary.uncalledBetReturns],
+  ] as const) {
+    if (!isAscending(values.map((value) => value.seatNumber))) {
+      context.addIssue({
+        code: 'custom',
+        message: '座位数组必须按座位号升序。',
+        path: [path],
+      })
+    }
+  }
+
+  if (
+    new Set(summary.positions.map((position) => position.position)).size !==
+    summary.positions.length
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: '每个参与座位必须具有唯一逻辑位置。',
+      path: ['positions'],
+    })
+  }
+  const positionBySeat = new Map(
+    summary.positions.map((position) => [
+      position.seatNumber,
+      position.position,
+    ]),
+  )
+  if (
+    positionBySeat.get(summary.buttonSeatNumber) !== 'BTN' ||
+    positionBySeat.get(summary.smallBlindSeatNumber) !== 'SB' ||
+    positionBySeat.get(summary.bigBlindSeatNumber) !== 'BB'
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: '按钮和庄盲座位必须与逻辑位置镜像一致。',
+      path: ['positions'],
+    })
+  }
+
+  if (
+    new Set(summary.seats.map((seat) => seat.playerId)).size !==
+      summary.seats.length ||
+    summary.seats.filter((seat) => seat.isUser).length !== 1 ||
+    summary.seats.some((seat) => seat.isUser !== (seat.seatNumber === 0))
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: '完成手座位结果必须保留唯一玩家和固定用户座位。',
+      path: ['seats'],
+    })
+  }
+  const participantHandBySeat = new Map(
+    summary.participantHands.map((hand) => [hand.seatNumber, hand]),
+  )
+  summary.seats.forEach((seat, index) => {
+    const participantHand = participantHandBySeat.get(seat.seatNumber)
+    if (
+      BigInt(seat.netChange) !==
+        BigInt(seat.endingStack) - BigInt(seat.startingStack) ||
+      participantHand === undefined ||
+      seat.startingHandCategory !==
+        classifyStartingHand(participantHand.holeCards)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '完成手座位结果必须与筹码和底牌事实镜像一致。',
+        path: ['seats', index],
+      })
+    }
+  })
+  const startingStackTotal = summary.seats.reduce(
+    (total, seat) => total + BigInt(seat.startingStack),
+    0n,
+  )
+  const endingStackTotal = summary.seats.reduce(
+    (total, seat) => total + BigInt(seat.endingStack),
+    0n,
+  )
+  if (startingStackTotal !== endingStackTotal) {
+    context.addIssue({
+      code: 'custom',
+      message: '完成手前后的座位筹码总额必须守恒。',
+      path: ['seats'],
+    })
+  }
+
+  if (
+    new Set(summary.uncalledBetReturns.map((item) => item.seatNumber)).size !==
+      summary.uncalledBetReturns.length ||
+    summary.uncalledBetReturns.some(
+      (item) => !participantSet.has(item.seatNumber),
+    )
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: '未跟注返还必须来自唯一的参与座位。',
+      path: ['uncalledBetReturns'],
+    })
+  }
+  const contributionTotal = summary.seats.reduce(
+    (total, seat) => total + BigInt(seat.totalContribution),
+    0n,
+  )
+  const distributedTotal =
+    summary.uncalledBetReturns.reduce(
+      (total, returned) => total + BigInt(returned.amount),
+      0n,
+    ) + summary.pots.reduce((total, pot) => total + BigInt(pot.amount), 0n)
+  if (contributionTotal !== distributedTotal) {
+    context.addIssue({
+      code: 'custom',
+      message: '总投入必须等于未跟注返还与全部底池金额之和。',
+      path: ['seats'],
+    })
+  }
+
+  const boardAndHoleCardKeys = [
+    ...summary.board,
+    ...summary.participantHands.flatMap((hand) => hand.holeCards),
+  ].map(cardKey)
+  if (new Set(boardAndHoleCardKeys).size !== boardAndHoleCardKeys.length) {
+    context.addIssue({
+      code: 'custom',
+      message: '公共牌和参与者底牌不得重复。',
+      path: ['participantHands'],
+    })
+  }
+
+  const evaluatedSeatNumbers = new Set<number>()
+  summary.participantHands.forEach((hand, index) => {
+    const evaluation = hand.handEvaluation
+    if (evaluation === null) return
+    evaluatedSeatNumbers.add(hand.seatNumber)
+    const availableCards = new Set(
+      [...summary.board, ...hand.holeCards].map(cardKey),
+    )
+    const bestFiveKeys = evaluation.bestFive.map(cardKey)
+    if (
+      new Set(bestFiveKeys).size !== bestFiveKeys.length ||
+      bestFiveKeys.some((key) => !availableCards.has(key))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '最佳五张牌必须来自该参与者可用牌且不得重复。',
+        path: ['participantHands', index, 'handEvaluation', 'bestFive'],
+      })
+    }
+  })
+
+  if (summary.terminationReason === 'complete') {
+    if (evaluatedSeatNumbers.size !== 0) {
+      context.addIssue({
+        code: 'custom',
+        message: '未摊牌完成手不得包含牌型评估。',
+        path: ['participantHands'],
+      })
+    }
+  } else {
+    const eligibleSeatNumbers = new Set(
+      summary.pots.flatMap((pot) => pot.eligibleSeatNumbers),
+    )
+    if (
+      summary.board.length !== 5 ||
+      evaluatedSeatNumbers.size !== eligibleSeatNumbers.size ||
+      [...eligibleSeatNumbers].some(
+        (seatNumber) => !evaluatedSeatNumbers.has(seatNumber),
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '摊牌评估必须与全部有资格参与底池的座位一致。',
+        path: ['participantHands'],
+      })
+    }
+  }
+
+  summary.pots.forEach((pot, potIndex) => {
+    const isUniqueParticipantSubset = (values: readonly number[]) =>
+      new Set(values).size === values.length &&
+      values.every((seatNumber) => participantSet.has(seatNumber))
+    const contributingSet = new Set(pot.contributingSeatNumbers)
+    const eligibleSet = new Set(pot.eligibleSeatNumbers)
+    if (
+      pot.potIndex !== potIndex ||
+      pot.kind !== (potIndex === 0 ? 'main' : 'side') ||
+      !isUniqueParticipantSubset(pot.contributingSeatNumbers) ||
+      !isUniqueParticipantSubset(pot.eligibleSeatNumbers) ||
+      !isUniqueParticipantSubset(pot.winningSeatNumbers) ||
+      pot.eligibleSeatNumbers.some(
+        (seatNumber) => !contributingSet.has(seatNumber),
+      ) ||
+      pot.winningSeatNumbers.some((seatNumber) => !eligibleSet.has(seatNumber))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '底池座位集合和顺序必须一致。',
+        path: ['pots', potIndex],
+      })
+    }
+    if (
+      !isAscending(pot.contributingSeatNumbers) ||
+      !isAscending(pot.eligibleSeatNumbers) ||
+      !isAscending(pot.winningSeatNumbers) ||
+      pot.awards.length !== pot.winningSeatNumbers.length ||
+      new Set(pot.awards.map((award) => award.seatNumber)).size !==
+        pot.awards.length ||
+      pot.awards.some(
+        (award) => !pot.winningSeatNumbers.includes(award.seatNumber),
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '底池参与者、赢家和派奖集合必须规范。',
+        path: ['pots', potIndex],
+      })
+    }
+    pot.awards.forEach((award, awardIndex) => {
       if (
-        pot.awards.reduce(
-          (total, award) => total + BigInt(award.amount),
-          0n,
-        ) !== BigInt(pot.amount)
+        BigInt(award.amount) !==
+        BigInt(award.baseAmount) + BigInt(award.oddChipAmount)
       ) {
         context.addIssue({
           code: 'custom',
-          message: '底池派奖总额必须等于底池金额。',
-          path: ['pots', potIndex, 'amount'],
+          message: '派奖金额必须等于基础金额与奇数筹码之和。',
+          path: ['pots', potIndex, 'awards', awardIndex, 'amount'],
         })
       }
     })
+    if (
+      pot.awards.reduce((total, award) => total + BigInt(award.amount), 0n) !==
+      BigInt(pot.amount)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '底池派奖总额必须等于底池金额。',
+        path: ['pots', potIndex, 'amount'],
+      })
+    }
   })
+}
+
+export const CompletedHandSummarySchema: z.ZodType<CompletedHandSummary> =
+  CompletedHandSummaryBaseSchema.superRefine(refineCompletedHandSummary)
+
+export const CompletedHandResultSchema: z.ZodType<CompletedHandResult> =
+  CompletedHandResultBaseSchema.superRefine(refineCompletedHandSummary)
 function freeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object') {
     for (const child of Object.values(value)) freeze(child)

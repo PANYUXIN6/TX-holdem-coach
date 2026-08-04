@@ -17,6 +17,7 @@ import {
   assertM24CommandLedgerRepository,
   assertM25SessionMutationRepository,
   assertM26SessionRecoveryRepository,
+  assertM27HandAgentAuditRepositories,
 } from './database-repository-assertions.js'
 
 const databaseTestMode = loadDatabaseTestMode(process.env)
@@ -77,6 +78,7 @@ async function runIntegrationTest(): Promise<void> {
       await assertM25SessionMutationRepository(sql, runtimeUrl)
       await assertM24M25AtomicComposition(sql)
       await assertM26SessionRecoveryRepository(sql, runtimeUrl)
+      await assertM27HandAgentAuditRepositories(sql, runtimeUrl)
     }
   } finally {
     await sql.end({ timeout: 0 })
@@ -95,7 +97,7 @@ test(
 
     await runIntegrationTest()
   },
-  180_000,
+  480_000,
 )
 
 async function applySqlMigrationFile(

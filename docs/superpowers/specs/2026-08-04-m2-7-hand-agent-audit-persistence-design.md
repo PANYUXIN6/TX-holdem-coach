@@ -1,8 +1,8 @@
 # M2.7 手牌与 AgentRun 审计持久化设计
 
-- 状态：已批准，待实现
+- 状态：已批准并实现；离线与真实 PostgreSQL 验收通过
 - 日期：2026-08-04
-- 最后修订：2026-08-04（补入 Runtime 审计 Decoder 组合端口）
+- 最后修订：2026-08-04（实现完成并通过 Runtime Decoder、事务锁、重启回读与秘密边界验收）
 - 任务来源：[项目开发任务 M2.7](../plans/2026-07-23-poker-practice-development-tasks.md#m27-实现手牌与-agentrun-审计持久化)
 - 上位架构：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
 - Agent 架构：[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
@@ -70,7 +70,7 @@ Hand、Foundation 审计、Player 审计和 Coach 审计分别拥有自己的严
 
 ## 3. 模块与依赖方向
 
-逻辑模块如下；实现前仍应按仓库地图确认最终文件落点：
+最终模块落点如下：
 
 ```text
 sessions/hand-audit/

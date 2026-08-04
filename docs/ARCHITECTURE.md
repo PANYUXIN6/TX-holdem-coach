@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-08-04（M2.6 多版本恢复与诊断事务已落地；领域命令组合仍待 M3）
+更新时间：2026-08-04（M2.7 Hand/Agent 审计持久化基础层已落地；领域组合仍待 M3，Agent 生命周期仍待 Runtime）
 
 ## Workspace 边界
 
@@ -10,15 +10,16 @@
 - `src/persistence/command-ledger-repository.ts` 是 M2.4 命令账本边界：依赖 Contracts Schema 验证公开响应，并在服务端私有联合中补充 `aiAction`；它在 Schema 验证后规范化命令 UUID，生成稳定摘要与一次性 capability，并把 acquired capability 绑定到登记事务，只消费调用方事务和已解析 Owner，不依赖扑克引擎、HTTP 或 SSE。M2.4 沿用既有 Schema，不新增迁移。
 - M2.5 已实现“权威状态契约与当前版本 Codec → 事务内原子持久化”分层：`src/sessions/authoritative-state/` 不依赖数据库，严格构造 `PrivateTableState`，并以四条独立版本序列编码当前快照及只含四种 M1.9 Poker 事件的累积私有事件 V1；`src/persistence/session-mutation-repository.ts` 只消费调用方事务，通过 Owner-scoped Session 行锁 capability 验证并按 Session、可选快照、完整事件三阶段写入。M2.5b 与 M2.4 并列且互不依赖，M3 才负责领域命令和事务组合。详细事实源见 [M2.5 设计](./superpowers/specs/2026-08-03-m2-5-authoritative-state-codecs-atomic-persistence-design.md)。
 - M2.6 已在同一纯模块边界增加完全独立的快照/私有事件复合版本注册表和确定性恢复核心；`src/persistence/session-recovery-repository.ts` 复用 M2.5 Session 行锁，在调用方事务内读取完整私有恢复事实，只修复可重建 `currentHandId` 或写入当前阻断性诊断，并提供保留首次诊断语义的显式重试。诊断字段与生命周期由 `0003_modern_supreme_intelligence.sql` 的回填和互斥约束闭合。详细事实源见 [M2.6 设计](./superpowers/specs/2026-08-03-m2-6-multiversion-recovery-design.md)。
+- M2.7 已在既有 M2.2 Schema 上增加 Hand 与 Agent Foundation 审计持久化，不新增迁移。`src/sessions/hand-audit/` 保存“开手命令前状态 + StartedHandFacts”和完整 M1.9 结算结果；`src/agents/audit/` 保存严格 Run Config、Budget、Attempt 载荷并定义固定 Player/Coach Decoder 端口；两个 persistence Repository 只消费调用方事务，分别闭合 Hand 状态与 Foundation 审计事实。详细事实源见 [M2.7 设计](./superpowers/specs/2026-08-04-m2-7-hand-agent-audit-persistence-design.md)。
 - `apps/server/.env.example` 提供脱敏占位的线上运行/迁移连接与 Provider Key；`.env.test.example` 只提供两条测试 URL。真实值只存在于后端、Git 忽略的 `.env.test.local` 或部署环境，project ref 不由环境声明。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与 `service/` 分类。普通 `verify` 明确不收集远程数据库测试文件。日常 `db:test:integration` 只执行合法前缀核验、Drizzle 迁移和迁移后 `exact`；手动 `db:test:full` 在同一正常流程后追加 M2.2 Schema/约束断言和 M2.3 Repository 真实读写断言，覆盖阵容与 revision 0、设置 UPSERT、损坏拒绝、活动冲突回滚、微秒分页和 Owner 隔离。M2.3 新断言全部在回滚事务或精确 Session ID 范围内运行。
-- M2.4/M2.5/M2.6 单元测试只通过公开构造器、Codec、纯恢复决策和 Repository API 验证领域契约、capability、写前拒绝及错误转换；`db:test:full` 额外以真实 PostgreSQL 验证 Owner 条件、唯一/外键/诊断约束、未提交不可见、`FOR UPDATE` 阻塞、双连接竞争、指针修复、诊断重试和活动冲突回滚，并在测试账号允许时用可丢弃数据库验证 M2.5→M2.6 旧 Schema 升级。默认离线验证不执行该远程文件。
+- M2.4–M2.7 单元测试只通过公开构造器、Codec、纯决策和 Repository API 验证契约、capability、写前拒绝及错误转换；`db:test:full` 额外以真实 PostgreSQL 验证 Owner 条件、唯一/外键/诊断约束、未提交不可见、`FOR UPDATE` 阻塞、双连接竞争、M2.7 独立序号、聚合无重复、换连接回读和秘密扫描，并在测试账号允许时用可丢弃数据库验证 M2.5→M2.6 旧 Schema 升级。默认离线验证不执行该远程文件。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、结构化合法动作、人物公开摘要与创建选择、Provider 健康/设置、HTTP/SSE 信封和错误响应。`LegalActionsSchema` 约束动作顺序、互斥、快捷目标顺序/唯一性/区间和普通目标与全下边界；Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。`bet`、`raise` 的命令金额固定为行动后本街总投入的 `targetStreetCommitment`。通用座位为 `0..8`，创建选择的 AI 为 `1..8`，公开快照固定唯一用户在座位 `0` 且总席数为 6–9；人物目录由八个固定标识组成。
 - 公开快照只承载当前手的最小行动时间线及两手之间的最小完成手摘要；M3 以后只能从私有事件与 M1.9 私有 `participantHands` 作可见性投影，Contracts 不导入服务器类型、评估比较等级、牌堆、burn 或未公开底牌。
 
 ## 依赖方向
 
-共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。Server 已从 Contracts 导入冻结的 Card 点数/花色字面量、合法动作和人物公开摘要协议；私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路以 `positioning.ts` 为唯一物理座位拓扑，下注、推进和结算只由 `poker-engine.ts` 对上层组合。M2.5/M2.6 依赖方向固定为 `poker/state + hand-result → sessions/authoritative-state Codec/registry/recovery-decision → persistence/session-mutation-repository + session-recovery-repository → postgres.js`；纯状态、Codec、注册表和恢复决策不依赖持久层，恢复 Repository 只复用 M2.5 的锁入口而不持有版本分支。M2.4 仍与二者并列，M3 才组合命令账本和恢复后 capability。所有浏览器可见数据必须通过 Contracts 的严格 Schema。完整会话服务、Agent Foundation 和两种 Runtime 尚未建立。
+共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。Server 已从 Contracts 导入冻结的 Card 点数/花色字面量、合法动作和人物公开摘要协议；私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路以 `positioning.ts` 为唯一物理座位拓扑，下注、推进和结算只由 `poker-engine.ts` 对上层组合。M2.5/M2.6 依赖方向固定为 `poker/state + hand-result → sessions/authoritative-state Codec/registry/recovery-decision → persistence/session-mutation-repository + session-recovery-repository → postgres.js`。M2.7 新增两条单向链：`authoritative-state + StartedHandFacts/CompletedHandResult → sessions/hand-audit → hand-audit-repository`，以及 `agents/audit 固定 Codec/Decoder 端口 → agent-foundation-audit-repository`；Foundation 与 persistence 不导入 Player/Coach 实现，未来只由应用组合点注入对应 Decoder。M3 才组合命令账本、Session capability、Hand 与事件；完整 Agent Foundation Runtime 和两种业务 Runtime 仍未建立。
 
 ## 设计评审开发工具边界
 
@@ -34,6 +35,8 @@ M2.5 调用链固定为“上层事务 → `lockSessionForMutation` → M3 生�
 
 M2.6 调用链固定为“上层事务 → `recoverSessionForMutation` → M2.5 行锁 → 完整读取私有事件/快照/Hand 摘要 → 纯恢复决策 → 可选指针修复或诊断转换 → 必要时重新锁定”。普通入口遇到既有诊断直接返回首次码和时间；`retryReadonlySessionRecovery` 才重新扫描并在成功时按保留的 `endedAt` 恢复生命周期、清空诊断。M3 必须在恢复返回活动 `ready` 后才登记命令并使用其 capability，提交前不得把修复或诊断对外宣称为持久化成功。
 
+M2.7 调用链固定为“上层事务 → 当前严格 Codec 重解码 → Hand/Agent 窄写入或精确聚合读取”。Attempt 和 Invocation 分别锁父 Run 后用新语句分配 PostgreSQL integer 范围内序号；AgentRun 聚合通过独立相关子查询避免笛卡尔重复，并按数据库 Runtime 选择构造期固定 Decoder 槽位。当前没有 Runtime writer 的非空 checkpoint/result/Decision/Review 一律拒绝未知版本；“换连接后可回读”不表示自动恢复或继续 AgentRun。
+
 ## 已实现的 M1 门面、M2.5 权威状态与待实施的非 Agent 重基线
 
 [非 Agent 运行时架构重基线](./superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)已确认；M1.R/M1.8/M1.9 已实施，后续任务仍待完成：
@@ -45,9 +48,9 @@ M2.6 调用链固定为“上层事务 → `recoverSessionForMutation` → M2.5 
 
 目标行动链为 `PokerTableState + PokerCommand → poker-engine.ts → PokerEngineResult`，开手也只调用同一模块并取得 `StartedHandFacts`。M3 只消费门面结果，不得直接持久化 `showdown/complete`，也不得自行组合发牌、庄盲、推进与结算模块；M2/M3/M5 可直接消费 `hand-result.ts` 的纯领域数据契约。
 
-## 已确认但尚未实现的 Agent 边界
+## 已实现的 Agent 审计基础与尚未实现的 Runtime 边界
 
-Agent 大模块已进入正式产品与开发计划，但当前代码中尚无对应模块。后续实现以 [Agent Foundation 与受限 Runtime](./superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md)、[Agent 大模块开发任务](./superpowers/plans/2026-07-26-agent-module-development-tasks.md) 和 Player/Coach 专项设计为准：
+M2.7 已实现严格审计 Codec、Foundation Repository 与 Runtime Decoder 组合端口，但没有实现 Agent 状态机、Worker 或 Player/Coach 业务载荷 writer。后续实现以 [Agent Foundation 与受限 Runtime](./superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md)、[Agent 大模块开发任务](./superpowers/plans/2026-07-26-agent-module-development-tasks.md) 和 Player/Coach 专项设计为准：
 
 - 共享 Foundation 只提供静态 Runtime 注册、AgentRun、预算、能力授权、模型网关、租约、审计和恢复，不理解扑克目标。
 - Player Runtime 负责“赢”，从权威状态中枢取得座位级观察，经确定性数学、策略、人物和对手预处理后让模型在候选中有界选择，再由专属 Commit Gate 输出扑克命令。

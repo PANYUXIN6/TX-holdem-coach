@@ -2,6 +2,7 @@
 
 - 状态：已批准，待实现
 - 日期：2026-08-04
+- 最后修订：2026-08-04（补入 Runtime 审计 Decoder 组合端口）
 - 任务来源：[项目开发任务 M2.7](../plans/2026-07-23-poker-practice-development-tasks.md#m27-实现手牌与-agentrun-审计持久化)
 - 上位架构：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
 - Agent 架构：[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
@@ -34,7 +35,7 @@ M2.7 定位为：
 
 | 模块/里程碑 | 职责 |
 | --- | --- |
-| M2.7 | Hand 与已冻结 Foundation 审计载荷的当前 Codec、版本分派、窄 writer、精确聚合 reader、结构性不变量与持久化测试 |
+| M2.7 | Hand 与已冻结 Foundation 审计载荷的当前 Codec、版本分派、窄 writer、精确聚合 reader、Runtime 审计 Decoder 组合端口、结构性不变量与持久化测试 |
 | M3 | 组合命令账本、Session 锁、Hand、快照和事件；验证自动买入差异；决定完成或中止何时合法 |
 | Agent Foundation/Runtime | AgentRun 状态转换、租约、fencing、Worker、恢复策略、迟到响应和 Runtime 专属检查点/结果 |
 | Player Runtime | 首个 Player Decision、真实有界记忆和 Validator 业务载荷 writer |
@@ -55,7 +56,7 @@ Hand、Foundation 审计、Player 审计和 Coach 审计分别拥有自己的严
 - 与既有 Foundation、Player、Coach 单向依赖一致。
 - 数据库行模型不泄漏给 Runtime。
 - 不需要通用 CRUD、任意表名或任意 JSON 接口。
-- 后续首个真实 Runtime writer 可以独立增加 Codec 和聚合分支，不改写 Hand 或 Foundation 契约。
+- M2.7 现在冻结 Foundation 所有的泛型聚合类型、固定 Decoder 端口和构造期组合 seam；后续首个真实 Runtime writer 只需实现对应端口并在应用 composition root 注入，不改写 Hand、Foundation 导出或依赖方向。
 
 代价是文件和少量严格校验代码更多，但这些重复保持了版本、错误和业务边界的独立性。
 
@@ -82,7 +83,8 @@ sessions/hand-audit/
 agents/audit/
 ├── run-configuration-audit-codec-v1.ts
 ├── execution-budget-audit-codec-v1.ts
-└── attempt-audit-codec-v1.ts
+├── attempt-audit-codec-v1.ts
+└── runtime-audit-extension-decoder.ts
 
 persistence/
 ├── hand-audit-repository.ts
@@ -92,8 +94,8 @@ persistence/
 职责：
 
 - Hand 纯模块依赖 `PrivateTableState`、`StartedHandFacts` 和 `CompletedHandResult`，不依赖 SQL、数据库行或 Repository 错误。
-- Agent 审计纯模块只定义版本引用、预算和 Attempt 审计载荷，不实现 RuntimeRegistry、模型调用、能力执行或状态机。
-- Repository 只消费调用方事务、已解析 Owner 和纯 Codec；不依赖 HTTP、SSE、Worker 或模型供应商。
+- Agent 审计纯模块定义版本引用、预算、Attempt 审计载荷，以及 Foundation 所有的泛型 Runtime 审计 Decoder 端口；不导入 Player/Coach 类型，也不实现 RuntimeRegistry、模型调用、能力执行或状态机。
+- Repository 只消费调用方事务、已解析 Owner、纯 Codec 和构造期不可变 Decoder bundle；不依赖 HTTP、SSE、Worker、模型供应商或 Player/Coach 实现。
 
 依赖方向固定为：
 
@@ -115,9 +117,17 @@ PrivateTableState + M1.9 Hand facts
 agent-foundation-audit-repository
               ↓
           PostgreSQL
+
+未来 Player / Coach 严格 Codec
+              ↓ 实现
+Foundation 所有的固定 Decoder 端口
+              ↓ 由应用 composition root 构造期注入
+agent-foundation-audit-repository
 ```
 
 `HandAudit` 与 `AgentRunAudit` 是两个独立返回类型。`player | coach` 判别只属于 `AgentRunAudit`，且必须来自权威的 `agent_runs.runtime`。
+
+这里采用依赖倒置而不是动态插件：Foundation 定义端口，Player/Coach 依赖并实现端口，应用组合点同时依赖双方并构造 Repository；Foundation 永远不导入 `agents/player` 或 `agents/coach`。Decoder bundle 只有固定 `player`、`coach` 两个可选槽位，没有运行时 `register()`、任意名称查找或全局可变注册表。
 
 ## 4. Hand 当前契约与版本
 
@@ -248,7 +258,7 @@ Writer 不接受非终态 Invocation。
 | Coach Assessment | 不单独发布不可组合的孤立 writer；随父 Review 的真实 writer 一起冻结 |
 | Agent Memory | 不重复建立 writer；revision 0 复用 M2.3 严格空记忆 V1，真实有界记忆由 Player Runtime 发布 |
 
-未来 Player Decision writer 发布时，必须同步决定 `AgentRunAudit` 是否内嵌其准确引用的 Memory Revision；M2.7 当前不提前实现。
+未来 Player Decision writer 发布时，必须同步决定其 `PlayerRuntimeAuditExtension` 是否内嵌准确引用的 Memory Revision；M2.7 当前不提前实现业务字段，但已经冻结承载该结果的泛型端口与聚合分支。
 
 ## 6. Repository API
 
@@ -303,6 +313,21 @@ readHandAudit(
 ### 6.2 Foundation 审计 API
 
 ```ts
+createAgentFoundationAuditRepository<
+  TPlayerRuntimeAudit extends PlayerRuntimeAuditShape =
+    EmptyPlayerRuntimeAudit,
+  TCoachRuntimeAudit extends CoachRuntimeAuditShape =
+    EmptyCoachRuntimeAudit,
+>(options: {
+  readonly runtimeAuditDecoders: AgentAuditDecoderBundle<
+    TPlayerRuntimeAudit,
+    TCoachRuntimeAudit
+  >
+}): AgentFoundationAuditRepository<
+  TPlayerRuntimeAudit,
+  TCoachRuntimeAudit
+>
+
 insertAgentRunAudit(
   transaction,
   owner,
@@ -332,8 +357,10 @@ readAgentRunAudit(
   owner,
   sessionId,
   agentRunId,
-): Promise<AgentRunAudit>
+): Promise<AgentRunAudit<TPlayerRuntimeAudit, TCoachRuntimeAudit>>
 ```
+
+Repository 工厂复制并深冻结 `runtimeAuditDecoders`，此后没有注册、替换或清除 Decoder 的 API。M2.7 生产组合显式传入空 bundle；因此当前合法缺省可以读取，任何尚未发布的非空 Runtime 载荷仍然失败。未来 Runtime 只改变应用 composition root 的构造参数和返回类型实参，不修改 Foundation 接口或实现。
 
 `insertAgentRunAudit()` 只能创建固定初态：
 
@@ -351,20 +378,118 @@ replacementRunId = null
 
 `startAgentAttemptAudit()` 与 `appendCapabilityInvocationAudit()` 锁定父 Run，并校验 Owner、Session 和 Run 身份，但不判断父 Run 当前是 `queued`、`leased`、`running` 还是终态。只有 Runtime 能结合租约、fencing、deadline 和状态机决定某次开始或调用在业务上是否合法；M2.7 保存调用方已经作出的决定。后续 Runtime 必须在同一调用方事务中先完成所需 Run 转换再调用 writer。M2.7 的独立测试可从固定 `queued` 初态验证结构写入，但这不把 `queued → Attempt started` 宣告为合法 Runtime 流程。
 
-`AgentRunAudit` 的公共父记录事实包括：
+Foundation 先冻结 Runtime 扩展的外形：
+
+```ts
+interface PlayerRuntimeAuditShape<
+  TCheckpoint = unknown,
+  TResult = unknown,
+  TDecision = unknown,
+> {
+  readonly checkpoint: TCheckpoint | null
+  readonly result: TResult | null
+  readonly decision: TDecision | null
+}
+
+interface CoachRuntimeAuditShape<
+  TCheckpoint = unknown,
+  TResult = unknown,
+  TReview = unknown,
+> {
+  readonly checkpoint: TCheckpoint | null
+  readonly result: TResult | null
+  readonly review: TReview | null
+}
+
+type EmptyPlayerRuntimeAudit = PlayerRuntimeAuditShape<never, never, never>
+type EmptyCoachRuntimeAudit = CoachRuntimeAuditShape<never, never, never>
+```
+
+`AgentRunAudit<TPlayerRuntimeAudit, TCoachRuntimeAudit>` 再以权威 Runtime 构成泛型联合：
+
+```ts
+type AgentRunAudit<
+  TPlayerRuntimeAudit extends PlayerRuntimeAuditShape,
+  TCoachRuntimeAudit extends CoachRuntimeAuditShape,
+> =
+  | (AgentRunAuditBase & {
+      readonly runtime: 'player'
+      readonly runtimeAudit: TPlayerRuntimeAudit
+    })
+  | (AgentRunAuditBase & {
+      readonly runtime: 'coach'
+      readonly runtimeAudit: TCoachRuntimeAudit
+    })
+```
+
+`EmptyPlayerRuntimeAudit` 与 `EmptyCoachRuntimeAudit` 是 Foundation 定义的封闭空扩展，只允许相应 checkpoint/result 及 Decision 或 Review 位置为 `null`，不包含开放键。未来 Runtime 的具体扩展类型必须满足对应固定 shape 和空值语义，只把相应 `never | null` 槽位替换为严格解码后的业务类型；不得增加任意载荷字典。
+
+公共父记录事实包括：
 
 - Owner、Session、Hand、Run ID。
 - Runtime、触发码、幂等键和生命周期。
 - Player 身份字段或 Coach 的固定空字段。
 - 父/替代 Run、租约、fencing 和 deadline。
 - Runtime Definition 版本、解码后的 Run Config 和 Budget。
-- 可空 checkpoint/result 的解码结果。
 - 终止码、创建、开始、完成和更新时间。
-- 排序后的 Attempts、Invocations，以及可空 Player Decision 或 Coach Review。
+- 排序后的 Attempts 和 Invocations。
 
-判别字段必须来自 `agent_runs.runtime`。读取器允许生命周期对应的合法“尚未产生后续记录”，例如 queued/running Run 没有 Decision 或 Review。任何已经存在的子记录都必须严格解码并校验其实际结构化身份镜像。
+`runtimeAudit` 分支承载可空 checkpoint/result，以及 Player 的可空 Decision 或 Coach 的可空 Review/Assessments；另一 Runtime 的业务槽位在类型上不存在。判别字段必须来自 `agent_runs.runtime`。读取器允许生命周期对应的合法“尚未产生后续记录”，例如 queued/running Run 没有 checkpoint、result、Decision 或 Review。任何已经存在的子记录都必须严格解码并校验其实际结构化身份镜像。
 
-### 6.3 Attempt 与 Invocation 序号
+### 6.3 Runtime 审计 Decoder 组合端口
+
+Foundation 发布两个固定端口槽位的只读 bundle：
+
+```ts
+interface RuntimeAuditExtensionDecoder<
+  TRuntime extends 'player' | 'coach',
+  TDecodeInput,
+  TDecodedAudit,
+> {
+  readonly runtime: TRuntime
+  decode(input: TDecodeInput): TDecodedAudit
+}
+
+type AgentAuditDecoderBundle<
+  TPlayerRuntimeAudit extends PlayerRuntimeAuditShape,
+  TCoachRuntimeAudit extends CoachRuntimeAuditShape,
+> =
+  Readonly<{
+    player?: RuntimeAuditExtensionDecoder<
+      'player',
+      PlayerRuntimeAuditDecodeInput,
+      TPlayerRuntimeAudit
+    >
+    coach?: RuntimeAuditExtensionDecoder<
+      'coach',
+      CoachRuntimeAuditDecodeInput,
+      TCoachRuntimeAudit
+    >
+  }>
+```
+
+`PlayerRuntimeAuditDecodeInput` 与 `CoachRuntimeAuditDecodeInput` 由 Foundation 拥有。它们不是数据库行类型，只包含 Repository 已规范化的：
+
+- 权威 Run 身份与 Runtime。
+- 可空 Run checkpoint/result 的命名版本载荷对。
+- Player Decision 的结构化身份、状态、时间、Memory Revision 与三个命名版本载荷对；或 Coach Review/Assessments 的结构化身份、状态、时间及各自命名版本载荷对。
+
+两个输入都是严格固定字段 DTO，不允许额外键、任意表名、任意载荷集合或回调 SQL。Foundation Repository 在调用 Decoder 前负责 Owner、Session、Hand、Run、Runtime 及其他实际结构化镜像；Runtime Decoder 只负责自己拥有的版本分派、严格业务 Codec 和扩展内部空值矩阵，不访问数据库、网络或 Foundation 私有状态。
+
+读取顺序固定为：
+
+1. 单条聚合 SQL 取得父记录和固定子记录形状。
+2. Foundation 规范化行并验证公共结构、身份镜像和载荷对完整性。
+3. 按 `agent_runs.runtime` 只选择对应的一个 Decoder 槽位。
+4. 所有 Runtime 扩展载荷均为空时，直接返回对应 `Empty*RuntimeAudit`，不要求安装 Decoder。
+5. 任一 Runtime 扩展载荷非空而对应槽位缺失时，按 `checkpoint → result → Decision` 或 `checkpoint → result → Review → Assessment` 的顺序，对第一个非空载荷抛出 `UnknownPayloadVersionError`。
+6. 槽位存在时，由该 Decoder 对每个非空命名载荷执行独立版本分派和严格解码；未知版本与损坏载荷分别保持既有错误分类。
+7. Foundation 对 Decoder 结果再次检查分支对应的 `checkpoint/result/decision|review` 顶层精确键集和空值位置；嵌套业务对象的严格性仍由 Runtime Codec 负责。
+8. Repository 深冻结完整 `AgentRunAudit` 后返回。
+
+该 seam 不是通用 JSON 扩展系统。生产 bundle 的 Decoder 只能由代码发布的 Player/Coach 模块提供，不能按数据库内容动态装载；固定对象类型对每个 Runtime 只有一个属性，不提供接收列表或逐项注册的 builder，因此重复槽位在接口上不可表达。未来 Runtime writer 的验收必须证明：新增 Runtime Codec、writer、Decoder 实现和 composition-root 绑定后，Foundation 源码与导出零修改即可严格 round-trip。
+
+### 6.4 Attempt 与 Invocation 序号
 
 Repository 不允许调用方自由指定序号：
 
@@ -375,7 +500,7 @@ Repository 不允许调用方自由指定序号：
 - 并发追加由父 Run 行锁串行化，数据库唯一约束仍作为最终防线。
 - 先行事务回滚不产生已提交序号缺口；后继事务基于已提交事实重新分配。
 
-### 6.4 未发布载荷的读取
+### 6.5 未发布载荷的读取
 
 以下载荷只要非空，读取器都必须进入对应的版本边界：
 
@@ -385,9 +510,9 @@ Repository 不允许调用方自由指定序号：
 - Coach Review 四类载荷。
 - Coach Assessment。
 
-当前没有生产注册项时，统一抛出对应 `UnknownPayloadVersionError`。不得忽略、返回原始 JSON 或降级为开放 `unknown`。
+当前空 bundle 没有 Runtime 生产 Decoder；非空 Runtime 载荷统一按 6.3 的确定顺序抛出对应 `UnknownPayloadVersionError`。不得忽略、返回原始 JSON 或降级为开放 `unknown`。Foundation 自有 Run Config、Budget 和 Attempt 仍使用各自不可变生产注册表，不经过 Runtime 扩展端口。
 
-### 6.5 实际镜像范围
+### 6.6 实际镜像范围
 
 - Attempt、Invocation：Owner、Session、Run。
 - Player Decision：Owner、Session、Hand、Run、Runtime、Participant、来源状态版本和请求 ID。
@@ -447,6 +572,8 @@ Hand 使用 Owner + Session + Hand ID 的单行精确读取，并按状态严格
 - Coach Review 与 Assessments。
 
 禁止把多个一对多子表直接平铺 JOIN，避免 Attempts × Invocations 笛卡尔重复。每个集合在 SQL 中稳定排序，应用层逐项严格解码。
+
+SQL 结果先映射为 Foundation 固定 DTO，再按 6.3 注入的端口解码 Runtime 扩展；SQL 适配器不得直接导入 Player/Coach Codec，Decoder 也不得看见 SQL 客户端或数据库行对象。
 
 该实现契约由真实 PostgreSQL 的一致快照、数量准确、独立排序和无重复验收；Repository 替身测试不通过断言内部 SQL 调用次数证明它。
 
@@ -534,6 +661,7 @@ M3 已确认 active + inHand + paused
 - `CanonicalAuditReferenceId` 与 `StableAuditCode` 的精确长度、字符、首尾和空白拒绝；业务码集合由相应 Runtime 的版本化契约测试覆盖。
 - Attempt 生命周期联合和全部空值矩阵。
 - Capability Invocation 成功、未授权和失败矩阵。
+- 空 Decoder bundle 的封闭空扩展，以及固定 `player|coach` 单槽位、无动态注册、构造后不可变和受 shape 约束的泛型判别联合。
 - 暂缓 writer 不存在生产导出或生产注册项。
 
 ### 11.2 Repository 替身测试
@@ -545,6 +673,10 @@ M3 已确认 active + inHand + paused
 - 纯验证失败时无修改性 SQL。
 - Hand 锁定、状态检查、精确单行更新和 Coach Run 中止拒绝。
 - Attempt/Invocation 独立排序、数量准确且无重复。
+- 无 Runtime 子载荷时空 bundle 正常返回；存在非空子载荷但缺少对应 Decoder 时按固定顺序返回 `UnknownPayloadVersionError`。
+- 注入测试专用 Player/Coach 严格 Decoder 后，只调用权威 Runtime 对应槽位，返回类型化扩展并深冻结；Decoder 不会收到另一 Runtime 的行或数据库对象。
+- Decoder 返回额外顶层键、缺失固定槽位或错误 Runtime shape 时在聚合返回前被拒绝。
+- Foundation 公共身份镜像在 Runtime Decoder 之前失败，Decoder 不能绕过或修复结构损坏。
 - 两类序号独立分配、`2_147_483_647` 上限和 `bigint` 溢出拒绝。
 - Attempt 只能从 `started` 更新一次到终态。
 - 任一步失败后不执行后续写入。
@@ -576,11 +708,14 @@ M3 已确认 active + inHand + paused
 
 M2.7 当前没有 Decision、Review、Assessment 或真实 Memory writer，因此重启测试不得通过直接 SQL 伪造这些正常业务记录。
 
+当前 M2.7 只用 Repository 替身和测试专用 Decoder 验证组合 seam，不把测试 Decoder 放入生产 bundle。未来首个 Player/Coach writer 的正常 PostgreSQL round-trip 必须经其公开 writer、真实 Codec 和 composition-root Decoder 绑定完成，并增加静态依赖验收，证明 Foundation 与 persistence 模块没有导入 Player/Coach 实现。
+
 ### 11.4 测试 seam
 
 正式 seam 只有：
 
 - Hand/Agent 当前 Codec 与版本注册表公开接口。
+- Foundation 所有的 Runtime 审计 Decoder 端口、泛型 `AgentRunAudit` 与 Repository 构造接口。
 - Hand Repository 公开写入与读取接口。
 - Foundation 审计 Repository 公开写入与聚合读取接口。
 - 真实 PostgreSQL 事务、锁、约束、可见性和持久性边界。
@@ -595,7 +730,7 @@ M2.7 当前没有 Decision、Review、Assessment 或真实 Memory writer，因�
 4. Run Config、Budget 与 AgentRun 初始 writer。
 5. Attempt 两阶段协议。
 6. Capability Invocation 完成事实。
-7. AgentRun 聚合读取。
+7. Runtime 审计 Decoder bundle、泛型联合与 AgentRun 聚合读取。
 8. PostgreSQL 并发、回滚、重启和秘密扫描。
 
 每个切片继续拆成多个微循环：
@@ -627,7 +762,8 @@ git diff --check
 - 不自行开启或提交跨模块事务。
 - 不实现 AgentRun 生命周期转换、租约、fencing、Worker、迟到结果判定、Commit Gate、恢复或重新调度。
 - 不为 Run checkpoint/result、Invocation payload、Player Decision、Coach Review、Coach Assessment 或真实 Memory 发布占位 writer。
-- 不建立通用 JSON、通用 CRUD、任意表名、任意过滤器或全局可变版本注册机制。
+- 不建立通用 JSON、通用 CRUD、任意表名、任意过滤器、动态 Decoder 注册或全局可变版本注册机制。
+- Foundation 与其 persistence 适配器不导入 Player/Coach Codec、Repository 或业务类型；构造期端口组合不能反转依赖方向。
 - 不保存原始供应商请求/响应、Prompt 原文、隐藏推理、`reasoning_content`、API Key、数据库连接串或原始异常。
 - 不重新计算牌型、胜者、边池划分或派奖结果。
 - 不从事件或关系表重建完成手结果。
@@ -645,6 +781,7 @@ git diff --check
 - Attempt 使用可持久化的 started/terminal 两阶段协议；Invocation 只写一次完整终态结构化事实。
 - Attempt/Invocation 分别在 PostgreSQL `integer` 范围内连续分配，父 Run 行锁与数据库约束保证并发正确性。
 - `HandAudit` 与 `AgentRunAudit` 返回完整父事实；Agent 判别只来自数据库 Runtime 行，合法缺省与损坏子记录严格区分。
+- Foundation 发布固定、不可变的 Player/Coach Runtime 审计 Decoder bundle 和泛型 `AgentRunAudit` 判别联合；当前空 bundle 保持未知版本拒绝，未来 Runtime 可在不修改 Foundation 源码或导出的前提下接入严格扩展回读。
 - 所有已存在非空载荷都必须经过注册表和严格 Decoder；未发布版本不得被忽略或原样返回。
 - 关闭原连接后，新连接可以通过公开 Repository API 完整回读所有 M2.7 已发布事实，但不会恢复或继续 Runtime。
 - 禁止字段在修改性 SQL 前被拒绝，合法写入后的全部 M2.7 可写列不包含秘密或隐藏推理哨兵。

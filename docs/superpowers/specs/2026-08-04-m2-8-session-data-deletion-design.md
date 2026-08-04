@@ -1,7 +1,8 @@
 # M2.8 场次删除与清空全部牌局数据事务设计
 
-- 状态：已批准，待实现
+- 状态：已批准设计的修订稿，待复核
 - 日期：2026-08-04
+- 最后修订：2026-08-04（补入历史阵容来源的锁内复验协议）
 - 任务来源：[项目开发任务 M2.8](../plans/2026-07-23-poker-practice-development-tasks.md#m28-实现场次删除和清空全部数据事务)
 - 产品边界：[Poker Practice PRD](./2026-07-23-poker-practice-prd.md)
 - 后端架构：[Poker Practice 后端设计](./2026-07-23-poker-practice-backend-design.md)
@@ -49,7 +50,7 @@ M2.8 提供两个 Owner-scoped、整场级持久化入口：
 
 代价：
 
-- 未来 M3 创建事务与 M4/M8 Runtime 必须遵守本设计冻结的锁顺序。
+- 未来 M3 创建事务与 M4/M8 Runtime 必须遵守本设计冻结的锁顺序；沿用上一场阵容时，事务外预检结果不能跨越 Owner 锁直接成为写入事实。
 - 数据库外 Provider 请求不能与数据库事务一起回滚；物理中断只能在提交后尽力执行。
 
 ### 2.2 拒绝：新增 `deleting` 生命周期或删除 epoch
@@ -86,7 +87,7 @@ M2.8 不修改 `schema.ts`，不生成 Drizzle migration。
 | 里程碑 | 职责 |
 | --- | --- |
 | M2.8 | 删除 Repository、事务内删除屏障、运行失效顺序、级联范围、回滚、影响行数和最小竞争事务测试 |
-| M3 | 外层应用事务、场次创建前 Owner 锁、HTTP 删除/清空入口、确认文案与提交后结果处理 |
+| M3 | 外层应用事务、场次创建前 Owner 锁、历史阵容来源的精确锁定与锁内复验、事务绑定创建 capability、HTTP 删除/清空入口、确认文案与提交后结果处理 |
 | M4 Player Runtime | AgentRun 通用生命周期、Worker、租约、fencing、Player Commit Gate 和提交后本地请求中断 |
 | M8 Coach Runtime | Coach 专属 Commit Gate、报告提交、Worker 中断和迟到结果处理 |
 
@@ -199,7 +200,8 @@ Repository 不提供 Hand 删除、Owner 删除、设置删除或任意资源删
 清空全部牌局数据：Owner → Sessions(id ASC) → Runs(id ASC)
 单场删除：Session → Runs(id ASC)
 Player/Coach Commit Gate：Session → Runs(id ASC)
-场次创建：Owner → Session
+当前目录场次创建：Owner → 新 Session（插入）
+沿用上一场阵容创建：Owner → 来源 ended Session → 新 Session（插入）
 ```
 
 排序锁必须由 PostgreSQL 查询中的 `ORDER BY id ASC ... FOR UPDATE` 完成。不得先无序读取 ID，再依赖 JavaScript 排序逐个补锁来声称数据库锁顺序成立。
@@ -207,6 +209,28 @@ Player/Coach Commit Gate：Session → Runs(id ASC)
 禁止任何 Runtime 或 Coordinator 先锁 Run，再反向获取 Session。普通 Commit Gate 不在持有 Session 锁后反向请求 Owner 锁。Owner 锁用于会改变 Owner Session 集合的清空与创建路径；单场删除不需要阻塞同 Owner 的无关场次。
 
 M3 创建事务必须在插入 Session 前取得 Owner 行锁。该能力由未来创建侧的窄 Repository 提供；M2.8 只冻结协议，不从删除模块公开创建能力。
+
+M2.3 的事务外阵容准备在本协议下进一步限定：
+
+- 当前目录创建可以在事务外解析当前只读人物目录、执行 Active 准入并形成待写入配置；这些配置不是任何 Session-scoped 历史事实。
+- 沿用上一场阵容时，事务外 `prepareLatestEndedRosterForReuse()` 的结果只能用于预检和提前反馈，不能作为取得 Owner 锁后的权威写入输入。缓存的 `configPayload`、`configPayloadVersion`、`configSnapshotKey`、`personaVersion` 或来源 Session ID 都不携带跨事务写入资格。
+- 当前 `prepareLatestEndedRosterForReuse()` 直接返回 `InsertSessionRosterSnapshotInput`，而低层 `insertSessionRosterSnapshot()` 正好消费该结构类型；M3 不得把这组现有 API 原样组合成生产创建路径。M3 必须把事务外预检收窄为不含可持久化配置的可用性结果，并增加事务绑定、不可伪造的 `LockedSessionRosterForCreation` capability。
+
+`LockedSessionRosterForCreation` 由创建侧窄 Repository 拥有，使用与现有锁 capability 一致的私有 WeakMap 身份、事务绑定和一次性消费语义。只有在同一事务已经取得 Owner 锁，并完成当前目录输入接纳或历史来源精确锁定与锁内解码后才能产生。其私有元数据保存最终 `InsertSessionRosterSnapshotInput`；公共对象不暴露可复制后绕过 capability 的原始写入结构。生产 M3 阵容写入入口必须同时消费原事务和该 capability；事务外预检类型、普通结构对象、其他事务或已经消费的 capability 均在修改性 SQL 前被拒绝。低层结构型写入原语若继续保留，只能作为该创建侧端口的私有适配细节，不能成为生产 M3 composition root 可直接调用的创建入口。
+
+未来 M3 的“沿用上一场”创建事务必须固定执行：
+
+1. 在事务外验证用户意图和新 Session/Participant 身份图；允许执行不具写入资格的旧阵容预检。
+2. 开启创建事务并先锁定 Owner 行。
+3. 在同一事务内按 `ended_at DESC, id DESC` 只读取该 Owner 当前最近 ended Session 的候选 ID；不得接受客户端或事务外缓存指定任意历史 Session。
+4. 使用 Owner ID 与步骤 3 的精确候选 ID 执行独立 `FOR UPDATE`。禁止用可能在等待后改选次新行的开放式 `ORDER BY ... LIMIT 1 FOR UPDATE` 代替精确候选锁。
+5. 候选不存在、等待锁时被删除、锁后不再严格为该 Owner 的 ended Session，或锁后复查发现它已不是最近 ended 来源时，在零写入情况下拒绝整个创建；不得回退到更旧 Session、事务外缓存、当前目录或部分升级阵容。
+6. 在该锁保护下重新读取完整人物快照，重复永久 Schema、结构镜像、哈希和当前 Active 准入，并只从本次锁内读取结果构造私有写入元数据和 `LockedSessionRosterForCreation`。
+7. 只有 capability 产生后，生产创建入口才插入新的 Session，并在同一事务完成 M3.2 的阵容、首手、事件和权威快照。
+
+候选选择只读取 ID，随后按该 ID 锁定至多一条来源 Session，不构成多 Session 无序锁定；任何实现若需要同时锁定多个 Session，仍必须先按 `id ASC` 在 SQL 中排序取得锁。
+
+来源 Session 锁必须持有到创建事务结束。这样单场删除若先取得精确候选 Session 锁，创建等待后会复验到该候选不存在并拒绝，不能改用次新来源；创建若先取得 Owner 与来源 Session 锁，则先完成显式沿用，后续清空会等待并删除来源与刚创建的新 Session。事务外缓存永远不能跨越清空的 Owner 锁线性化点重新获得资格。
 
 ## 8. Run 失效与 Player 指针
 
@@ -272,7 +296,7 @@ active_decision_request_id = null
 9. 最终删除数必须等于此前锁定 Session 数；否则抛出删除转换冲突。
 10. 返回深冻结结果，不调用任何外部副作用。
 
-由于生产创建路径必须先取得同一 Owner 行锁，不会有旧事务在 Owner 锁内绕过 Session 集合边界。合法创建事务若在清空之后取得 Owner 锁，可以用新的 Session ID 独立提交；它是清空之后的新用户写入，不是旧数据重建。
+由于生产创建路径必须先取得同一 Owner 行锁，不会有创建写入绕过 Session 集合边界。合法的当前目录创建若在清空之后取得 Owner 锁，可以用新的 Session ID 独立提交；它是基于当前只读目录的新用户写入，不是旧数据重建。清空前已经完成事务外预检的“沿用上一场”请求在清空后取得 Owner 锁时，必须重新选择并锁定事务内的当前来源；没有清空后新产生的 ended 来源时，在零写入情况下拒绝。无论是否出现新来源，都不能把缓存的历史配置写回新 Session。
 
 清空不锁定、不读取、不删除 `app_settings`。并发设置 UPSERT 不参与牌局删除屏障，清空前后的最终设置仍按设置 Repository 的正常并发规则决定。
 
@@ -291,10 +315,14 @@ active_decision_request_id = null
 
 ### 11.2 清空与创建
 
-- 创建先取得 Owner 锁并提交：清空随后锁定新 Session，将它与其他旧 Session 一起删除。
-- 清空先取得 Owner 锁并提交：创建随后以新的 Session ID 独立成功，最终数据库可以存在这次全新场次。
+- 当前目录创建先取得 Owner 锁并提交：清空随后锁定新 Session，将它与其他旧 Session 一起删除。
+- 沿用上一场创建先取得 Owner 与来源 Session 锁并提交：清空随后取得 Owner 锁，将来源、新 Session 及其全部派生数据一起删除。
+- 清空先取得 Owner 锁并提交：当前目录创建随后可以新的 Session ID 独立成功，最终数据库可以存在这次全新场次。
+- 清空先取得 Owner 锁并提交：任何在清空前从旧 Session 完成事务外预检、但尚未取得 Owner 锁的沿用请求，随后都必须丢弃缓存并在锁内重新选择来源；没有清空后新产生的 ended 来源时复验失败且不创建 Session，即使存在新来源也只能写入锁内重新读取的事实。
 
-验收必须证明旧 Session 及其全部派生记录消失，后置创建不复制旧 Session ID、阵容记忆、Hand、事件、账本、AgentRun、Coach 或统计数据。
+验收必须证明旧 Session 及其全部派生记录消失；合法后置创建不复制旧 Session ID、历史人物配置版本或 key、阵容记忆、Hand、事件、账本、AgentRun、Coach 或统计数据。若请求语义是“沿用上一场”且锁内不存在新的合法来源，安全结果是拒绝创建，不是把历史缓存重新解释为当前用户输入。
+
+上述等待后复验语义同样以当前 `READ COMMITTED` 为准。未来改用 `REPEATABLE READ` 或 `SERIALIZABLE` 时，历史来源锁定也可能以 serialization failure 安全拒绝；外层只能重试完整创建事务，且重试后仍不得使用事务外缓存作为权威来源。
 
 “等待后看到 Session/Run 不存在”只描述迟到 Player/Coach 最小提交事务，不适用于合法后置的创建事务。
 
@@ -405,13 +433,17 @@ TransactionSql 替身只作为数据库系统边界，用于注入查询结果�
 
 - 清空与活动 Player 最小提交事务，覆盖删除先锁与提交先锁。
 - 单场删除/清空与已结束场次 Coach 最小提交事务，覆盖两种顺序。
-- 清空与遵守 `Owner → Session` 的最小创建事务，覆盖两种顺序。
+- 清空与遵守 `Owner → 新 Session` 的当前目录最小创建事务，覆盖两种顺序。
+- 清空与遵守 `Owner → 来源 ended Session → 新 Session` 的旧阵容复用最小创建事务，覆盖两种顺序。
+- 使用两个 ended Session 构造单场删除与旧阵容复用竞争：创建在 Owner 锁内选出最新候选后暂停，单场删除先删除该候选；创建恢复后必须按精确 ID 复验失败且不得回退到次新 Session。反向顺序下创建先锁定候选并提交，单场删除等待后只删除其目标来源，不影响已经独立提交的新 Session。
 - Player/Coach 等待方在当前 `READ COMMITTED` 下看到 Session/Run 不存在并零副作用失败。
 - Commit Gate 先提交时，删除随后清除其刚写入的结果。
 - 删除提交后，最小 Player/Coach 提交事务不能创建替代 Run。
-- 创建在清空后提交时使用新 Session ID；旧场次及全部派生数据消失，新场次不复制任何旧事实。
+- 当前目录创建在清空后提交时使用新 Session ID；旧场次及全部派生数据消失，新场次不复制任何旧事实。
+- 构造当前目录无法产生、只能来自旧 Session 的历史配置版本或 key；让旧阵容复用请求在事务外准备完成后暂停，执行清空并提交，再恢复创建。锁内来源复验必须失败，不得创建新 Session，也不得重新持久化该历史版本或 key。
+- 旧阵容复用事务先取得 Owner 与来源 Session 锁时，清空必须等待；创建先提交后，清空删除来源、新 Session 及两者全部派生数据。
 
-这些测试只验证锁协议与删除屏障，不宣称真实 Player/Coach Commit Gate、Worker 或 Runtime 已完成。
+这些测试只验证锁协议与删除屏障，不宣称生产 M3 创建编排、真实 Player/Coach Commit Gate、Worker 或 Runtime 已完成。
 
 ### 15.4 远程测试边界
 
@@ -427,7 +459,7 @@ TransactionSql 替身只作为数据库系统边界，用于注入查询结果�
 2. 单场 `ended` 删除最小闭环。
 3. 清空全部牌局数据、设置保留和确定性返回。
 4. 完整级联、损坏载荷和事务回滚。
-5. 双连接 Player、Coach、创建竞争。
+5. 双连接 Player、Coach、当前目录创建和旧阵容复用竞争。
 6. 仓库地图同步与完整验证。
 
 每个阶段继续拆成多个微型红绿循环：
@@ -481,6 +513,7 @@ git diff --check
 - 不新增 Schema、迁移、删除 epoch 或 `deleting` 生命周期。
 - 不实现 HTTP 确认文字、前端交互或共享公开协议。
 - 不实现生产 Player/Coach Commit Gate、Runtime 状态机、Worker 中断或替代 Run 策略。
+- 不在 M2.8 改写 M2.3 阵容准备或实现生产 M3 创建服务；历史来源精确锁定、锁内重读与事务绑定 capability 只作为 M3 强制协议，由 M2.8 的最小竞争事务验证。
 - 不写删除事件、命令账本结果或删除墓碑；这些父聚合本身就是删除目标。
 - 不读取、修复、升级或重写 JSONB。
 - 不访问或承诺清除 Supabase 备份、PITR 和基础设施副本。
@@ -497,7 +530,7 @@ git diff --check
 - `invalidatedRuns` 确定性排序并深冻结，只能在外层提交后用于尽力取消。
 - 未知或损坏 JSONB 不阻止删除，删除代码不依赖任何 Decoder。
 - 当前 `READ COMMITTED` 下删除与迟到 Player/Coach 提交具有确定性安全语义；未来 serialization failure 也按安全拒绝处理。
-- 清空与创建按 Owner 锁线性化；合法后置创建使用新 Session ID，不重建旧数据。
+- 清空与创建按 Owner 锁线性化；合法的当前目录后置创建使用新 Session ID，不重建旧数据；事务外旧阵容预检不能构造生产写入 capability，历史来源必须按锁内选出的精确 ID 锁定、重读与复验，候选已删除时在零写入情况下拒绝且不回退。
 - 单元测试不绑定 SQL 文本或私有实现；真实 PostgreSQL 测试证明级联、锁、回滚、保留和竞争。
 - M2.8 不越界声称完成 M3、M4 或 M8 的真实服务和 Runtime。
 - `REPO_MAP.md` 与 `ARCHITECTURE.md` 在实现后同步反映新入口和锁协议。

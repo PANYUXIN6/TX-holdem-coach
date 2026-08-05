@@ -187,7 +187,7 @@ describe('hand audit codecs', () => {
     }).toEqual({ rowVersion: 1, envelopeVersion: 1 })
     expect(encoded).toEqual({
       payloadVersion: 1,
-      payload: { resultSchemaVersion: 1, result },
+      payload: { handResultSchemaVersion: 1, result },
     })
     expect(
       decodeCurrentCompletedHandResultV1(structuredClone(encoded)),
@@ -224,6 +224,63 @@ describe('hand audit codecs', () => {
     expect(() => encodeCompletedHandResultV1(invalid)).toThrow(
       '手牌审计载荷无效。',
     )
+  })
+
+  test('rejects a contribution above the starting stack even when payout arithmetic balances', () => {
+    const result = createTestCompletedPokerResult().completedHand
+    const seats = result.seats.map((seat) =>
+      seat.seatNumber === 2 ? { ...seat, totalContribution: 2_000 } : seat,
+    )
+    const uncalledBetReturns = result.uncalledBetReturns.map((returned) =>
+      returned.seatNumber === 2 ? { ...returned, amount: 1_990 } : returned,
+    )
+
+    expect(() =>
+      encodeCompletedHandResultV1({
+        ...result,
+        seats,
+        uncalledBetReturns,
+        summary: {
+          ...result.summary,
+          seats,
+          uncalledBetReturns,
+        },
+      }),
+    ).toThrow('手牌审计载荷无效。')
+  })
+
+  test('rejects an uncalled return above its seat contribution even when all totals balance', () => {
+    const result = createTestCompletedPokerResult().completedHand
+    const seats = result.seats.map((seat) => {
+      if (seat.seatNumber === 1) {
+        return {
+          ...seat,
+          endingStack: 970,
+          totalContribution: 30,
+          netChange: -30,
+        }
+      }
+      if (seat.seatNumber === 2) {
+        return { ...seat, endingStack: 1_030, netChange: 30 }
+      }
+      return seat
+    })
+    const uncalledBetReturns = result.uncalledBetReturns.map((returned) =>
+      returned.seatNumber === 2 ? { ...returned, amount: 30 } : returned,
+    )
+
+    expect(() =>
+      encodeCompletedHandResultV1({
+        ...result,
+        seats,
+        uncalledBetReturns,
+        summary: {
+          ...result.summary,
+          seats,
+          uncalledBetReturns,
+        },
+      }),
+    ).toThrow('手牌审计载荷无效。')
   })
 
   test('rejects duplicate awards for the same winning seat even when pot arithmetic still balances', () => {
@@ -347,9 +404,16 @@ describe('hand audit codecs', () => {
     ).toEqual({ kind: 'decoded', value: current.payload.result })
     expect(
       productionCompletedHandResultVersionRegistry.read(2, {
-        resultSchemaVersion: 2,
+        handResultSchemaVersion: 2,
       }),
     ).toEqual({ kind: 'unknownVersion' })
+
+    expect(
+      productionCompletedHandResultVersionRegistry.read(1, {
+        resultSchemaVersion: 1,
+        result: current.payload.result,
+      }),
+    ).toEqual({ kind: 'invalidPayload' })
 
     const legacy = createCompletedHandResultVersionRegistry([
       {
@@ -359,7 +423,9 @@ describe('hand audit codecs', () => {
         migrate: () => createTestCompletedPokerResult().completedHand,
       },
     ])
-    expect(legacy.read(3, { resultSchemaVersion: 4, legacy: true })).toEqual({
+    expect(
+      legacy.read(3, { handResultSchemaVersion: 4, legacy: true }),
+    ).toEqual({
       kind: 'decoded',
       value: current.payload.result,
     })
@@ -374,7 +440,7 @@ describe('hand audit codecs', () => {
     ).toEqual({ kind: 'invalidPayload' })
     expect(
       productionCompletedHandResultVersionRegistry.read(1, {
-        resultSchemaVersion: 1,
+        handResultSchemaVersion: 1,
         result: {},
       }),
     ).toEqual({ kind: 'invalidPayload' })

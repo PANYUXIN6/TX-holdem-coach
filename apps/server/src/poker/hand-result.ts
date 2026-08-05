@@ -611,6 +611,7 @@ function refineCompletedHandSummary(
   summary.seats.forEach((seat, index) => {
     const participantHand = participantHandBySeat.get(seat.seatNumber)
     if (
+      seat.totalContribution > seat.startingStack ||
       BigInt(seat.netChange) !==
         BigInt(seat.endingStack) - BigInt(seat.startingStack) ||
       participantHand === undefined ||
@@ -640,16 +641,24 @@ function refineCompletedHandSummary(
     })
   }
 
+  const seatBySeatNumber = new Map(
+    summary.seats.map((seat) => [seat.seatNumber, seat]),
+  )
   if (
     new Set(summary.uncalledBetReturns.map((item) => item.seatNumber)).size !==
       summary.uncalledBetReturns.length ||
-    summary.uncalledBetReturns.some(
-      (item) => !participantSet.has(item.seatNumber),
-    )
+    summary.uncalledBetReturns.some((item) => {
+      const seat = seatBySeatNumber.get(item.seatNumber)
+      return (
+        !participantSet.has(item.seatNumber) ||
+        seat === undefined ||
+        item.amount > seat.totalContribution
+      )
+    })
   ) {
     context.addIssue({
       code: 'custom',
-      message: '未跟注返还必须来自唯一的参与座位。',
+      message: '未跟注返还必须来自唯一参与座位且不超过该座位投入。',
       path: ['uncalledBetReturns'],
     })
   }

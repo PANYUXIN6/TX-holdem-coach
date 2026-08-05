@@ -14,7 +14,7 @@ export const HAND_RESULT_SCHEMA_VERSION = 1 as const
 export interface StoredCompletedHandResultV1 {
   readonly payloadVersion: typeof COMPLETED_HAND_RESULT_PAYLOAD_VERSION
   readonly payload: {
-    readonly resultSchemaVersion: typeof HAND_RESULT_SCHEMA_VERSION
+    readonly handResultSchemaVersion: typeof HAND_RESULT_SCHEMA_VERSION
     readonly result: CompletedHandResult
   }
 }
@@ -22,7 +22,7 @@ export interface StoredCompletedHandResultV1 {
 const StoredCompletedResultInputSchema = z.strictObject({
   payloadVersion: z.literal(COMPLETED_HAND_RESULT_PAYLOAD_VERSION),
   payload: z.strictObject({
-    resultSchemaVersion: z.literal(HAND_RESULT_SCHEMA_VERSION),
+    handResultSchemaVersion: z.literal(HAND_RESULT_SCHEMA_VERSION),
     result: CompletedHandResultSchema,
   }),
 })
@@ -51,7 +51,7 @@ export function decodeCurrentCompletedHandResultV1(
   }
   if (!isRecord(input.payload)) throw new HandAuditPayloadValidationError()
   const envelopeVersion = PositiveIntegerSchema.safeParse(
-    input.payload.resultSchemaVersion,
+    input.payload.handResultSchemaVersion,
   )
   if (!envelopeVersion.success) throw new HandAuditPayloadValidationError()
   if (envelopeVersion.data !== HAND_RESULT_SCHEMA_VERSION) {
@@ -77,6 +77,6 @@ export function encodeCompletedHandResultV1(
   }
   return decodeCurrentCompletedHandResultV1({
     payloadVersion: COMPLETED_HAND_RESULT_PAYLOAD_VERSION,
-    payload: { resultSchemaVersion: HAND_RESULT_SCHEMA_VERSION, result },
+    payload: { handResultSchemaVersion: HAND_RESULT_SCHEMA_VERSION, result },
   })
 }

@@ -86,14 +86,14 @@ export function createCompletedHandResultVersionRegistry(
       if (
         !isPositiveSafeInteger(rowPayloadVersion) ||
         !isRecord(payload) ||
-        !isPositiveSafeInteger(payload.resultSchemaVersion)
+        !isPositiveSafeInteger(payload.handResultSchemaVersion)
       ) {
         return { kind: 'invalidPayload' }
       }
       const registration = byIdentity.get(
         identityKey({
           rowPayloadVersion,
-          envelopeSchemaVersion: payload.resultSchemaVersion,
+          envelopeSchemaVersion: payload.handResultSchemaVersion,
         }),
       )
       if (registration === undefined) return { kind: 'unknownVersion' }

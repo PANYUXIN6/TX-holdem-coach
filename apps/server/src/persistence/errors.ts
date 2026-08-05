@@ -114,6 +114,13 @@ export class SessionRecoveryTransitionError extends Error {
   }
 }
 
+export class SessionDeletionTransitionError extends Error {
+  public constructor() {
+    super('场次删除状态无法推进。')
+    this.name = 'SessionDeletionTransitionError'
+  }
+}
+
 export class HandAuditTransitionError extends Error {
   public constructor() {
     super('手牌审计状态无法推进。')
@@ -148,6 +155,7 @@ export function isRepositoryDomainError(error: unknown): error is Error {
     error instanceof CommandLedgerTransitionError ||
     error instanceof SessionMutationTransitionError ||
     error instanceof SessionRecoveryTransitionError ||
+    error instanceof SessionDeletionTransitionError ||
     error instanceof HandAuditTransitionError ||
     error instanceof AgentAttemptAuditTransitionError ||
     error instanceof DatabaseOperationError

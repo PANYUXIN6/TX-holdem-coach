@@ -6,16 +6,16 @@
 
 开发数据库里程碑时按以下顺序执行，禁止用反复重跑全套代替定位：
 
-1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m27`
+1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m28`
 2. 若修改共享事务、锁或测试运行时，再分别运行受影响的相邻里程碑。
 3. 离线 `pnpm run verify`。
 4. 提交前只运行一次 `pnpm --filter @tx-holdem-coach/server run db:test:full`。
 
-可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
+可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`、`m28`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
 
 ## 进度与失败定位
 
-远程入口把迁移、M2.2–M2.7 和 M2.5→M2.6 隔离升级注册为独立 Vitest 测试。每个阶段即时输出：
+远程入口把迁移、M2.2–M2.8 和 M2.5→M2.6 隔离升级注册为独立 Vitest 测试；M2.8 再按功能、Player/Coach 删除竞争、当前目录创建竞争、历史清空竞争和历史候选竞争拆分阶段。每个阶段即时输出：
 
 ```text
 [database-test] START M2.7 audit persistence

@@ -42,13 +42,13 @@ describe('database integration test mode', () => {
       loadDatabaseTestMode({
         DATABASE_TEST_ENTRYPOINT: 'run-database-integration-tests',
         DATABASE_TEST_SCOPE: 'milestone',
-        DATABASE_TEST_MILESTONE: 'm27',
+        DATABASE_TEST_MILESTONE: 'm28',
         DATABASE_TEST_RUN_ID: '0123456789abcdef',
       }),
     ).toEqual({
       enabled: true,
       full: false,
-      milestone: 'm27',
+      milestone: 'm28',
       cleanupStale: false,
       runId: '0123456789abcdef',
     })
@@ -59,7 +59,7 @@ describe('database integration test mode', () => {
     [
       {
         DATABASE_TEST_SCOPE: 'milestone',
-        DATABASE_TEST_MILESTONE: 'm28',
+        DATABASE_TEST_MILESTONE: 'm29',
         DATABASE_TEST_RUN_ID: '0123456789abcdef',
       },
       '数据库测试里程碑无效。',

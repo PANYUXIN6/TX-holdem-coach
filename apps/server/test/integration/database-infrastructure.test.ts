@@ -19,6 +19,12 @@ import {
   assertM25SessionMutationRepository,
   assertM26SessionRecoveryRepository,
   assertM27HandAgentAuditRepositories,
+  assertM28CoachDeletionContention,
+  assertM28CurrentCatalogCreationContention,
+  assertM28HistoricalCandidateContention,
+  assertM28HistoricalClearContention,
+  assertM28PlayerDeletionContention,
+  assertM28SessionDataDeletionRepositories,
 } from './database-repository-assertions.js'
 import {
   assertNoConflictingDatabaseTestConnections,
@@ -146,6 +152,35 @@ registerMilestoneTest('m26', 'M2.6 recovery', (sql, runtimeUrl) =>
 )
 registerMilestoneTest('m27', 'M2.7 audit persistence', (sql, runtimeUrl) =>
   assertM27HandAgentAuditRepositories(sql, runtimeUrl),
+)
+registerMilestoneTest('m28', 'M2.8 session data deletion', (sql, runtimeUrl) =>
+  assertM28SessionDataDeletionRepositories(sql, runtimeUrl),
+)
+registerMilestoneTest(
+  'm28',
+  'M2.8 Player deletion contention',
+  (sql, runtimeUrl) => assertM28PlayerDeletionContention(sql, runtimeUrl),
+)
+registerMilestoneTest(
+  'm28',
+  'M2.8 Coach deletion contention',
+  (sql, runtimeUrl) => assertM28CoachDeletionContention(sql, runtimeUrl),
+)
+registerMilestoneTest(
+  'm28',
+  'M2.8 current catalog creation contention',
+  (sql, runtimeUrl) =>
+    assertM28CurrentCatalogCreationContention(sql, runtimeUrl),
+)
+registerMilestoneTest(
+  'm28',
+  'M2.8 historical clear contention',
+  (sql, runtimeUrl) => assertM28HistoricalClearContention(sql, runtimeUrl),
+)
+registerMilestoneTest(
+  'm28',
+  'M2.8 historical candidate contention',
+  (sql, runtimeUrl) => assertM28HistoricalCandidateContention(sql, runtimeUrl),
 )
 
 test('cleans stale tagged database test transactions', async (context) => {

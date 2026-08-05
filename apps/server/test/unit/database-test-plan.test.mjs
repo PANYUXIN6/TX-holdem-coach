@@ -6,9 +6,9 @@ import {
 
 describe('database test plan', () => {
   test('selects one allowlisted milestone', () => {
-    expect(parseDatabaseTestArguments(['--milestone=m27'])).toEqual({
+    expect(parseDatabaseTestArguments(['--milestone=m28'])).toEqual({
       kind: 'milestone',
-      milestone: 'm27',
+      milestone: 'm28',
     })
   })
 
@@ -55,7 +55,7 @@ describe('database test plan', () => {
   })
 
   test.each([
-    ['--milestone=m28'],
+    ['--milestone=m29'],
     ['--full', '--cleanup-stale'],
     ['--unknown'],
   ])('rejects uncontrolled arguments %j', (...arguments_) => {

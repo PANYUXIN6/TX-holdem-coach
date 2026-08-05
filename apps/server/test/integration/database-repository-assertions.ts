@@ -21,6 +21,7 @@ import {
   PersistenceDataCorruptionError,
   RepositoryInputValidationError,
   ResourceNotFoundError,
+  SessionDeletionTransitionError,
   UnknownPayloadVersionError,
 } from '../../src/persistence/errors.js'
 import { createAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
@@ -48,6 +49,10 @@ import {
 } from '../../src/persistence/session-mutation-repository.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import {
+  clearOwnerSessionData,
+  deleteEndedSessionData,
+} from '../../src/persistence/session-deletion-repository.js'
+import {
   readPlayerTimeoutSettings,
   writePlayerTimeoutSettings,
 } from '../../src/persistence/player-settings-repository.js'
@@ -60,6 +65,7 @@ import {
 import {
   assertRosterSnapshotsUseActiveModels,
   prepareCurrentCatalogRoster,
+  prepareLatestEndedRosterForReuse,
 } from '../../src/sessions/roster-preparation.js'
 import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
 import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
@@ -4567,4 +4573,1557 @@ export async function assertM27HandAgentAuditRepositories(
   await assertM27AgentUnknownAndCorruptRows(sql)
   await assertM27AgentSequenceConcurrency(sql, runtimeUrl)
   await assertM27AgentSecretBoundaries(sql)
+}
+
+const M28_DELETED_AT = '2026-08-05T04:00:00.000Z'
+const M28_SESSION_SCOPED_TABLES = Object.freeze([
+  'session_participants',
+  'session_agents',
+  'agent_memory_revisions',
+  'hands',
+  'command_ledger',
+  'session_events',
+  'session_snapshots',
+  'agent_runs',
+  'agent_attempts',
+  'agent_capability_invocations',
+  'player_decisions',
+  'coach_reviews',
+  'coach_decision_assessments',
+  'hand_statistics_shards',
+  'session_settlement_statistics_shards',
+] as const)
+
+async function insertM28RosterSession(sql: Sql, sessionId: string) {
+  return sql.begin(async (transaction) => {
+    const roster = await createRosterInput(transaction as unknown as Sql)
+    const input = { ...roster, sessionId }
+    await insertSessionRosterSnapshot(transaction, input)
+    return input
+  })
+}
+
+async function insertM28DiagnosticSessionForOwner(
+  sql: Sql,
+  databaseOwnerId: string,
+  sessionId: string,
+): Promise<void> {
+  await sql.begin(async (transaction) => {
+    await transaction`
+      INSERT INTO app_private.sessions (id, owner_id)
+      VALUES (${sessionId}::uuid, ${databaseOwnerId}::uuid)
+    `
+    await transaction`
+      INSERT INTO app_private.session_participants (
+        id, session_id, owner_id, participant_type, seat_number
+      ) VALUES (
+        ${randomUUID()}::uuid, ${sessionId}::uuid,
+        ${databaseOwnerId}::uuid, 'user', 0
+      )
+    `
+    for (let seatNumber = 1; seatNumber <= 5; seatNumber += 1) {
+      const participantId = randomUUID()
+      await transaction`
+        INSERT INTO app_private.session_participants (
+          id, session_id, owner_id, participant_type, seat_number
+        ) VALUES (
+          ${participantId}::uuid, ${sessionId}::uuid,
+          ${databaseOwnerId}::uuid, 'agent', ${seatNumber}
+        )
+      `
+      await transaction`
+        INSERT INTO app_private.session_agents (
+          participant_id, session_id, owner_id, display_name, avatar_color,
+          persona_id, persona_version, config_snapshot_key,
+          config_payload_version, config_payload,
+          memory_payload_version, memory_payload
+        ) VALUES (
+          ${participantId}::uuid, ${sessionId}::uuid,
+          ${databaseOwnerId}::uuid, ${`Other Agent ${seatNumber}`}, '#0f766e',
+          ${`other-agent-${seatNumber}`}, 1, ${'a'.repeat(64)},
+          1, '{}'::jsonb, 1, '{}'::jsonb
+        )
+      `
+      await transaction`
+        INSERT INTO app_private.agent_memory_revisions (
+          participant_id, session_id, owner_id, revision,
+          memory_payload_version, memory_payload
+        ) VALUES (
+          ${participantId}::uuid, ${sessionId}::uuid,
+          ${databaseOwnerId}::uuid, 0, 1, '{}'::jsonb
+        )
+      `
+    }
+    await transaction`
+      UPDATE app_private.sessions
+      SET lifecycle_status = 'readonlyDiagnostic',
+          diagnostic_code = 'snapshotMissing',
+          diagnosed_at = ${M28_DELETED_AT}::timestamptz,
+          updated_at = ${M28_DELETED_AT}::timestamptz
+      WHERE id = ${sessionId}::uuid
+        AND owner_id = ${databaseOwnerId}::uuid
+    `
+  })
+}
+
+async function endM28Session(
+  sql: Sql,
+  ownerId: string,
+  sessionId: string,
+): Promise<void> {
+  await sql`
+    UPDATE app_private.sessions
+    SET lifecycle_status = 'ended',
+        ended_at = ${M28_DELETED_AT}::timestamptz,
+        updated_at = ${M28_DELETED_AT}::timestamptz
+    WHERE id = ${sessionId}::uuid
+      AND owner_id = ${ownerId}::uuid
+  `
+}
+
+interface M28CascadeFixture {
+  readonly sessionId: string
+  readonly handId: string
+  readonly playerRunId: string
+  readonly coachRunId: string
+  readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
+}
+
+async function insertM28CascadeFixture(
+  sql: Sql,
+  sessionId: string,
+): Promise<M28CascadeFixture> {
+  const roster = await insertM28RosterSession(sql, sessionId)
+  const handId = randomUUID()
+  const handFixture = createM27HandAuditFixture(handId)
+  await sql.begin(async (transaction) => {
+    await insertInProgressHandAudit(transaction, roster.owner, {
+      sessionId,
+      checkpoint: handFixture.checkpoint,
+      startedAt: '2026-08-05T03:50:00.000Z',
+    })
+    await completeHandAudit(transaction, roster.owner, {
+      sessionId,
+      handId,
+      result: handFixture.completed,
+      completedAt: '2026-08-05T03:51:00.000Z',
+    })
+  })
+
+  await sql.begin(async (transaction) => {
+    const locked = await lockSessionForMutation(
+      transaction,
+      roster.owner,
+      sessionId,
+    )
+    await persistSessionMutation(
+      transaction,
+      locked,
+      createMutationBatch({
+        sessionId,
+        handId,
+        eventIds: [randomUUID()],
+        lockedStateVersion: 0,
+        nextEventSeq: 0,
+        mutationAt: '2026-08-05T03:52:00.000Z',
+      }),
+    )
+  })
+
+  const command = prepareCommandRegistration({
+    sessionId,
+    commandId: randomUUID(),
+    expectedStateVersion: 1,
+    type: 'endSession',
+    payload: {},
+  })
+  await sql.begin(async (transaction) => {
+    const registration = await registerCommand(
+      transaction,
+      roster.owner,
+      command,
+    )
+    expect(registration.status).toBe('acquired')
+  })
+
+  const firstAgent = roster.agents[0]
+  if (firstAgent === undefined) {
+    throw new Error('M2.8 Cascade fixture 缺少 Agent。')
+  }
+  const playerRunId = randomUUID()
+  const coachRunId = randomUUID()
+  const decisionRequestId = randomUUID()
+  const auditRepository = createAgentFoundationAuditRepository({
+    runtimeAuditDecoders: {},
+  })
+  await sql.begin(async (transaction) => {
+    await auditRepository.insertAgentRunAudit(
+      transaction,
+      roster.owner,
+      createM27PlayerRunInput(
+        sessionId,
+        handId,
+        playerRunId,
+        firstAgent.agentParticipantId,
+        decisionRequestId,
+      ),
+    )
+    await auditRepository.insertAgentRunAudit(
+      transaction,
+      roster.owner,
+      createM27CoachRunInput(sessionId, handId, coachRunId),
+    )
+    await transaction`
+      UPDATE app_private.agent_runs
+      SET lifecycle = 'running',
+          lease_owner = 'm28-worker',
+          lease_expires_at = '2026-08-05T05:00:00.000Z'::timestamptz,
+          fencing_token = 9007199254740991
+      WHERE id IN (${playerRunId}::uuid, ${coachRunId}::uuid)
+        AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+        AND session_id = ${sessionId}::uuid
+    `
+    await transaction`
+      UPDATE app_private.sessions
+      SET agent_run_state = 'thinking',
+          active_player_run_id = ${playerRunId}::uuid,
+          active_decision_request_id = ${decisionRequestId}::uuid
+      WHERE id = ${sessionId}::uuid
+        AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+    `
+  })
+
+  await sql.begin(async (transaction) => {
+    await auditRepository.startAgentAttemptAudit(
+      transaction,
+      roster.owner,
+      createM27AttemptInput(sessionId, coachRunId, 0),
+    )
+    await auditRepository.appendCapabilityInvocationAudit(
+      transaction,
+      roster.owner,
+      createM27InvocationInput(sessionId, coachRunId, 0),
+    )
+  })
+
+  const configRows = await sql<
+    {
+      readonly personaId: string
+      readonly personaVersion: number
+      readonly configSnapshotKey: string
+    }[]
+  >`
+    SELECT
+      persona_id AS "personaId",
+      persona_version AS "personaVersion",
+      config_snapshot_key AS "configSnapshotKey"
+    FROM app_private.session_agents
+    WHERE participant_id = ${firstAgent.agentParticipantId}::uuid
+      AND session_id = ${sessionId}::uuid
+      AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+  `
+  const config = configRows[0]
+  if (config === undefined) {
+    throw new Error('M2.8 Cascade fixture 缺少 Agent 配置。')
+  }
+
+  const coachReviewId = randomUUID()
+  await sql.begin(async (transaction) => {
+    await transaction`
+      INSERT INTO app_private.player_decisions (
+        id, agent_run_id, owner_id, session_id, hand_id, participant_id,
+        source_state_version, decision_request_id, memory_revision,
+        runtime, submission_status, command_ledger_id,
+        decision_packet_payload_version, decision_packet_payload,
+        candidate_set_payload_version, candidate_set_payload,
+        validator_result_payload_version, validator_result_payload
+      ) VALUES (
+        ${randomUUID()}::uuid, ${playerRunId}::uuid,
+        ${roster.owner.databaseOwnerId}::uuid, ${sessionId}::uuid,
+        ${handId}::uuid, ${firstAgent.agentParticipantId}::uuid,
+        1, ${decisionRequestId}::uuid, 0,
+        'player', 'pending', ${command.ledgerId}::uuid,
+        1, '{}'::jsonb, 1, '{}'::jsonb, 1, '{}'::jsonb
+      )
+    `
+    await transaction`
+      INSERT INTO app_private.coach_reviews (
+        id, agent_run_id, owner_id, session_id, hand_id, runtime,
+        request_id, status, frozen_context_payload_version,
+        frozen_context_payload, requested_at
+      ) VALUES (
+        ${coachReviewId}::uuid, ${coachRunId}::uuid,
+        ${roster.owner.databaseOwnerId}::uuid, ${sessionId}::uuid,
+        ${handId}::uuid, 'coach', ${randomUUID()}::uuid, 'running',
+        1, '{}'::jsonb, '2026-08-05T03:55:00.000Z'::timestamptz
+      )
+    `
+    await transaction`
+      INSERT INTO app_private.coach_decision_assessments (
+        id, coach_review_id, owner_id, session_id, hand_id, decision_id,
+        street, ordinal_on_street, assessment_payload_version,
+        assessment_payload
+      ) VALUES (
+        ${randomUUID()}::uuid, ${coachReviewId}::uuid,
+        ${roster.owner.databaseOwnerId}::uuid, ${sessionId}::uuid,
+        ${handId}::uuid, ${randomUUID()}::uuid,
+        'preflop', 0, 1, '{}'::jsonb
+      )
+    `
+    await transaction`
+      INSERT INTO app_private.hand_statistics_shards (
+        id, owner_id, session_id, hand_id, participant_id,
+        participant_type, completed_at, logical_position,
+        calculation_version, calculated_at, source_through_event_seq,
+        completed_result_payload_version, persona_id, persona_version,
+        config_snapshot_key, metrics_payload_version, metrics_payload
+      ) VALUES (
+        ${randomUUID()}::uuid, ${roster.owner.databaseOwnerId}::uuid,
+        ${sessionId}::uuid, ${handId}::uuid,
+        ${firstAgent.agentParticipantId}::uuid, 'agent',
+        '2026-08-05T03:51:00.000Z'::timestamptz, 'BTN', 1,
+        '2026-08-05T03:56:00.000Z'::timestamptz, 0, 1,
+        ${config.personaId}, ${config.personaVersion},
+        ${config.configSnapshotKey}, 1, '{}'::jsonb
+      )
+    `
+    await transaction`
+      INSERT INTO app_private.session_settlement_statistics_shards (
+        id, owner_id, session_id, participant_id, participant_type,
+        persona_id, persona_version, config_snapshot_key,
+        calculation_version, calculated_at, source_state_version,
+        source_snapshot_payload_version, metrics_payload_version,
+        metrics_payload
+      ) VALUES (
+        ${randomUUID()}::uuid, ${roster.owner.databaseOwnerId}::uuid,
+        ${sessionId}::uuid, ${firstAgent.agentParticipantId}::uuid, 'agent',
+        ${config.personaId}, ${config.personaVersion},
+        ${config.configSnapshotKey}, 1,
+        '2026-08-05T03:57:00.000Z'::timestamptz, 1, 1, 1, '{}'::jsonb
+      )
+    `
+  })
+
+  await sql`
+    UPDATE app_private.session_snapshots
+    SET private_table_state_payload_version = 999,
+        private_table_state_payload = '{"corrupt":"m28-delete-must-not-decode"}'::jsonb
+    WHERE session_id = ${sessionId}::uuid
+      AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+  `
+  await endM28Session(sql, roster.owner.databaseOwnerId, sessionId)
+  return {
+    sessionId,
+    handId,
+    playerRunId,
+    coachRunId,
+    owner: roster.owner,
+  }
+}
+
+async function readM28SessionScopedCounts(
+  sql: Sql,
+  sessionId: string,
+): Promise<Record<(typeof M28_SESSION_SCOPED_TABLES)[number], number>> {
+  const rows = await sql<Record<string, number>[]>`
+    SELECT
+      (SELECT count(*)::int FROM app_private.session_participants WHERE session_id = ${sessionId}::uuid) AS "session_participants",
+      (SELECT count(*)::int FROM app_private.session_agents WHERE session_id = ${sessionId}::uuid) AS "session_agents",
+      (SELECT count(*)::int FROM app_private.agent_memory_revisions WHERE session_id = ${sessionId}::uuid) AS "agent_memory_revisions",
+      (SELECT count(*)::int FROM app_private.hands WHERE session_id = ${sessionId}::uuid) AS hands,
+      (SELECT count(*)::int FROM app_private.command_ledger WHERE session_id = ${sessionId}::uuid) AS "command_ledger",
+      (SELECT count(*)::int FROM app_private.session_events WHERE session_id = ${sessionId}::uuid) AS "session_events",
+      (SELECT count(*)::int FROM app_private.session_snapshots WHERE session_id = ${sessionId}::uuid) AS "session_snapshots",
+      (SELECT count(*)::int FROM app_private.agent_runs WHERE session_id = ${sessionId}::uuid) AS "agent_runs",
+      (SELECT count(*)::int FROM app_private.agent_attempts WHERE session_id = ${sessionId}::uuid) AS "agent_attempts",
+      (SELECT count(*)::int FROM app_private.agent_capability_invocations WHERE session_id = ${sessionId}::uuid) AS "agent_capability_invocations",
+      (SELECT count(*)::int FROM app_private.player_decisions WHERE session_id = ${sessionId}::uuid) AS "player_decisions",
+      (SELECT count(*)::int FROM app_private.coach_reviews WHERE session_id = ${sessionId}::uuid) AS "coach_reviews",
+      (SELECT count(*)::int FROM app_private.coach_decision_assessments WHERE session_id = ${sessionId}::uuid) AS "coach_decision_assessments",
+      (SELECT count(*)::int FROM app_private.hand_statistics_shards WHERE session_id = ${sessionId}::uuid) AS "hand_statistics_shards",
+      (SELECT count(*)::int FROM app_private.session_settlement_statistics_shards WHERE session_id = ${sessionId}::uuid) AS "session_settlement_statistics_shards"
+  `
+  const counts = rows[0]
+  if (counts === undefined) {
+    throw new Error('M2.8 无法读取 Session-scoped 表计数。')
+  }
+  return counts as Record<(typeof M28_SESSION_SCOPED_TABLES)[number], number>
+}
+
+async function assertM28EndedDeletionAndCascade(sql: Sql): Promise<void> {
+  const sessionId = randomUUID()
+  const sameOwnerSessionId = randomUUID()
+  const otherOwnerId = randomUUID()
+  const otherOwnerSessionId = randomUUID()
+  const otherOwnerIdentityKey = `m28-other-${otherOwnerId}`
+
+  try {
+    const fixture = await insertM28CascadeFixture(sql, sessionId)
+    await insertCommittedDiagnosticSession(sql, sameOwnerSessionId)
+    await sql`
+      INSERT INTO app_private.owners (id, identity_key)
+      VALUES (${otherOwnerId}::uuid, ${otherOwnerIdentityKey})
+    `
+    await insertM28DiagnosticSessionForOwner(
+      sql,
+      otherOwnerId,
+      otherOwnerSessionId,
+    )
+
+    const beforeCounts = await readM28SessionScopedCounts(sql, sessionId)
+    for (const table of M28_SESSION_SCOPED_TABLES) {
+      expect(
+        beforeCounts[table],
+        `${table} fixture must exist`,
+      ).toBeGreaterThan(0)
+    }
+
+    const result = await sql.begin((transaction) =>
+      deleteEndedSessionData(transaction, fixture.owner, {
+        sessionId,
+        deletedAt: M28_DELETED_AT,
+      }),
+    )
+    expect(result).toEqual({
+      sessionId,
+      invalidatedRuns: [
+        { agentRunId: fixture.coachRunId, runtime: 'coach' },
+        { agentRunId: fixture.playerRunId, runtime: 'player' },
+      ].sort((left, right) => left.agentRunId.localeCompare(right.agentRunId)),
+    })
+
+    const afterCounts = await readM28SessionScopedCounts(sql, sessionId)
+    expect(afterCounts).toEqual(
+      Object.fromEntries(M28_SESSION_SCOPED_TABLES.map((table) => [table, 0])),
+    )
+    const preservedRows = await sql<{ readonly count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM app_private.sessions
+      WHERE id IN (${sameOwnerSessionId}::uuid, ${otherOwnerSessionId}::uuid)
+    `
+    expect(preservedRows[0]?.count).toBe(2)
+  } finally {
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (
+        ${sessionId}::uuid,
+        ${sameOwnerSessionId}::uuid,
+        ${otherOwnerSessionId}::uuid
+      )
+    `
+    await sql`
+      DELETE FROM app_private.owners
+      WHERE id = ${otherOwnerId}::uuid
+    `
+  }
+}
+
+async function assertM28SingleDeletionLifecycleBoundary(
+  sql: Sql,
+): Promise<void> {
+  const sessionId = randomUUID()
+  try {
+    const roster = await insertM28RosterSession(sql, sessionId)
+    await expect(
+      sql.begin((transaction) =>
+        deleteEndedSessionData(transaction, roster.owner, {
+          sessionId,
+          deletedAt: M28_DELETED_AT,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(SessionDeletionTransitionError)
+
+    await sql`
+      UPDATE app_private.sessions
+      SET lifecycle_status = 'readonlyDiagnostic',
+          diagnostic_code = 'snapshotMissing',
+          diagnosed_at = ${M28_DELETED_AT}::timestamptz,
+          updated_at = ${M28_DELETED_AT}::timestamptz
+      WHERE id = ${sessionId}::uuid
+        AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+    `
+    await expect(
+      sql.begin((transaction) =>
+        deleteEndedSessionData(transaction, roster.owner, {
+          sessionId,
+          deletedAt: M28_DELETED_AT,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(SessionDeletionTransitionError)
+
+    const rows = await sql<
+      { readonly lifecycleStatus: string; readonly participantCount: number }[]
+    >`
+      SELECT
+        session.lifecycle_status AS "lifecycleStatus",
+        (
+          SELECT count(*)::int
+          FROM app_private.session_participants AS participant
+          WHERE participant.session_id = session.id
+        ) AS "participantCount"
+      FROM app_private.sessions AS session
+      WHERE session.id = ${sessionId}::uuid
+    `
+    expect(rows[0]).toEqual({
+      lifecycleStatus: 'readonlyDiagnostic',
+      participantCount: 6,
+    })
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+async function assertM28ClearAndPreservedRoots(sql: Sql): Promise<void> {
+  const endedSessionId = randomUUID()
+  const activeSessionId = randomUUID()
+  const diagnosticSessionId = randomUUID()
+  const otherOwnerId = randomUUID()
+  const otherOwnerSessionId = randomUUID()
+  const otherOwnerIdentityKey = `m28-clear-other-${otherOwnerId}`
+  const owner = await resolveOwnerScope(sql, ownerScope)
+  const settings = {
+    attemptTimeoutSeconds: 21,
+    decisionDeadlineSeconds: 73,
+  } as const
+  const originalSettingRows = await sql<
+    {
+      readonly id: string
+      readonly settingPayloadVersion: number
+      readonly settingPayload: JSONValue
+      readonly updatedAt: string
+    }[]
+  >`
+    SELECT
+      id::text AS id,
+      setting_payload_version AS "settingPayloadVersion",
+      setting_payload AS "settingPayload",
+      updated_at::text AS "updatedAt"
+    FROM app_private.app_settings
+    WHERE owner_id = ${owner.databaseOwnerId}::uuid
+      AND setting_key = 'player-timeouts'
+  `
+
+  try {
+    await sql`
+      DELETE FROM app_private.app_settings
+      WHERE owner_id = ${owner.databaseOwnerId}::uuid
+        AND setting_key = 'player-timeouts'
+    `
+    await insertM28RosterSession(sql, endedSessionId)
+    await endM28Session(sql, owner.databaseOwnerId, endedSessionId)
+    await insertCommittedDiagnosticSession(sql, diagnosticSessionId)
+    await insertM28RosterSession(sql, activeSessionId)
+    await sql`
+      INSERT INTO app_private.owners (id, identity_key)
+      VALUES (${otherOwnerId}::uuid, ${otherOwnerIdentityKey})
+    `
+    await insertM28DiagnosticSessionForOwner(
+      sql,
+      otherOwnerId,
+      otherOwnerSessionId,
+    )
+    await writePlayerTimeoutSettings(sql, ownerScope, settings)
+    const beforeSettings = await readPlayerTimeoutSettings(sql, ownerScope)
+
+    await expect(
+      sql.begin((transaction) =>
+        clearOwnerSessionData(transaction, owner, {
+          deletedAt: M28_DELETED_AT,
+        }),
+      ),
+    ).resolves.toEqual({ deletedSessionCount: 3, invalidatedRuns: [] })
+
+    const afterSettings = await readPlayerTimeoutSettings(sql, ownerScope)
+    expect(afterSettings).toEqual(beforeSettings)
+    const preservedRows = await sql<
+      {
+        readonly ownerCount: number
+        readonly settingCount: number
+        readonly sessionCount: number
+        readonly schemaExists: boolean
+        readonly migrationCount: number
+        readonly otherOwnerCount: number
+        readonly otherOwnerSessionCount: number
+        readonly otherOwnerParticipantCount: number
+        readonly otherOwnerAgentCount: number
+      }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM app_private.owners WHERE id = ${owner.databaseOwnerId}::uuid) AS "ownerCount",
+        (SELECT count(*)::int FROM app_private.app_settings WHERE owner_id = ${owner.databaseOwnerId}::uuid AND setting_key = 'player-timeouts') AS "settingCount",
+        (SELECT count(*)::int FROM app_private.sessions WHERE owner_id = ${owner.databaseOwnerId}::uuid) AS "sessionCount",
+        to_regnamespace('app_private') IS NOT NULL AS "schemaExists",
+        (SELECT count(*)::int FROM app_private.__drizzle_migrations) AS "migrationCount",
+        (SELECT count(*)::int FROM app_private.owners WHERE id = ${otherOwnerId}::uuid) AS "otherOwnerCount",
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${otherOwnerSessionId}::uuid AND owner_id = ${otherOwnerId}::uuid) AS "otherOwnerSessionCount",
+        (SELECT count(*)::int FROM app_private.session_participants WHERE session_id = ${otherOwnerSessionId}::uuid AND owner_id = ${otherOwnerId}::uuid) AS "otherOwnerParticipantCount",
+        (SELECT count(*)::int FROM app_private.session_agents WHERE session_id = ${otherOwnerSessionId}::uuid AND owner_id = ${otherOwnerId}::uuid) AS "otherOwnerAgentCount"
+    `
+    expect(preservedRows[0]).toMatchObject({
+      ownerCount: 1,
+      settingCount: 1,
+      sessionCount: 0,
+      schemaExists: true,
+      otherOwnerCount: 1,
+      otherOwnerSessionCount: 1,
+      otherOwnerParticipantCount: 6,
+      otherOwnerAgentCount: 5,
+    })
+    expect(preservedRows[0]?.migrationCount).toBeGreaterThan(0)
+    expect(loadAndValidatePersonaCatalog().list().length).toBeGreaterThan(0)
+
+    await expect(
+      sql.begin((transaction) =>
+        clearOwnerSessionData(transaction, owner, {
+          deletedAt: M28_DELETED_AT,
+        }),
+      ),
+    ).resolves.toEqual({ deletedSessionCount: 0, invalidatedRuns: [] })
+  } finally {
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (
+        ${endedSessionId}::uuid,
+        ${activeSessionId}::uuid,
+        ${diagnosticSessionId}::uuid,
+        ${otherOwnerSessionId}::uuid
+      )
+    `
+    await sql`
+      DELETE FROM app_private.owners
+      WHERE id = ${otherOwnerId}::uuid
+    `
+    await sql`
+      DELETE FROM app_private.app_settings
+      WHERE owner_id = ${owner.databaseOwnerId}::uuid
+        AND setting_key = 'player-timeouts'
+    `
+    const originalSetting = originalSettingRows[0]
+    if (originalSetting !== undefined) {
+      await sql`
+        INSERT INTO app_private.app_settings (
+          id, owner_id, setting_key, setting_payload_version,
+          setting_payload, updated_at
+        ) VALUES (
+          ${originalSetting.id}::uuid, ${owner.databaseOwnerId}::uuid,
+          'player-timeouts', ${originalSetting.settingPayloadVersion},
+          ${serializeJsonbFixture(originalSetting.settingPayload)}::text::jsonb,
+          ${originalSetting.updatedAt}::timestamptz
+        )
+      `
+    }
+  }
+}
+
+async function assertM28DeletionRollback(sql: Sql): Promise<void> {
+  const sessionId = randomUUID()
+  try {
+    const fixture = await insertM28CascadeFixture(sql, sessionId)
+    const beforeCounts = await readM28SessionScopedCounts(sql, sessionId)
+    await inRollbackTransaction(sql, async (transaction) => {
+      const result = await deleteEndedSessionData(transaction, fixture.owner, {
+        sessionId,
+        deletedAt: M28_DELETED_AT,
+      })
+      expect(result.invalidatedRuns).toHaveLength(2)
+    })
+
+    expect(await readM28SessionScopedCounts(sql, sessionId)).toEqual(
+      beforeCounts,
+    )
+    const restoredRows = await sql<
+      {
+        readonly lifecycleStatus: string
+        readonly agentRunState: string
+        readonly activePlayerRunId: string | null
+        readonly activeDecisionRequestId: string | null
+        readonly runningRunCount: number
+        readonly leasedRunCount: number
+        readonly maxFencingToken: string
+      }[]
+    >`
+      SELECT
+        session.lifecycle_status AS "lifecycleStatus",
+        session.agent_run_state AS "agentRunState",
+        session.active_player_run_id::text AS "activePlayerRunId",
+        session.active_decision_request_id::text AS "activeDecisionRequestId",
+        count(*) FILTER (WHERE run.lifecycle = 'running')::int AS "runningRunCount",
+        count(*) FILTER (WHERE run.lease_owner = 'm28-worker' AND run.lease_expires_at IS NOT NULL)::int AS "leasedRunCount",
+        max(run.fencing_token)::text AS "maxFencingToken"
+      FROM app_private.sessions AS session
+      JOIN app_private.agent_runs AS run ON run.session_id = session.id
+      WHERE session.id = ${sessionId}::uuid
+      GROUP BY session.id
+    `
+    expect(restoredRows[0]).toMatchObject({
+      lifecycleStatus: 'ended',
+      agentRunState: 'thinking',
+      activePlayerRunId: fixture.playerRunId,
+      runningRunCount: 2,
+      leasedRunCount: 2,
+      maxFencingToken: String(Number.MAX_SAFE_INTEGER),
+    })
+    expect(restoredRows[0]?.activeDecisionRequestId).not.toBeNull()
+  } finally {
+    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
+  }
+}
+
+export async function assertM28SessionDataDeletionRepositories(
+  sql: Sql,
+  _runtimeUrl: string,
+): Promise<void> {
+  await assertM28EndedDeletionAndCascade(sql)
+  await assertM28SingleDeletionLifecycleBoundary(sql)
+  await assertM28ClearAndPreservedRoots(sql)
+  await assertM28DeletionRollback(sql)
+}
+
+interface M28GateFixture {
+  readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
+  readonly sessionId: string
+  readonly agentRunId: string
+  readonly runtime: 'player' | 'coach'
+}
+
+async function insertM28PlayerGateFixture(sql: Sql): Promise<M28GateFixture> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const agentRunId = randomUUID()
+  const decisionRequestId = randomUUID()
+  const roster = await insertM28RosterSession(sql, sessionId)
+  const agent = roster.agents[0]
+  if (agent === undefined) {
+    throw new Error('M2.8 Player Gate fixture 缺少 Agent。')
+  }
+  await sql.begin(async (transaction) => {
+    await insertMutationHand(
+      transaction as unknown as Sql,
+      roster.owner.databaseOwnerId,
+      sessionId,
+      handId,
+    )
+    const repository = createAgentFoundationAuditRepository({
+      runtimeAuditDecoders: {},
+    })
+    await repository.insertAgentRunAudit(
+      transaction,
+      roster.owner,
+      createM27PlayerRunInput(
+        sessionId,
+        handId,
+        agentRunId,
+        agent.agentParticipantId,
+        decisionRequestId,
+      ),
+    )
+    await transaction`
+      UPDATE app_private.agent_runs
+      SET lifecycle = 'running',
+          lease_owner = 'm28-player-gate',
+          lease_expires_at = '2026-08-05T05:00:00.000Z'::timestamptz,
+          fencing_token = 17
+      WHERE id = ${agentRunId}::uuid
+        AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+        AND session_id = ${sessionId}::uuid
+    `
+    await transaction`
+      UPDATE app_private.sessions
+      SET agent_run_state = 'thinking',
+          active_player_run_id = ${agentRunId}::uuid,
+          active_decision_request_id = ${decisionRequestId}::uuid
+      WHERE id = ${sessionId}::uuid
+        AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+    `
+  })
+  return { owner: roster.owner, sessionId, agentRunId, runtime: 'player' }
+}
+
+async function insertM28CoachGateFixture(sql: Sql): Promise<M28GateFixture> {
+  const sessionId = randomUUID()
+  const handId = randomUUID()
+  const agentRunId = randomUUID()
+  const { owner } = await insertCommittedM27CoachRun(
+    sql,
+    sessionId,
+    handId,
+    agentRunId,
+  )
+  await endM28Session(sql, owner.databaseOwnerId, sessionId)
+  return { owner, sessionId, agentRunId, runtime: 'coach' }
+}
+
+async function runM28MinimalCommitGate(
+  transaction: TransactionSql,
+  fixture: M28GateFixture,
+): Promise<boolean> {
+  const sessionRows = await transaction<
+    {
+      readonly lifecycleStatus: string
+      readonly activePlayerRunId: string | null
+    }[]
+  >`
+    SELECT
+      lifecycle_status AS "lifecycleStatus",
+      active_player_run_id::text AS "activePlayerRunId"
+    FROM app_private.sessions
+    WHERE id = ${fixture.sessionId}::uuid
+      AND owner_id = ${fixture.owner.databaseOwnerId}::uuid
+    FOR UPDATE
+  `
+  const session = sessionRows[0]
+  if (
+    session === undefined ||
+    (fixture.runtime === 'player' &&
+      (session.lifecycleStatus !== 'active' ||
+        session.activePlayerRunId !== fixture.agentRunId)) ||
+    (fixture.runtime === 'coach' && session.lifecycleStatus !== 'ended')
+  ) {
+    return false
+  }
+
+  const runRows = await transaction<
+    { readonly agentRunId: string; readonly lifecycle: string }[]
+  >`
+    SELECT id::text AS "agentRunId", lifecycle
+    FROM app_private.agent_runs
+    WHERE id = ${fixture.agentRunId}::uuid
+      AND owner_id = ${fixture.owner.databaseOwnerId}::uuid
+      AND session_id = ${fixture.sessionId}::uuid
+      AND runtime = ${fixture.runtime}
+    ORDER BY id ASC
+    FOR UPDATE
+  `
+  const run = runRows[0]
+  if (
+    run === undefined ||
+    !['queued', 'leased', 'running'].includes(run.lifecycle)
+  ) {
+    return false
+  }
+
+  const updatedRows = await transaction<{ readonly agentRunId: string }[]>`
+    UPDATE app_private.agent_runs
+    SET checkpoint_payload_version = 1,
+        checkpoint_payload = '{"minimalGateCommitted":true}'::jsonb,
+        updated_at = clock_timestamp()
+    WHERE id = ${fixture.agentRunId}::uuid
+      AND owner_id = ${fixture.owner.databaseOwnerId}::uuid
+      AND session_id = ${fixture.sessionId}::uuid
+      AND lifecycle IN ('queued', 'leased', 'running')
+    RETURNING id::text AS "agentRunId"
+  `
+  return updatedRows[0]?.agentRunId === fixture.agentRunId
+}
+
+async function runM28Deletion(
+  transaction: TransactionSql,
+  fixture: M28GateFixture,
+): Promise<void> {
+  if (fixture.runtime === 'player') {
+    await clearOwnerSessionData(transaction, fixture.owner, {
+      deletedAt: M28_DELETED_AT,
+    })
+    return
+  }
+  await deleteEndedSessionData(transaction, fixture.owner, {
+    sessionId: fixture.sessionId,
+    deletedAt: M28_DELETED_AT,
+  })
+}
+
+async function assertM28DeletionFirstRejectsWaitingGate(
+  sql: Sql,
+  runtimeUrl: string,
+  createFixture: (sql: Sql) => Promise<M28GateFixture>,
+  role: string,
+): Promise<void> {
+  const fixture = await createFixture(sql)
+  const gateSql = createDatabaseTestSqlForRole(runtimeUrl, role)
+  let gateResult: Promise<boolean> | undefined
+  try {
+    await sql.begin(async (transaction) => {
+      const deletionBackendPid = await readTransactionBackendPid(transaction)
+      await runM28Deletion(transaction, fixture)
+      let signalGatePid: ((pid: number) => void) | undefined
+      const gatePid = new Promise<number>((resolve) => {
+        signalGatePid = resolve
+      })
+      gateResult = gateSql.begin(async (gateTransaction) => {
+        const pid = await readTransactionBackendPid(gateTransaction)
+        signalGatePid?.(pid)
+        return runM28MinimalCommitGate(gateTransaction, fixture)
+      })
+      await waitForTransactionBlock(
+        transaction,
+        deletionBackendPid,
+        await gatePid,
+      )
+    })
+
+    await expect(gateResult).resolves.toBe(false)
+    const rows = await sql<
+      { readonly sessionCount: number; readonly runCount: number }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${fixture.sessionId}::uuid) AS "sessionCount",
+        (SELECT count(*)::int FROM app_private.agent_runs WHERE id = ${fixture.agentRunId}::uuid) AS "runCount"
+    `
+    expect(rows[0]).toEqual({ sessionCount: 0, runCount: 0 })
+  } finally {
+    await gateSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id = ${fixture.sessionId}::uuid
+    `
+  }
+}
+
+async function assertM28GateFirstIsCascadedByWaitingDeletion(
+  sql: Sql,
+  runtimeUrl: string,
+  createFixture: (sql: Sql) => Promise<M28GateFixture>,
+  role: string,
+): Promise<void> {
+  const fixture = await createFixture(sql)
+  const deletionSql = createDatabaseTestSqlForRole(runtimeUrl, role)
+  let deletionResult: Promise<void> | undefined
+  try {
+    await sql.begin(async (transaction) => {
+      const gateBackendPid = await readTransactionBackendPid(transaction)
+      await expect(runM28MinimalCommitGate(transaction, fixture)).resolves.toBe(
+        true,
+      )
+      let signalDeletionPid: ((pid: number) => void) | undefined
+      const deletionPid = new Promise<number>((resolve) => {
+        signalDeletionPid = resolve
+      })
+      deletionResult = deletionSql.begin(async (deletionTransaction) => {
+        const pid = await readTransactionBackendPid(deletionTransaction)
+        signalDeletionPid?.(pid)
+        await runM28Deletion(deletionTransaction, fixture)
+      })
+      await waitForTransactionBlock(
+        transaction,
+        gateBackendPid,
+        await deletionPid,
+      )
+    })
+
+    await expect(deletionResult).resolves.toBeUndefined()
+    const rows = await sql<
+      { readonly sessionCount: number; readonly runCount: number }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${fixture.sessionId}::uuid) AS "sessionCount",
+        (SELECT count(*)::int FROM app_private.agent_runs WHERE id = ${fixture.agentRunId}::uuid) AS "runCount"
+    `
+    expect(rows[0]).toEqual({ sessionCount: 0, runCount: 0 })
+  } finally {
+    await deletionSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id = ${fixture.sessionId}::uuid
+    `
+  }
+}
+
+export async function assertM28PlayerDeletionContention(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  await assertM28DeletionFirstRejectsWaitingGate(
+    sql,
+    runtimeUrl,
+    insertM28PlayerGateFixture,
+    'm28-player-wait',
+  )
+  await assertM28GateFirstIsCascadedByWaitingDeletion(
+    sql,
+    runtimeUrl,
+    insertM28PlayerGateFixture,
+    'm28-player-delete',
+  )
+}
+
+export async function assertM28CoachDeletionContention(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  await assertM28DeletionFirstRejectsWaitingGate(
+    sql,
+    runtimeUrl,
+    insertM28CoachGateFixture,
+    'm28-coach-wait',
+  )
+  await assertM28GateFirstIsCascadedByWaitingDeletion(
+    sql,
+    runtimeUrl,
+    insertM28CoachGateFixture,
+    'm28-coach-delete',
+  )
+}
+
+async function runM28CurrentCatalogCreation(
+  transaction: TransactionSql,
+  owner: Awaited<ReturnType<typeof resolveOwnerScope>>,
+  sessionId: string,
+): Promise<void> {
+  const ownerRows = await transaction<{ readonly databaseOwnerId: string }[]>`
+    SELECT id::text AS "databaseOwnerId"
+    FROM app_private.owners
+    WHERE id = ${owner.databaseOwnerId}::uuid
+    FOR UPDATE
+  `
+  expect(ownerRows[0]?.databaseOwnerId).toBe(owner.databaseOwnerId)
+  const prepared = await createRosterInput(transaction as unknown as Sql)
+  await insertSessionRosterSnapshot(transaction, { ...prepared, sessionId })
+}
+
+async function assertM28ClearFirstThenCurrentCatalogCreation(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const oldSessionId = randomUUID()
+  const newSessionId = randomUUID()
+  const roster = await insertM28RosterSession(sql, oldSessionId)
+  await endM28Session(sql, roster.owner.databaseOwnerId, oldSessionId)
+  const creationSql = createDatabaseTestSqlForRole(
+    runtimeUrl,
+    'm28-current-create',
+  )
+  let creationResult: Promise<void> | undefined
+  try {
+    await sql.begin(async (transaction) => {
+      const clearPid = await readTransactionBackendPid(transaction)
+      await clearOwnerSessionData(transaction, roster.owner, {
+        deletedAt: M28_DELETED_AT,
+      })
+      let signalCreationPid: ((pid: number) => void) | undefined
+      const creationPid = new Promise<number>((resolve) => {
+        signalCreationPid = resolve
+      })
+      creationResult = creationSql.begin(async (creationTransaction) => {
+        const pid = await readTransactionBackendPid(creationTransaction)
+        signalCreationPid?.(pid)
+        await runM28CurrentCatalogCreation(
+          creationTransaction,
+          roster.owner,
+          newSessionId,
+        )
+      })
+      await waitForTransactionBlock(transaction, clearPid, await creationPid)
+    })
+
+    await expect(creationResult).resolves.toBeUndefined()
+    const rows = await sql<
+      {
+        readonly oldCount: number
+        readonly newCount: number
+        readonly newParticipantCount: number
+        readonly oldDerivedCount: number
+      }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${oldSessionId}::uuid) AS "oldCount",
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${newSessionId}::uuid) AS "newCount",
+        (SELECT count(*)::int FROM app_private.session_participants WHERE session_id = ${newSessionId}::uuid) AS "newParticipantCount",
+        (
+          (SELECT count(*) FROM app_private.hands WHERE session_id = ${oldSessionId}::uuid) +
+          (SELECT count(*) FROM app_private.session_events WHERE session_id = ${oldSessionId}::uuid) +
+          (SELECT count(*) FROM app_private.agent_runs WHERE session_id = ${oldSessionId}::uuid)
+        )::int AS "oldDerivedCount"
+    `
+    expect(rows[0]).toEqual({
+      oldCount: 0,
+      newCount: 1,
+      newParticipantCount: 6,
+      oldDerivedCount: 0,
+    })
+  } finally {
+    await creationSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (${oldSessionId}::uuid, ${newSessionId}::uuid)
+    `
+  }
+}
+
+async function assertM28CurrentCatalogCreationFirstThenClear(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const oldSessionId = randomUUID()
+  const newSessionId = randomUUID()
+  const roster = await insertM28RosterSession(sql, oldSessionId)
+  await endM28Session(sql, roster.owner.databaseOwnerId, oldSessionId)
+  const clearSql = createDatabaseTestSqlForRole(runtimeUrl, 'm28-current-clear')
+  let clearResult: Promise<void> | undefined
+  try {
+    await sql.begin(async (transaction) => {
+      const creationPid = await readTransactionBackendPid(transaction)
+      await runM28CurrentCatalogCreation(
+        transaction,
+        roster.owner,
+        newSessionId,
+      )
+      let signalClearPid: ((pid: number) => void) | undefined
+      const clearPid = new Promise<number>((resolve) => {
+        signalClearPid = resolve
+      })
+      clearResult = clearSql.begin(async (clearTransaction) => {
+        const pid = await readTransactionBackendPid(clearTransaction)
+        signalClearPid?.(pid)
+        await clearOwnerSessionData(clearTransaction, roster.owner, {
+          deletedAt: M28_DELETED_AT,
+        })
+      })
+      await waitForTransactionBlock(transaction, creationPid, await clearPid)
+    })
+
+    await expect(clearResult).resolves.toBeUndefined()
+    const rows = await sql<{ readonly count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM app_private.sessions
+      WHERE id IN (${oldSessionId}::uuid, ${newSessionId}::uuid)
+    `
+    expect(rows[0]?.count).toBe(0)
+  } finally {
+    await clearSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (${oldSessionId}::uuid, ${newSessionId}::uuid)
+    `
+  }
+}
+
+export async function assertM28CurrentCatalogCreationContention(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  await assertM28ClearFirstThenCurrentCatalogCreation(sql, runtimeUrl)
+  await assertM28CurrentCatalogCreationFirstThenClear(sql, runtimeUrl)
+}
+
+interface M28HistoricalSourceFixture {
+  readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
+  readonly sessionId: string
+  readonly historicalConfigSnapshotKey: string
+}
+
+async function insertM28HistoricalEndedSession(
+  sql: Sql,
+  sessionId: string,
+  endedAt = '2026-08-05T03:59:00.000Z',
+): Promise<M28HistoricalSourceFixture> {
+  const changedDefinitions = structuredClone(
+    PERSONA_CATALOG_DEFINITIONS,
+  ) as unknown as Record<string, unknown>[]
+  for (const [index, definition] of changedDefinitions.entries()) {
+    if (index >= 5) {
+      break
+    }
+    definition.name = `Historical M2.8 ${index + 1}`
+    definition.personaVersion = 800 + index
+  }
+  const historicalCatalog = loadAndValidatePersonaCatalog(changedDefinitions)
+  const prepared = await sql.begin(async (transaction) => {
+    const roster = await prepareCurrentCatalogRoster(
+      transaction as unknown as Sql,
+      ownerScope,
+      historicalCatalog,
+      {
+        sessionId,
+        userParticipantId: randomUUID(),
+        agents: historicalCatalog
+          .list()
+          .slice(0, 5)
+          .map((entry, index) => ({
+            seatNumber: index + 1,
+            agentParticipantId: randomUUID(),
+            personaId: entry.personaId,
+          })),
+      },
+    )
+    await insertSessionRosterSnapshot(transaction, roster)
+    await transaction`
+      UPDATE app_private.sessions
+      SET lifecycle_status = 'ended',
+          ended_at = ${endedAt}::timestamptz,
+          updated_at = ${endedAt}::timestamptz
+      WHERE id = ${sessionId}::uuid
+        AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+    `
+    return roster
+  })
+  const snapshots = await readSessionAgentSnapshots(sql, ownerScope, sessionId)
+  const historicalConfigSnapshotKey = snapshots[0]?.configSnapshotKey
+  if (historicalConfigSnapshotKey === undefined) {
+    throw new Error('M2.8 历史阵容 fixture 缺少配置 Key。')
+  }
+  return {
+    owner: prepared.owner,
+    sessionId,
+    historicalConfigSnapshotKey,
+  }
+}
+
+async function runM28HistoricalRosterCreation(
+  transaction: TransactionSql,
+  owner: Awaited<ReturnType<typeof resolveOwnerScope>>,
+  newSessionId: string,
+  onCandidate?: (candidateId: string) => Promise<void>,
+): Promise<boolean> {
+  const ownerRows = await transaction<{ readonly databaseOwnerId: string }[]>`
+    SELECT id::text AS "databaseOwnerId"
+    FROM app_private.owners
+    WHERE id = ${owner.databaseOwnerId}::uuid
+    FOR UPDATE
+  `
+  if (ownerRows[0]?.databaseOwnerId !== owner.databaseOwnerId) {
+    return false
+  }
+  const candidateRows = await transaction<{ readonly sessionId: string }[]>`
+    SELECT id::text AS "sessionId"
+    FROM app_private.sessions
+    WHERE owner_id = ${owner.databaseOwnerId}::uuid
+      AND lifecycle_status = 'ended'
+    ORDER BY ended_at DESC, id DESC
+    LIMIT 1
+  `
+  const candidateId = candidateRows[0]?.sessionId
+  if (candidateId === undefined) {
+    return false
+  }
+  await onCandidate?.(candidateId)
+
+  const lockedRows = await transaction<{ readonly sessionId: string }[]>`
+    SELECT id::text AS "sessionId"
+    FROM app_private.sessions
+    WHERE id = ${candidateId}::uuid
+      AND owner_id = ${owner.databaseOwnerId}::uuid
+      AND lifecycle_status = 'ended'
+    FOR UPDATE
+  `
+  if (lockedRows[0]?.sessionId !== candidateId) {
+    return false
+  }
+  const latestRows = await transaction<{ readonly sessionId: string }[]>`
+    SELECT id::text AS "sessionId"
+    FROM app_private.sessions
+    WHERE owner_id = ${owner.databaseOwnerId}::uuid
+      AND lifecycle_status = 'ended'
+    ORDER BY ended_at DESC, id DESC
+    LIMIT 1
+  `
+  if (latestRows[0]?.sessionId !== candidateId) {
+    return false
+  }
+
+  const prepared = await prepareLatestEndedRosterForReuse(
+    transaction as unknown as Sql,
+    ownerScope,
+    {
+      sessionId: newSessionId,
+      userParticipantId: randomUUID(),
+      agentParticipants: Array.from({ length: 5 }, (_, index) => ({
+        seatNumber: index + 1,
+        agentParticipantId: randomUUID(),
+      })),
+    },
+  )
+  await insertSessionRosterSnapshot(transaction, prepared)
+  return true
+}
+
+async function assertM28ClearRejectsStaleHistoricalPreflight(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const sourceSessionId = randomUUID()
+  const newSessionId = randomUUID()
+  const source = await insertM28HistoricalEndedSession(sql, sourceSessionId)
+  const cachedPreflight = await prepareLatestEndedRosterForReuse(
+    sql,
+    ownerScope,
+    {
+      sessionId: newSessionId,
+      userParticipantId: randomUUID(),
+      agentParticipants: Array.from({ length: 5 }, (_, index) => ({
+        seatNumber: index + 1,
+        agentParticipantId: randomUUID(),
+      })),
+    },
+  )
+  expect(cachedPreflight.agents[0]?.configSnapshotKey).toBe(
+    source.historicalConfigSnapshotKey,
+  )
+  const reuseSql = createDatabaseTestSqlForRole(runtimeUrl, 'm28-reuse-wait')
+  let reuseResult: Promise<boolean> | undefined
+  try {
+    await sql.begin(async (transaction) => {
+      const clearPid = await readTransactionBackendPid(transaction)
+      await clearOwnerSessionData(transaction, source.owner, {
+        deletedAt: M28_DELETED_AT,
+      })
+      let signalReusePid: ((pid: number) => void) | undefined
+      const reusePid = new Promise<number>((resolve) => {
+        signalReusePid = resolve
+      })
+      reuseResult = reuseSql.begin(async (reuseTransaction) => {
+        const pid = await readTransactionBackendPid(reuseTransaction)
+        signalReusePid?.(pid)
+        return runM28HistoricalRosterCreation(
+          reuseTransaction,
+          source.owner,
+          newSessionId,
+        )
+      })
+      await waitForTransactionBlock(transaction, clearPid, await reusePid)
+    })
+
+    await expect(reuseResult).resolves.toBe(false)
+    const rows = await sql<
+      { readonly newCount: number; readonly historicalKeyCount: number }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${newSessionId}::uuid) AS "newCount",
+        (SELECT count(*)::int FROM app_private.session_agents WHERE config_snapshot_key = ${source.historicalConfigSnapshotKey}) AS "historicalKeyCount"
+    `
+    expect(rows[0]).toEqual({ newCount: 0, historicalKeyCount: 0 })
+  } finally {
+    await reuseSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (${sourceSessionId}::uuid, ${newSessionId}::uuid)
+    `
+  }
+}
+
+async function assertM28HistoricalReuseFirstThenClear(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const sourceSessionId = randomUUID()
+  const newSessionId = randomUUID()
+  const source = await insertM28HistoricalEndedSession(sql, sourceSessionId)
+  const clearSql = createDatabaseTestSqlForRole(runtimeUrl, 'm28-reuse-clear')
+  let clearResult: Promise<void> | undefined
+  try {
+    await sql.begin(async (transaction) => {
+      const reusePid = await readTransactionBackendPid(transaction)
+      await expect(
+        runM28HistoricalRosterCreation(transaction, source.owner, newSessionId),
+      ).resolves.toBe(true)
+      let signalClearPid: ((pid: number) => void) | undefined
+      const clearPid = new Promise<number>((resolve) => {
+        signalClearPid = resolve
+      })
+      clearResult = clearSql.begin(async (clearTransaction) => {
+        const pid = await readTransactionBackendPid(clearTransaction)
+        signalClearPid?.(pid)
+        await clearOwnerSessionData(clearTransaction, source.owner, {
+          deletedAt: M28_DELETED_AT,
+        })
+      })
+      await waitForTransactionBlock(transaction, reusePid, await clearPid)
+    })
+
+    await expect(clearResult).resolves.toBeUndefined()
+    const rows = await sql<{ readonly count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM app_private.sessions
+      WHERE id IN (${sourceSessionId}::uuid, ${newSessionId}::uuid)
+    `
+    expect(rows[0]?.count).toBe(0)
+  } finally {
+    await clearSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (${sourceSessionId}::uuid, ${newSessionId}::uuid)
+    `
+  }
+}
+
+export async function assertM28HistoricalClearContention(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  await assertM28ClearRejectsStaleHistoricalPreflight(sql, runtimeUrl)
+  await assertM28HistoricalReuseFirstThenClear(sql, runtimeUrl)
+}
+
+async function insertM28OlderEndedSession(
+  sql: Sql,
+  sessionId: string,
+): Promise<Awaited<ReturnType<typeof insertM28RosterSession>>> {
+  const roster = await insertM28RosterSession(sql, sessionId)
+  await sql`
+    UPDATE app_private.sessions
+    SET lifecycle_status = 'ended',
+        ended_at = '2026-08-05T03:00:00.000Z'::timestamptz,
+        updated_at = '2026-08-05T03:00:00.000Z'::timestamptz
+    WHERE id = ${sessionId}::uuid
+      AND owner_id = ${roster.owner.databaseOwnerId}::uuid
+  `
+  return roster
+}
+
+async function assertM28CandidateDeleteFirstDoesNotFallback(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const olderSessionId = randomUUID()
+  const latestSessionId = randomUUID()
+  const newSessionId = randomUUID()
+  await insertM28OlderEndedSession(sql, olderSessionId)
+  const latest = await insertM28HistoricalEndedSession(sql, latestSessionId)
+  const creationSql = createDatabaseTestSqlForRole(
+    runtimeUrl,
+    'm28-exact-reuse',
+  )
+  let resumeCreation: (() => void) | undefined
+  const creationResume = new Promise<void>((resolve) => {
+    resumeCreation = resolve
+  })
+  let signalCandidate:
+    | ((value: { readonly candidateId: string; readonly pid: number }) => void)
+    | undefined
+  const selectedCandidate = new Promise<{
+    readonly candidateId: string
+    readonly pid: number
+  }>((resolve) => {
+    signalCandidate = resolve
+  })
+  let creationPid = 0
+  const creationResult = creationSql.begin(async (transaction) => {
+    creationPid = await readTransactionBackendPid(transaction)
+    return runM28HistoricalRosterCreation(
+      transaction,
+      latest.owner,
+      newSessionId,
+      async (candidateId) => {
+        signalCandidate?.({ candidateId, pid: creationPid })
+        await creationResume
+      },
+    )
+  })
+
+  try {
+    const candidate = await selectedCandidate
+    expect(candidate.candidateId).toBe(latestSessionId)
+    await sql.begin(async (transaction) => {
+      const deletionPid = await readTransactionBackendPid(transaction)
+      await deleteEndedSessionData(transaction, latest.owner, {
+        sessionId: latestSessionId,
+        deletedAt: M28_DELETED_AT,
+      })
+      resumeCreation?.()
+      await waitForTransactionBlock(transaction, deletionPid, candidate.pid)
+    })
+
+    await expect(creationResult).resolves.toBe(false)
+    const rows = await sql<
+      {
+        readonly olderCount: number
+        readonly latestCount: number
+        readonly newCount: number
+      }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${olderSessionId}::uuid) AS "olderCount",
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${latestSessionId}::uuid) AS "latestCount",
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${newSessionId}::uuid) AS "newCount"
+    `
+    expect(rows[0]).toEqual({ olderCount: 1, latestCount: 0, newCount: 0 })
+  } finally {
+    resumeCreation?.()
+    await creationResult.catch(() => undefined)
+    await creationSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (
+        ${olderSessionId}::uuid,
+        ${latestSessionId}::uuid,
+        ${newSessionId}::uuid
+      )
+    `
+  }
+}
+
+async function assertM28CandidateReuseFirstSurvivesSourceDelete(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  const olderSessionId = randomUUID()
+  const latestSessionId = randomUUID()
+  const newSessionId = randomUUID()
+  await insertM28OlderEndedSession(sql, olderSessionId)
+  const latest = await insertM28HistoricalEndedSession(sql, latestSessionId)
+  const deletionSql = createDatabaseTestSqlForRole(
+    runtimeUrl,
+    'm28-exact-delete',
+  )
+  let deletionResult: Promise<void> | undefined
+  try {
+    await sql.begin(async (transaction) => {
+      const creationPid = await readTransactionBackendPid(transaction)
+      await expect(
+        runM28HistoricalRosterCreation(transaction, latest.owner, newSessionId),
+      ).resolves.toBe(true)
+      let signalDeletionPid: ((pid: number) => void) | undefined
+      const deletionPid = new Promise<number>((resolve) => {
+        signalDeletionPid = resolve
+      })
+      deletionResult = deletionSql.begin(async (deletionTransaction) => {
+        const pid = await readTransactionBackendPid(deletionTransaction)
+        signalDeletionPid?.(pid)
+        await deleteEndedSessionData(deletionTransaction, latest.owner, {
+          sessionId: latestSessionId,
+          deletedAt: M28_DELETED_AT,
+        })
+      })
+      await waitForTransactionBlock(transaction, creationPid, await deletionPid)
+    })
+
+    await expect(deletionResult).resolves.toBeUndefined()
+    const rows = await sql<
+      {
+        readonly olderCount: number
+        readonly latestCount: number
+        readonly newCount: number
+        readonly historicalKeyCount: number
+      }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${olderSessionId}::uuid) AS "olderCount",
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${latestSessionId}::uuid) AS "latestCount",
+        (SELECT count(*)::int FROM app_private.sessions WHERE id = ${newSessionId}::uuid) AS "newCount",
+        (SELECT count(*)::int FROM app_private.session_agents WHERE session_id = ${newSessionId}::uuid AND config_snapshot_key = ${latest.historicalConfigSnapshotKey}) AS "historicalKeyCount"
+    `
+    expect(rows[0]).toEqual({
+      olderCount: 1,
+      latestCount: 0,
+      newCount: 1,
+      historicalKeyCount: 1,
+    })
+  } finally {
+    await deletionSql.end({ timeout: 0 })
+    await sql`
+      DELETE FROM app_private.sessions
+      WHERE id IN (
+        ${olderSessionId}::uuid,
+        ${latestSessionId}::uuid,
+        ${newSessionId}::uuid
+      )
+    `
+  }
+}
+
+export async function assertM28HistoricalCandidateContention(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
+  await assertM28CandidateDeleteFirstDoesNotFallback(sql, runtimeUrl)
+  await assertM28CandidateReuseFirstSurvivesSourceDelete(sql, runtimeUrl)
 }

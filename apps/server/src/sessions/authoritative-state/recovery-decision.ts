@@ -1,4 +1,4 @@
-import type { PrivateEventV1 } from './private-event.js'
+import { getPrivateEventHandId } from './private-event-v2.js'
 import type { PrivateEventVersionRegistry } from './private-event-version-registry.js'
 import type { PrivateTableState } from './private-table-state.js'
 import type { SnapshotVersionRegistry } from './snapshot-version-registry.js'
@@ -88,10 +88,6 @@ function isSafeNonnegativeInteger(value: number): boolean {
 
 function normalizeUuid(value: string): string {
   return value.toLowerCase()
-}
-
-function privateEventHandId(event: PrivateEventV1): string {
-  return event.type === 'handStarted' ? event.startedHand.handId : event.handId
 }
 
 function hasExactEventSequence(
@@ -212,10 +208,12 @@ export function decideSessionRecovery(
     if (result.kind === 'invalidPayload') {
       return diagnostic('eventPayloadInvalid')
     }
+    const eventHandId = getPrivateEventHandId(result.value)
     if (
-      row.handId === null ||
-      normalizeUuid(row.handId) !==
-        normalizeUuid(privateEventHandId(result.value))
+      (row.handId === null) !== (eventHandId === null) ||
+      (row.handId !== null &&
+        eventHandId !== null &&
+        normalizeUuid(row.handId) !== normalizeUuid(eventHandId))
     ) {
       return diagnostic('eventRowMismatch')
     }

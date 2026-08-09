@@ -1,10 +1,13 @@
 import type { TransactionSql } from 'postgres'
 import { SseEventSchema, type SseEvent } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
+import { type StoredPrivateEventV2 } from '../sessions/authoritative-state/private-event-codec-v2.js'
+import type { CurrentPrivateEventProtocol } from '../sessions/authoritative-state/current-private-event-protocol.js'
+import { currentPrivateEventProtocol as productionCurrentPrivateEventProtocol } from '../sessions/authoritative-state/current-private-event-protocol.js'
 import {
-  decodeCurrentPrivateEventV1,
-  type StoredPrivateEventV1,
-} from '../sessions/authoritative-state/private-event-codec-v1.js'
+  getPrivateEventHandId,
+  type PrivateEventV2,
+} from '../sessions/authoritative-state/private-event-v2.js'
 import {
   decodeCurrentSnapshotV1,
   type StoredTableSnapshotV1,
@@ -59,7 +62,7 @@ const LockedSessionRowSchema = z.strictObject({
 
 declare const lockedSessionMutationBrand: unique symbol
 
-export interface LockedSessionMutation {
+export interface LockedSessionView {
   readonly sessionId: string
   readonly lifecycleStatus: 'active' | 'ended' | 'readonlyDiagnostic'
   readonly endedAt: string | null
@@ -71,6 +74,9 @@ export interface LockedSessionMutation {
   readonly agentRunState: 'idle' | 'thinking' | 'paused'
   readonly activePlayerRunId: string | null
   readonly activeDecisionRequestId: string | null
+}
+
+export interface LockedSessionMutation extends LockedSessionView {
   readonly [lockedSessionMutationBrand]: never
 }
 
@@ -81,7 +87,7 @@ export interface SessionMutationEventInput {
   readonly commandLedgerId: string | null
   readonly stateVersionBefore: number
   readonly stateVersionAfter: number
-  readonly privateEvent: StoredPrivateEventV1
+  readonly privateEvent: StoredPrivateEventV2
   readonly publicEvent: SseEvent
   readonly createdAt: string
 }
@@ -136,6 +142,7 @@ const SessionMutationBatchSchema = z.strictObject({
 interface LockedSessionMetadata {
   readonly transaction: TransactionSql
   readonly owner: ResolvedOwnerScope
+  readonly repositoryIdentity: object
 }
 
 const lockedSessionMetadata = new WeakMap<
@@ -158,6 +165,15 @@ function normalizeUuid(value: string): string {
   return value.toLowerCase()
 }
 
+function nullableUuidEquals(
+  left: string | null,
+  right: string | null,
+): boolean {
+  return left === null || right === null
+    ? left === right
+    : normalizeUuid(left) === normalizeUuid(right)
+}
+
 function canonicalPublicState(event: SseEvent): string {
   const snapshot = structuredClone(event.payload.snapshot) as unknown as Record<
     string,
@@ -167,14 +183,8 @@ function canonicalPublicState(event: SseEvent): string {
   return canonicalJson(snapshot as JsonValue)
 }
 
-function privateEventHandId(event: StoredPrivateEventV1): string {
-  const content = event.payload.event
-  return content.type === 'handStarted'
-    ? content.startedHand.handId
-    : content.handId
-}
-
 function assertAvailableLockedSession(
+  repositoryIdentity: object,
   transaction: TransactionSql,
   locked: LockedSessionMutation,
 ): LockedSessionMetadata {
@@ -190,6 +200,7 @@ function assertAvailableLockedSession(
   }
   const metadata = lockedSessionMetadata.get(locked) as LockedSessionMetadata
   if (
+    metadata.repositoryIdentity !== repositoryIdentity ||
     metadata.transaction !== transaction ||
     locked.lifecycleStatus !== 'active'
   ) {
@@ -198,7 +209,8 @@ function assertAvailableLockedSession(
   return metadata
 }
 
-export async function lockSessionForMutation(
+async function lockSessionForMutationFor(
+  repositoryIdentity: object,
   transaction: TransactionSql,
   owner: ResolvedOwnerScope,
   sessionId: string,
@@ -266,16 +278,38 @@ export async function lockSessionForMutation(
   }
 
   const locked = Object.freeze(row) as LockedSessionMutation
-  lockedSessionMetadata.set(locked, { transaction, owner })
+  lockedSessionMetadata.set(locked, { transaction, owner, repositoryIdentity })
   return locked
 }
 
-export async function persistSessionMutation(
+function validateSessionMutationFor(
+  repositoryIdentity: object,
+  currentPrivateEventProtocol: CurrentPrivateEventProtocol<
+    PrivateEventV2,
+    StoredPrivateEventV2
+  >,
   transaction: TransactionSql,
   locked: LockedSessionMutation,
   batch: SessionMutationBatch,
-): Promise<PersistedSessionMutation> {
-  const metadata = assertAvailableLockedSession(transaction, locked)
+): {
+  readonly metadata: LockedSessionMetadata
+  readonly parsedBatch: {
+    readonly success: true
+    readonly data: z.infer<typeof SessionMutationBatchSchema>
+  }
+  readonly snapshot: StoredTableSnapshotV1 | null
+  readonly events: readonly {
+    readonly input: z.infer<typeof SessionMutationBatchSchema>['events'][number]
+    readonly privateEvent: StoredPrivateEventV2
+    readonly privateEventDraft: PrivateEventV2
+    readonly publicEvent: SseEvent
+  }[]
+} {
+  const metadata = assertAvailableLockedSession(
+    repositoryIdentity,
+    transaction,
+    locked,
+  )
   const parsedBatch = SessionMutationBatchSchema.safeParse(batch)
   if (!parsedBatch.success) {
     throw new RepositoryInputValidationError()
@@ -284,7 +318,8 @@ export async function persistSessionMutation(
   let snapshot: StoredTableSnapshotV1 | null = null
   const events: Array<{
     readonly input: z.infer<typeof SessionMutationBatchSchema>['events'][number]
-    readonly privateEvent: StoredPrivateEventV1
+    readonly privateEvent: StoredPrivateEventV2
+    readonly privateEventDraft: PrivateEventV2
     readonly publicEvent: SseEvent
   }> = []
   try {
@@ -296,7 +331,10 @@ export async function persistSessionMutation(
       const publicEvent = SseEventSchema.parse(event.publicEvent)
       events.push({
         input: event,
-        privateEvent: decodeCurrentPrivateEventV1(event.privateEvent),
+        privateEvent: event.privateEvent as StoredPrivateEventV2,
+        privateEventDraft: currentPrivateEventProtocol.decodeStoredCurrent(
+          event.privateEvent,
+        ),
         publicEvent,
       })
     }
@@ -372,7 +410,7 @@ export async function persistSessionMutation(
     eventIds.size !== events.length ||
     commandLedgerIds.some((ledgerId) => ledgerId !== firstCommandLedgerId) ||
     events.some(
-      ({ input, privateEvent, publicEvent }, index) =>
+      ({ input, privateEventDraft, publicEvent }, index) =>
         input.stateVersionBefore !== locked.stateVersion ||
         input.stateVersionAfter !== parsedBatch.data.finalStateVersion ||
         BigInt(input.eventSeq) !==
@@ -385,17 +423,42 @@ export async function persistSessionMutation(
         publicEvent.payload.snapshot.stateVersion !==
           parsedBatch.data.finalStateVersion ||
         !hasValidPublicCoordination(publicEvent) ||
-        privateEvent.payload.event.type !== publicEvent.type ||
-        input.handId === null ||
-        normalizeUuid(input.handId) !==
-          normalizeUuid(privateEventHandId(privateEvent)) ||
+        privateEventDraft.type !== publicEvent.type ||
+        !nullableUuidEquals(
+          input.handId,
+          getPrivateEventHandId(privateEventDraft),
+        ) ||
         canonicalPublicState(publicEvent) !== firstPublicState,
     )
   ) {
     throw new RepositoryInputValidationError()
   }
 
-  const nextEventSeq = Number(nextEventSeqBigInt)
+  return { metadata, parsedBatch, snapshot, events }
+}
+
+async function persistSessionMutationFor(
+  repositoryIdentity: object,
+  currentPrivateEventProtocol: CurrentPrivateEventProtocol<
+    PrivateEventV2,
+    StoredPrivateEventV2
+  >,
+  transaction: TransactionSql,
+  locked: LockedSessionMutation,
+  batch: SessionMutationBatch,
+): Promise<PersistedSessionMutation> {
+  const { metadata, parsedBatch, snapshot, events } =
+    validateSessionMutationFor(
+      repositoryIdentity,
+      currentPrivateEventProtocol,
+      transaction,
+      locked,
+      batch,
+    )
+
+  const nextEventSeq = Number(
+    BigInt(locked.nextEventSeq) + BigInt(events.length),
+  )
   consumedLockedSessions.add(locked)
 
   let updatedRows: readonly { readonly sessionId: string }[]
@@ -556,3 +619,93 @@ export async function persistSessionMutation(
     events: events.map((event) => structuredClone(event.publicEvent)),
   })
 }
+
+export interface SessionMutationRepository {
+  readonly currentPrivateEventProtocol: CurrentPrivateEventProtocol<
+    PrivateEventV2,
+    StoredPrivateEventV2
+  >
+  lockSessionForMutation(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    sessionId: string,
+  ): Promise<LockedSessionMutation>
+  validateSessionMutation(
+    transaction: TransactionSql,
+    locked: LockedSessionMutation,
+    batch: SessionMutationBatch,
+  ): void
+  persistSessionMutation(
+    transaction: TransactionSql,
+    locked: LockedSessionMutation,
+    batch: SessionMutationBatch,
+  ): Promise<PersistedSessionMutation>
+}
+
+export function createSessionMutationRepository(input: {
+  readonly currentPrivateEventProtocol: CurrentPrivateEventProtocol<
+    PrivateEventV2,
+    StoredPrivateEventV2
+  >
+}): SessionMutationRepository {
+  if (
+    typeof input !== 'object' ||
+    input === null ||
+    typeof input.currentPrivateEventProtocol?.decodeStoredCurrent !== 'function'
+  ) {
+    throw new RepositoryInputValidationError()
+  }
+  const currentPrivateEventProtocol = input.currentPrivateEventProtocol
+  const repositoryIdentity = Object.freeze({})
+  return Object.freeze({
+    currentPrivateEventProtocol,
+    lockSessionForMutation: (
+      transaction: TransactionSql,
+      owner: ResolvedOwnerScope,
+      sessionId: string,
+    ) =>
+      lockSessionForMutationFor(
+        repositoryIdentity,
+        transaction,
+        owner,
+        sessionId,
+      ),
+    validateSessionMutation: (
+      transaction: TransactionSql,
+      locked: LockedSessionMutation,
+      batch: SessionMutationBatch,
+    ) => {
+      validateSessionMutationFor(
+        repositoryIdentity,
+        currentPrivateEventProtocol,
+        transaction,
+        locked,
+        batch,
+      )
+    },
+    persistSessionMutation: (
+      transaction: TransactionSql,
+      locked: LockedSessionMutation,
+      batch: SessionMutationBatch,
+    ) =>
+      persistSessionMutationFor(
+        repositoryIdentity,
+        currentPrivateEventProtocol,
+        transaction,
+        locked,
+        batch,
+      ),
+  })
+}
+
+export const productionSessionMutationRepository =
+  createSessionMutationRepository({
+    currentPrivateEventProtocol: productionCurrentPrivateEventProtocol,
+  })
+
+export const lockSessionForMutation =
+  productionSessionMutationRepository.lockSessionForMutation
+export const validateSessionMutation =
+  productionSessionMutationRepository.validateSessionMutation
+export const persistSessionMutation =
+  productionSessionMutationRepository.persistSessionMutation

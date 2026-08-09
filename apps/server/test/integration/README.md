@@ -6,16 +6,16 @@
 
 开发数据库里程碑时按以下顺序执行，禁止用反复重跑全套代替定位：
 
-1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m28`
+1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m31`
 2. 若修改共享事务、锁或测试运行时，再分别运行受影响的相邻里程碑。
 3. 离线 `pnpm run verify`。
 4. 提交前只运行一次 `pnpm --filter @tx-holdem-coach/server run db:test:full`。
 
-可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`、`m28`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
+可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`、`m28`、`m31`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
 
 ## 进度与失败定位
 
-远程入口把迁移、M2.2–M2.8 和 M2.5→M2.6 隔离升级注册为独立 Vitest 测试；M2.8 再按功能、Player/Coach 删除竞争、当前目录创建竞争、历史清空竞争和历史候选竞争拆分阶段。每个阶段即时输出：
+远程入口把迁移、M2.2–M2.8、M3.1 和 M2.5→M2.6 隔离升级注册为独立 Vitest 测试；M2.8 再按功能、Player/Coach 删除竞争、当前目录创建竞争、历史清空竞争和历史候选竞争拆分阶段。M3.1 通过真实 Repository、测试 Handler 和独立执行器连接验证 ended 重放不重复写入、基于 `rebuy` V2 结构夹具的 `stateChanged`、同版本竞争只推进一次、V1/V2 混合历史恢复、首事务回滚后等待方重新取得处理权、测试 Hand 关系事实/Session/快照/事件/账本联合原子提交与回滚，以及完整未提交事务对观察连接不可见；测试 Handler 只证明执行协议，不代表 M3.4 补码或 Hand 业务验收。锁等待由 `pg_locks` 与 `pg_blocking_pids` 直接确认。不同 Session 并行场景遵守单 Owner 只允许一个 active Session 的数据库约束，以 ended 重放事务与另一 active Session 新提交事务通过可控屏障证明双方同时进入，不使用耗时阈值推断。每个阶段即时输出：
 
 ```text
 [database-test] START M2.7 audit persistence
@@ -27,9 +27,10 @@
 ## 连接与事务护栏
 
 - 所有测试连接必须通过 `database-test-runtime.ts` 创建，携带当前 Run ID 和 `application_name`。
-- 每条 SQL 的数据库侧 `statement_timeout` 为 90 秒；idle-in-transaction 上限为 60 秒。
+- 普通 SQL 的数据库侧 `statement_timeout` 为 90 秒；idle-in-transaction 上限为 60 秒。M3.1 已被 `pg_locks`/`pg_blocking_pids` 证明的受控竞争事务局部把两项上限都设为 240 秒，分别保护等待行锁的事务和停在测试屏障中的持锁事务；该值仍低于阶段 300 秒的 Vitest 总预算，为失败取消与夹具清理保留边界。
 - 每个正常阶段开始前查询 `pg_stat_activity`。发现其他带测试标签且仍有事务的连接时立即失败，输出 PID、状态和事务年龄，不等待业务 SQL 超时。
 - 只有显式执行 `pnpm --filter @tx-holdem-coach/server run db:test:cleanup` 才会终止其他 Run ID 下仍持有事务的测试连接。该命令受既有测试项目安全门和 `application_name` 前缀双重限制；不得用于生产数据库。
+- `db:test:cleanup` 只负责遗留连接，不猜测并删除已提交业务行。M3.1 并发场景自身在失败时先释放屏障、关闭 worker 连接并收敛全部已启动 Promise，再由独立连接以 2 秒 `lock_timeout` 对精确 Session 做最多 30 秒的 `55P03` 有界重试；不得用 transaction-pooler backend PID 是否仍有事务作为回滚完成判据。二次清理失败不得覆盖原始验收错误，并只输出错误类型/稳定码，不输出数据库 URL 或错误正文。真实失败夹具会在 worker 已进入事务后注入主错误并回查 Session 已删除。
 - 共享远程测试 Owner 不支持并行 full/milestone 运行。不同任务应串行使用测试库。
 
 ## 并发与损坏夹具规则

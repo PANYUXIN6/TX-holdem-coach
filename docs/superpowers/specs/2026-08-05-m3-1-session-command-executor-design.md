@@ -808,7 +808,8 @@ if (lastCommittedEventSeq === null) {
 这保证：
 
 - 所有事件使用同一个最终业务状态；
-- 除公开快照顶层 `eventSeq` 外规范等价；
+- 同一命令派生的所有 SSE，其 `payload.snapshot` 在移除公开快照顶层 `eventSeq` 后规范等价；
+- SSE 信封的 `eventId`、`eventSeq` 和 `type` 按各事件独立验证，不纳入上述快照等价比较；
 - `CommandResponse.snapshot` 就是最后一条事件的快照；
 - 投影不会随事件数量重复读取数据库。
 
@@ -1090,7 +1091,8 @@ M3.1 不修改 Contracts、数据库 Schema/迁移、Hono 路由、`app.ts` 生�
 - 连续事件序号、统一命令级版本和命令关联；
 - 完整批次在关系写入前验证；
 - apply、M2.5b、complete 和 COMMIT 失败回滚；
-- 所有 SSE 除公开快照顶层 `eventSeq` 外规范等价；
+- 同一命令派生的所有 SSE，其 `payload.snapshot` 在移除公开快照顶层 `eventSeq` 后规范等价；
+- 各 SSE 信封的 `eventId`、`eventSeq` 和 `type` 按对应事件独立验证；
 - `CommandResponse` 使用最终游标；
 - 只有 `completed/newCommit` 返回深冻结新事件；
 - pointer repair 只在提交后尽力记录。
@@ -1138,7 +1140,12 @@ pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m31
 - 未提交写入对另一连接不可见；
 - 不同 Session 并行。
 
-同 Session 行锁和账本唯一键等待通过 `pg_locks`、`pg_blocking_pids` 证明。不同 Session 并行使用可控 Promise/数据库屏障证明双方均已进入，不使用耗时阈值推断。
+锁等待证据拆分为两个独立验收场景：
+
+- M3.1 测试组合根通过两个完整执行器事务证明同 Session 行锁等待，并使用 `pg_locks`、`pg_blocking_pids` 确认阻塞关系；
+- M2.4 Repository 层通过两个独立连接直接并发调用 `registerCommand()` 证明账本唯一键等待；该场景不经过 `SessionCommandExecutor`，也不要求在先锁 Session 的完整 M3.1 路径中重复观测。
+
+不同 Session 并行使用可控 Promise/数据库屏障证明双方均已进入，不使用耗时阈值推断。
 
 测试 Handler 与端口只存在于测试代码，只使用生产 V2 事件契约，只证明执行协议，不冒充 M3.3/M3.4 领域验收。
 

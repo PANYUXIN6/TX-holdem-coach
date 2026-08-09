@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'vitest'
 import { AuthoritativeStateValidationError } from '../../src/sessions/authoritative-state/errors.js'
-import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
+import {
+  createPrivateTableState,
+  createPrivateTableStateContent,
+} from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   createTestBettingPokerState,
   createTestPokerState,
@@ -8,6 +11,25 @@ import {
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
 describe('private table state', () => {
+  test('constructs strict versionless content for executor-owned version assignment', () => {
+    const poker = createTestPokerState()
+    const content = createPrivateTableStateContent({
+      poker,
+      completedHandCount: 0,
+      seatAccounting: poker.seats.map((seat) => ({
+        seatNumber: seat.seatNumber,
+        cumulativeBuyIn: 2_000,
+      })),
+      lastCompletedHandSummary: null,
+    })
+
+    expect(content).not.toHaveProperty('stateVersion')
+    expect(Object.isFrozen(content)).toBe(true)
+    expect(() =>
+      createPrivateTableStateContent({ ...content, stateVersion: 1 }),
+    ).toThrow(AuthoritativeStateValidationError)
+  })
+
   test('creates the minimal valid authoritative state as a sorted deep-frozen value', () => {
     const poker = createTestPokerState()
     const state = createPrivateTableState({

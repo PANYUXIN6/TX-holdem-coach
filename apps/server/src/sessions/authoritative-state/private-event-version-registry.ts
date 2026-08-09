@@ -9,7 +9,15 @@ import {
   EVENT_SCHEMA_VERSION,
   PRIVATE_EVENT_PAYLOAD_VERSION,
 } from './private-event-codec-v1.js'
-import { createPrivateEventV1, type PrivateEventV1 } from './private-event.js'
+import { type StoredPrivateEventV2 } from './private-event-codec-v2.js'
+import {
+  currentPrivateEventProtocol,
+  type CurrentPrivateEventProtocol,
+} from './current-private-event-protocol.js'
+import {
+  createPrivateEventV2,
+  type PrivateEventV2,
+} from './private-event-v2.js'
 
 export interface PrivateEventVersionIdentity {
   readonly rowPayloadVersion: number
@@ -20,7 +28,7 @@ export type PrivateEventVersionRegistration =
   | {
       readonly kind: 'current'
       readonly identity: PrivateEventVersionIdentity
-      readonly decode: (input: unknown) => PrivateEventV1
+      readonly decode: (input: unknown) => PrivateEventV2
     }
   | {
       readonly kind: 'legacy'
@@ -30,7 +38,7 @@ export type PrivateEventVersionRegistration =
     }
 
 export type PrivateEventVersionReadResult =
-  | { readonly kind: 'decoded'; readonly value: PrivateEventV1 }
+  | { readonly kind: 'decoded'; readonly value: PrivateEventV2 }
   | { readonly kind: 'unknownVersion' }
   | { readonly kind: 'invalidPayload' }
 
@@ -72,8 +80,27 @@ function isPayloadValidationError(error: unknown): boolean {
 }
 
 export function createPrivateEventVersionRegistry(
-  registrations: readonly PrivateEventVersionRegistration[],
+  input:
+    | readonly PrivateEventVersionRegistration[]
+    | {
+        readonly current: CurrentPrivateEventProtocol<
+          PrivateEventV2,
+          StoredPrivateEventV2
+        >
+        readonly legacy: readonly PrivateEventVersionRegistration[]
+      },
 ): PrivateEventVersionRegistry {
+  const registrations: readonly PrivateEventVersionRegistration[] =
+    'current' in input
+      ? [
+          {
+            kind: 'current' as const,
+            identity: input.current.identity,
+            decode: input.current.decodeStoredCurrent,
+          },
+          ...input.legacy,
+        ]
+      : input
   const byIdentity = new Map<string, PrivateEventVersionRegistration>()
   for (const registration of registrations) {
     if (
@@ -112,7 +139,7 @@ export function createPrivateEventVersionRegistry(
         const value =
           registration.kind === 'current'
             ? registration.decode(row)
-            : createPrivateEventV1(
+            : createPrivateEventV2(
                 registration.migrate(registration.decode(row)),
               )
         return deepFreeze({ kind: 'decoded', value })
@@ -127,13 +154,17 @@ export function createPrivateEventVersionRegistry(
 }
 
 export const productionPrivateEventVersionRegistry =
-  createPrivateEventVersionRegistry([
-    {
-      kind: 'current',
-      identity: {
-        rowPayloadVersion: PRIVATE_EVENT_PAYLOAD_VERSION,
-        envelopeSchemaVersion: EVENT_SCHEMA_VERSION,
+  createPrivateEventVersionRegistry({
+    current: currentPrivateEventProtocol,
+    legacy: [
+      {
+        kind: 'legacy',
+        identity: {
+          rowPayloadVersion: PRIVATE_EVENT_PAYLOAD_VERSION,
+          envelopeSchemaVersion: EVENT_SCHEMA_VERSION,
+        },
+        decode: (input) => decodeCurrentPrivateEventV1(input).payload.event,
+        migrate: (decoded) => decoded,
       },
-      decode: (input) => decodeCurrentPrivateEventV1(input).payload.event,
-    },
-  ])
+    ],
+  })

@@ -4,6 +4,7 @@ import {
   completeCommand,
   failCommand,
   prepareCommandRegistration,
+  readExistingCommandResult,
   registerCommand,
 } from '../../src/persistence/command-ledger-repository.js'
 import {
@@ -177,6 +178,54 @@ function ledgerRow(
 }
 
 describe('command ledger repository', () => {
+  test('reads ended-session ledger outcomes without inserting or granting capability', async () => {
+    const owner = await resolvedOwner()
+    const cases = [
+      { rows: [], expected: { status: 'notFound' } },
+      {
+        rows: (prepared: ReturnType<typeof prepareCommandRegistration>) => [
+          ledgerRow(prepared),
+        ],
+        expected: { status: 'processing' },
+      },
+      {
+        rows: (prepared: ReturnType<typeof prepareCommandRegistration>) => [
+          ledgerRow(prepared, {
+            processingStatus: 'completed',
+            finalStateVersion: 13,
+            responsePayloadVersion: 1,
+            responsePayload: commandResponse(),
+            hasCompletedAt: true,
+          }),
+        ],
+        expected: { status: 'completed', response: commandResponse() },
+      },
+      {
+        rows: (prepared: ReturnType<typeof prepareCommandRegistration>) => [
+          ledgerRow(prepared, {
+            processingStatus: 'failed',
+            finalStateVersion: null,
+            responsePayloadVersion: 1,
+            responsePayload: errorResponse(false),
+            hasCompletedAt: true,
+          }),
+        ],
+        expected: { status: 'failed', response: errorResponse(false) },
+      },
+    ] as const
+
+    for (const entry of cases) {
+      const prepared = prepareCommandRegistration(command('endSession'))
+      const rows =
+        typeof entry.rows === 'function' ? entry.rows(prepared) : entry.rows
+      const tracked = createTrackedTransaction([rows])
+      await expect(
+        readExistingCommandResult(tracked.transaction, owner, prepared),
+      ).resolves.toEqual(entry.expected)
+      expect(tracked.getCallCount()).toBe(1)
+    }
+  })
+
   test('prepares all public commands and the private aiAction as frozen commands', () => {
     for (const type of [
       'playerAction',

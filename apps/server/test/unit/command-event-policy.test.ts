@@ -1,0 +1,381 @@
+import { describe, expect, test } from 'vitest'
+import {
+  applyPokerAction,
+  startPokerHand,
+} from '../../src/poker/poker-engine.js'
+import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
+import { isCommandMutationConsistent } from '../../src/sessions/command-execution/command-event-policy.js'
+import {
+  createTestBettingPokerState,
+  createTestPokerState,
+} from '../poker/create-test-poker-state.js'
+
+const handId = '10000000-0000-4000-8000-000000000001'
+const sessionId = '20000000-0000-4000-8000-000000000001'
+const commandId = '30000000-0000-4000-8000-000000000001'
+const randomSource = Object.freeze({ nextInt: () => 0 })
+
+function privateState(
+  stateVersion: number,
+  poker: ReturnType<typeof createTestPokerState>,
+  cumulativeBuyIns: readonly {
+    readonly seatNumber: number
+    readonly cumulativeBuyIn: number
+  }[] = poker.seats.map((seat) => ({
+    seatNumber: seat.seatNumber,
+    cumulativeBuyIn: seat.stack,
+  })),
+) {
+  return createPrivateTableState({
+    stateVersion,
+    poker,
+    completedHandCount: 0,
+    seatAccounting: cumulativeBuyIns,
+    lastCompletedHandSummary: null,
+  })
+}
+
+describe('command event policy', () => {
+  test('rejects playerAction until the M3.3 verifier is installed', () => {
+    const beforePoker = createTestBettingPokerState({
+      hand: { currentActorSeatNumber: 0 },
+    })
+    const accounting = beforePoker.seats.map((seat) => ({
+      seatNumber: seat.seatNumber,
+      cumulativeBuyIn: 2_000,
+    }))
+    const before = privateState(7, beforePoker, accounting)
+    const action = { type: 'fold' as const }
+    const applied = applyPokerAction(beforePoker, {
+      actorSeatNumber: 0,
+      action,
+    })
+    const after = privateState(8, applied.state, accounting)
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'playerAction' as const,
+        payload: { action },
+      },
+      stateEffectKind: 'stateChanged' as const,
+      stateBefore: before,
+      stateAfter: after,
+      lifecycleAfter: 'active' as const,
+      currentHandIdAfter: handId,
+      events: applied.eventDrafts,
+      relationPlan: Object.freeze({ handId }),
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(false)
+  })
+
+  test('rejects aiAction until the M4.7 verifier is installed', () => {
+    const beforePoker = createTestBettingPokerState()
+    const accounting = beforePoker.seats.map((seat) => ({
+      seatNumber: seat.seatNumber,
+      cumulativeBuyIn: 2_000,
+    }))
+    const before = privateState(7, beforePoker, accounting)
+    const action = { type: 'fold' as const }
+    const applied = applyPokerAction(beforePoker, {
+      actorSeatNumber: 3,
+      action,
+    })
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'aiAction' as const,
+        payload: {
+          decisionRequestId: '40000000-0000-4000-8000-000000000001',
+          handId,
+          actorSeatNumber: 3,
+          candidateActionId: 'candidate-1',
+          action,
+        },
+      },
+      stateEffectKind: 'stateChanged' as const,
+      stateBefore: before,
+      stateAfter: privateState(8, applied.state, accounting),
+      lifecycleAfter: 'active' as const,
+      currentHandIdAfter: handId,
+      events: applied.eventDrafts,
+      relationPlan: Object.freeze({ handId }),
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(false)
+  })
+
+  test('rejects startNextHand until the M3.4 verifier is installed', () => {
+    const beforePoker = createTestPokerState({
+      seats: createTestPokerState().seats.map((seat) =>
+        seat.seatNumber === 1
+          ? { ...seat, stack: 0, status: 'out' as const }
+          : seat.seatNumber === 2
+            ? { ...seat, stack: 4_000 }
+            : seat,
+      ),
+    })
+    const before = privateState(
+      7,
+      beforePoker,
+      beforePoker.seats.map((seat) => ({
+        seatNumber: seat.seatNumber,
+        cumulativeBuyIn: 2_000,
+      })),
+    )
+    const afterRebuyPoker = createTestPokerState({
+      ...beforePoker,
+      seats: beforePoker.seats.map((seat) =>
+        seat.seatNumber === 1
+          ? { ...seat, stack: 2_000, status: 'active' as const }
+          : seat,
+      ),
+    })
+    const started = startPokerHand(afterRebuyPoker, {
+      handId,
+      completedHandCountBeforeStart: 0,
+      randomSource,
+    })
+    const after = privateState(
+      8,
+      started.state,
+      before.seatAccounting.map((seat) =>
+        seat.seatNumber === 1 ? { ...seat, cumulativeBuyIn: 4_000 } : seat,
+      ),
+    )
+    const events = [
+      {
+        type: 'aiAutoRebuy' as const,
+        seatNumber: 1,
+        amount: 2_000 as const,
+        stackBefore: 0 as const,
+        stackAfter: 2_000 as const,
+        cumulativeBuyInBefore: 2_000,
+        cumulativeBuyInAfter: 4_000,
+      },
+      started.eventDrafts[0]!,
+    ]
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'startNextHand' as const,
+        payload: {},
+      },
+      stateEffectKind: 'stateChanged' as const,
+      stateBefore: before,
+      stateAfter: after,
+      lifecycleAfter: 'active' as const,
+      currentHandIdAfter: handId,
+      events,
+      relationPlan: Object.freeze({ handId }),
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(false)
+  })
+
+  test('requires rebuy event amounts to mirror the old and final state', () => {
+    const beforePoker = createTestPokerState({
+      seats: createTestPokerState().seats.map((seat) =>
+        seat.seatNumber === 0
+          ? { ...seat, stack: 1_000 }
+          : seat.seatNumber === 1
+            ? { ...seat, stack: 3_000 }
+            : seat,
+      ),
+    })
+    const before = privateState(
+      7,
+      beforePoker,
+      beforePoker.seats.map((seat) => ({
+        seatNumber: seat.seatNumber,
+        cumulativeBuyIn: 2_000,
+      })),
+    )
+    const afterPoker = createTestPokerState({
+      ...beforePoker,
+      seats: beforePoker.seats.map((seat) =>
+        seat.seatNumber === 0 ? { ...seat, stack: 1_500 } : seat,
+      ),
+    })
+    const after = privateState(
+      8,
+      afterPoker,
+      before.seatAccounting.map((seat) =>
+        seat.seatNumber === 0 ? { ...seat, cumulativeBuyIn: 2_500 } : seat,
+      ),
+    )
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'rebuy' as const,
+        payload: { amount: 500 },
+      },
+      stateEffectKind: 'stateChanged' as const,
+      stateBefore: before,
+      stateAfter: after,
+      lifecycleAfter: 'active' as const,
+      currentHandIdAfter: null,
+      events: [
+        {
+          type: 'userRebuy' as const,
+          seatNumber: 0 as const,
+          amount: 500,
+          stackBefore: 1_000,
+          stackAfter: 1_500,
+          cumulativeBuyInBefore: 2_000,
+          cumulativeBuyInAfter: 2_500,
+        },
+      ],
+      relationPlan: Object.freeze({}),
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(true)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        command: { ...input.command, payload: { amount: 600 } },
+      }),
+    ).toBe(false)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        stateAfter: privateState(
+          8,
+          createTestPokerState({
+            ...afterPoker,
+            seats: afterPoker.seats.map((seat) =>
+              seat.seatNumber === 0 ? { ...seat, stack: 1_600 } : seat,
+            ),
+          }),
+          before.seatAccounting.map((seat) =>
+            seat.seatNumber === 0 ? { ...seat, cumulativeBuyIn: 2_600 } : seat,
+          ),
+        ),
+      }),
+    ).toBe(false)
+    const addedSeat = {
+      seatNumber: 6,
+      playerId: '00000000-0000-4000-8000-000000000007',
+      isUser: false,
+      stack: 2_000,
+      status: 'active' as const,
+      streetContribution: 0,
+      totalContribution: 0,
+    }
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        stateAfter: privateState(
+          8,
+          createTestPokerState({
+            ...afterPoker,
+            seats: [...afterPoker.seats, addedSeat],
+          }),
+          [...after.seatAccounting, { seatNumber: 6, cumulativeBuyIn: 2_000 }],
+        ),
+      }),
+    ).toBe(false)
+  })
+
+  test('requires normal endSession to preserve state while ending lifecycle', () => {
+    const poker = createTestPokerState()
+    const state = privateState(7, poker)
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'endSession' as const,
+        payload: {},
+      },
+      stateEffectKind: 'stateUnchanged' as const,
+      stateBefore: state,
+      stateAfter: state,
+      lifecycleAfter: 'ended' as const,
+      currentHandIdAfter: null,
+      events: [
+        { type: 'sessionEnded' as const, reason: 'userRequested' as const },
+      ],
+      relationPlan: Object.freeze({}),
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(true)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        stateEffectKind: 'stateChanged',
+        stateAfter: privateState(8, poker),
+      }),
+    ).toBe(false)
+  })
+
+  test('rejects aborted endSession until the M3.4 checkpoint verifier is installed', () => {
+    const restoredPoker = createTestPokerState()
+    const restored = privateState(8, restoredPoker)
+    const started = startPokerHand(restoredPoker, {
+      handId,
+      completedHandCountBeforeStart: 0,
+      randomSource,
+    })
+    const beforeAbort = privateState(
+      7,
+      started.state,
+      started.state.seats.map((seat) => ({
+        seatNumber: seat.seatNumber,
+        cumulativeBuyIn: 2_000,
+      })),
+    )
+    const event = {
+      type: 'handAborted' as const,
+      handId,
+      beforeAbort: {
+        buttonSeatNumber: started.state.buttonSeatNumber,
+        completedHandCount: 0,
+        pot: started.state.hand!.pot,
+        seats: started.state.seats.map((seat) => ({
+          seatNumber: seat.seatNumber,
+          stack: seat.stack,
+          cumulativeBuyIn: 2_000,
+        })),
+      },
+      restored: {
+        buttonSeatNumber: restoredPoker.buttonSeatNumber,
+        completedHandCount: 0,
+        seats: restoredPoker.seats.map((seat) => ({
+          seatNumber: seat.seatNumber,
+          stack: seat.stack,
+          cumulativeBuyIn: 2_000,
+        })),
+      },
+    }
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'endSession' as const,
+        payload: {},
+      },
+      stateEffectKind: 'stateChanged' as const,
+      stateBefore: beforeAbort,
+      stateAfter: restored,
+      lifecycleAfter: 'ended' as const,
+      currentHandIdAfter: null,
+      events: [
+        event,
+        { type: 'sessionEnded' as const, reason: 'handAborted' as const },
+      ],
+      relationPlan: Object.freeze({ handId }),
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(false)
+  })
+})

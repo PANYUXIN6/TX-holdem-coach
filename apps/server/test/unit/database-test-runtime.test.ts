@@ -4,6 +4,7 @@ import {
   assertNoConflictingDatabaseTestConnections,
   createDatabaseTestConnectionOptions,
   readTransactionBackendPid,
+  runDatabaseTestWithCleanup,
   runTimedDatabasePhase,
   shouldRunDatabaseMilestone,
   serializeJsonbFixture,
@@ -103,6 +104,51 @@ describe('database test runtime', () => {
       '[database-test] START M2.6\n',
       '[database-test] FAIL M2.6 (250 ms)\n',
     ])
+  })
+
+  test('preserves the primary failure when database fixture cleanup also fails', async () => {
+    const output: string[] = []
+    const primaryFailure = new Error('concurrent command timed out')
+    const cleanupFailure = Object.assign(
+      new Error(
+        'canceling statement due to lock timeout at postgresql://user:password@example.test/postgres',
+      ),
+      { name: 'PostgresError', code: '55P03' },
+    )
+
+    await expect(
+      runDatabaseTestWithCleanup(
+        async () => {
+          throw primaryFailure
+        },
+        async () => {
+          throw cleanupFailure
+        },
+        { write: (message) => output.push(message) },
+      ),
+    ).rejects.toBe(primaryFailure)
+    expect(output).toEqual([
+      '[database-test] CLEANUP failed after preserving the primary failure: PostgresError(code=55P03)\n',
+    ])
+    expect(output.join('')).not.toContain('password')
+  })
+
+  test('throws a sanitized cleanup diagnostic when the operation succeeded', async () => {
+    const cleanupFailure = Object.assign(
+      new Error('postgresql://user:password@example.test/postgres'),
+      { name: 'PostgresError', code: '55P03' },
+    )
+
+    await expect(
+      runDatabaseTestWithCleanup(
+        async () => 'completed',
+        async () => {
+          throw new AggregateError([cleanupFailure], 'fixture cleanup failed')
+        },
+      ),
+    ).rejects.toThrow(
+      '数据库测试清理失败：AggregateError(causes=PostgresError(code=55P03))',
+    )
   })
 
   test('tags every test connection and bounds abandoned statements and transactions', () => {

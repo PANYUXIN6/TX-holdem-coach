@@ -15,8 +15,10 @@ import {
   SessionRecoveryTransitionError,
 } from './errors.js'
 import {
-  lockSessionForMutation,
+  productionSessionMutationRepository,
   type LockedSessionMutation,
+  type LockedSessionView,
+  type SessionMutationRepository,
 } from './session-mutation-repository.js'
 import { isResolvedOwnerScope, type ResolvedOwnerScope } from './owner-scope.js'
 
@@ -61,11 +63,13 @@ export type SessionRecoveryTransactionResult =
       readonly lifecycleStatus: 'active'
       readonly state: PrivateTableState
       readonly locked: LockedSessionMutation
+      readonly session: LockedSessionView
       readonly pointerRepair: PointerRepair | null
     }
   | {
       readonly kind: 'ended'
       readonly state: PrivateTableState
+      readonly session: LockedSessionView
       readonly pointerRepair: PointerRepair | null
     }
   | {
@@ -82,6 +86,24 @@ function deepFreeze<Value>(value: Value): Value {
     Object.freeze(value)
   }
   return value
+}
+
+function createLockedSessionView(
+  locked: LockedSessionMutation,
+): LockedSessionView {
+  return deepFreeze({
+    sessionId: locked.sessionId,
+    lifecycleStatus: locked.lifecycleStatus,
+    endedAt: locked.endedAt,
+    stateVersion: locked.stateVersion,
+    nextEventSeq: locked.nextEventSeq,
+    currentHandId: locked.currentHandId,
+    diagnosticCode: locked.diagnosticCode,
+    diagnosedAt: locked.diagnosedAt,
+    agentRunState: locked.agentRunState,
+    activePlayerRunId: locked.activePlayerRunId,
+    activeDecisionRequestId: locked.activeDecisionRequestId,
+  })
 }
 
 function getPostgresConstraint(error: unknown): string | undefined {
@@ -343,13 +365,20 @@ function readyResult(
         lifecycleStatus: 'active',
         state,
         locked,
+        session: createLockedSessionView(locked),
         pointerRepair,
       })
-    : deepFreeze({ kind: 'ended', state, pointerRepair })
+    : deepFreeze({
+        kind: 'ended',
+        state,
+        session: createLockedSessionView(locked),
+        pointerRepair,
+      })
 }
 
 async function recover(
   mode: 'ordinary' | 'retry',
+  sessionMutationRepository: SessionMutationRepository,
   transaction: TransactionSql,
   owner: ResolvedOwnerScope,
   sessionId: string,
@@ -357,7 +386,11 @@ async function recover(
   registries: RecoveryRegistries,
 ): Promise<SessionRecoveryTransactionResult> {
   validateInputs(transaction, owner, sessionId, recoveryAt, registries)
-  const locked = await lockSessionForMutation(transaction, owner, sessionId)
+  const locked = await sessionMutationRepository.lockSessionForMutation(
+    transaction,
+    owner,
+    sessionId,
+  )
 
   if (mode === 'ordinary' && locked.lifecycleStatus === 'readonlyDiagnostic') {
     return deepFreeze({
@@ -436,35 +469,89 @@ async function recover(
   }
 
   if (decision.kind === 'repairCurrentHandPointer' || mode === 'retry') {
-    const relocked = await lockSessionForMutation(transaction, owner, sessionId)
+    const relocked = await sessionMutationRepository.lockSessionForMutation(
+      transaction,
+      owner,
+      sessionId,
+    )
     return readyResult(relocked, decision.state, pointerRepair)
   }
   return readyResult(locked, decision.state, null)
 }
 
-export function recoverSessionForMutation(
-  transaction: TransactionSql,
-  owner: ResolvedOwnerScope,
-  sessionId: string,
-  recoveryAt: string,
-  registries: RecoveryRegistries,
-): Promise<SessionRecoveryTransactionResult> {
-  return recover(
-    'ordinary',
-    transaction,
-    owner,
-    sessionId,
-    recoveryAt,
-    registries,
-  )
+export interface SessionRecoveryRepository {
+  readonly sessionMutationRepository: SessionMutationRepository
+  recoverSessionForMutation(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    sessionId: string,
+    recoveryAt: string,
+    registries: RecoveryRegistries,
+  ): Promise<SessionRecoveryTransactionResult>
+  retryReadonlySessionRecovery(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    sessionId: string,
+    recoveryAt: string,
+    registries: RecoveryRegistries,
+  ): Promise<SessionRecoveryTransactionResult>
 }
 
-export function retryReadonlySessionRecovery(
-  transaction: TransactionSql,
-  owner: ResolvedOwnerScope,
-  sessionId: string,
-  recoveryAt: string,
-  registries: RecoveryRegistries,
-): Promise<SessionRecoveryTransactionResult> {
-  return recover('retry', transaction, owner, sessionId, recoveryAt, registries)
+export function createSessionRecoveryRepository(input: {
+  readonly sessionMutationRepository: SessionMutationRepository
+}): SessionRecoveryRepository {
+  if (
+    typeof input !== 'object' ||
+    input === null ||
+    typeof input.sessionMutationRepository?.lockSessionForMutation !==
+      'function'
+  ) {
+    throw new RepositoryInputValidationError()
+  }
+  const sessionMutationRepository = input.sessionMutationRepository
+  return Object.freeze({
+    sessionMutationRepository,
+    recoverSessionForMutation: (
+      transaction: TransactionSql,
+      owner: ResolvedOwnerScope,
+      sessionId: string,
+      recoveryAt: string,
+      registries: RecoveryRegistries,
+    ) =>
+      recover(
+        'ordinary',
+        sessionMutationRepository,
+        transaction,
+        owner,
+        sessionId,
+        recoveryAt,
+        registries,
+      ),
+    retryReadonlySessionRecovery: (
+      transaction: TransactionSql,
+      owner: ResolvedOwnerScope,
+      sessionId: string,
+      recoveryAt: string,
+      registries: RecoveryRegistries,
+    ) =>
+      recover(
+        'retry',
+        sessionMutationRepository,
+        transaction,
+        owner,
+        sessionId,
+        recoveryAt,
+        registries,
+      ),
+  })
 }
+
+export const productionSessionRecoveryRepository =
+  createSessionRecoveryRepository({
+    sessionMutationRepository: productionSessionMutationRepository,
+  })
+
+export const recoverSessionForMutation =
+  productionSessionRecoveryRepository.recoverSessionForMutation
+export const retryReadonlySessionRecovery =
+  productionSessionRecoveryRepository.retryReadonlySessionRecovery

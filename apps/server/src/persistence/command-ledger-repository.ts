@@ -112,6 +112,10 @@ export type CommandRegistrationResult =
       readonly response: DeepReadonly<z.infer<typeof ErrorResponseSchema>>
     }
 
+export type ExistingCommandResult =
+  | { readonly status: 'notFound' }
+  | Exclude<CommandRegistrationResult, AcquiredCommandRegistration>
+
 const preparedRegistrations = new WeakSet<object>()
 const acquiredTransactions = new WeakMap<
   AcquiredCommandRegistration,
@@ -410,6 +414,56 @@ export async function registerCommand(
 
   if (existingRows.length === 0) {
     throw new ResourceNotFoundError()
+  }
+  if (existingRows.length !== 1) {
+    throw invalidLedger()
+  }
+  return parseExistingRegistration(existingRows[0], prepared)
+}
+
+export async function readExistingCommandResult(
+  transaction: TransactionSql,
+  owner: ResolvedOwnerScope,
+  prepared: PreparedCommandRegistration,
+): Promise<ExistingCommandResult> {
+  if (
+    typeof prepared !== 'object' ||
+    prepared === null ||
+    !preparedRegistrations.delete(prepared) ||
+    !isResolvedOwnerScope(owner)
+  ) {
+    throw new RepositoryInputValidationError()
+  }
+
+  let existingRows: readonly unknown[]
+  try {
+    existingRows = await transaction<LedgerRow[]>`
+      SELECT
+        ledger.id::text AS "ledgerId",
+        ledger.session_id::text AS "sessionId",
+        ledger.command_id::text AS "commandId",
+        ledger.canonical_payload_digest AS "canonicalPayloadDigest",
+        ledger.processing_status AS "processingStatus",
+        ledger.final_state_version::float8 AS "finalStateVersion",
+        ledger.first_event_seq::float8 AS "firstEventSeq",
+        ledger.last_event_seq::float8 AS "lastEventSeq",
+        ledger.response_payload_version AS "responsePayloadVersion",
+        ledger.response_payload AS "responsePayload",
+        ledger.completed_at IS NOT NULL AS "hasCompletedAt"
+      FROM app_private.command_ledger AS ledger
+      JOIN app_private.sessions AS session
+        ON session.id = ledger.session_id
+        AND session.owner_id = ledger.owner_id
+      WHERE ledger.session_id = ${prepared.command.sessionId}::uuid
+        AND ledger.command_id = ${prepared.command.commandId}::uuid
+        AND ledger.owner_id = ${owner.databaseOwnerId}::uuid
+      LIMIT 2
+    `
+  } catch {
+    throw new DatabaseOperationError()
+  }
+  if (existingRows.length === 0) {
+    return Object.freeze({ status: 'notFound' })
   }
   if (existingRows.length !== 1) {
     throw invalidLedger()

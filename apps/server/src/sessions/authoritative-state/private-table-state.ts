@@ -27,6 +27,9 @@ const PrivateTableStateInputSchema = z.strictObject({
   seatAccounting: z.array(SeatAccountingSchema),
   lastCompletedHandSummary: z.unknown().nullable(),
 })
+const PrivateTableStateContentInputSchema = PrivateTableStateInputSchema.omit({
+  stateVersion: true,
+})
 
 export interface SeatAccounting {
   readonly seatNumber: number
@@ -40,6 +43,8 @@ export interface PrivateTableState {
   readonly seatAccounting: readonly SeatAccounting[]
   readonly lastCompletedHandSummary: CompletedHandSummary | null
 }
+
+export type PrivateTableStateContent = Omit<PrivateTableState, 'stateVersion'>
 
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object') {
@@ -125,6 +130,21 @@ export function createPrivateTableState(input: unknown): PrivateTableState {
       ),
       lastCompletedHandSummary,
     })
+  } catch {
+    throw new AuthoritativeStateValidationError()
+  }
+}
+
+export function createPrivateTableStateContent(
+  input: unknown,
+): PrivateTableStateContent {
+  try {
+    const parsed = PrivateTableStateContentInputSchema.parse(input)
+    const { stateVersion: _, ...content } = createPrivateTableState({
+      stateVersion: 0,
+      ...parsed,
+    })
+    return deepFreeze(content)
   } catch {
     throw new AuthoritativeStateValidationError()
   }

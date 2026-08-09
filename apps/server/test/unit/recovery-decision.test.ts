@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { createHandStartedEventDraft } from '../../src/poker/hand-result.js'
 import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
+import { encodePrivateEventV2 } from '../../src/sessions/authoritative-state/private-event-codec-v2.js'
 import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
@@ -139,6 +140,33 @@ describe('session recovery decision', () => {
       kind: 'ready',
       state: currentState(),
     })
+  })
+
+  test('recovers mixed V1/V2 history with nullable Session-event hand ids', () => {
+    const facts = validFacts()
+    const sessionEvent = encodePrivateEventV2({
+      type: 'sessionEnded',
+      reason: 'userRequested',
+    })
+
+    expect(
+      decide(
+        factsWith({
+          session: { nextEventSeq: 2 },
+          eventRows: [
+            facts.eventRows[0]!,
+            {
+              eventSeq: 1,
+              handId: null,
+              stateVersionBefore: 1,
+              stateVersionAfter: 1,
+              rowPayloadVersion: sessionEvent.payloadVersion,
+              payload: sessionEvent.payload,
+            },
+          ],
+        }),
+      ).kind,
+    ).toBe('ready')
   })
 
   test('rejects every non-exact event sequence before inspecting later facts', () => {

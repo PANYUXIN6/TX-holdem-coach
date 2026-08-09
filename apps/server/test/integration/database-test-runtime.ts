@@ -18,6 +18,76 @@ export interface DatabaseTestPhaseReporter {
   readonly write: (message: string) => void
 }
 
+export interface DatabaseTestCleanupReporter {
+  readonly write: (message: string) => void
+}
+
+function describeDatabaseTestCleanupFailure(error: unknown): string {
+  if (error instanceof AggregateError) {
+    return `AggregateError(causes=${error.errors
+      .map((cause) => describeDatabaseTestCleanupFailure(cause))
+      .join(',')})`
+  }
+  if (typeof error !== 'object' || error === null) {
+    return 'UnknownCleanupFailure'
+  }
+  const name =
+    'name' in error &&
+    typeof error.name === 'string' &&
+    /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(error.name)
+      ? error.name
+      : 'CleanupFailure'
+  const code =
+    'code' in error &&
+    typeof error.code === 'string' &&
+    /^[A-Za-z0-9_]{1,64}$/.test(error.code)
+      ? error.code
+      : null
+  return code === null ? name : `${name}(code=${code})`
+}
+
+export async function runDatabaseTestWithCleanup<Result>(
+  operation: () => Promise<Result>,
+  cleanup: () => Promise<void>,
+  reporter: DatabaseTestCleanupReporter = {
+    write: (message) => process.stderr.write(message),
+  },
+): Promise<Result> {
+  let operationCompleted = false
+  let operationFailed = false
+  let operationResult: Result | undefined
+  let primaryFailure: unknown
+  try {
+    operationResult = await operation()
+    operationCompleted = true
+  } catch (error) {
+    operationFailed = true
+    primaryFailure = error
+  }
+
+  try {
+    await cleanup()
+  } catch (cleanupFailure) {
+    if (!operationFailed) {
+      throw new Error(
+        `数据库测试清理失败：${describeDatabaseTestCleanupFailure(cleanupFailure)}`,
+        { cause: cleanupFailure },
+      )
+    }
+    reporter.write(
+      `[database-test] CLEANUP failed after preserving the primary failure: ${describeDatabaseTestCleanupFailure(cleanupFailure)}\n`,
+    )
+  }
+
+  if (operationFailed) {
+    throw primaryFailure
+  }
+  if (!operationCompleted) {
+    throw new Error('数据库测试既未完成也未返回失败。')
+  }
+  return operationResult as Result
+}
+
 export function createDatabaseTestConnectionOptions(
   runId: string,
   role: string,

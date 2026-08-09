@@ -1,9 +1,11 @@
 import type { Sql, TransactionSql } from 'postgres'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { createHandStartedEventDraft } from '../../src/poker/hand-result.js'
 import {
+  createSessionMutationRepository,
   lockSessionForMutation,
   persistSessionMutation,
+  validateSessionMutation,
   type SessionMutationEventInput,
 } from '../../src/persistence/session-mutation-repository.js'
 import {
@@ -13,7 +15,8 @@ import {
   SessionMutationTransitionError,
 } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
-import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
+import { encodePrivateEventV2 } from '../../src/sessions/authoritative-state/private-event-codec-v2.js'
+import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-state/current-private-event-protocol.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
@@ -148,7 +151,7 @@ function validBatch() {
     })),
     lastCompletedHandSummary: null,
   })
-  const privateEvent = encodePrivateEventV1(
+  const privateEvent = encodePrivateEventV2(
     createHandStartedEventDraft({
       handId,
       handNumber: 1,
@@ -254,6 +257,60 @@ function validNoSnapshotEndedBatch() {
 }
 
 describe('session mutation repository', () => {
+  test('captures the current event protocol supplied at composition time', async () => {
+    const originalDecode = vi.fn(
+      currentPrivateEventProtocol.decodeStoredCurrent,
+    )
+    const replacementDecode = vi.fn(
+      currentPrivateEventProtocol.decodeStoredCurrent,
+    )
+    const originalProtocol = {
+      ...currentPrivateEventProtocol,
+      decodeStoredCurrent: originalDecode,
+    }
+    const replacementProtocol = {
+      ...currentPrivateEventProtocol,
+      decodeStoredCurrent: replacementDecode,
+    }
+    const options = { currentPrivateEventProtocol: originalProtocol }
+    const repository = createSessionMutationRepository(options)
+    ;(
+      options as { currentPrivateEventProtocol: typeof replacementProtocol }
+    ).currentPrivateEventProtocol = replacementProtocol
+    const transaction = createTransactionMock([[lockedRow()]])
+    const locked = await repository.lockSessionForMutation(
+      transaction,
+      await resolvedOwner(),
+      sessionId,
+    )
+
+    expect(() =>
+      repository.validateSessionMutation(transaction, locked, validBatch()),
+    ).not.toThrow()
+    expect(repository.currentPrivateEventProtocol).toBe(originalProtocol)
+    expect(originalDecode).toHaveBeenCalledOnce()
+    expect(replacementDecode).not.toHaveBeenCalled()
+  })
+
+  test('rejects a lock capability created by another repository instance', async () => {
+    const first = createSessionMutationRepository({
+      currentPrivateEventProtocol,
+    })
+    const second = createSessionMutationRepository({
+      currentPrivateEventProtocol,
+    })
+    const transaction = createTransactionMock([[lockedRow()]])
+    const locked = await first.lockSessionForMutation(
+      transaction,
+      await resolvedOwner(),
+      sessionId,
+    )
+
+    await expect(
+      second.persistSessionMutation(transaction, locked, validBatch()),
+    ).rejects.toBeInstanceOf(SessionMutationTransitionError)
+  })
+
   test('locks one owner-scoped session and returns a frozen transaction capability', async () => {
     const transaction = createTransactionMock([[lockedRow()]])
 
@@ -308,6 +365,50 @@ describe('session mutation repository', () => {
     })
     expect(Object.isFrozen(persisted)).toBe(true)
     expect(Object.isFrozen(persisted.events)).toBe(true)
+  })
+
+  test('validates a complete batch without SQL or consuming the lock capability', async () => {
+    const tracked = createTrackedTransaction([
+      [lockedRow()],
+      [{ sessionId }],
+      [{ sessionId }],
+      [{ eventId }],
+    ])
+    const locked = await lockSessionForMutation(
+      tracked.transaction,
+      await resolvedOwner(),
+      sessionId,
+    )
+    const batch = validBatch()
+    const event = batch.events[0]!
+    const invalidBatch = {
+      ...batch,
+      events: [
+        {
+          ...event,
+          publicEvent: {
+            ...event.publicEvent,
+            payload: {
+              snapshot: publicSnapshot(8, 20, {
+                sessionId: otherHandId,
+              }),
+            },
+          },
+        },
+      ],
+    }
+
+    expect(() =>
+      validateSessionMutation(tracked.transaction, locked, invalidBatch),
+    ).toThrow(RepositoryInputValidationError)
+    expect(tracked.getSqlCallCount()).toBe(1)
+    expect(() =>
+      validateSessionMutation(tracked.transaction, locked, batch),
+    ).not.toThrow()
+    expect(tracked.getSqlCallCount()).toBe(1)
+    await expect(
+      persistSessionMutation(tracked.transaction, locked, batch),
+    ).resolves.toMatchObject({ finalStateVersion: 8 })
   })
 
   test('rejects split final versions before writing and leaves the lock capability available', async () => {

@@ -1,20 +1,27 @@
 import type { Sql, TransactionSql } from 'postgres'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { createHandStartedEventDraft } from '../../src/poker/hand-result.js'
 import {
+  createSessionRecoveryRepository,
   recoverSessionForMutation,
   retryReadonlySessionRecovery,
 } from '../../src/persistence/session-recovery-repository.js'
+import {
+  createSessionMutationRepository,
+  productionSessionMutationRepository,
+} from '../../src/persistence/session-mutation-repository.js'
 import {
   ActiveSessionConflictError,
   DatabaseOperationError,
   isRepositoryDomainError,
   RepositoryInputValidationError,
   SessionRecoveryTransitionError,
+  SessionMutationTransitionError,
 } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
 import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
+import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-state/current-private-event-protocol.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
 import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
@@ -130,6 +137,77 @@ function storedRows() {
 }
 
 describe('session recovery repository', () => {
+  test('captures the mutation repository supplied at composition time', async () => {
+    const originalError = new Error('original repository')
+    const replacementError = new Error('replacement repository')
+    const originalLock = vi.fn(async () => {
+      throw originalError
+    })
+    const replacementLock = vi.fn(async () => {
+      throw replacementError
+    })
+    const originalMutationRepository = {
+      lockSessionForMutation: originalLock,
+    } as never
+    const replacementMutationRepository = {
+      lockSessionForMutation: replacementLock,
+    } as never
+    const options = {
+      sessionMutationRepository: originalMutationRepository,
+    }
+    const repository = createSessionRecoveryRepository(options)
+    ;(
+      options as { sessionMutationRepository: unknown }
+    ).sessionMutationRepository = replacementMutationRepository
+
+    await expect(
+      repository.recoverSessionForMutation(
+        (() => Promise.resolve([])) as unknown as TransactionSql,
+        await resolvedOwner(),
+        sessionId,
+        recoveryAt,
+        registries,
+      ),
+    ).rejects.toBe(originalError)
+    expect(repository.sessionMutationRepository).toBe(
+      originalMutationRepository,
+    )
+    expect(originalLock).toHaveBeenCalledOnce()
+    expect(replacementLock).not.toHaveBeenCalled()
+  })
+
+  test('returns a capability owned by its injected mutation repository instance', async () => {
+    const stored = storedRows()
+    const mutationRepository = createSessionMutationRepository({
+      currentPrivateEventProtocol,
+    })
+    const recoveryRepository = createSessionRecoveryRepository({
+      sessionMutationRepository: mutationRepository,
+    })
+    const tracked = createTransactionMock([
+      [lockedRow()],
+      stored.snapshot,
+      stored.hands,
+      stored.events,
+    ])
+    const result = await recoveryRepository.recoverSessionForMutation(
+      tracked.transaction,
+      await resolvedOwner(),
+      sessionId,
+      recoveryAt,
+      registries,
+    )
+    if (result.kind !== 'ready') throw new Error('Expected ready recovery.')
+
+    await expect(
+      productionSessionMutationRepository.persistSessionMutation(
+        tracked.transaction,
+        result.locked,
+        {} as never,
+      ),
+    ).rejects.toBeInstanceOf(SessionMutationTransitionError)
+  })
+
   test('returns a current-transaction mutation capability for a valid active Session', async () => {
     const stored = storedRows()
     const tracked = createTransactionMock([
@@ -430,10 +508,16 @@ describe('session recovery repository', () => {
       registries,
     )
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: 'ended',
       state: stored.state,
       pointerRepair: null,
+      session: {
+        sessionId,
+        lifecycleStatus: 'ended',
+        stateVersion: 1,
+        nextEventSeq: 1,
+      },
     })
     expect('locked' in result).toBe(false)
     expect(tracked.getSqlCallCount()).toBe(6)

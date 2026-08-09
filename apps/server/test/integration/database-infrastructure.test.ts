@@ -25,6 +25,7 @@ import {
   assertM28HistoricalClearContention,
   assertM28PlayerDeletionContention,
   assertM28SessionDataDeletionRepositories,
+  assertM31SessionCommandExecutor,
 } from './database-repository-assertions.js'
 import {
   assertNoConflictingDatabaseTestConnections,
@@ -107,29 +108,38 @@ function registerMilestoneTest(
   milestone: NonNullable<typeof databaseTestMode.milestone>,
   label: string,
   assertion: (sql: Sql, runtimeUrl: string) => Promise<void>,
+  timeout = 180_000,
 ): void {
-  test(`validates ${label} against PostgreSQL`, async (context) => {
-    if (
-      !databaseTestMode.enabled ||
-      !shouldRunDatabaseMilestone(
-        databaseTestMode,
-        milestone,
-        persistentDatabasePrepared,
+  test(
+    `validates ${label} against PostgreSQL`,
+    async (context) => {
+      if (
+        !databaseTestMode.enabled ||
+        !shouldRunDatabaseMilestone(
+          databaseTestMode,
+          milestone,
+          persistentDatabasePrepared,
+        )
+      ) {
+        context.skip()
+        return
+      }
+      const { runtimeUrl } = loadTestDatabaseConnections(process.env)
+      const runId = requireDatabaseTestRunId()
+      const sql = createDatabaseTestSql(
+        runtimeUrl,
+        runId,
+        `${milestone}-primary`,
       )
-    ) {
-      context.skip()
-      return
-    }
-    const { runtimeUrl } = loadTestDatabaseConnections(process.env)
-    const runId = requireDatabaseTestRunId()
-    const sql = createDatabaseTestSql(runtimeUrl, runId, `${milestone}-primary`)
-    try {
-      await assertNoConflictingDatabaseTestConnections(sql, runId)
-      await runTimedDatabasePhase(label, () => assertion(sql, runtimeUrl))
-    } finally {
-      await sql.end({ timeout: 0 })
-    }
-  }, 180_000)
+      try {
+        await assertNoConflictingDatabaseTestConnections(sql, runId)
+        await runTimedDatabasePhase(label, () => assertion(sql, runtimeUrl))
+      } finally {
+        await sql.end({ timeout: 0 })
+      }
+    },
+    timeout,
+  )
 }
 
 registerMilestoneTest('m22', 'M2.2 schema', assertM22DatabaseSchema)
@@ -160,6 +170,12 @@ registerMilestoneTest(
   'm28',
   'M2.8 Player deletion contention',
   (sql, runtimeUrl) => assertM28PlayerDeletionContention(sql, runtimeUrl),
+)
+registerMilestoneTest(
+  'm31',
+  'M3.1 session command executor',
+  (sql, runtimeUrl) => assertM31SessionCommandExecutor(sql, runtimeUrl),
+  300_000,
 )
 registerMilestoneTest(
   'm28',

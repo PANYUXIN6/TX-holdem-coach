@@ -65,15 +65,15 @@ import {
 } from '../../src/persistence/player-settings-repository.js'
 import {
   getSessionById,
-  insertSessionRosterSnapshot,
   listHistoricalSessions,
   readSessionAgentSnapshots,
 } from '../../src/persistence/session-repository.js'
+import { assertRosterSnapshotsUseActiveModels } from '../../src/sessions/roster-preparation.js'
 import {
-  assertRosterSnapshotsUseActiveModels,
-  prepareCurrentCatalogRoster,
-  prepareLatestEndedRosterForReuse,
-} from '../../src/sessions/roster-preparation.js'
+  insertSessionRosterSnapshot,
+  prepareCurrentCatalogRosterSnapshot,
+  prepareLatestEndedRosterSnapshotForReuse,
+} from '../helpers/session-roster-fixture.js'
 import { encodePrivateEventV2 } from '../../src/sessions/authoritative-state/private-event-codec-v2.js'
 import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
 import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
@@ -120,7 +120,7 @@ async function inRollbackTransaction(
 
 async function createRosterInput(query: Sql) {
   const catalog = loadAndValidatePersonaCatalog()
-  return prepareCurrentCatalogRoster(query, ownerScope, catalog, {
+  return prepareCurrentCatalogRosterSnapshot(query, ownerScope, catalog, {
     sessionId: randomUUID(),
     userParticipantId: randomUUID(),
     agents: catalog
@@ -2228,7 +2228,7 @@ async function assertRecoveryDiagnosticMatrix(sql: Sql): Promise<void> {
     async (query, sessionId) => {
       await query`
         UPDATE app_private.session_events
-        SET private_event_payload_version = 2
+        SET private_event_payload_version = 99
         WHERE session_id = ${sessionId}::uuid
       `
     },
@@ -2240,7 +2240,7 @@ async function assertRecoveryDiagnosticMatrix(sql: Sql): Promise<void> {
     async (query, sessionId) => {
       await query`
         UPDATE app_private.session_events
-        SET private_event_payload = '{"eventSchemaVersion":1,"event":{}}'::jsonb
+        SET private_event_payload = '{"eventSchemaVersion":2,"event":{}}'::jsonb
         WHERE session_id = ${sessionId}::uuid
       `
     },
@@ -5758,7 +5758,7 @@ async function insertM28HistoricalEndedSession(
   }
   const historicalCatalog = loadAndValidatePersonaCatalog(changedDefinitions)
   const prepared = await sql.begin(async (transaction) => {
-    const roster = await prepareCurrentCatalogRoster(
+    const roster = await prepareCurrentCatalogRosterSnapshot(
       transaction as unknown as Sql,
       ownerScope,
       historicalCatalog,
@@ -5850,7 +5850,7 @@ async function runM28HistoricalRosterCreation(
     return false
   }
 
-  const prepared = await prepareLatestEndedRosterForReuse(
+  const prepared = await prepareLatestEndedRosterSnapshotForReuse(
     transaction as unknown as Sql,
     ownerScope,
     {
@@ -5873,7 +5873,7 @@ async function assertM28ClearRejectsStaleHistoricalPreflight(
   const sourceSessionId = randomUUID()
   const newSessionId = randomUUID()
   const source = await insertM28HistoricalEndedSession(sql, sourceSessionId)
-  const cachedPreflight = await prepareLatestEndedRosterForReuse(
+  const cachedPreflight = await prepareLatestEndedRosterSnapshotForReuse(
     sql,
     ownerScope,
     {

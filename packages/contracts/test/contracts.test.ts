@@ -7,6 +7,8 @@ import {
   CardSchema,
   CommandRequestSchema,
   CommandResponseSchema,
+  CreateSessionRequestSchema,
+  CreateSessionResponseSchema,
   CreateSessionPersonaSelectionSchema,
   ErrorResponseSchema,
   LegalActionSchema,
@@ -153,6 +155,96 @@ const publicCompletedHandSummary = {
 }
 
 describe('共享外部协议', () => {
+  it('严格解析场次创建请求与固定成功警告', () => {
+    const selections = [
+      { personaId: 'nit_fish', seatNumber: 5 },
+      { personaId: 'lag_rec', seatNumber: 1 },
+      { personaId: 'tag_pro', seatNumber: 3 },
+      { personaId: 'short_shark', seatNumber: 2 },
+      { personaId: 'calling_station', seatNumber: 4 },
+    ]
+
+    expect(
+      CreateSessionRequestSchema.safeParse({
+        protocolVersion: 1,
+        rosterSource: { type: 'currentCatalog', selections },
+      }).success,
+    ).toBe(true)
+    expect(
+      CreateSessionRequestSchema.safeParse({
+        protocolVersion: 1,
+        rosterSource: { type: 'latestEnded' },
+      }).success,
+    ).toBe(true)
+    expect(
+      CreateSessionResponseSchema.safeParse({
+        protocolVersion: 1,
+        snapshot: publicSnapshot,
+        warnings: [
+          {
+            code: 'KIMI_FALLBACK_UNAVAILABLE',
+            message: 'Kimi API Key 未配置，自动降级不可用。',
+          },
+        ],
+      }).success,
+    ).toBe(true)
+
+    for (const request of [
+      {
+        protocolVersion: 1,
+        rosterSource: { type: 'currentCatalog', selections },
+        userSeatNumber: 0,
+      },
+      {
+        protocolVersion: 1,
+        rosterSource: { type: 'currentCatalog', selections, button: 1 },
+      },
+      {
+        protocolVersion: 1,
+        rosterSource: { type: 'latestEnded', sessionId: ids.session },
+      },
+      {
+        protocolVersion: 1,
+        rosterSource: { type: 'latestEnded', selections },
+      },
+    ]) {
+      expect(CreateSessionRequestSchema.safeParse(request).success).toBe(false)
+    }
+
+    for (const warnings of [
+      [
+        {
+          code: 'KIMI_FALLBACK_UNAVAILABLE',
+          message: '另一个消息',
+        },
+      ],
+      [
+        {
+          code: 'UNKNOWN',
+          message: 'Kimi API Key 未配置，自动降级不可用。',
+        },
+      ],
+      [
+        {
+          code: 'KIMI_FALLBACK_UNAVAILABLE',
+          message: 'Kimi API Key 未配置，自动降级不可用。',
+        },
+        {
+          code: 'KIMI_FALLBACK_UNAVAILABLE',
+          message: 'Kimi API Key 未配置，自动降级不可用。',
+        },
+      ],
+    ]) {
+      expect(
+        CreateSessionResponseSchema.safeParse({
+          protocolVersion: 1,
+          snapshot: publicSnapshot,
+          warnings,
+        }).success,
+      ).toBe(false)
+    }
+  })
+
   it('收紧阶段并验证公开时间线与规范派奖', () => {
     const validTimelineEntry = {
       eventSeq: 8,

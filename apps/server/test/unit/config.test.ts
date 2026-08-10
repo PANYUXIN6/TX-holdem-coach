@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
+  getProviderCreationPolicy,
   getServerCapabilities,
   getProviderSettingsResponse,
   loadServerConfig,
@@ -19,6 +20,17 @@ function createEnvironment(
 }
 
 describe('server configuration', () => {
+  test('projects only boolean provider capabilities for session creation', () => {
+    const config = loadServerConfig(
+      createEnvironment({ DEEPSEEK_API_KEY: 'deepseek', KIMI_API_KEY: '' }),
+    )
+
+    expect(getProviderCreationPolicy(config)).toEqual({
+      deepSeekConfigured: true,
+      kimiConfigured: false,
+    })
+  })
+
   test('keeps read-only features available when both provider keys are missing', () => {
     const config = loadServerConfig(createEnvironment())
 

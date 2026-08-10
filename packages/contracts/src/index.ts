@@ -80,6 +80,19 @@ export const CreateSessionPersonaSelectionSchema = z
       seatNumbers.add(selection.seatNumber)
     })
   })
+export const CreateSessionRosterSourceSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('currentCatalog'),
+    selections: CreateSessionPersonaSelectionSchema,
+  }),
+  z.strictObject({
+    type: z.literal('latestEnded'),
+  }),
+])
+export const CreateSessionRequestSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  rosterSource: CreateSessionRosterSourceSchema,
+})
 export const PersonaSnapshotFilterSchema = z.strictObject({
   personaId: AgentPersonaIdSchema,
   personaVersion: z.number().int().positive().optional(),
@@ -868,6 +881,16 @@ export const PublicSessionSnapshotSchema = z
     }
   })
 
+export const SessionCreationWarningSchema = z.strictObject({
+  code: z.literal('KIMI_FALLBACK_UNAVAILABLE'),
+  message: z.literal('Kimi API Key 未配置，自动降级不可用。'),
+})
+export const CreateSessionResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  snapshot: PublicSessionSnapshotSchema,
+  warnings: z.array(SessionCreationWarningSchema).max(1),
+})
+
 export const SseEventTypeSchema = z.enum([
   'snapshot',
   'sessionCreated',
@@ -940,6 +963,14 @@ export type SessionPersonaSelection = z.infer<
 export type CreateSessionPersonaSelection = z.infer<
   typeof CreateSessionPersonaSelectionSchema
 >
+export type CreateSessionRosterSource = z.infer<
+  typeof CreateSessionRosterSourceSchema
+>
+export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>
+export type SessionCreationWarning = z.infer<
+  typeof SessionCreationWarningSchema
+>
+export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>
 export type PersonaSnapshotFilter = z.infer<typeof PersonaSnapshotFilterSchema>
 export type PokerAction = z.infer<typeof PokerActionSchema>
 export type SuggestedTarget = z.infer<typeof SuggestedTargetSchema>

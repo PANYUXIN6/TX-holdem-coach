@@ -121,6 +121,20 @@ export class SessionDeletionTransitionError extends Error {
   }
 }
 
+export class SessionCreationTransitionError extends Error {
+  public constructor() {
+    super('场次创建状态无法推进。')
+    this.name = 'SessionCreationTransitionError'
+  }
+}
+
+export class RosterSourceChangedError extends Error {
+  public constructor() {
+    super('历史阵容来源已变化，请重新提交。')
+    this.name = 'RosterSourceChangedError'
+  }
+}
+
 export class HandAuditTransitionError extends Error {
   public constructor() {
     super('手牌审计状态无法推进。')
@@ -156,6 +170,8 @@ export function isRepositoryDomainError(error: unknown): error is Error {
     error instanceof SessionMutationTransitionError ||
     error instanceof SessionRecoveryTransitionError ||
     error instanceof SessionDeletionTransitionError ||
+    error instanceof SessionCreationTransitionError ||
+    error instanceof RosterSourceChangedError ||
     error instanceof HandAuditTransitionError ||
     error instanceof AgentAttemptAuditTransitionError ||
     error instanceof DatabaseOperationError

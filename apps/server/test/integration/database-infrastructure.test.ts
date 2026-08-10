@@ -12,6 +12,7 @@ import {
 import { loadDatabaseTestMode } from '../../src/db/database-test-mode.js'
 import { loadTestDatabaseConnections } from '../../src/db/test-database-safety.js'
 import { assertM22DatabaseSchema } from './database-schema-assertions.js'
+import { assertM32SessionCreation } from './database-m32-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -157,11 +158,17 @@ registerMilestoneTest(
     await assertM24M25AtomicComposition(sql)
   },
 )
-registerMilestoneTest('m26', 'M2.6 recovery', (sql, runtimeUrl) =>
-  assertM26SessionRecoveryRepository(sql, runtimeUrl),
+registerMilestoneTest(
+  'm26',
+  'M2.6 recovery',
+  (sql, runtimeUrl) => assertM26SessionRecoveryRepository(sql, runtimeUrl),
+  300_000,
 )
-registerMilestoneTest('m27', 'M2.7 audit persistence', (sql, runtimeUrl) =>
-  assertM27HandAgentAuditRepositories(sql, runtimeUrl),
+registerMilestoneTest(
+  'm27',
+  'M2.7 audit persistence',
+  (sql, runtimeUrl) => assertM27HandAgentAuditRepositories(sql, runtimeUrl),
+  300_000,
 )
 registerMilestoneTest('m28', 'M2.8 session data deletion', (sql, runtimeUrl) =>
   assertM28SessionDataDeletionRepositories(sql, runtimeUrl),
@@ -175,6 +182,12 @@ registerMilestoneTest(
   'm31',
   'M3.1 session command executor',
   (sql, runtimeUrl) => assertM31SessionCommandExecutor(sql, runtimeUrl),
+  300_000,
+)
+registerMilestoneTest(
+  'm32',
+  'M3.2 session creation and roster snapshot',
+  (sql, runtimeUrl) => assertM32SessionCreation(sql, runtimeUrl),
   300_000,
 )
 registerMilestoneTest(

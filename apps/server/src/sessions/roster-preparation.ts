@@ -6,8 +6,11 @@ import {
   ActiveModelConfigurationV1Schema,
   createConfigSnapshotKey,
   deepFreeze,
+  MEMORY_PAYLOAD_VERSION,
   PERSONA_CONFIG_PAYLOAD_VERSION,
   PersonaConfigPayloadV1Schema,
+  type AgentMemoryPayloadV1,
+  type PersonaConfigPayloadV1,
 } from '../personas/config.js'
 import {
   ActiveModelConfigurationError,
@@ -15,16 +18,15 @@ import {
   ResourceNotFoundError,
 } from '../persistence/errors.js'
 import {
+  isResolvedOwnerScope,
   resolveOwnerScope,
   type OwnerScope,
+  type ResolvedOwnerScope,
 } from '../persistence/owner-scope.js'
 import {
   findLatestEndedSessionForRosterReuse,
-  INITIAL_AGENT_MEMORY,
   readSessionAgentSnapshots,
-  type InsertSessionRosterSnapshotInput,
   type SessionAgentSnapshot,
-  type SessionRosterAgentInput,
 } from '../persistence/session-repository.js'
 
 const StableIdentityGraphSchema = z.strictObject({
@@ -43,6 +45,37 @@ const StableIdentityGraphSchema = z.strictObject({
 
 export type StableIdentityGraph = z.infer<typeof StableIdentityGraphSchema>
 
+export interface InitialAgentMemoryInput {
+  readonly currentRevision: number
+  readonly currentPayloadVersion: number
+  readonly currentPayload: AgentMemoryPayloadV1
+  readonly revision: number
+  readonly revisionPayloadVersion: number
+  readonly revisionPayload: AgentMemoryPayloadV1
+}
+
+export interface SessionRosterAgentInput {
+  readonly seatNumber: number
+  readonly agentParticipantId: string
+  readonly displayName: string
+  readonly avatarColor: string
+  readonly personaId: string
+  readonly personaVersion: number
+  readonly configSnapshotKey: string
+  readonly configPayloadVersion: number
+  readonly configPayload: PersonaConfigPayloadV1
+  readonly initialMemory: InitialAgentMemoryInput
+}
+
+export const INITIAL_AGENT_MEMORY: InitialAgentMemoryInput = deepFreeze({
+  currentRevision: 0,
+  currentPayloadVersion: MEMORY_PAYLOAD_VERSION,
+  currentPayload: {},
+  revision: 0,
+  revisionPayloadVersion: MEMORY_PAYLOAD_VERSION,
+  revisionPayload: {},
+})
+
 export interface CurrentCatalogRosterSelection {
   readonly seatNumber: number
   readonly agentParticipantId: string
@@ -53,6 +86,32 @@ export interface CurrentCatalogRosterIdentityGraph {
   readonly sessionId: string
   readonly userParticipantId: string
   readonly agents: readonly CurrentCatalogRosterSelection[]
+}
+
+declare const preparedCurrentCatalogRosterBrand: unique symbol
+
+export interface PreparedCurrentCatalogRoster {
+  readonly sessionId: string
+  readonly userParticipantId: string
+  readonly agents: readonly SessionRosterAgentInput[]
+  readonly [preparedCurrentCatalogRosterBrand]: never
+}
+
+const preparedCurrentCatalogRosters = new WeakSet<object>()
+
+export function isPreparedCurrentCatalogRoster(
+  value: unknown,
+): value is PreparedCurrentCatalogRoster {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    preparedCurrentCatalogRosters.has(value)
+  )
+}
+
+export interface LatestEndedRosterPreflight {
+  readonly sourceSessionId: string
+  readonly aiSeatNumbers: readonly number[]
 }
 
 function assertIdentityGraph(
@@ -81,24 +140,6 @@ function assertIdentityGraph(
   return result.data
 }
 
-function createAgentInput(
-  snapshot: SessionAgentSnapshot,
-  agentParticipantId: string,
-): SessionRosterAgentInput {
-  return deepFreeze({
-    seatNumber: snapshot.seatNumber,
-    agentParticipantId,
-    displayName: snapshot.displayName,
-    avatarColor: snapshot.avatarColor,
-    personaId: snapshot.personaId,
-    personaVersion: snapshot.personaVersion,
-    configSnapshotKey: snapshot.configSnapshotKey,
-    configPayloadVersion: snapshot.configPayloadVersion,
-    configPayload: snapshot.configPayload,
-    initialMemory: INITIAL_AGENT_MEMORY,
-  })
-}
-
 type ActiveModelConfigurationSchema = Pick<
   typeof ActiveModelConfigurationV1Schema,
   'safeParse'
@@ -121,13 +162,10 @@ export function assertRosterSnapshotsUseActiveModels(
   }
 }
 
-export async function prepareCurrentCatalogRoster(
-  sql: Sql,
-  ownerScope: OwnerScope,
+export function prepareCurrentCatalogRoster(
   catalog: PersonaCatalog,
   identityGraph: CurrentCatalogRosterIdentityGraph,
-): Promise<InsertSessionRosterSnapshotInput> {
-  const owner = await resolveOwnerScope(sql, ownerScope)
+): PreparedCurrentCatalogRoster {
   const graph = assertIdentityGraph({
     sessionId: identityGraph.sessionId,
     userParticipantId: identityGraph.userParticipantId,
@@ -185,21 +223,22 @@ export async function prepareCurrentCatalogRoster(
     })
   })
 
-  return deepFreeze({
-    owner,
+  const prepared = deepFreeze({
     sessionId: graph.sessionId,
     userParticipantId: graph.userParticipantId,
     agents,
-  })
+  }) as PreparedCurrentCatalogRoster
+  preparedCurrentCatalogRosters.add(prepared)
+  return prepared
 }
 
-export async function prepareLatestEndedRosterForReuse(
+export async function prepareLatestEndedRosterPreflight(
   sql: Sql,
-  ownerScope: OwnerScope,
-  identityGraph: StableIdentityGraph,
-): Promise<InsertSessionRosterSnapshotInput> {
-  const owner = await resolveOwnerScope(sql, ownerScope)
-  const graph = assertIdentityGraph(identityGraph)
+  ownerScope: OwnerScope | ResolvedOwnerScope,
+): Promise<LatestEndedRosterPreflight> {
+  const owner = isResolvedOwnerScope(ownerScope)
+    ? ownerScope
+    : await resolveOwnerScope(sql, ownerScope)
   const latestEndedSession = await findLatestEndedSessionForRosterReuse(
     sql,
     owner,
@@ -212,32 +251,12 @@ export async function prepareLatestEndedRosterForReuse(
     owner,
     latestEndedSession.id,
   )
-  if (snapshots.length !== graph.agentParticipants.length) {
-    throw new RepositoryInputValidationError()
-  }
   assertRosterSnapshotsUseActiveModels(
     snapshots,
     ActiveModelConfigurationV1Schema,
   )
-
-  const participantsBySeat = new Map(
-    graph.agentParticipants.map((participant) => [
-      participant.seatNumber,
-      participant.agentParticipantId,
-    ]),
-  )
-  const agents = snapshots.map((snapshot) => {
-    const participantId = participantsBySeat.get(snapshot.seatNumber)
-    if (participantId === undefined) {
-      throw new RepositoryInputValidationError()
-    }
-    return createAgentInput(snapshot, participantId)
-  })
-
   return deepFreeze({
-    owner,
-    sessionId: graph.sessionId,
-    userParticipantId: graph.userParticipantId,
-    agents,
+    sourceSessionId: latestEndedSession.id,
+    aiSeatNumbers: snapshots.map((snapshot) => snapshot.seatNumber),
   })
 }

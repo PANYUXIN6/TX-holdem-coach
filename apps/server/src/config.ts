@@ -151,6 +151,16 @@ export function getServerCapabilities(
   }
 }
 
+export function getProviderCreationPolicy(config: ServerConfig): {
+  readonly deepSeekConfigured: boolean
+  readonly kimiConfigured: boolean
+} {
+  return Object.freeze({
+    deepSeekConfigured: config.hasDeepSeekApiKey(),
+    kimiConfigured: config.hasKimiApiKey(),
+  })
+}
+
 export function getProviderSettingsResponse(
   config: ServerConfig,
 ): ProviderSettingsResponse {

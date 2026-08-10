@@ -7,6 +7,7 @@ export const DATABASE_TEST_MILESTONES = Object.freeze([
   'm27',
   'm28',
   'm31',
+  'm32',
 ])
 
 export function parseDatabaseTestArguments(arguments_) {

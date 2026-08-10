@@ -6,9 +6,9 @@ import {
 
 describe('database test plan', () => {
   test('selects one allowlisted milestone', () => {
-    expect(parseDatabaseTestArguments(['--milestone=m31'])).toEqual({
+    expect(parseDatabaseTestArguments(['--milestone=m32'])).toEqual({
       kind: 'milestone',
-      milestone: 'm31',
+      milestone: 'm32',
     })
   })
 

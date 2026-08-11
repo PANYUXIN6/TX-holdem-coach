@@ -10,6 +10,8 @@ import {
   createTestPokerState,
 } from '../poker/create-test-poker-state.js'
 import { createPokerTableState } from '../../src/poker/state.js'
+import { createHandStartCheckpointV1 } from '../../src/sessions/hand-audit/hand-start-checkpoint.js'
+import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
 const handId = '10000000-0000-4000-8000-000000000001'
 const sessionId = '20000000-0000-4000-8000-000000000001'
@@ -19,6 +21,15 @@ const idlePlayerCoordination = Object.freeze({
   agentRunState: 'idle' as const,
   activePlayerRunId: null,
   activeDecisionRequestId: null,
+})
+const activeIdleSession = Object.freeze({
+  lifecycleStatus: 'active' as const,
+  currentHandId: handId as string | null,
+  ...idlePlayerCoordination,
+})
+const activeBetweenHandsSession = Object.freeze({
+  ...activeIdleSession,
+  currentHandId: null,
 })
 
 function privateState(
@@ -65,6 +76,7 @@ describe('command event policy', () => {
         type: 'playerAction' as const,
         payload: { action },
       },
+      sessionBefore: activeIdleSession,
       stateEffectKind: 'stateChanged' as const,
       stateBefore: before,
       stateAfter: after,
@@ -124,6 +136,7 @@ describe('command event policy', () => {
           type: 'playerAction',
           payload: { action },
         },
+        sessionBefore: activeIdleSession,
         stateEffectKind: 'stateChanged',
         stateBefore: before,
         stateAfter: privateState(8, applied.state, accounting),
@@ -194,6 +207,7 @@ describe('command event policy', () => {
         type: 'playerAction' as const,
         payload: { action },
       },
+      sessionBefore: activeIdleSession,
       stateEffectKind: 'stateChanged' as const,
       stateBefore: before,
       stateAfter: after,
@@ -262,6 +276,7 @@ describe('command event policy', () => {
           action,
         },
       },
+      sessionBefore: activeIdleSession,
       stateEffectKind: 'stateChanged' as const,
       stateBefore: before,
       stateAfter: privateState(8, applied.state, accounting),
@@ -275,7 +290,7 @@ describe('command event policy', () => {
     expect(isCommandMutationConsistent(input)).toBe(false)
   })
 
-  test('rejects startNextHand until the M3.4 verifier is installed', () => {
+  test('accepts a mirrored startNextHand and rejects plan or event tampering', () => {
     const beforePoker = createTestPokerState({
       seats: createTestPokerState().seats.map((seat) =>
         seat.seatNumber === 1
@@ -285,14 +300,19 @@ describe('command event policy', () => {
             : seat,
       ),
     })
-    const before = privateState(
-      7,
-      beforePoker,
-      beforePoker.seats.map((seat) => ({
-        seatNumber: seat.seatNumber,
-        cumulativeBuyIn: 2_000,
-      })),
-    )
+    const accountingBefore = beforePoker.seats.map((seat) => ({
+      seatNumber: seat.seatNumber,
+      cumulativeBuyIn: 2_000,
+    }))
+    const lastCompletedHandSummary =
+      createTestCompletedPokerResult().completedHand.summary
+    const before = createPrivateTableState({
+      stateVersion: 7,
+      poker: beforePoker,
+      completedHandCount: 1,
+      seatAccounting: accountingBefore,
+      lastCompletedHandSummary,
+    })
     const afterRebuyPoker = createTestPokerState({
       ...beforePoker,
       seats: beforePoker.seats.map((seat) =>
@@ -303,16 +323,18 @@ describe('command event policy', () => {
     })
     const started = startPokerHand(afterRebuyPoker, {
       handId,
-      completedHandCountBeforeStart: 0,
+      completedHandCountBeforeStart: 1,
       randomSource,
     })
-    const after = privateState(
-      8,
-      started.state,
-      before.seatAccounting.map((seat) =>
+    const after = createPrivateTableState({
+      stateVersion: 8,
+      poker: started.state,
+      completedHandCount: 1,
+      seatAccounting: before.seatAccounting.map((seat) =>
         seat.seatNumber === 1 ? { ...seat, cumulativeBuyIn: 4_000 } : seat,
       ),
-    )
+      lastCompletedHandSummary,
+    })
     const events = [
       {
         type: 'aiAutoRebuy' as const,
@@ -333,6 +355,7 @@ describe('command event policy', () => {
         type: 'startNextHand' as const,
         payload: {},
       },
+      sessionBefore: activeBetweenHandsSession,
       stateEffectKind: 'stateChanged' as const,
       stateBefore: before,
       stateAfter: after,
@@ -340,10 +363,39 @@ describe('command event policy', () => {
       currentHandIdAfter: handId,
       playerCoordinationAfter: idlePlayerCoordination,
       events,
-      relationPlan: Object.freeze({ handId }),
+      relationPlan: Object.freeze({
+        kind: 'startNextHand' as const,
+        sessionId,
+        handId,
+        checkpoint: createHandStartCheckpointV1({
+          stateBeforeStartCommand: before,
+          startedHand: started.startedHand,
+        }),
+      }),
     }
 
-    expect(isCommandMutationConsistent(input)).toBe(false)
+    expect(isCommandMutationConsistent(input)).toBe(true)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        relationPlan: Object.freeze({
+          ...input.relationPlan,
+          sessionId: '20000000-0000-4000-8000-000000000002',
+        }),
+      }),
+    ).toBe(false)
+    for (const tamperedAutoRebuyEvent of [
+      { ...events[0]!, amount: 1 },
+      { ...events[0]!, stackBefore: 123 },
+      { ...events[0]!, stackAfter: 456 },
+    ]) {
+      expect(
+        isCommandMutationConsistent({
+          ...input,
+          events: [tamperedAutoRebuyEvent as never, events[1]!],
+        }),
+      ).toBe(false)
+    }
   })
 
   test('requires rebuy event amounts to mirror the old and final state', () => {
@@ -385,6 +437,7 @@ describe('command event policy', () => {
         type: 'rebuy' as const,
         payload: { amount: 500 },
       },
+      sessionBefore: activeBetweenHandsSession,
       stateEffectKind: 'stateChanged' as const,
       stateBefore: before,
       stateAfter: after,
@@ -402,7 +455,7 @@ describe('command event policy', () => {
           cumulativeBuyInAfter: 2_500,
         },
       ],
-      relationPlan: Object.freeze({}),
+      relationPlan: Object.freeze({ kind: 'rebuy' as const }),
     }
 
     expect(isCommandMutationConsistent(input)).toBe(true)
@@ -464,6 +517,7 @@ describe('command event policy', () => {
         type: 'endSession' as const,
         payload: {},
       },
+      sessionBefore: activeBetweenHandsSession,
       stateEffectKind: 'stateUnchanged' as const,
       stateBefore: state,
       stateAfter: state,
@@ -473,7 +527,7 @@ describe('command event policy', () => {
       events: [
         { type: 'sessionEnded' as const, reason: 'userRequested' as const },
       ],
-      relationPlan: Object.freeze({}),
+      relationPlan: Object.freeze({ kind: 'normalEnd' as const }),
     }
 
     expect(isCommandMutationConsistent(input)).toBe(true)
@@ -486,8 +540,12 @@ describe('command event policy', () => {
     ).toBe(false)
   })
 
-  test('rejects aborted endSession until the M3.4 checkpoint verifier is installed', () => {
-    const restoredPoker = createTestPokerState()
+  test('accepts an aborted endSession only when checkpoint and events mirror', () => {
+    const sortedRestoredPoker = createTestPokerState()
+    const restoredPoker = createPokerTableState({
+      ...sortedRestoredPoker,
+      seats: [...sortedRestoredPoker.seats].reverse(),
+    })
     const restored = privateState(8, restoredPoker)
     const started = startPokerHand(restoredPoker, {
       handId,
@@ -509,20 +567,24 @@ describe('command event policy', () => {
         buttonSeatNumber: started.state.buttonSeatNumber,
         completedHandCount: 0,
         pot: started.state.hand!.pot,
-        seats: started.state.seats.map((seat) => ({
-          seatNumber: seat.seatNumber,
-          stack: seat.stack,
-          cumulativeBuyIn: 2_000,
-        })),
+        seats: [...started.state.seats]
+          .sort((left, right) => left.seatNumber - right.seatNumber)
+          .map((seat) => ({
+            seatNumber: seat.seatNumber,
+            stack: seat.stack,
+            cumulativeBuyIn: 2_000,
+          })),
       },
       restored: {
         buttonSeatNumber: restoredPoker.buttonSeatNumber,
         completedHandCount: 0,
-        seats: restoredPoker.seats.map((seat) => ({
-          seatNumber: seat.seatNumber,
-          stack: seat.stack,
-          cumulativeBuyIn: 2_000,
-        })),
+        seats: [...restoredPoker.seats]
+          .sort((left, right) => left.seatNumber - right.seatNumber)
+          .map((seat) => ({
+            seatNumber: seat.seatNumber,
+            stack: seat.stack,
+            cumulativeBuyIn: 2_000,
+          })),
       },
     }
     const input = {
@@ -533,6 +595,10 @@ describe('command event policy', () => {
         type: 'endSession' as const,
         payload: {},
       },
+      sessionBefore: Object.freeze({
+        ...activeIdleSession,
+        agentRunState: 'paused' as const,
+      }),
       stateEffectKind: 'stateChanged' as const,
       stateBefore: beforeAbort,
       stateAfter: restored,
@@ -543,9 +609,28 @@ describe('command event policy', () => {
         event,
         { type: 'sessionEnded' as const, reason: 'handAborted' as const },
       ],
-      relationPlan: Object.freeze({ handId }),
+      relationPlan: Object.freeze({
+        kind: 'abortHand' as const,
+        sessionId,
+        handId,
+        failedPlayerRunId: '70000000-0000-4000-8000-000000000001',
+        failureReasonCode: 'provider_timeout',
+        checkpoint: createHandStartCheckpointV1({
+          stateBeforeStartCommand: restored,
+          startedHand: started.startedHand,
+        }),
+      }),
     }
 
-    expect(isCommandMutationConsistent(input)).toBe(false)
+    expect(isCommandMutationConsistent(input)).toBe(true)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        events: [
+          { ...event, restored: { ...event.restored, buttonSeatNumber: 1 } },
+          { type: 'sessionEnded' as const, reason: 'handAborted' as const },
+        ],
+      }),
+    ).toBe(false)
   })
 })

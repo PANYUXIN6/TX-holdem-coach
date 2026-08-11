@@ -3574,7 +3574,7 @@ function createM27CoachRunInput(
   }
 }
 
-function createM27PlayerRunInput(
+export function createM27PlayerRunInput(
   sessionId: string,
   handId: string,
   agentRunId: string,
@@ -6270,9 +6270,7 @@ function createM31RebuyHandler(
 ) {
   const relationFixture = createM27HandAuditFixture(relationHandId)
   type RelationPlan = {
-    readonly kind: 'm31Rebuy'
-    readonly checkpoint: typeof relationFixture.checkpoint
-    readonly completed: typeof relationFixture.completed
+    readonly kind: 'rebuy'
   }
   type WritePort = {
     readonly insertProtocolRelation: (plan: RelationPlan) => Promise<unknown>
@@ -6332,9 +6330,7 @@ function createM31RebuyHandler(
             },
           ],
           relationPlan: Object.freeze({
-            kind: 'm31Rebuy' as const,
-            checkpoint: Object.freeze(relationFixture.checkpoint),
-            completed: relationFixture.completed,
+            kind: 'rebuy' as const,
           }),
         },
       }
@@ -6343,7 +6339,11 @@ function createM31RebuyHandler(
       { writes }: { readonly writes: WritePort },
       capability: PreparedMutationCapability<RelationPlan>,
     ) => {
-      await writes.insertProtocolRelation(capability.relationPlan)
+      await writes.insertProtocolRelation({
+        ...capability.relationPlan,
+        checkpoint: relationFixture.checkpoint,
+        completed: relationFixture.completed,
+      } as never)
     },
   }
 }
@@ -7085,7 +7085,7 @@ async function assertM31DifferentSessionsRunInParallel(
                 reason: 'userRequested' as const,
               },
             ] as const,
-            relationPlan: Object.freeze({ kind: 'm31ParallelEnd' }),
+            relationPlan: Object.freeze({ kind: 'normalEnd' }),
           },
         }),
         applyRelations: async () => {},
@@ -7190,7 +7190,7 @@ export async function assertM31SessionCommandExecutor(
           privateEventDrafts: [
             { type: 'sessionEnded' as const, reason: 'userRequested' as const },
           ] as const,
-          relationPlan: Object.freeze({ kind: 'm31EndSession' }),
+          relationPlan: Object.freeze({ kind: 'normalEnd' }),
         },
       }),
       applyRelations: async () => {},

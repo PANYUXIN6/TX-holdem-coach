@@ -42,13 +42,13 @@ describe('database integration test mode', () => {
       loadDatabaseTestMode({
         DATABASE_TEST_ENTRYPOINT: 'run-database-integration-tests',
         DATABASE_TEST_SCOPE: 'milestone',
-        DATABASE_TEST_MILESTONE: 'm32',
+        DATABASE_TEST_MILESTONE: 'm34',
         DATABASE_TEST_RUN_ID: '0123456789abcdef',
       }),
     ).toEqual({
       enabled: true,
       full: false,
-      milestone: 'm32',
+      milestone: 'm34',
       cleanupStale: false,
       runId: '0123456789abcdef',
     })

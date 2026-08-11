@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-08-10（M3.3 用户行动、稳定扑克拒绝、正常完成手审计与 PostgreSQL 原子验收已落地；生产公开投影、HTTP/SSE 传输仍待后续 M3，生产 Commit Gate 仍待 M4/M8）
+更新时间：2026-08-11（M3.4 补码、下一手、正常结束、暂停中止与 PostgreSQL 原子验收已落地；生产公开投影、HTTP/SSE 传输仍待后续 M3，生产 Commit Gate 仍待 M4/M8）
 
 ## Workspace 边界
 
@@ -12,17 +12,17 @@
 - M2.6 已在同一纯模块边界增加完全独立的快照/私有事件复合版本注册表和确定性恢复核心；`src/persistence/session-recovery-repository.ts` 复用 M2.5 Session 行锁，在调用方事务内读取完整私有恢复事实，只修复可重建 `currentHandId` 或写入当前阻断性诊断，并提供保留首次诊断语义的显式重试。诊断字段与生命周期由 `0003_modern_supreme_intelligence.sql` 的回填和互斥约束闭合。详细事实源见 [M2.6 设计](./superpowers/specs/2026-08-03-m2-6-multiversion-recovery-design.md)。
 - M2.7 已在既有 M2.2 Schema 上增加 Hand 与 Agent Foundation 审计持久化，不新增迁移。`src/sessions/hand-audit/` 保存“开手命令前状态 + StartedHandFacts”和完整 M1.9 结算结果；`src/agents/audit/` 保存严格 Run Config、Budget、Attempt 载荷并定义固定 Player/Coach Decoder 端口；两个 persistence Repository 只消费调用方事务，分别闭合 Hand 状态与 Foundation 审计事实。详细事实源见 [M2.7 设计](./superpowers/specs/2026-08-04-m2-7-hand-agent-audit-persistence-design.md)。
 - M2.8 已在既有外键图上增加 `session-deletion-repository.ts`，不新增迁移。ended 单场删除按 `Session → Runs(id ASC)`，Owner 清空按 `Owner → Sessions(id ASC) → Runs(id ASC)`；两者先取消非终态 Run、清租约且保留 fencing，再成组清理 Player 三指针并删除 Session 根。`owners` 与 `app_settings` 保留，删除路径不解码 JSONB。详细事实源见 [M2.8 设计](./superpowers/specs/2026-08-04-m2-8-session-data-deletion-design.md)。
-- M3.1 已新增 `src/sessions/command-execution/`，以不可变启用 Handler 映射、两阶段事务端口和每场 Promise 尾队列组合 M2.4–M2.6；M3.3 在同一边界增加 `playerAction` 生产 Handler、类型化稳定拒绝和专属 verifier。执行器在关系写入前冻结并验证最终状态、V2 私有事件、公开投影、SSE 与提交批次，向关系写入透传唯一 `commandAt`，只在 COMMIT 后返回本次新事件。终止用户行动按 `Session → Hand` 锁序组合 M2.7 完成审计；`aiAction`、`startNextHand`、`retryAgent` 和带中止恢复的结束仍等待后续 verifier。详细事实源见 [M3.1 设计](./superpowers/specs/2026-08-05-m3-1-session-command-executor-design.md)与 [M3.3 设计](./superpowers/specs/2026-08-09-m3-3-player-action-hand-completion-design.md)。
+- M3.1 已新增 `src/sessions/command-execution/`，以不可变启用 Handler 映射、两阶段事务端口和每场 Promise 尾队列组合 M2.4–M2.6；M3.3/M3.4 在同一边界增加 `playerAction`、`rebuy`、`startNextHand`、`endSession` 生产 Handler、类型化稳定拒绝和专属 verifier。执行器在关系写入前冻结并验证最终状态、V2 私有事件、公开投影、SSE 与提交批次，只在 COMMIT 后返回本次新事件。用户行动按 `Session → Hand` 完成审计；下一手原子插入 Hand；暂停中止通过 `session-lifecycle-repository.ts` 读取唯一 failed Player leaf，并按 `Session → Hand → AgentRun` 恢复 checkpoint 和中止 Hand。`aiAction`、`retryAgent` 仍等待后续 verifier。详细事实源见 [M3.1 设计](./superpowers/specs/2026-08-05-m3-1-session-command-executor-design.md)、[M3.3 设计](./superpowers/specs/2026-08-09-m3-3-player-action-hand-completion-design.md)与 [M3.4 设计](./superpowers/specs/2026-08-09-m3-4-rebuy-next-hand-session-end-design.md)。
 - M3.2 已新增 `src/sessions/session-creation/` 与 `src/persistence/session-creation-repository.ts`。创建服务在事务外严格解析、读取 Provider 能力、准备阵容并一次生成身份/首手计划；事务内按 `Owner → active Session → 可选来源 ended Session → 新 Session` 锁序取得一次性 roster capability，组合 M2.7 Hand writer 与 M2.5 mutation writer，原子提交 roster、空记忆、首手、两条 V2 事件和最终快照；latest-ended 的来源缺失、来源变化和模型失效在服务边界分别稳定为 `ROSTER_SOURCE_NOT_FOUND|ROSTER_SOURCE_CHANGED|ROSTER_MODEL_INACTIVE`。创建不登记命令账本；当前只提供测试 projector/active reader，尚未安装生产路由。详细事实源见 [M3.2 设计](./superpowers/specs/2026-08-09-m3-2-session-creation-roster-snapshot-design.md)。
 - `apps/server/.env.example` 提供脱敏占位的线上运行/迁移连接与 Provider Key；`.env.test.example` 只提供两条测试 URL。真实值只存在于后端、Git 忽略的 `.env.test.local` 或部署环境，project ref 不由环境声明。
-- `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与 `service/` 分类。普通 `verify` 明确不收集远程数据库测试文件。受控启动器支持迁移-only、单个 `m22…m28`/`m31`/`m32`/`m33`、显式遗留事务清理和最终 full；M3.3 真实入口从 M3.2 创建首手进入生产 Handler，核对普通/终止行动、稳定拒绝、未提交关系写入不可见、提交后 Hand/Session/事件/账本一致、重放不重复及 checkpoint 损坏整体回滚。所有测试连接继续携带 Run ID 标签和数据库侧超时。
+- `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与 `service/` 分类。普通 `verify` 明确不收集远程数据库测试文件。受控启动器支持迁移-only、单个 `m22…m28`/`m31`/`m32`/`m33`/`m34`、显式遗留事务清理和最终 full；`m34` 从真实完成首手进入生产 Handler，核对补码与重放、下一手 Hand、暂停失败叶子中止恢复、连续事件和正常结束状态版本不变。所有测试连接继续携带 Run ID 标签和数据库侧超时。
 - M2.4–M2.8 单元测试只通过公开构造器、Codec、纯决策和 Repository API 验证契约、capability、写前拒绝及错误转换；`db:test:full` 额外以真实 PostgreSQL 验证 Owner 条件、级联/回滚、`FOR UPDATE` 阻塞、双连接竞争、15 张 Session-scoped 子表清除、设置保留，以及当前/历史阵容创建的 Owner 与精确来源锁协议。默认离线验证不执行该远程文件。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、结构化合法动作、人物公开摘要与创建选择、M3.2 创建请求/成功响应/固定警告、Provider 健康/设置、HTTP/SSE 信封和错误响应。Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。创建请求只允许 `currentCatalog` 的 5–8 个唯一 AI 选择或无额外字段的 `latestEnded`。
 - 公开快照只承载当前手的最小行动时间线及两手之间的最小完成手摘要；M3 以后只能从私有事件与 M1.9 私有 `participantHands` 作可见性投影，Contracts 不导入服务器类型、评估比较等级、牌堆、burn 或未公开底牌。
 
 ## 依赖方向
 
-共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路只由 `poker-engine.ts` 对上层组合；M2.5/M2.6 固定为 `poker/state + hand-result → authoritative-state → mutation/recovery Repository → postgres.js`；M3.1/M3.3 为 `command-execution → poker-engine + Hand audit + ledger + mutation + recovery`，执行器拥有唯一外层事务；M3.2 为 `session-creation → poker-engine + creation Repository + Hand writer + mutation writer`。Repository 不反向依赖服务。M2.8 删除边界保持独立；生产公开投影与 HTTP/SSE 由后续 M3 安装，生产 Player/Coach Commit Gate 仍由 M4/M8 实现。
+共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路只由 `poker-engine.ts` 对上层组合；M2.5/M2.6 固定为 `poker/state + hand-result → authoritative-state → mutation/recovery Repository → postgres.js`；M3.1/M3.3/M3.4 为 `command-execution → poker-engine + Hand audit + lifecycle reader + ledger + mutation + recovery`，执行器拥有唯一外层事务；M3.2 为 `session-creation → poker-engine + creation Repository + Hand writer + mutation writer`。Repository 不反向依赖服务。M2.8 删除边界保持独立；生产公开投影与 HTTP/SSE 由后续 M3 安装，生产 Player/Coach Commit Gate 仍由 M4/M8 实现。
 
 ## 设计评审开发工具边界
 
@@ -47,6 +47,8 @@ M3.1 调用链固定为“命令解析/启用检查 → 每场串行队列 → `
 M3.2 调用链固定为“严格请求与 Provider 能力 → 阵容事务外准备 → 一次身份图/首手计划 → `sql.begin` → Owner 锁/active 检查 → roster capability → roster 写入 → 锁定新 Session → Hand 写入 → M2.5 mutation 预验证与原子持久化 → COMMIT → 返回最新快照和 seq 0/1 两条事件”。active conflict 在同一事务内读取锁定 Session 的最新公开快照并零写入返回；创建最终固定 `stateVersion=1`、`nextEventSeq=2`、`currentHandId=首手`、`commandLedgerId=null`。
 
 M3.3 调用链固定为“严格 `playerAction` → Session recovery/锁 → ledger acquire → M1.9 单次行动与可选同步结算 → Handler 关系计划 + 命令 verifier → mutation 预验证 → 可选 Hand completion → Session/snapshot/events → ledger terminal → COMMIT”。普通行动只推进一个版本；完成行动同样只推进一个版本并停在 `active + betweenHands`，Hand 完整结果只进入审计行，快照只保留最近完成手摘要。
+
+M3.4 调用链固定为“严格 `rebuy|startNextHand|endSession` → Session recovery/锁 → ledger acquire → Handler 资格与候选 → 命令 verifier → mutation 预验证 → 可选 Hand 插入/中止 → Session/snapshot/events → ledger terminal → COMMIT”。补码只改变用户资金；下一手在自动买入后只调用一次 M1.9，但 checkpoint 保存命令前状态；正常结束不写快照或推进状态版本；暂停中止恢复 checkpoint 业务内容、以当前版本加一提交并关联唯一 failed Player leaf。
 
 ## 已实现的 M1 门面、M2.5 权威状态与待实施的非 Agent 重基线
 

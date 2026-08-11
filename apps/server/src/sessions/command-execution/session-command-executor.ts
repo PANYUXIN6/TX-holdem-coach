@@ -457,6 +457,14 @@ export function createSessionCommandExecutor(input: {
             if (
               !isCommandMutationConsistent({
                 command: prepared.command,
+                sessionBefore: {
+                  lifecycleStatus: 'active',
+                  currentHandId: recovery.session.currentHandId,
+                  agentRunState: recovery.session.agentRunState,
+                  activePlayerRunId: recovery.session.activePlayerRunId,
+                  activeDecisionRequestId:
+                    recovery.session.activeDecisionRequestId,
+                },
                 stateEffectKind: candidate.stateEffect.kind,
                 stateBefore: recovery.state,
                 stateAfter: finalState,

@@ -1,9 +1,13 @@
+import { isDeepStrictEqual } from 'node:util'
 import type { LedgerCommand } from '../../persistence/command-ledger-repository.js'
 import type { CompletedHandResult } from '../../poker/hand-result.js'
 import type { PrivateEventV2 } from '../authoritative-state/private-event-v2.js'
 import type { PrivateTableState } from '../authoritative-state/private-table-state.js'
 import { getPrivateEventHandId } from '../authoritative-state/private-event-v2.js'
+import { parseEndSessionRelationPlan } from './end-session-handler.js'
 import { parsePlayerActionRelationPlan } from './player-action-handler.js'
+import { parseRebuyRelationPlan } from './rebuy-handler.js'
+import { parseStartNextHandRelationPlan } from './start-next-hand-handler.js'
 
 export function isEventSequenceAllowedForCommand(
   commandType: LedgerCommand['type'],
@@ -22,23 +26,39 @@ export function isEventSequenceAllowedForCommand(
           events[1]?.type === 'uncalledBetReturned' &&
           events[2]?.type === 'handCompleted')
       )
-    case 'aiAction':
     case 'startNextHand':
+      return (
+        events.length <= 9 &&
+        events.at(-1)?.type === 'handStarted' &&
+        events.slice(0, -1).every((event) => event.type === 'aiAutoRebuy')
+      )
+    case 'aiAction':
     case 'retryAgent':
       return false
     case 'rebuy':
       return events.length === 1 && events[0]?.type === 'userRebuy'
     case 'endSession':
       return (
-        events.length === 1 &&
-        events[0]?.type === 'sessionEnded' &&
-        events[0].reason === 'userRequested'
+        (events.length === 1 &&
+          events[0]?.type === 'sessionEnded' &&
+          events[0].reason === 'userRequested') ||
+        (events.length === 2 &&
+          events[0]?.type === 'handAborted' &&
+          events[1]?.type === 'sessionEnded' &&
+          events[1].reason === 'handAborted')
       )
   }
 }
 
 export interface CommandMutationConsistencyInput {
   readonly command: LedgerCommand
+  readonly sessionBefore: {
+    readonly lifecycleStatus: 'active'
+    readonly currentHandId: string | null
+    readonly agentRunState: 'idle' | 'thinking' | 'paused'
+    readonly activePlayerRunId: string | null
+    readonly activeDecisionRequestId: string | null
+  }
   readonly stateEffectKind: 'stateChanged' | 'stateUnchanged'
   readonly stateBefore: PrivateTableState
   readonly stateAfter: PrivateTableState
@@ -54,7 +74,7 @@ export interface CommandMutationConsistencyInput {
 }
 
 function equalValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return isDeepStrictEqual(left, right)
 }
 
 function stateContentEquals(
@@ -85,6 +105,7 @@ function haveSameSeatNumberSet(
 
 function rebuyMirrors(input: CommandMutationConsistencyInput): boolean {
   const event = input.events[0]
+  const relationPlan = parseRebuyRelationPlan(input.relationPlan)
   if (
     input.stateEffectKind !== 'stateChanged' ||
     input.lifecycleAfter !== 'active' ||
@@ -93,6 +114,15 @@ function rebuyMirrors(input: CommandMutationConsistencyInput): boolean {
     input.stateAfter.poker.pokerPhase !== 'betweenHands' ||
     event?.type !== 'userRebuy' ||
     input.command.type !== 'rebuy' ||
+    relationPlan === null ||
+    input.sessionBefore.lifecycleStatus !== 'active' ||
+    input.sessionBefore.currentHandId !== null ||
+    input.sessionBefore.agentRunState !== 'idle' ||
+    input.sessionBefore.activePlayerRunId !== null ||
+    input.sessionBefore.activeDecisionRequestId !== null ||
+    input.playerCoordinationAfter.agentRunState !== 'idle' ||
+    input.playerCoordinationAfter.activePlayerRunId !== null ||
+    input.playerCoordinationAfter.activeDecisionRequestId !== null ||
     event.amount !== input.command.payload.amount ||
     input.stateBefore.completedHandCount !==
       input.stateAfter.completedHandCount ||
@@ -138,6 +168,10 @@ function rebuyMirrors(input: CommandMutationConsistencyInput): boolean {
     if (afterSeat === undefined) return false
     if (beforeSeat.seatNumber === 0) {
       return (
+        (beforeSeat.stack === 0
+          ? event.amount === 2_000
+          : beforeSeat.stack < 2_000 &&
+            event.amount <= 2_000 - beforeSeat.stack) &&
         beforeSeat.stack === event.stackBefore &&
         afterSeat.stack === event.stackAfter &&
         afterSeat.status === 'active' &&
@@ -155,7 +189,137 @@ function rebuyMirrors(input: CommandMutationConsistencyInput): boolean {
   })
 }
 
+function startNextHandMirrors(input: CommandMutationConsistencyInput): boolean {
+  const plan = parseStartNextHandRelationPlan(input.relationPlan)
+  const handStarted = input.events.at(-1)
+  const beforeHand = input.stateBefore.poker.hand
+  const afterHand = input.stateAfter.poker.hand
+  if (
+    input.command.type !== 'startNextHand' ||
+    plan === null ||
+    input.stateEffectKind !== 'stateChanged' ||
+    input.lifecycleAfter !== 'active' ||
+    input.stateBefore.poker.pokerPhase !== 'betweenHands' ||
+    beforeHand !== null ||
+    input.stateAfter.poker.pokerPhase !== 'inHand' ||
+    afterHand === null ||
+    input.stateBefore.completedHandCount < 1 ||
+    input.stateBefore.completedHandCount !==
+      input.stateAfter.completedHandCount ||
+    !equalValue(
+      input.stateBefore.lastCompletedHandSummary,
+      input.stateAfter.lastCompletedHandSummary,
+    ) ||
+    input.sessionBefore.currentHandId !== null ||
+    input.sessionBefore.agentRunState !== 'idle' ||
+    input.sessionBefore.activePlayerRunId !== null ||
+    input.sessionBefore.activeDecisionRequestId !== null ||
+    input.playerCoordinationAfter.agentRunState !== 'idle' ||
+    input.playerCoordinationAfter.activePlayerRunId !== null ||
+    input.playerCoordinationAfter.activeDecisionRequestId !== null ||
+    handStarted?.type !== 'handStarted' ||
+    plan.sessionId.toLowerCase() !== input.command.sessionId.toLowerCase() ||
+    plan.handId.toLowerCase() !==
+      handStarted.startedHand.handId.toLowerCase() ||
+    plan.handId.toLowerCase() !== afterHand.handId.toLowerCase() ||
+    input.currentHandIdAfter?.toLowerCase() !== plan.handId.toLowerCase() ||
+    !equalValue(plan.checkpoint.stateBeforeStartCommand, input.stateBefore) ||
+    !equalValue(plan.checkpoint.startedHand, handStarted.startedHand) ||
+    handStarted.startedHand.handNumber !==
+      input.stateBefore.completedHandCount + 1 ||
+    handStarted.startedHand.buttonSeatNumber !==
+      input.stateAfter.poker.buttonSeatNumber ||
+    !haveSameSeatNumberSet(
+      input.stateBefore.poker.seats,
+      input.stateAfter.poker.seats,
+      input.stateBefore.seatAccounting,
+      input.stateAfter.seatAccounting,
+      handStarted.startedHand.startingStacks,
+    )
+  ) {
+    return false
+  }
+
+  const afterSeatByNumber = new Map(
+    input.stateAfter.poker.seats.map((seat) => [seat.seatNumber, seat]),
+  )
+  const beforeAccountingBySeat = new Map(
+    input.stateBefore.seatAccounting.map((seat) => [
+      seat.seatNumber,
+      seat.cumulativeBuyIn,
+    ]),
+  )
+  const afterAccountingBySeat = new Map(
+    input.stateAfter.seatAccounting.map((seat) => [
+      seat.seatNumber,
+      seat.cumulativeBuyIn,
+    ]),
+  )
+  const startingStackBySeat = new Map(
+    handStarted.startedHand.startingStacks.map((seat) => [
+      seat.seatNumber,
+      seat.stack,
+    ]),
+  )
+  const expectedAutoRebuySeats = input.stateBefore.poker.seats
+    .filter((seat) => !seat.isUser && seat.stack === 0)
+    .map((seat) => seat.seatNumber)
+    .sort((left, right) => left - right)
+  const autoRebuyEvents = input.events.slice(0, -1)
+  if (
+    autoRebuyEvents.length !== expectedAutoRebuySeats.length ||
+    autoRebuyEvents.some(
+      (event, index) =>
+        event.type !== 'aiAutoRebuy' ||
+        event.seatNumber !== expectedAutoRebuySeats[index],
+    )
+  ) {
+    return false
+  }
+
+  return input.stateBefore.poker.seats.every((beforeSeat) => {
+    const afterSeat = afterSeatByNumber.get(beforeSeat.seatNumber)
+    const beforeAccounting = beforeAccountingBySeat.get(beforeSeat.seatNumber)
+    const afterAccounting = afterAccountingBySeat.get(beforeSeat.seatNumber)
+    const startingStack = startingStackBySeat.get(beforeSeat.seatNumber)
+    if (
+      afterSeat === undefined ||
+      beforeAccounting === undefined ||
+      afterAccounting === undefined ||
+      startingStack === undefined ||
+      afterSeat.playerId !== beforeSeat.playerId ||
+      afterSeat.isUser !== beforeSeat.isUser ||
+      afterSeat.stack + afterSeat.totalContribution !== startingStack
+    ) {
+      return false
+    }
+    const autoRebuyEvent = autoRebuyEvents.find(
+      (event) =>
+        event.type === 'aiAutoRebuy' &&
+        event.seatNumber === beforeSeat.seatNumber,
+    )
+    if (autoRebuyEvent?.type === 'aiAutoRebuy') {
+      return (
+        beforeSeat.stack === 0 &&
+        !beforeSeat.isUser &&
+        startingStack === 2_000 &&
+        autoRebuyEvent.amount === 2_000 &&
+        autoRebuyEvent.stackBefore === 0 &&
+        autoRebuyEvent.stackAfter === 2_000 &&
+        autoRebuyEvent.cumulativeBuyInBefore === beforeAccounting &&
+        autoRebuyEvent.cumulativeBuyInAfter === afterAccounting
+      )
+    }
+    return (
+      beforeSeat.stack > 0 &&
+      startingStack === beforeSeat.stack &&
+      afterAccounting === beforeAccounting
+    )
+  })
+}
+
 function endSessionMirrors(input: CommandMutationConsistencyInput): boolean {
+  const relationPlan = parseEndSessionRelationPlan(input.relationPlan)
   if (input.lifecycleAfter !== 'ended' || input.currentHandIdAfter !== null) {
     return false
   }
@@ -164,12 +328,84 @@ function endSessionMirrors(input: CommandMutationConsistencyInput): boolean {
     return (
       event?.type === 'sessionEnded' &&
       event.reason === 'userRequested' &&
+      relationPlan?.kind === 'normalEnd' &&
       input.stateEffectKind === 'stateUnchanged' &&
       input.stateBefore.poker.pokerPhase === 'betweenHands' &&
+      input.sessionBefore.currentHandId === null &&
+      input.sessionBefore.agentRunState === 'idle' &&
+      input.sessionBefore.activePlayerRunId === null &&
+      input.sessionBefore.activeDecisionRequestId === null &&
       stateContentEquals(input.stateBefore, input.stateAfter)
     )
   }
-  return false
+  const aborted = input.events[0]
+  const ended = input.events[1]
+  const beforeHand = input.stateBefore.poker.hand
+  if (
+    relationPlan?.kind !== 'abortHand' ||
+    aborted?.type !== 'handAborted' ||
+    ended?.type !== 'sessionEnded' ||
+    ended.reason !== 'handAborted' ||
+    input.stateEffectKind !== 'stateChanged' ||
+    input.stateBefore.poker.pokerPhase !== 'inHand' ||
+    beforeHand === null ||
+    input.stateAfter.poker.pokerPhase !== 'betweenHands' ||
+    input.stateAfter.poker.hand !== null ||
+    input.sessionBefore.agentRunState !== 'paused' ||
+    input.sessionBefore.activePlayerRunId !== null ||
+    input.sessionBefore.activeDecisionRequestId !== null ||
+    input.sessionBefore.currentHandId?.toLowerCase() !==
+      beforeHand.handId.toLowerCase() ||
+    relationPlan.sessionId.toLowerCase() !==
+      input.command.sessionId.toLowerCase() ||
+    relationPlan.handId.toLowerCase() !== beforeHand.handId.toLowerCase() ||
+    aborted.handId.toLowerCase() !== beforeHand.handId.toLowerCase() ||
+    relationPlan.checkpoint.startedHand.handId.toLowerCase() !==
+      beforeHand.handId.toLowerCase() ||
+    !stateContentEquals(
+      relationPlan.checkpoint.stateBeforeStartCommand,
+      input.stateAfter,
+    ) ||
+    input.stateBefore.completedHandCount !==
+      input.stateAfter.completedHandCount ||
+    !equalValue(
+      input.stateBefore.lastCompletedHandSummary,
+      input.stateAfter.lastCompletedHandSummary,
+    )
+  ) {
+    return false
+  }
+  const beforeAbort = {
+    buttonSeatNumber: input.stateBefore.poker.buttonSeatNumber,
+    completedHandCount: input.stateBefore.completedHandCount,
+    pot: beforeHand.pot,
+    seats: [...input.stateBefore.poker.seats]
+      .sort((left, right) => left.seatNumber - right.seatNumber)
+      .map((seat) => ({
+        seatNumber: seat.seatNumber,
+        stack: seat.stack,
+        cumulativeBuyIn: input.stateBefore.seatAccounting.find(
+          (accounting) => accounting.seatNumber === seat.seatNumber,
+        )?.cumulativeBuyIn,
+      })),
+  }
+  const restored = {
+    buttonSeatNumber: input.stateAfter.poker.buttonSeatNumber,
+    completedHandCount: input.stateAfter.completedHandCount,
+    seats: [...input.stateAfter.poker.seats]
+      .sort((left, right) => left.seatNumber - right.seatNumber)
+      .map((seat) => ({
+        seatNumber: seat.seatNumber,
+        stack: seat.stack,
+        cumulativeBuyIn: input.stateAfter.seatAccounting.find(
+          (accounting) => accounting.seatNumber === seat.seatNumber,
+        )?.cumulativeBuyIn,
+      })),
+  }
+  return (
+    equalValue(aborted.beforeAbort, beforeAbort) &&
+    equalValue(aborted.restored, restored)
+  )
 }
 
 function actionSnapshotMirrors(
@@ -377,12 +613,21 @@ function playerActionMirrors(input: CommandMutationConsistencyInput): boolean {
 export function isCommandMutationConsistent(
   input: CommandMutationConsistencyInput,
 ): boolean {
+  const stateVersionDelta = input.stateEffectKind === 'stateChanged' ? 1 : 0
+  if (
+    input.sessionBefore.lifecycleStatus !== 'active' ||
+    input.stateAfter.stateVersion !==
+      input.stateBefore.stateVersion + stateVersionDelta ||
+    !Number.isSafeInteger(input.stateAfter.stateVersion)
+  ) {
+    return false
+  }
   if (!isEventSequenceAllowedForCommand(input.command.type, input.events)) {
     return false
   }
   switch (input.command.type) {
     case 'startNextHand':
-      return false
+      return startNextHandMirrors(input)
     case 'rebuy':
       return rebuyMirrors(input)
     case 'endSession':

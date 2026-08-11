@@ -377,7 +377,7 @@ describe('session command execution', () => {
           privateEventDrafts: [
             { type: 'sessionEnded', reason: 'userRequested' },
           ],
-          relationPlan: Object.freeze({ kind: 'endSession' }),
+          relationPlan: Object.freeze({ kind: 'normalEnd' }),
         },
       },
     })
@@ -621,7 +621,7 @@ describe('session command execution', () => {
               cumulativeBuyInAfter: 1_500,
             },
           ],
-          relationPlan: Object.freeze({ kind: 'testRebuy' }),
+          relationPlan: Object.freeze({ kind: 'rebuy' }),
         },
       },
     })
@@ -689,7 +689,7 @@ describe('session command execution', () => {
           activeDecisionRequestId: null,
         },
         privateEventDrafts: [{ type: 'sessionEnded', reason: 'userRequested' }],
-        relationPlan: Object.freeze({ kind: 'endSession' }),
+        relationPlan: Object.freeze({ kind: 'normalEnd' }),
       },
     }
     const fixture = await createExecutionFixture({
@@ -824,7 +824,7 @@ describe('session command execution', () => {
           privateEventDrafts: [
             { type: 'sessionEnded', reason: 'userRequested' },
           ],
-          relationPlan: Object.freeze({ kind: 'endSession' }),
+          relationPlan: Object.freeze({ kind: 'normalEnd' }),
         },
       },
     })
@@ -953,7 +953,7 @@ describe('session command execution', () => {
               cumulativeBuyInAfter: 1_500,
             },
           ],
-          relationPlan: Object.freeze({ kind: 'testRebuy' }),
+          relationPlan: Object.freeze({ kind: 'rebuy' }),
         },
       },
     })

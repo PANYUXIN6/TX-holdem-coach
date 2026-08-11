@@ -86,6 +86,86 @@ describe('command rejection contract', () => {
         { command: playerCommand, state: aiTurn },
       ),
     ).toBeNull()
+
+    const betweenHands = state(createTestPokerState())
+    expect(
+      parseStableCommandRejection(
+        { kind: 'rebuyAmountNotAllowed' },
+        {
+          command: {
+            sessionId,
+            commandId,
+            expectedStateVersion: 7,
+            type: 'rebuy',
+            payload: { amount: 1 },
+          },
+          state: betweenHands,
+        },
+      ),
+    ).toEqual({ kind: 'rebuyAmountNotAllowed' })
+    const partiallyFundedUserPoker = createTestPokerState({
+      seats: createTestPokerState().seats.map((seat) =>
+        seat.seatNumber === 0
+          ? { ...seat, stack: 1_000 }
+          : seat.seatNumber === 1
+            ? { ...seat, stack: 3_000 }
+            : seat,
+      ),
+    })
+    expect(
+      parseStableCommandRejection(
+        { kind: 'rebuyAmountNotAllowed' },
+        {
+          command: {
+            sessionId,
+            commandId,
+            expectedStateVersion: 7,
+            type: 'rebuy',
+            payload: { amount: 500 },
+          },
+          state: state(partiallyFundedUserPoker),
+        },
+      ),
+    ).toBeNull()
+    expect(
+      parseStableCommandRejection(
+        { kind: 'rebuyAmountNotAllowed' },
+        {
+          command: {
+            sessionId,
+            commandId,
+            expectedStateVersion: 7,
+            type: 'rebuy',
+            payload: { amount: 1_001 },
+          },
+          state: state(partiallyFundedUserPoker),
+        },
+      ),
+    ).toEqual({ kind: 'rebuyAmountNotAllowed' })
+    const zeroUserPoker = createTestPokerState({
+      seats: createTestPokerState().seats.map((seat) =>
+        seat.seatNumber === 0
+          ? { ...seat, stack: 0, status: 'out' as const }
+          : seat.seatNumber === 1
+            ? { ...seat, stack: 4_000 }
+            : seat,
+      ),
+    })
+    expect(
+      parseStableCommandRejection(
+        { kind: 'userRebuyRequired' },
+        {
+          command: {
+            sessionId,
+            commandId,
+            expectedStateVersion: 7,
+            type: 'startNextHand',
+            payload: {},
+          },
+          state: state(zeroUserPoker),
+        },
+      ),
+    ).toEqual({ kind: 'userRebuyRequired' })
   })
 
   test('maps every stable rejection to its fixed response', () => {
@@ -109,6 +189,16 @@ describe('command rejection contract', () => {
         { kind: 'pokerActionTargetOutOfRange' },
         'POKER_ACTION_TARGET_OUT_OF_RANGE',
         '下注或加注金额超出当前合法范围。',
+      ],
+      [
+        { kind: 'rebuyAmountNotAllowed' },
+        'REBUY_AMOUNT_NOT_ALLOWED',
+        '当前补码金额不符合桌上限或归零补码规则。',
+      ],
+      [
+        { kind: 'userRebuyRequired' },
+        'USER_REBUY_REQUIRED',
+        '筹码为零，请先补入 2,000 或结束本场。',
       ],
     ]
     for (const [rejection, code, message] of cases) {

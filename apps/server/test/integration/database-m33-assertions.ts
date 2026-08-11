@@ -68,7 +68,7 @@ function createDeferred(): {
   }
 }
 
-async function createSessionFixture(
+export async function createSessionFixture(
   sql: Sql,
   randomValue: number,
 ): Promise<SessionCreationIdentityGraph> {
@@ -95,7 +95,10 @@ async function createSessionFixture(
   return identity
 }
 
-async function readPrivateState(sql: Sql | TransactionSql, sessionId: string) {
+export async function readPrivateState(
+  sql: Sql | TransactionSql,
+  sessionId: string,
+) {
   const rows = await sql<
     { readonly payloadVersion: number; readonly payload: unknown }[]
   >`
@@ -131,7 +134,7 @@ function choosePreparationAction(
   throw new Error('M3.3 固定牌堆准备路径缺少被动合法行动。')
 }
 
-async function prepareTerminalUserTurn(
+export async function prepareTerminalUserTurn(
   sql: Sql,
   owner: Awaited<ReturnType<typeof resolveOwnerScope>>,
   identity: SessionCreationIdentityGraph,
@@ -278,7 +281,7 @@ async function prepareTerminalUserTurn(
   })
 }
 
-function createM33Executor(input: {
+export function createM33Executor(input: {
   readonly sql: Sql
   readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
   readonly mutationRepository?: SessionMutationRepository

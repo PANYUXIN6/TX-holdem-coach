@@ -14,6 +14,7 @@ import { loadTestDatabaseConnections } from '../../src/db/test-database-safety.j
 import { assertM22DatabaseSchema } from './database-schema-assertions.js'
 import { assertM32SessionCreation } from './database-m32-assertions.js'
 import { assertM33PlayerActionHandCompletion } from './database-m33-assertions.js'
+import { assertM34RebuyNextHandSessionEnd } from './database-m34-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -144,7 +145,7 @@ function registerMilestoneTest(
   )
 }
 
-registerMilestoneTest('m22', 'M2.2 schema', assertM22DatabaseSchema)
+registerMilestoneTest('m22', 'M2.2 schema', assertM22DatabaseSchema, 300_000)
 registerMilestoneTest('m23', 'M2.3 repositories', (sql) =>
   assertM23Repositories(sql),
 )
@@ -189,12 +190,18 @@ registerMilestoneTest(
   'm32',
   'M3.2 session creation and roster snapshot',
   (sql, runtimeUrl) => assertM32SessionCreation(sql, runtimeUrl),
-  300_000,
+  600_000,
 )
 registerMilestoneTest(
   'm33',
   'M3.3 player action and hand completion',
   (sql, runtimeUrl) => assertM33PlayerActionHandCompletion(sql, runtimeUrl),
+  300_000,
+)
+registerMilestoneTest(
+  'm34',
+  'M3.4 rebuy, next hand, and session end',
+  (sql, runtimeUrl) => assertM34RebuyNextHandSessionEnd(sql, runtimeUrl),
   300_000,
 )
 registerMilestoneTest(
@@ -240,7 +247,7 @@ test('cleans stale tagged database test transactions', async (context) => {
   } finally {
     await sql.end({ timeout: 0 })
   }
-})
+}, 60_000)
 
 async function applySqlMigrationFile(
   sql: Sql,

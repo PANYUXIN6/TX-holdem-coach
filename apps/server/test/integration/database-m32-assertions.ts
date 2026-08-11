@@ -163,7 +163,7 @@ export function projectPublicSnapshot(
             actionTimeline: [],
           },
     lastCompletedHandSummary:
-      state.lastCompletedHandSummary === null
+      hand !== null || state.lastCompletedHandSummary === null
         ? null
         : projectCompletedHandSummary(state.lastCompletedHandSummary),
   }

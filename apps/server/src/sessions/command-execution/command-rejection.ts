@@ -6,6 +6,7 @@ import {
 import { z } from 'zod'
 import type { LedgerCommand } from '../../persistence/command-ledger-repository.js'
 import type { PrivateTableState } from '../authoritative-state/private-table-state.js'
+import { isRebuyAmountAllowed } from './rebuy-handler.js'
 
 export interface CommandNotAllowedInPhaseRejection {
   readonly kind: 'commandNotAllowedInPhase'
@@ -17,6 +18,8 @@ export type StableCommandRejection =
   | { readonly kind: 'playerNotCurrentActor' }
   | { readonly kind: 'pokerActionNotLegal' }
   | { readonly kind: 'pokerActionTargetOutOfRange' }
+  | { readonly kind: 'rebuyAmountNotAllowed' }
+  | { readonly kind: 'userRebuyRequired' }
 
 const StableCommandRejectionSchema = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -26,6 +29,8 @@ const StableCommandRejectionSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('playerNotCurrentActor') }),
   z.strictObject({ kind: z.literal('pokerActionNotLegal') }),
   z.strictObject({ kind: z.literal('pokerActionTargetOutOfRange') }),
+  z.strictObject({ kind: z.literal('rebuyAmountNotAllowed') }),
+  z.strictObject({ kind: z.literal('userRebuyRequired') }),
 ])
 
 export function parseStableCommandRejection(
@@ -40,6 +45,27 @@ export function parseStableCommandRejection(
   const rejection = parsed.data
   if (rejection.kind === 'commandNotAllowedInPhase') {
     return rejection.phase === context.state.poker.pokerPhase
+      ? Object.freeze(rejection)
+      : null
+  }
+  if (rejection.kind === 'rebuyAmountNotAllowed') {
+    const userSeat = context.state.poker.seats.find(
+      (seat) => seat.seatNumber === 0 && seat.isUser,
+    )
+    return context.command.type === 'rebuy' &&
+      context.state.poker.pokerPhase === 'betweenHands' &&
+      userSeat !== undefined &&
+      !isRebuyAmountAllowed(userSeat.stack, context.command.payload.amount)
+      ? Object.freeze(rejection)
+      : null
+  }
+  if (rejection.kind === 'userRebuyRequired') {
+    const userSeat = context.state.poker.seats.find(
+      (seat) => seat.seatNumber === 0 && seat.isUser,
+    )
+    return context.command.type === 'startNextHand' &&
+      context.state.poker.pokerPhase === 'betweenHands' &&
+      userSeat?.stack === 0
       ? Object.freeze(rejection)
       : null
   }
@@ -86,6 +112,16 @@ export function mapCommandRejectionToErrorResponse(
         return {
           code: 'POKER_ACTION_TARGET_OUT_OF_RANGE',
           message: '下注或加注金额超出当前合法范围。',
+        }
+      case 'rebuyAmountNotAllowed':
+        return {
+          code: 'REBUY_AMOUNT_NOT_ALLOWED',
+          message: '当前补码金额不符合桌上限或归零补码规则。',
+        }
+      case 'userRebuyRequired':
+        return {
+          code: 'USER_REBUY_REQUIRED',
+          message: '筹码为零，请先补入 2,000 或结束本场。',
         }
     }
   })()

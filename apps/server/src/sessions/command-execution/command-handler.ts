@@ -84,6 +84,7 @@ export interface PrepareCommandContext<
 
 export interface ApplyRelationsContext<WritePort = unknown> {
   readonly writes: WritePort
+  readonly commandAt: string
 }
 
 declare const preparedMutationCapabilityBrand: unique symbol

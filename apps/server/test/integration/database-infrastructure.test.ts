@@ -13,6 +13,7 @@ import { loadDatabaseTestMode } from '../../src/db/database-test-mode.js'
 import { loadTestDatabaseConnections } from '../../src/db/test-database-safety.js'
 import { assertM22DatabaseSchema } from './database-schema-assertions.js'
 import { assertM32SessionCreation } from './database-m32-assertions.js'
+import { assertM33PlayerActionHandCompletion } from './database-m33-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -188,6 +189,12 @@ registerMilestoneTest(
   'm32',
   'M3.2 session creation and roster snapshot',
   (sql, runtimeUrl) => assertM32SessionCreation(sql, runtimeUrl),
+  300_000,
+)
+registerMilestoneTest(
+  'm33',
+  'M3.3 player action and hand completion',
+  (sql, runtimeUrl) => assertM33PlayerActionHandCompletion(sql, runtimeUrl),
   300_000,
 )
 registerMilestoneTest(

@@ -9,11 +9,17 @@ import {
   createTestBettingPokerState,
   createTestPokerState,
 } from '../poker/create-test-poker-state.js'
+import { createPokerTableState } from '../../src/poker/state.js'
 
 const handId = '10000000-0000-4000-8000-000000000001'
 const sessionId = '20000000-0000-4000-8000-000000000001'
 const commandId = '30000000-0000-4000-8000-000000000001'
 const randomSource = Object.freeze({ nextInt: () => 0 })
+const idlePlayerCoordination = Object.freeze({
+  agentRunState: 'idle' as const,
+  activePlayerRunId: null,
+  activeDecisionRequestId: null,
+})
 
 function privateState(
   stateVersion: number,
@@ -36,7 +42,7 @@ function privateState(
 }
 
 describe('command event policy', () => {
-  test('rejects playerAction until the M3.3 verifier is installed', () => {
+  test('accepts a mirrored normal playerAction and rejects plan tampering', () => {
     const beforePoker = createTestBettingPokerState({
       hand: { currentActorSeatNumber: 0 },
     })
@@ -64,11 +70,170 @@ describe('command event policy', () => {
       stateAfter: after,
       lifecycleAfter: 'active' as const,
       currentHandIdAfter: handId,
+      playerCoordinationAfter: idlePlayerCoordination,
       events: applied.eventDrafts,
-      relationPlan: Object.freeze({ handId }),
+      relationPlan: Object.freeze({ kind: 'continueHand', handId }),
     }
 
-    expect(isCommandMutationConsistent(input)).toBe(false)
+    expect(isCommandMutationConsistent(input)).toBe(true)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        playerCoordinationAfter: {
+          ...idlePlayerCoordination,
+          agentRunState: 'paused',
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        relationPlan: Object.freeze({
+          kind: 'continueHand',
+          handId: '10000000-0000-4000-8000-000000000002',
+        }),
+      }),
+    ).toBe(false)
+  })
+
+  test('rejects a playerAction whose event disguises an AI seat action as seat zero', () => {
+    const beforePoker = createTestBettingPokerState({
+      hand: { currentActorSeatNumber: 3 },
+    })
+    const accounting = beforePoker.seats.map((seat) => ({
+      seatNumber: seat.seatNumber,
+      cumulativeBuyIn: 2_000,
+    }))
+    const before = privateState(7, beforePoker, accounting)
+    const action = { type: 'fold' as const }
+    const applied = applyPokerAction(beforePoker, {
+      actorSeatNumber: 3,
+      action,
+    })
+    const actionEvent = applied.eventDrafts[0]
+    if (actionEvent?.type !== 'actionCommitted') {
+      throw new Error('Expected action-committed event.')
+    }
+
+    expect(
+      isCommandMutationConsistent({
+        command: {
+          sessionId,
+          commandId,
+          expectedStateVersion: 7,
+          type: 'playerAction',
+          payload: { action },
+        },
+        stateEffectKind: 'stateChanged',
+        stateBefore: before,
+        stateAfter: privateState(8, applied.state, accounting),
+        lifecycleAfter: 'active',
+        currentHandIdAfter: handId,
+        playerCoordinationAfter: idlePlayerCoordination,
+        events: [
+          {
+            ...actionEvent,
+            actorSeatNumber: 0,
+            command: { actorSeatNumber: 0, action },
+          },
+        ],
+        relationPlan: Object.freeze({ kind: 'continueHand', handId }),
+      }),
+    ).toBe(false)
+  })
+
+  test('accepts a mirrored terminal playerAction and rejects summary tampering', () => {
+    const started = startPokerHand(createTestPokerState(), {
+      handId,
+      completedHandCountBeforeStart: 0,
+      randomSource,
+    }).state
+    const beforePoker = createPokerTableState({
+      ...started,
+      seats: started.seats.map((seat) => ({
+        ...seat,
+        status:
+          seat.seatNumber === 0 || seat.seatNumber === 2
+            ? ('active' as const)
+            : ('folded' as const),
+      })),
+      hand: { ...started.hand!, currentActorSeatNumber: 0 },
+    })
+    const accounting = beforePoker.seats.map((seat) => ({
+      seatNumber: seat.seatNumber,
+      cumulativeBuyIn: 2_000,
+    }))
+    const before = privateState(7, beforePoker, accounting)
+    const action = { type: 'fold' as const }
+    const applied = applyPokerAction(beforePoker, {
+      actorSeatNumber: 0,
+      action,
+    })
+    const completedHand = applied.completedHand
+    if (completedHand === null) throw new Error('Expected completed hand.')
+    const completionEvent = applied.eventDrafts.at(-1)
+    if (completionEvent?.type !== 'handCompleted') {
+      throw new Error('Expected hand-completed event.')
+    }
+    const actionEvent = applied.eventDrafts[0]
+    if (actionEvent?.type !== 'actionCommitted') {
+      throw new Error('Expected action-committed event.')
+    }
+    const after = createPrivateTableState({
+      stateVersion: 8,
+      poker: applied.state,
+      completedHandCount: 1,
+      seatAccounting: accounting,
+      lastCompletedHandSummary: completedHand.summary,
+    })
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'playerAction' as const,
+        payload: { action },
+      },
+      stateEffectKind: 'stateChanged' as const,
+      stateBefore: before,
+      stateAfter: after,
+      lifecycleAfter: 'active' as const,
+      currentHandIdAfter: null,
+      playerCoordinationAfter: idlePlayerCoordination,
+      events: applied.eventDrafts,
+      relationPlan: Object.freeze({
+        kind: 'completeHand' as const,
+        sessionId,
+        handId,
+        result: completedHand,
+      }),
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(true)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        events: [
+          ...applied.eventDrafts.slice(0, -1),
+          {
+            ...completionEvent,
+            handId: '10000000-0000-4000-8000-000000000002',
+          },
+        ],
+      }),
+    ).toBe(false)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        events: [
+          {
+            ...actionEvent,
+            after: { ...actionEvent.after, pot: actionEvent.after.pot + 1 },
+          },
+          ...applied.eventDrafts.slice(1),
+        ],
+      }),
+    ).toBe(false)
   })
 
   test('rejects aiAction until the M4.7 verifier is installed', () => {
@@ -102,6 +267,7 @@ describe('command event policy', () => {
       stateAfter: privateState(8, applied.state, accounting),
       lifecycleAfter: 'active' as const,
       currentHandIdAfter: handId,
+      playerCoordinationAfter: idlePlayerCoordination,
       events: applied.eventDrafts,
       relationPlan: Object.freeze({ handId }),
     }
@@ -172,6 +338,7 @@ describe('command event policy', () => {
       stateAfter: after,
       lifecycleAfter: 'active' as const,
       currentHandIdAfter: handId,
+      playerCoordinationAfter: idlePlayerCoordination,
       events,
       relationPlan: Object.freeze({ handId }),
     }
@@ -223,6 +390,7 @@ describe('command event policy', () => {
       stateAfter: after,
       lifecycleAfter: 'active' as const,
       currentHandIdAfter: null,
+      playerCoordinationAfter: idlePlayerCoordination,
       events: [
         {
           type: 'userRebuy' as const,
@@ -301,6 +469,7 @@ describe('command event policy', () => {
       stateAfter: state,
       lifecycleAfter: 'ended' as const,
       currentHandIdAfter: null,
+      playerCoordinationAfter: idlePlayerCoordination,
       events: [
         { type: 'sessionEnded' as const, reason: 'userRequested' as const },
       ],
@@ -369,6 +538,7 @@ describe('command event policy', () => {
       stateAfter: restored,
       lifecycleAfter: 'ended' as const,
       currentHandIdAfter: null,
+      playerCoordinationAfter: idlePlayerCoordination,
       events: [
         event,
         { type: 'sessionEnded' as const, reason: 'handAborted' as const },

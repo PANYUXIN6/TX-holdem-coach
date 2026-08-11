@@ -42,7 +42,10 @@ import {
   type SessionCommandHandlerMap,
 } from './command-handler-map.js'
 import { createPerSessionScheduler } from './per-session-scheduler.js'
-import { parseStableCommandRejection } from './command-rejection.js'
+import {
+  mapCommandRejectionToErrorResponse,
+  parseStableCommandRejection,
+} from './command-rejection.js'
 import type {
   SnapshotProjectionInput,
   SnapshotProjectorBinding,
@@ -356,12 +359,11 @@ export function createSessionCommandExecutor(input: {
               readLifetime.active = false
             }
             if (preparedResult.kind === 'rejected') {
-              if (
-                parseStableCommandRejection(
-                  preparedResult.rejection,
-                  recovery.state.poker.pokerPhase,
-                ) === null
-              ) {
+              const rejection = parseStableCommandRejection(
+                preparedResult.rejection,
+                { command: prepared.command, state: recovery.state },
+              )
+              if (rejection === null) {
                 throw new SessionCommandInvariantError()
               }
               const latestSnapshot = await projectLatestSnapshot(
@@ -372,12 +374,10 @@ export function createSessionCommandExecutor(input: {
                 recovery.session,
                 lastCommittedEventSeq,
               )
-              const response = ErrorResponseSchema.parse({
-                protocolVersion: 1,
-                code: 'COMMAND_NOT_ALLOWED_IN_PHASE',
-                message: '当前牌局阶段不允许执行该命令。',
+              const response = mapCommandRejectionToErrorResponse(
+                rejection,
                 latestSnapshot,
-              })
+              )
               await ledger.failCommand(transaction, registration, response)
               return deepFreeze({
                 kind: 'rejected',
@@ -462,6 +462,7 @@ export function createSessionCommandExecutor(input: {
                 stateAfter: finalState,
                 lifecycleAfter: candidate.lifecycleAfter,
                 currentHandIdAfter: candidate.currentHandIdAfter,
+                playerCoordinationAfter: candidate.playerCoordinationAfter,
                 events: privateEventDrafts,
                 relationPlan: candidate.relationPlan,
               })
@@ -590,7 +591,10 @@ export function createSessionCommandExecutor(input: {
               capability,
             )
             try {
-              await binding.handler.applyRelations({ writes }, capability)
+              await binding.handler.applyRelations(
+                { writes, commandAt },
+                capability,
+              )
             } finally {
               writeLifetime.active = false
             }

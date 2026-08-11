@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   applyPokerAction,
   initializePokerTable,
+  PokerActionRejectedError,
   startPokerHand,
 } from '../../src/poker/poker-engine.js'
 import { createPokerTableState } from '../../src/poker/state.js'
@@ -132,6 +133,20 @@ describe('poker engine start boundary', () => {
 })
 
 describe('poker engine action boundary', () => {
+  function expectActionRejection(
+    action: () => unknown,
+    reason: PokerActionRejectedError['reason'],
+  ) {
+    try {
+      action()
+    } catch (error) {
+      expect(error).toBeInstanceOf(PokerActionRejectedError)
+      expect((error as PokerActionRejectedError).reason).toBe(reason)
+      return
+    }
+    throw new Error('Expected poker action rejection.')
+  }
+
   function startedTable() {
     return startPokerHand(initializePokerTable(seats, random(0)), {
       handId: '10000000-0000-4000-8000-000000000001',
@@ -273,18 +288,38 @@ describe('poker engine action boundary', () => {
     const inHand = startedTable()
     const snapshot = structuredClone(inHand)
 
-    expect(() =>
-      applyPokerAction(betweenHands, {
-        actorSeatNumber: 0,
-        action: { type: 'fold' },
-      }),
-    ).toThrow(RangeError)
-    expect(() =>
-      applyPokerAction(inHand, {
-        actorSeatNumber: 4,
-        action: { type: 'fold' },
-      }),
-    ).toThrow(RangeError)
+    expectActionRejection(
+      () =>
+        applyPokerAction(betweenHands, {
+          actorSeatNumber: 0,
+          action: { type: 'fold' },
+        }),
+      'notInActionPhase',
+    )
+    expectActionRejection(
+      () =>
+        applyPokerAction(inHand, {
+          actorSeatNumber: 4,
+          action: { type: 'fold' },
+        }),
+      'actorMismatch',
+    )
+    expectActionRejection(
+      () =>
+        applyPokerAction(inHand, {
+          actorSeatNumber: 3,
+          action: { type: 'check' },
+        }),
+      'actionNotLegal',
+    )
+    expectActionRejection(
+      () =>
+        applyPokerAction(inHand, {
+          actorSeatNumber: 3,
+          action: { type: 'raise', targetStreetCommitment: 39 },
+        }),
+      'targetOutOfRange',
+    )
     expect(inHand).toEqual(snapshot)
   })
 })

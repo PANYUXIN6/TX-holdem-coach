@@ -6,16 +6,16 @@
 
 开发数据库里程碑时按以下顺序执行，禁止用反复重跑全套代替定位：
 
-1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m32`
+1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m33`
 2. 若修改共享事务、锁或测试运行时，再分别运行受影响的相邻里程碑。
 3. 离线 `pnpm run verify`。
 4. 提交前只运行一次 `pnpm --filter @tx-holdem-coach/server run db:test:full`。
 
-可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`、`m28`、`m31`、`m32`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
+可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`、`m28`、`m31`、`m32`、`m33`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
 
 ## 进度与失败定位
 
-远程入口把迁移、M2.2–M2.8、M3.1、M3.2 和 M2.5→M2.6 隔离升级注册为独立 Vitest 测试。M3.2 通过真实创建服务、创建 Repository、Hand/mutation writer 与测试 projector 核对 6–9 人 current catalog、latest-ended 历史配置、首手最终行、两条 V2 事件、同 Owner 并发收敛和注入失败整体回滚；它不代表生产公开投影或 HTTP/SSE 路由已安装。每个阶段即时输出：
+远程入口把迁移、M2.2–M2.8、M3.1–M3.3 和 M2.5→M2.6 隔离升级注册为独立 Vitest 测试。M3.2 通过真实创建服务核对创建、锁竞争和回滚；M3.3 从该首手进入生产 `playerAction` Handler，以 M1.9 真实行动序列准备固定牌堆终止状态，并核对普通/终止行动、非法动作/目标、错误行动者、未提交不可见、完整 Hand/快照/事件范围/账本响应镜像、幂等重放和 checkpoint 损坏整体回滚。它们不代表生产 HTTP/SSE 路由已安装。每个阶段即时输出：
 
 ```text
 [database-test] START M2.7 audit persistence
@@ -28,7 +28,7 @@
 
 - 所有测试连接必须通过 `database-test-runtime.ts` 创建，携带当前 Run ID 和 `application_name`。
 - 普通 SQL 的数据库侧 `statement_timeout` 为 90 秒；idle-in-transaction 上限为 60 秒。M3.1 已被 `pg_locks`/`pg_blocking_pids` 证明的受控竞争事务局部把两项上限都设为 240 秒，分别保护等待行锁的事务和停在测试屏障中的持锁事务；该值仍低于阶段 300 秒的 Vitest 总预算，为失败取消与夹具清理保留边界。
-- M2.6 恢复诊断矩阵、M2.7 审计矩阵、M3.1 竞争和 M3.2 创建阶段的 Vitest 总预算为 300 秒；这只覆盖阶段内多组顺序远程往返，不放宽单条普通 SQL 的 90 秒数据库侧上限。
+- M2.6 恢复诊断矩阵、M2.7 审计矩阵、M3.1 竞争、M3.2 创建和 M3.3 行动阶段的 Vitest 总预算为 300 秒；这只覆盖阶段内多组顺序远程往返，不放宽单条普通 SQL 的 90 秒数据库侧上限。
 - 每个正常阶段开始前查询 `pg_stat_activity`。发现其他带测试标签且仍有事务的连接时立即失败，输出 PID、状态和事务年龄，不等待业务 SQL 超时。
 - 只有显式执行 `pnpm --filter @tx-holdem-coach/server run db:test:cleanup` 才会终止其他 Run ID 下仍持有事务的测试连接。该命令受既有测试项目安全门和 `application_name` 前缀双重限制；不得用于生产数据库。
 - `db:test:cleanup` 只负责遗留连接，不猜测并删除已提交业务行。M3.1 并发场景自身在失败时先释放屏障、关闭 worker 连接并收敛全部已启动 Promise，再由独立连接以 2 秒 `lock_timeout` 对精确 Session 做最多 30 秒的 `55P03` 有界重试；不得用 transaction-pooler backend PID 是否仍有事务作为回滚完成判据。二次清理失败不得覆盖原始验收错误，并只输出错误类型/稳定码，不输出数据库 URL 或错误正文。真实失败夹具会在 worker 已进入事务后注入主错误并回查 Session 已删除。

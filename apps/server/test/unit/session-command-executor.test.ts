@@ -700,13 +700,18 @@ describe('session command execution', () => {
     })
     let leakedReads: { readonly read: () => string } | undefined
     let leakedWrites: { readonly write: () => string } | undefined
+    let relationCommandAt: string | undefined
     fixture.binding.handler.prepare.mockImplementationOnce(async (context) => {
       leakedReads = (context as { readonly reads: typeof leakedReads }).reads
       return preparedResult
     })
     fixture.applyRelations.mockImplementationOnce(async (context) => {
-      leakedWrites = (context as { readonly writes: typeof leakedWrites })
-        .writes
+      const relationContext = context as {
+        readonly writes: typeof leakedWrites
+        readonly commandAt: string
+      }
+      leakedWrites = relationContext.writes
+      relationCommandAt = relationContext.commandAt
     })
 
     await expect(
@@ -739,6 +744,7 @@ describe('session command execution', () => {
         },
       ],
     })
+    expect(relationCommandAt).toBe('2026-08-05T10:00:00.000Z')
     expect(() => leakedReads?.read()).toThrow(
       'Transaction port is no longer active.',
     )

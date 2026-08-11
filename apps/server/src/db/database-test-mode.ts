@@ -1,5 +1,5 @@
 export type DatabaseTestMilestone =
-  'm22' | 'm23' | 'm24' | 'm25' | 'm26' | 'm27' | 'm28' | 'm31' | 'm32'
+  'm22' | 'm23' | 'm24' | 'm25' | 'm26' | 'm27' | 'm28' | 'm31' | 'm32' | 'm33'
 
 export interface DatabaseTestMode {
   readonly enabled: boolean
@@ -19,6 +19,7 @@ const DATABASE_TEST_MILESTONES = new Set<DatabaseTestMilestone>([
   'm28',
   'm31',
   'm32',
+  'm33',
 ])
 
 function isDatabaseTestMilestone(

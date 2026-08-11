@@ -41,6 +41,16 @@ export interface PokerEngineResult {
   readonly completedHand: CompletedHandResult | null
 }
 
+export type PokerActionRejectionReason =
+  'notInActionPhase' | 'actorMismatch' | 'actionNotLegal' | 'targetOutOfRange'
+
+export class PokerActionRejectedError extends Error {
+  public constructor(public readonly reason: PokerActionRejectionReason) {
+    super('扑克行动被拒绝。')
+    this.name = 'PokerActionRejectedError'
+  }
+}
+
 const STREET_ORDER = [
   'postingBlinds',
   'preflop',
@@ -50,6 +60,44 @@ const STREET_ORDER = [
   'showdown',
   'complete',
 ] as const
+
+const ACTION_STREETS = new Set(['preflop', 'flop', 'turn', 'river'])
+
+function assertPokerActionIsAccepted(
+  state: PokerTableState,
+  command: PokerCommand,
+): ReturnType<typeof getLegalActions> {
+  const hand = state.hand
+  if (
+    state.pokerPhase !== 'inHand' ||
+    hand === null ||
+    !ACTION_STREETS.has(hand.street) ||
+    hand.bettingRound === null ||
+    hand.currentActorSeatNumber === null
+  ) {
+    throw new PokerActionRejectedError('notInActionPhase')
+  }
+  if (command.actorSeatNumber !== hand.currentActorSeatNumber) {
+    throw new PokerActionRejectedError('actorMismatch')
+  }
+
+  const legalActions = getLegalActions(state)
+  const legalAction = legalActions.find(
+    (candidate) => candidate.type === command.action.type,
+  )
+  if (legalAction === undefined) {
+    throw new PokerActionRejectedError('actionNotLegal')
+  }
+  if (
+    (command.action.type === 'bet' || command.action.type === 'raise') &&
+    (legalAction.type !== command.action.type ||
+      command.action.targetStreetCommitment < legalAction.minTarget ||
+      command.action.targetStreetCommitment > legalAction.maxTarget)
+  ) {
+    throw new PokerActionRejectedError('targetOutOfRange')
+  }
+  return legalActions
+}
 
 function actionSnapshot(state: PokerTableState): ActionTableSnapshot {
   const hand = state.hand
@@ -292,7 +340,7 @@ export function applyPokerAction(
   command: PokerCommand,
 ): PokerEngineResult {
   const parsedCommand = PokerCommandSchema.parse(command)
-  const legalActionsBefore = getLegalActions(state)
+  const legalActionsBefore = assertPokerActionIsAccepted(state, parsedCommand)
   const before = actionSnapshot(state)
   const statistics = actionStatistics(state, parsedCommand, legalActionsBefore)
   const progressedState = progressPokerAction(state, parsedCommand)

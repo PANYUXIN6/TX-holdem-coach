@@ -10,6 +10,7 @@ export const DATABASE_TEST_MILESTONES = Object.freeze([
   'm32',
   'm33',
   'm34',
+  'm35',
 ])
 
 export function parseDatabaseTestArguments(arguments_) {
@@ -59,4 +60,14 @@ export function createDatabaseTestPlanEnvironment(plan, runId) {
     environment.DATABASE_TEST_SCOPE = 'cleanup'
   }
   return environment
+}
+
+export function createDatabaseVitestArguments() {
+  return [
+    'exec',
+    'vitest',
+    'run',
+    '--bail=1',
+    'test/integration/database-infrastructure.test.ts',
+  ]
 }

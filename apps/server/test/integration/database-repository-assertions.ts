@@ -7011,8 +7011,8 @@ async function assertM31AtomicCommitRollbackAndVisibility(
         type: 'rebuy',
         payload: { amount: 500 },
       })
-      await expect(rollbackResult).rejects.toThrow(
-        'injected transaction rollback after writes',
+      await expect(rollbackResult).rejects.toBeInstanceOf(
+        DatabaseOperationError,
       )
       expect(await readM31AtomicCounts(sql, rollbackSessionId)).toEqual({
         stateVersion: 1,

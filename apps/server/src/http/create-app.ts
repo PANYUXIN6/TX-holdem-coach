@@ -1,0 +1,297 @@
+import { randomUUID } from 'node:crypto'
+import {
+  ErrorResponseSchema,
+  PROTOCOL_VERSION,
+} from '@tx-holdem-coach/contracts'
+import { Hono, type Context } from 'hono'
+import type { PersonaCatalog } from '../personas/catalog.js'
+import type { ProviderHealthService } from '../providers/provider-health-service.js'
+import type { PlayerAgentSettingsService } from '../settings/player-agent-settings-service.js'
+import type { SessionDataDeletionService } from '../sessions/session-data-deletion-service.js'
+import { registerAgentSettingsRoutes } from './agent-settings-routes.js'
+import type { ApiVariables } from './api-context.js'
+import { registerDataRoutes } from './data-routes.js'
+import { handleHttpError } from './error-mapper.js'
+import { registerHealthRoutes } from './health-routes.js'
+import type { HealthService } from './health-service.js'
+import { registerPersonaRoutes } from './persona-routes.js'
+import { registerProviderSettingsRoutes } from './provider-settings-routes.js'
+import { HttpBoundaryError } from './request-boundary.js'
+import {
+  registerSessionRoutes,
+  type SessionHttpPorts,
+} from './session-routes.js'
+
+export interface ApiRuntime {
+  readonly health: HealthService
+  readonly providerHealth: ProviderHealthService
+  readonly playerAgentSettings: PlayerAgentSettingsService
+  readonly personaCatalog: PersonaCatalog
+  readonly deletion: SessionDataDeletionService
+  readonly sessionHttp?: SessionHttpPorts
+}
+
+export interface ApiAppOptions {
+  readonly port: number
+  readonly allowedOrigins: ReadonlySet<string>
+  readonly logRequest?: (entry: ApiRequestLogEntry) => void
+}
+
+export interface ApiRequestLogEntry {
+  readonly requestId: string
+  readonly method: string
+  readonly route: string
+  readonly status: number
+  readonly errorCode?: string
+  readonly durationMs: number
+}
+
+function routeLookupMethod(method: string): string {
+  return method === 'HEAD' ? 'GET' : method
+}
+
+function isKnownRoute(
+  method: string,
+  path: string,
+  sessions: boolean,
+): boolean {
+  method = routeLookupMethod(method)
+  const fixed = new Set([
+    'GET /api/health',
+    'GET /api/settings/providers',
+    'GET /api/settings/agent',
+    'PATCH /api/settings/agent',
+    'GET /api/agent-personas',
+    'DELETE /api/data',
+  ])
+  if (fixed.has(`${method} ${path}`)) return true
+  if (/^\/api\/settings\/providers\/(deepseek|kimi)\/check$/.test(path)) {
+    return method === 'POST'
+  }
+  if (/^\/api\/agent-personas\/[^/]+$/.test(path)) return method === 'GET'
+  if (sessions && path === '/api/sessions/active') return method === 'GET'
+  if (/^\/api\/sessions\/[^/]+$/.test(path)) {
+    return method === 'DELETE' || (sessions && method === 'GET')
+  }
+  if (!sessions) return false
+  if (path === '/api/sessions') return method === 'POST'
+  return method === 'POST' && /^\/api\/sessions\/[^/]+\/commands$/.test(path)
+}
+
+function requestRouteTemplate(
+  method: string,
+  path: string,
+  sessions: boolean,
+): string | null {
+  method = routeLookupMethod(method)
+  const fixed = new Map([
+    ['GET /api/health', '/api/health'],
+    ['GET /api/settings/providers', '/api/settings/providers'],
+    ['GET /api/settings/agent', '/api/settings/agent'],
+    ['PATCH /api/settings/agent', '/api/settings/agent'],
+    ['GET /api/agent-personas', '/api/agent-personas'],
+    ['DELETE /api/data', '/api/data'],
+  ])
+  const fixedTemplate = fixed.get(`${method} ${path}`)
+  if (fixedTemplate !== undefined) return fixedTemplate
+  if (
+    method === 'POST' &&
+    /^\/api\/settings\/providers\/[^/]+\/check$/.test(path)
+  ) {
+    return '/api/settings/providers/:provider/check'
+  }
+  if (method === 'GET' && /^\/api\/agent-personas\/[^/]+$/.test(path)) {
+    return '/api/agent-personas/:personaId'
+  }
+  if (sessions && method === 'GET' && path === '/api/sessions/active') {
+    return '/api/sessions/active'
+  }
+  if (/^\/api\/sessions\/[^/]+$/.test(path)) {
+    if (method === 'DELETE' || (sessions && method === 'GET')) {
+      return '/api/sessions/:sessionId'
+    }
+  }
+  if (!sessions) return null
+  if (method === 'POST' && path === '/api/sessions') return '/api/sessions'
+  if (method === 'POST' && /^\/api\/sessions\/[^/]+\/commands$/.test(path)) {
+    return '/api/sessions/:sessionId/commands'
+  }
+  return null
+}
+
+function appendVaryOrigin(response: Response): void {
+  const current = response.headers.get('Vary')
+  if (current === null) response.headers.set('Vary', 'Origin')
+  else if (
+    !current
+      .split(',')
+      .map((part) => part.trim())
+      .includes('Origin')
+  ) {
+    response.headers.set('Vary', `${current}, Origin`)
+  }
+}
+
+function setSecurityHeaders(
+  context: Context<{ Variables: ApiVariables }>,
+  requestId: string,
+): void {
+  context.header('Cache-Control', 'no-store')
+  context.header('X-Content-Type-Options', 'nosniff')
+  context.header('Referrer-Policy', 'no-referrer')
+  context.header('X-Frame-Options', 'DENY')
+  context.header('X-Request-Id', requestId)
+  context.header('Vary', 'Origin')
+}
+
+export function createApp(
+  runtime: ApiRuntime,
+  options: ApiAppOptions,
+): Hono<{ Variables: ApiVariables }> {
+  const app = new Hono<{ Variables: ApiVariables }>()
+  const allowedHosts = new Set([
+    `127.0.0.1:${options.port}`,
+    `localhost:${options.port}`,
+  ])
+
+  app.onError(handleHttpError)
+  app.use('/api/*', async (context, next) => {
+    const startedAt = Date.now()
+    await next()
+    let errorCode: string | undefined
+    if (context.res.status >= 400) {
+      try {
+        const body = (await context.res.clone().json()) as unknown
+        if (
+          typeof body === 'object' &&
+          body !== null &&
+          'code' in body &&
+          typeof body.code === 'string' &&
+          /^[A-Z][A-Z0-9_]{0,63}$/.test(body.code)
+        ) {
+          errorCode = body.code
+        }
+      } catch {
+        // Logging never changes the public response.
+      }
+    }
+    try {
+      const route = requestRouteTemplate(
+        context.req.method.toUpperCase(),
+        new URL(context.req.url).pathname,
+        runtime.sessionHttp !== undefined,
+      )
+      options.logRequest?.({
+        requestId: context.get('requestId'),
+        method: context.req.method,
+        route: route ?? 'unmatched',
+        status: context.res.status,
+        ...(errorCode === undefined ? {} : { errorCode }),
+        durationMs: Date.now() - startedAt,
+      })
+    } catch {
+      // Logging never changes the public response.
+    }
+  })
+  app.use('/api/*', async (context, next) => {
+    const requestId = randomUUID()
+    context.set('requestId', requestId)
+    setSecurityHeaders(context, requestId)
+    const host = context.req.header('host') ?? new URL(context.req.url).host
+    if (!allowedHosts.has(host.toLowerCase())) {
+      throw new HttpBoundaryError(
+        403,
+        'HOST_NOT_ALLOWED',
+        '请求 Host 不受信任。',
+      )
+    }
+
+    const origin = context.req.header('origin')
+    if (origin !== undefined && options.allowedOrigins.has(origin)) {
+      context.header('Access-Control-Allow-Origin', origin)
+    }
+    const method = context.req.method.toUpperCase()
+    const mutating =
+      method === 'POST' || method === 'PATCH' || method === 'DELETE'
+    if (
+      mutating &&
+      (origin === undefined || !options.allowedOrigins.has(origin))
+    ) {
+      throw new HttpBoundaryError(
+        403,
+        'ORIGIN_NOT_ALLOWED',
+        '请求来源不受允许。',
+      )
+    }
+    if (mutating) {
+      const contentType = context.req.header('content-type')?.toLowerCase()
+      if (contentType?.split(';', 1)[0]?.trim() !== 'application/json') {
+        throw new HttpBoundaryError(
+          415,
+          'UNSUPPORTED_MEDIA_TYPE',
+          '修改请求必须使用 application/json。',
+        )
+      }
+    }
+    if (new URL(context.req.url).search.length > 0) {
+      throw new HttpBoundaryError(
+        400,
+        'INVALID_REQUEST',
+        '该接口不接受查询参数。',
+      )
+    }
+
+    await next()
+    const response = context.res
+    response.headers.set('Cache-Control', 'no-store')
+    response.headers.set('X-Content-Type-Options', 'nosniff')
+    response.headers.set('Referrer-Policy', 'no-referrer')
+    response.headers.set('X-Frame-Options', 'DENY')
+    response.headers.set('X-Request-Id', context.get('requestId'))
+    appendVaryOrigin(response)
+  })
+
+  app.options('/api/*', (context) => {
+    const origin = context.req.header('origin')
+    const requestedMethod = context.req.header('access-control-request-method')
+    if (
+      origin === undefined ||
+      !options.allowedOrigins.has(origin) ||
+      requestedMethod === undefined ||
+      !isKnownRoute(
+        requestedMethod.toUpperCase(),
+        new URL(context.req.url).pathname,
+        runtime.sessionHttp !== undefined,
+      )
+    ) {
+      throw new HttpBoundaryError(404, 'ROUTE_NOT_FOUND', '接口不存在。')
+    }
+    context.header(
+      'Access-Control-Allow-Methods',
+      requestedMethod.toUpperCase(),
+    )
+    context.header('Access-Control-Allow-Headers', 'Content-Type')
+    return context.body(null, 204)
+  })
+
+  registerHealthRoutes(app, runtime.health)
+  registerProviderSettingsRoutes(app, runtime.providerHealth)
+  registerAgentSettingsRoutes(app, runtime.playerAgentSettings)
+  registerPersonaRoutes(app, runtime.personaCatalog)
+  registerDataRoutes(app, runtime.deletion)
+  if (runtime.sessionHttp !== undefined) {
+    registerSessionRoutes(app, runtime.sessionHttp)
+  }
+
+  app.notFound((context) =>
+    context.json(
+      ErrorResponseSchema.parse({
+        protocolVersion: PROTOCOL_VERSION,
+        code: 'ROUTE_NOT_FOUND',
+        message: '接口不存在。',
+      }),
+      404,
+    ),
+  )
+  return app
+}

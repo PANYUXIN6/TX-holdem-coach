@@ -15,6 +15,7 @@ import { assertM22DatabaseSchema } from './database-schema-assertions.js'
 import { assertM32SessionCreation } from './database-m32-assertions.js'
 import { assertM33PlayerActionHandCompletion } from './database-m33-assertions.js'
 import { assertM34RebuyNextHandSessionEnd } from './database-m34-assertions.js'
+import { assertM35HttpAndAtomicSettings } from './database-m35-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -202,6 +203,12 @@ registerMilestoneTest(
   'm34',
   'M3.4 rebuy, next hand, and session end',
   (sql, runtimeUrl) => assertM34RebuyNextHandSessionEnd(sql, runtimeUrl),
+  300_000,
+)
+registerMilestoneTest(
+  'm35',
+  'M3.5 HTTP, transactions, and atomic Player settings',
+  (sql, runtimeUrl) => assertM35HttpAndAtomicSettings(sql, runtimeUrl),
   300_000,
 )
 registerMilestoneTest(

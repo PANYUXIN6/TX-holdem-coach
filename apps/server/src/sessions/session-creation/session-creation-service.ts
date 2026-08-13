@@ -19,6 +19,7 @@ import {
   ResourceNotFoundError,
   RosterSourceChangedError,
 } from '../../persistence/errors.js'
+import { runDatabaseTransaction } from '../../persistence/database-transaction.js'
 import {
   resolveOwnerScope,
   type ResolvedOwnerScope,
@@ -254,7 +255,7 @@ export function createSessionCreationService(input: {
       const plan = createSessionCreationPlan({ identityGraph, randomSource })
       const mutationAt = now()
 
-      return sql.begin(async (transaction) => {
+      return runDatabaseTransaction(sql, async (transaction) => {
         const lockedOwner =
           await creationRepository.lockOwnerForSessionCreation(
             transaction,

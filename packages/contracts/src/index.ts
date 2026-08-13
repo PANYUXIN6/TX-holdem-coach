@@ -534,6 +534,66 @@ export const ProviderSettingsResponseSchema = z.strictObject({
   kimi: KimiProviderSettingsSchema,
 })
 
+export const HealthResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  status: z.literal('ok'),
+  database: z.literal('available'),
+})
+
+export const ProviderPathParamsSchema = z.strictObject({
+  provider: ProviderIdSchema,
+})
+
+export const ProviderCheckRequestSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+})
+
+export const PlayerAgentSettingsSchema = z
+  .strictObject({
+    attemptTimeoutSeconds: z.number().int().min(5).max(30),
+    decisionDeadlineSeconds: z.number().int().min(15).max(120),
+  })
+  .superRefine((settings, context) => {
+    if (settings.decisionDeadlineSeconds < settings.attemptTimeoutSeconds) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['decisionDeadlineSeconds'],
+        message: '完整决策 deadline 不得小于单次尝试超时。',
+      })
+    }
+  })
+
+export const PlayerAgentSettingsPatchRequestSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  settings: z
+    .strictObject({
+      attemptTimeoutSeconds: z.number().int().min(5).max(30).optional(),
+      decisionDeadlineSeconds: z.number().int().min(15).max(120).optional(),
+    })
+    .refine((settings) => Object.keys(settings).length > 0, {
+      message: '至少需要修改一个设置字段。',
+    }),
+})
+
+export const PlayerAgentSettingsResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  settings: PlayerAgentSettingsSchema,
+})
+
+export const AgentPersonaPathParamsSchema = z.strictObject({
+  personaId: AgentPersonaIdSchema,
+})
+
+export const AgentPersonaListResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  personas: z.array(AgentPersonaSummarySchema),
+})
+
+export const AgentPersonaDetailResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  persona: AgentPersonaSummarySchema,
+})
+
 export const PublicSeatSchema = z.strictObject({
   seatNumber: SeatNumberSchema,
   playerId: PlayerIdSchema,
@@ -940,6 +1000,37 @@ export const CommandResponseSchema = z.strictObject({
   snapshot: PublicSessionSnapshotSchema,
 })
 
+export const SessionPathParamsSchema = z.strictObject({
+  sessionId: SessionIdSchema,
+})
+
+export const SessionSnapshotResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  snapshot: PublicSessionSnapshotSchema,
+})
+
+export const DeleteSessionRequestSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  confirmation: z.literal('永久删除本场'),
+})
+
+export const DeleteSessionResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  deletedSessionId: SessionIdSchema,
+  invalidatedRunCount: z.number().int().nonnegative(),
+})
+
+export const ClearDataRequestSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  confirmation: z.literal('永久清空全部数据'),
+})
+
+export const ClearDataResponseSchema = z.strictObject({
+  protocolVersion: ProtocolVersionSchema,
+  deletedSessionCount: z.number().int().nonnegative(),
+  invalidatedRunCount: z.number().int().nonnegative(),
+})
+
 export const FieldErrorSchema = z.strictObject({
   path: z.array(z.string()),
   message: z.string().min(1),
@@ -985,6 +1076,25 @@ export type ProviderHealthSummary = z.infer<typeof ProviderHealthSummarySchema>
 export type ProviderSettingsResponse = z.infer<
   typeof ProviderSettingsResponseSchema
 >
+export type HealthResponse = z.infer<typeof HealthResponseSchema>
+export type ProviderPathParams = z.infer<typeof ProviderPathParamsSchema>
+export type ProviderCheckRequest = z.infer<typeof ProviderCheckRequestSchema>
+export type PlayerAgentSettings = z.infer<typeof PlayerAgentSettingsSchema>
+export type PlayerAgentSettingsPatchRequest = z.infer<
+  typeof PlayerAgentSettingsPatchRequestSchema
+>
+export type PlayerAgentSettingsResponse = z.infer<
+  typeof PlayerAgentSettingsResponseSchema
+>
+export type AgentPersonaPathParams = z.infer<
+  typeof AgentPersonaPathParamsSchema
+>
+export type AgentPersonaListResponse = z.infer<
+  typeof AgentPersonaListResponseSchema
+>
+export type AgentPersonaDetailResponse = z.infer<
+  typeof AgentPersonaDetailResponseSchema
+>
 export type SessionCommand = z.infer<typeof SessionCommandSchema>
 export type PublicSeat = z.infer<typeof PublicSeatSchema>
 export type PublicActionTimelineEntry = z.infer<
@@ -1001,4 +1111,12 @@ export type PublicSessionSnapshot = z.infer<typeof PublicSessionSnapshotSchema>
 export type SseEvent = z.infer<typeof SseEventSchema>
 export type CommandRequest = z.infer<typeof CommandRequestSchema>
 export type CommandResponse = z.infer<typeof CommandResponseSchema>
+export type SessionPathParams = z.infer<typeof SessionPathParamsSchema>
+export type SessionSnapshotResponse = z.infer<
+  typeof SessionSnapshotResponseSchema
+>
+export type DeleteSessionRequest = z.infer<typeof DeleteSessionRequestSchema>
+export type DeleteSessionResponse = z.infer<typeof DeleteSessionResponseSchema>
+export type ClearDataRequest = z.infer<typeof ClearDataRequestSchema>
+export type ClearDataResponse = z.infer<typeof ClearDataResponseSchema>
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>

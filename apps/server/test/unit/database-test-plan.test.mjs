@@ -1,10 +1,21 @@
 import { describe, expect, test } from 'vitest'
 import {
   createDatabaseTestPlanEnvironment,
+  createDatabaseVitestArguments,
   parseDatabaseTestArguments,
 } from '../../scripts/database-test-plan.mjs'
 
 describe('database test plan', () => {
+  test('stops the full runner after the first failed or timed-out milestone', () => {
+    expect(createDatabaseVitestArguments()).toEqual([
+      'exec',
+      'vitest',
+      'run',
+      '--bail=1',
+      'test/integration/database-infrastructure.test.ts',
+    ])
+  })
+
   test('selects one allowlisted milestone', () => {
     expect(parseDatabaseTestArguments(['--milestone=m34'])).toEqual({
       kind: 'milestone',

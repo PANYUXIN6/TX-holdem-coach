@@ -6,6 +6,7 @@ import {
   PersonaCatalogValidationError,
 } from '../../src/personas/catalog.js'
 import { StartupError } from '../../src/startup.js'
+import type { DatabaseClient } from '../../src/db/client.js'
 
 const config = loadServerConfig({
   DATABASE_URL:
@@ -16,6 +17,9 @@ describe('server bootstrap', () => {
   test('loads the persona catalog after config and before database/listen', async () => {
     const calls: string[] = []
     const catalog = loadAndValidatePersonaCatalog()
+    const database = {
+      close: vi.fn(),
+    } as unknown as DatabaseClient
 
     await bootstrap({
       loadConfig: () => {
@@ -28,15 +32,27 @@ describe('server bootstrap', () => {
       },
       initializeDatabase: async () => {
         calls.push('database')
+        return database
+      },
+      createRuntime: async (_config, receivedCatalog, receivedDatabase) => {
+        calls.push('runtime')
+        expect(receivedCatalog).toBe(catalog)
+        expect(receivedDatabase).toBe(database)
         return {} as never
       },
-      listen: (_config, receivedCatalog) => {
+      listen: () => {
         calls.push('listen')
-        expect(receivedCatalog).toBe(catalog)
       },
     })
 
-    expect(calls).toEqual(['config', 'personas', 'database', 'listen'])
+    expect(calls).toEqual([
+      'config',
+      'personas',
+      'database',
+      'runtime',
+      'listen',
+    ])
+    expect(database.close).not.toHaveBeenCalled()
   })
 
   test('sanitizes catalog validation failures before database initialization', async () => {
@@ -98,5 +114,22 @@ describe('server bootstrap', () => {
       '服务配置无效，请检查后端 .env 文件。',
     )
     expect(setExitCode).toHaveBeenCalledWith(1)
+  })
+
+  test('closes the initialized database when runtime composition fails', async () => {
+    const database = {
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as DatabaseClient
+
+    await expect(
+      bootstrap({
+        loadConfig: () => config,
+        initializeDatabase: async () => database,
+        createRuntime: async () => {
+          throw new Error('composition failed')
+        },
+      }),
+    ).rejects.toThrow('composition failed')
+    expect(database.close).toHaveBeenCalledOnce()
   })
 })

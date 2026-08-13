@@ -21,6 +21,14 @@ export type StableCommandRejection =
   | { readonly kind: 'rebuyAmountNotAllowed' }
   | { readonly kind: 'userRebuyRequired' }
 
+export type StableCommandRejectionCode =
+  | 'COMMAND_NOT_ALLOWED_IN_PHASE'
+  | 'PLAYER_NOT_CURRENT_ACTOR'
+  | 'POKER_ACTION_NOT_LEGAL'
+  | 'POKER_ACTION_TARGET_OUT_OF_RANGE'
+  | 'REBUY_AMOUNT_NOT_ALLOWED'
+  | 'USER_REBUY_REQUIRED'
+
 const StableCommandRejectionSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('commandNotAllowedInPhase'),
@@ -91,7 +99,10 @@ export function mapCommandRejectionToErrorResponse(
   rejection: StableCommandRejection,
   latestSnapshot: PublicSessionSnapshot,
 ): ErrorResponse {
-  const error = (() => {
+  const error: {
+    readonly code: StableCommandRejectionCode
+    readonly message: string
+  } = (() => {
     switch (rejection.kind) {
       case 'commandNotAllowedInPhase':
         return {

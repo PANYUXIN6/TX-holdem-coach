@@ -3,6 +3,10 @@ import {
   AiSeatNumberSchema,
   AgentPersonaIdSchema,
   AgentPersonaSummarySchema,
+  AgentPersonaDetailResponseSchema,
+  AgentPersonaListResponseSchema,
+  ClearDataRequestSchema,
+  ClearDataResponseSchema,
   ChipAmountSchema,
   CardSchema,
   CommandRequestSchema,
@@ -11,22 +15,28 @@ import {
   CreateSessionResponseSchema,
   CreateSessionPersonaSelectionSchema,
   ErrorResponseSchema,
+  HealthResponseSchema,
   LegalActionSchema,
   LegalActionsSchema,
   PersonaSnapshotFilterSchema,
   PokerActionSchema,
   PokerPhaseSchema,
   PublicCompletedHandSummarySchema,
+  ProviderCheckRequestSchema,
   ProviderCheckStatusSchema,
   ProviderHealthSummarySchema,
   ProviderIdSchema,
   ProviderPublicErrorCodeSchema,
   ProviderSettingsResponseSchema,
+  PlayerAgentSettingsPatchRequestSchema,
+  PlayerAgentSettingsResponseSchema,
   PublicSessionSnapshotSchema,
   SeatNumberSchema,
   SuggestedTargetSchema,
   SseEventSchema,
   SseEventTypeSchema,
+  DeleteSessionRequestSchema,
+  DeleteSessionResponseSchema,
   type LegalAction,
   type LegalActions,
   type SuggestedTarget,
@@ -1006,6 +1016,15 @@ describe('共享外部协议', () => {
         kimi: { ...response.kimi, model: 'must-not-be-public' },
       }).success,
     ).toBe(false)
+    expect(
+      ProviderCheckRequestSchema.safeParse({ protocolVersion: 1 }).success,
+    ).toBe(true)
+    expect(
+      ProviderCheckRequestSchema.safeParse({
+        protocolVersion: 1,
+        provider: 'kimi',
+      }).success,
+    ).toBe(false)
   })
 
   it('只接受六到九个公开座位', () => {
@@ -1059,5 +1078,83 @@ describe('共享外部协议', () => {
         modelConfig: { apiKey: 'must-not-be-public' },
       }).success,
     ).toBe(false)
+  })
+
+  it('约束 M3.5 健康、设置、人物和删除协议', () => {
+    expect(
+      HealthResponseSchema.safeParse({
+        protocolVersion: 1,
+        status: 'ok',
+        database: 'available',
+      }).success,
+    ).toBe(true)
+
+    expect(
+      PlayerAgentSettingsPatchRequestSchema.safeParse({
+        protocolVersion: 1,
+        settings: { attemptTimeoutSeconds: 20 },
+      }).success,
+    ).toBe(true)
+    expect(
+      PlayerAgentSettingsPatchRequestSchema.safeParse({
+        protocolVersion: 1,
+        settings: {},
+      }).success,
+    ).toBe(false)
+    expect(
+      PlayerAgentSettingsResponseSchema.safeParse({
+        protocolVersion: 1,
+        settings: {
+          attemptTimeoutSeconds: 30,
+          decisionDeadlineSeconds: 15,
+        },
+      }).success,
+    ).toBe(false)
+
+    expect(
+      AgentPersonaListResponseSchema.safeParse({
+        protocolVersion: 1,
+        personas: [agentPersonaSummary],
+      }).success,
+    ).toBe(true)
+    expect(
+      AgentPersonaDetailResponseSchema.safeParse({
+        protocolVersion: 1,
+        persona: { ...agentPersonaSummary, prompt: 'private' },
+      }).success,
+    ).toBe(false)
+
+    expect(
+      DeleteSessionRequestSchema.safeParse({
+        protocolVersion: 1,
+        confirmation: '永久删除本场',
+      }).success,
+    ).toBe(true)
+    expect(
+      DeleteSessionRequestSchema.safeParse({
+        protocolVersion: 1,
+        confirmation: '删除',
+      }).success,
+    ).toBe(false)
+    expect(
+      DeleteSessionResponseSchema.safeParse({
+        protocolVersion: 1,
+        deletedSessionId: ids.session,
+        invalidatedRunCount: 2,
+      }).success,
+    ).toBe(true)
+    expect(
+      ClearDataRequestSchema.safeParse({
+        protocolVersion: 1,
+        confirmation: '永久清空全部数据',
+      }).success,
+    ).toBe(true)
+    expect(
+      ClearDataResponseSchema.safeParse({
+        protocolVersion: 1,
+        deletedSessionCount: 3,
+        invalidatedRunCount: 1,
+      }).success,
+    ).toBe(true)
   })
 })

@@ -8,9 +8,12 @@ import {
 } from '../../src/persistence/errors.js'
 import {
   DEFAULT_PLAYER_TIMEOUT_SETTINGS,
+  patchPlayerTimeoutSettings,
   readPlayerTimeoutSettings,
   writePlayerTimeoutSettings,
 } from '../../src/persistence/player-settings-repository.js'
+import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
+import { RepositoryInputValidationError } from '../../src/persistence/errors.js'
 
 interface SqlCall {
   readonly text: string
@@ -186,5 +189,76 @@ describe('player timeout settings repository', () => {
       decisionDeadlineSeconds: 30,
     })
     expect(writeCalls[0]?.text).not.toMatch(/agent_runs|agent_attempts/)
+  })
+
+  test('patches the locked latest value instead of a stale pre-read value', async () => {
+    const { sql, calls } = createSqlMock([
+      [{ databaseOwnerId }],
+      [],
+      [
+        {
+          settingPayloadVersion: 1,
+          settingPayload: {
+            attemptTimeoutSeconds: 20,
+            decisionDeadlineSeconds: 60,
+          },
+        },
+      ],
+      [
+        {
+          settingPayloadVersion: 1,
+          settingPayload: {
+            attemptTimeoutSeconds: 20,
+            decisionDeadlineSeconds: 90,
+          },
+        },
+      ],
+    ])
+    const owner = await resolveOwnerScope(sql, ownerScope)
+
+    await expect(
+      patchPlayerTimeoutSettings(sql as never, owner, {
+        decisionDeadlineSeconds: 90,
+      }),
+    ).resolves.toEqual({
+      attemptTimeoutSeconds: 20,
+      decisionDeadlineSeconds: 90,
+    })
+
+    expect(calls[1]?.text).toContain('ON CONFLICT')
+    expect(calls[1]?.text).toContain('DO NOTHING')
+    expect(calls[2]?.text).toContain('FOR UPDATE')
+    expect(calls[3]?.text).toContain('RETURNING')
+    expect(calls[3]?.parameters).toContainEqual({
+      attemptTimeoutSeconds: 20,
+      decisionDeadlineSeconds: 90,
+    })
+  })
+
+  test('rejects an invalid locked merge before updating', async () => {
+    const { sql, calls } = createSqlMock([
+      [{ databaseOwnerId }],
+      [],
+      [
+        {
+          settingPayloadVersion: 1,
+          settingPayload: {
+            attemptTimeoutSeconds: 10,
+            decisionDeadlineSeconds: 60,
+          },
+        },
+      ],
+    ])
+    const owner = await resolveOwnerScope(sql, ownerScope)
+
+    await expect(
+      patchPlayerTimeoutSettings(sql as never, owner, {
+        attemptTimeoutSeconds: 30,
+        decisionDeadlineSeconds: 15,
+      }),
+    ).rejects.toBeInstanceOf(RepositoryInputValidationError)
+    expect(
+      calls.some((call) => call.text.trimStart().startsWith('UPDATE')),
+    ).toBe(false)
   })
 })

@@ -110,7 +110,7 @@ async function executeM34Stage<Result>(
   }
 }
 
-function createM34Executor(input: {
+export function createM34Executor(input: {
   readonly sql: Sql
   readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
   readonly nextHandId: string

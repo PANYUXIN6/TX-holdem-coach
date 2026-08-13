@@ -23,6 +23,7 @@ import { ResourceNotFoundError } from '../../persistence/errors.js'
 import type { ResolvedOwnerScope } from '../../persistence/owner-scope.js'
 import type { SessionMutationRepository } from '../../persistence/session-mutation-repository.js'
 import type { SessionRecoveryRepository } from '../../persistence/session-recovery-repository.js'
+import { runDatabaseTransaction } from '../../persistence/database-transaction.js'
 import type { RecoveryRegistries } from '../authoritative-state/recovery-decision.js'
 import {
   createPrivateTableState,
@@ -45,11 +46,24 @@ import { createPerSessionScheduler } from './per-session-scheduler.js'
 import {
   mapCommandRejectionToErrorResponse,
   parseStableCommandRejection,
+  type StableCommandRejectionCode,
 } from './command-rejection.js'
 import type {
   SnapshotProjectionInput,
   SnapshotProjectorBinding,
 } from './snapshot-projector.js'
+
+export type StableSessionCommandErrorCode =
+  | StableCommandRejectionCode
+  | 'SESSION_NOT_FOUND'
+  | 'STATE_VERSION_CONFLICT'
+  | 'COMMAND_ID_CONFLICT'
+  | 'SESSION_ENDED'
+  | 'SESSION_READONLY_DIAGNOSTIC'
+
+export type StableSessionCommandErrorResponse = ErrorResponse & {
+  readonly code: StableSessionCommandErrorCode
+}
 
 export type SessionCommandExecutionResult =
   | {
@@ -66,7 +80,7 @@ export type SessionCommandExecutionResult =
   | {
       readonly kind: 'rejected'
       readonly origin: 'ledgerCommit' | 'replay' | 'unregistered'
-      readonly response: ErrorResponse
+      readonly response: StableSessionCommandErrorResponse
     }
   | { readonly kind: 'processing' }
 
@@ -148,6 +162,31 @@ function isDeepFrozen(
   })
 }
 
+const STABLE_SESSION_COMMAND_ERROR_CODES: ReadonlySet<string> =
+  new Set<StableSessionCommandErrorCode>([
+    'SESSION_NOT_FOUND',
+    'STATE_VERSION_CONFLICT',
+    'COMMAND_ID_CONFLICT',
+    'COMMAND_NOT_ALLOWED_IN_PHASE',
+    'PLAYER_NOT_CURRENT_ACTOR',
+    'POKER_ACTION_NOT_LEGAL',
+    'POKER_ACTION_TARGET_OUT_OF_RANGE',
+    'REBUY_AMOUNT_NOT_ALLOWED',
+    'USER_REBUY_REQUIRED',
+    'SESSION_ENDED',
+    'SESSION_READONLY_DIAGNOSTIC',
+  ])
+
+function parseStableSessionCommandErrorResponse(
+  response: unknown,
+): StableSessionCommandErrorResponse {
+  const parsed = ErrorResponseSchema.parse(response)
+  if (!STABLE_SESSION_COMMAND_ERROR_CODES.has(parsed.code)) {
+    throw new SessionCommandInvariantError()
+  }
+  return parsed as StableSessionCommandErrorResponse
+}
+
 function replayResult(
   result:
     | ExistingCommandResult
@@ -169,7 +208,7 @@ function replayResult(
       return deepFreeze({
         kind: 'rejected',
         origin: 'replay',
-        response: ErrorResponseSchema.parse(result.response),
+        response: parseStableSessionCommandErrorResponse(result.response),
       })
     case 'notFound':
       return unregisteredError(
@@ -180,13 +219,17 @@ function replayResult(
 }
 
 function unregisteredError(
-  code: string,
+  code: StableSessionCommandErrorCode,
   message: string,
 ): SessionCommandExecutionResult {
   return deepFreeze({
     kind: 'rejected',
     origin: 'unregistered',
-    response: ErrorResponseSchema.parse({ protocolVersion: 1, code, message }),
+    response: parseStableSessionCommandErrorResponse({
+      protocolVersion: 1,
+      code,
+      message,
+    }),
   })
 }
 
@@ -262,7 +305,8 @@ export function createSessionCommandExecutor(input: {
       return scheduler.run(prepared.command.sessionId, async () => {
         let pointerRepair: unknown = null
         let executionResult: SessionCommandExecutionResult
-        const transactionResult = await sql.begin(
+        const transactionResult = await runDatabaseTransaction(
+          sql,
           async (transaction: TransactionSql) => {
             const commandAt = now()
             if (!CanonicalUtcTimestampSchema.safeParse(commandAt).success) {
@@ -327,7 +371,7 @@ export function createSessionCommandExecutor(input: {
                 recovery.session,
                 lastCommittedEventSeq,
               )
-              const response = ErrorResponseSchema.parse({
+              const response = parseStableSessionCommandErrorResponse({
                 protocolVersion: 1,
                 code: 'STATE_VERSION_CONFLICT',
                 message: '场次状态已变化。',
@@ -374,9 +418,8 @@ export function createSessionCommandExecutor(input: {
                 recovery.session,
                 lastCommittedEventSeq,
               )
-              const response = mapCommandRejectionToErrorResponse(
-                rejection,
-                latestSnapshot,
+              const response = parseStableSessionCommandErrorResponse(
+                mapCommandRejectionToErrorResponse(rejection, latestSnapshot),
               )
               await ledger.failCommand(transaction, registration, response)
               return deepFreeze({

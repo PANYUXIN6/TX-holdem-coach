@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { parseEnv } from 'node:util'
 import {
   createDatabaseTestPlanEnvironment,
+  createDatabaseVitestArguments,
   parseDatabaseTestArguments,
 } from './database-test-plan.mjs'
 import { runManagedChildProcess } from './managed-child-process.mjs'
@@ -82,7 +83,7 @@ Object.assign(
 const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const { completion } = runManagedChildProcess(
   command,
-  ['exec', 'vitest', 'run', 'test/integration/database-infrastructure.test.ts'],
+  createDatabaseVitestArguments(),
   {
     cwd: process.cwd(),
     env: childEnvironment,

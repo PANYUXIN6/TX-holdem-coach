@@ -1,3 +1,5 @@
-import { Hono } from 'hono'
-
-export const app = new Hono()
+export {
+  createApp,
+  type ApiAppOptions,
+  type ApiRuntime,
+} from './http/create-app.js'

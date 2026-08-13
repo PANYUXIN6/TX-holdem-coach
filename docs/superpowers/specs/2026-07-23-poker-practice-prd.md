@@ -2,7 +2,7 @@
 
 - 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构、预设人物与 Supabase Postgres 迁移方案已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-29
+- 最后更新：2026-08-13
 - 产品形态：本机单用户 Web 应用
 - 开发任务：[开发任务分解](../plans/2026-07-23-poker-practice-development-tasks.md)
 - 关联设计：
@@ -41,7 +41,8 @@
 
 - 前端：React + Vite + TypeScript；TanStack Query 管理服务端状态，Zustand 管理页面级或跨组件的纯客户端状态，组件私有状态使用 React 内置状态。
 - 后端：Node.js + Hono + TypeScript；Zod 负责边界校验，dotenv 只在后端加载环境变量，Vercel AI SDK 接入 DeepSeek 和 Kimi。
-- 数据库目标：Supabase 托管 PostgreSQL；M2.1 的 Hono 服务端使用 Drizzle ORM + `postgres.js`，运行时客户端通过 TLS 连接 `6543` transaction pooler 并固定 `prepare: false`，Drizzle Kit 通过独立的 `5432` session/direct 连接执行显式发布迁移。当前只完成依赖安装以及 `ServerConfig` 对 `DATABASE_URL` 的校验和私有保存，尚未建立数据库客户端或迁移。
+- 数据库：Supabase 托管 PostgreSQL。Hono 服务端使用 Drizzle ORM + `postgres.js`，运行时客户端通过 TLS 连接 `6543` transaction pooler 并固定 `prepare: false`；Drizzle Kit 通过独立的 `5432` session/direct 连接执行显式发布迁移。数据库客户端、`app_private` Schema、迁移兼容门控和 M2 Repository 已经落地；服务启动不自动执行 DDL。
+- 当前 Hono 服务仍只监听本机；未来产品上线时，Agent 后端目标为常驻 Node.js/Hono 服务，承载 HTTP/SSE、Coordinator、进程内 Player/Coach Worker 和 Runtime。Supabase PostgreSQL 已是独立托管的唯一数据库，服务容器不保存数据库文件或挂载数据库持久卷；公网监听、Host/Origin、TLS 与真实身份需在上线前另行确认。
 - 仓库：单仓库，使用 pnpm workspace。
 - 推荐目录边界：
   - `apps/web`：React/Vite 前端。

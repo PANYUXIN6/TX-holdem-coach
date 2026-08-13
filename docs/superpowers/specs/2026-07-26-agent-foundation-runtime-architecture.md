@@ -2,7 +2,7 @@
 
 - 状态：已确认
 - 日期：2026-07-26
-- 最后更新：2026-07-29
+- 最后更新：2026-08-13
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - Player 专项设计：[Player Agent Runtime](./2026-07-23-poker-practice-agent-harness-design.md)
 - Coach 专项设计：[Coach Agent](./2026-07-26-poker-coach-agent-design.md)
@@ -20,7 +20,7 @@
 - 运行可恢复、可审计、可限额。
 - 模型不负责不擅长的数学、范围查询和样本判断。
 - Prompt、模型、策略数据和分类规则升级可回归。
-- 本地实现不提前引入分布式基础设施，但保留未来多租户上线所需的窄适配边界。
+- 首版模块化单体不提前引入分布式调度基础设施，但保留未来多租户上线所需的窄适配边界。
 
 采用的路线是：
 
@@ -93,6 +93,37 @@ flowchart TD
 - Player 与 Coach 不共享 Context Schema、Prompt、记忆、业务 Validator 或 Commit Gate。
 - 策略事实源可以共享，Player 与 Coach 使用不同投影。
 - Hono 是浏览器可访问的唯一服务入口；Agent、会话和 Coach 只能通过应用服务与窄 Repository 端口访问 PostgreSQL，不能绕过所有权、生命周期或公开投影边界。
+
+### 3.1 上线部署拓扑目标
+
+当前仓库仍按本机产品运行：Hono 硬编码监听回环地址，并执行本机 Host/Origin 白名单。未来把产品上线时，目标部署由两个独立运行边界组成：
+
+```text
+常驻 Node.js/Hono 服务
+├── HTTP API 与 SSE
+├── Session / AgentRun Coordinator
+├── 进程内 Player Worker（保留一个槽位）
+├── 进程内 Coach Worker（保留一个槽位）
+└── Player / Coach Runtime
+          │
+          ├── 模型供应商 API
+          └── Supabase transaction pooler
+                         │
+                         ▼
+             Supabase 托管 PostgreSQL
+             └── app_private
+```
+
+- 上线前需要把监听地址、Host/Origin、传输安全和真实身份边界按独立设计开放；不能仅把当前镜像放到公网。
+- Hono 服务需要常驻进程语义，以承载 SSE、进程内 Worker、优雅关闭和运行中请求管理；不把完整 Agent 执行塞进一次长 HTTP 请求。
+- Supabase PostgreSQL 是容器外部的唯一运行数据事实源。容器不携带数据库文件，不挂载数据库持久卷，也不维护本地数据库副本。
+- API 先持久化 `AgentRun` 再返回运行标识；Worker 随后领取租约并异步执行。HTTP 请求结束不等于 AgentRun 结束。
+- 运行时只使用 `DATABASE_URL` 通过 TLS 连接 transaction pooler；DDL 仅由独立发布步骤使用 `DATABASE_MIGRATION_URL` 执行，服务启动绝不自动迁移。
+- 上线初期可以单个 Hono 实例部署，但事务正确性不能依赖单实例、进程内队列或内存状态，必须依赖 PostgreSQL 行锁、唯一约束、幂等键、租约和 fencing。
+- 进程重启后从 PostgreSQL 读取未完成运行，并按 Runtime 的重启恢复策略处理；不能把内存队列视为持久任务源。
+- 当前不使用 Supabase Auth、Realtime、Data API、Storage 或 Edge Functions；浏览器和 Agent 都不能直连业务表。
+
+当前进程内 Worker 与持续 SSE 不适合直接部署在短生命周期、可能冻结或随请求销毁的 Serverless Function 中。若未来平台不能提供常驻进程，应先把 Worker 拆成独立常驻服务，而不是弱化 AgentRun 的持久化与恢复边界。
 
 ## 4. Agent Foundation
 
@@ -551,6 +582,7 @@ Coach 固定场景：
 - Agent Foundation、静态 Registry、OwnerScope 和 Capability 权限。
 - Supabase 托管 PostgreSQL 中 `app_private` 的通用运行与业务表，由 Drizzle 和窄 Repository 访问。
 - 持久化 AgentRun、租约和进程内 Worker。
+- 当前本机 Hono 运行边界，以及未来上线所需的常驻 Node.js/Hono 部署目标；数据库始终独立托管在 Supabase，不使用服务容器本地数据库文件或数据库持久卷。
 - Player 与 Coach 两种 Runtime。
 - 版本化审计、保留策略、结构化日志、测试指标和 Eval。
 
@@ -558,6 +590,7 @@ Coach 固定场景：
 
 - 真实注册与认证。
 - 消息队列和独立 Worker 集群。
+- 多个无状态 API 实例；所有实例继续通过窄 Repository 访问同一 Supabase PostgreSQL，队列只负责唤醒而不成为运行事实源。
 - OpenTelemetry、监控与告警。
 
 未来适配不授权动态 Plugin、RAG、Agent Cron 或协作式 Multi-Agent；这些能力如有需求必须重新设计并审批。

@@ -584,7 +584,7 @@ Player Runtime 使用稳定的内部错误类别：
 
 在以下位置搜索测试密钥并断言不存在：
 
-- Repository 持久化记录；未来真实 PostgreSQL 合约测试使用隔离的 `TEST_DATABASE_URL`。
+- Repository 持久化记录；Player Runtime writer 落地后通过现有受控数据库测试启动器和独立测试 Supabase 执行对应 PostgreSQL 里程碑验收。
 - 应用日志。
 - 调试 API。
 - SSE。

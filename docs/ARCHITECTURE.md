@@ -75,7 +75,7 @@ M2.7 已实现严格审计 Codec、Foundation Repository 与 Runtime Decoder 组
 - Player 与 Coach 只复用 Foundation 和版本化策略事实源；Context、Prompt、记忆、业务 Validator、信息投影和 Commit Gate 严格分离。
 - Player 与 Coach 的模型都没有自主工具调用权；确定性流水线由各自 Runtime 固定编排。
 - Coach 先由确定性分类器冻结标签、严重度、基准对比和 EV 状态，再由看不到事后事实的 Analyzer 解释，最后由 Hindsight 补充事后信息；任何 Coach 失败均不得影响牌局状态。
-- 当前身份仍为固定 `local-user` OwnerScope，服务为单个 Hono 进程且 Agent Worker 尚未实现；持久化目标已固定为 Supabase Postgres。未来可替换真实认证、队列唤醒和独立 Worker，但不得让浏览器或 Agent 绕过 Hono 直连数据库，也不预建 RAG、动态插件、Agent Cron 或 Agent 间协作。
+- 当前身份仍为固定 `local-user` OwnerScope，服务为只监听回环地址的单个 Hono 进程且 Agent Worker 尚未实现；Supabase Postgres 已经是唯一运行数据库，M2.1–M2.8 的数据库基础、Schema、Repository、恢复与审计持久化已经落地，不存在 SQLite 产品数据库或本地数据库持久卷。未来上线目标是常驻 Hono 服务连接容器外的 Supabase PostgreSQL；公网监听、Host/Origin、TLS 与真实身份必须先独立设计。之后可以替换队列唤醒和独立 Worker，但不得让浏览器或 Agent 绕过 Hono 直连数据库，也不预建 RAG、动态插件、Agent Cron 或 Agent 间协作。
 
 后续计划中的其余服务端落点：
 

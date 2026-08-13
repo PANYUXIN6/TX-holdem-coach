@@ -2,7 +2,7 @@
 
 - 状态：待开发
 - 日期：2026-07-26
-- 最后更新：2026-07-29
+- 最后更新：2026-08-13
 - 总体架构：[Agent Foundation 与受限 Runtime](../specs/2026-07-26-agent-foundation-runtime-architecture.md)
 - Player 设计：[Player Agent Runtime 专项设计](../specs/2026-07-23-poker-practice-agent-harness-design.md)
 - Coach 设计：[Coach Agent Runtime](../specs/2026-07-26-poker-coach-agent-design.md)
@@ -23,6 +23,7 @@
 5. 模型只能在 Runtime 给定的边界内生成结构化结果。
 6. 每个任务必须有自动化验证；真实模型 Eval 不进入普通 CI，但相关版本发布前必须执行。
 7. 持久化只实现 Supabase 托管 PostgreSQL 与 Drizzle 适配器，不保留旧本地数据库适配器或双数据库实现；进程内 Worker、固定 `local-user` 和静态 Runtime Registry 继续有效。
+8. 当前仍按本机 Hono 服务运行；未来上线使用常驻 Node.js/Hono 服务。两种形态都连接容器或进程外部的 Supabase PostgreSQL，不创建本地数据库文件、数据库持久卷或内存任务事实源。
 
 ## 2. 工作包与依赖
 
@@ -328,7 +329,7 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 
 - Repository 合约测试覆盖 OwnerScope、事务、并发约束和级联。
 - 服务进程重启后可以从 PostgreSQL 恢复 queued/leased/running 运行。
-- 默认 Repository 合约测试使用离线替身；未来提供 `TEST_DATABASE_URL` 时，额外对隔离的临时 PostgreSQL 执行迁移与真实事务集成测试。
+- 默认 Repository 合约测试使用离线替身；需要真实事务证明时，通过现有受控数据库测试启动器和独立测试 Supabase 执行对应 `db:test:milestone`，不直连产品库。
 
 完成标准：
 
@@ -1059,6 +1060,29 @@ Coach 投影：
 - 相关真实模型 Eval 达到已登记阈值。
 - Runtime、Prompt、Route、Strategy、Classifier 版本均已登记。
 - 没有启用 RAG、动态 Plugin、Agent Cron 或 Agent 间通信。
+
+### A9.4 上线前固化常驻服务部署边界
+
+实现：
+
+- Hono 常驻服务同时承载 HTTP/SSE、Coordinator、独立 Player/Coach 进程内 Worker 和 Runtime。
+- 将当前回环监听和本机 Host/Origin 白名单改为经过独立安全设计的部署配置；本任务不能顺带猜测公网域名、认证或反向代理契约。
+- API 创建并持久化 AgentRun 后返回运行标识，不用单次长 HTTP 请求承载完整模型执行。
+- 运行时只注入 `DATABASE_URL`；发布迁移步骤独立使用 `DATABASE_MIGRATION_URL`，服务启动不执行 DDL。
+- 容器不创建本地数据库文件，也不挂载数据库持久卷；Supabase PostgreSQL 是唯一运行数据事实源。
+- 实现优雅关闭：停止领取新运行，使当前外部请求失效或有界收敛，并确保迟到结果不能越过租约、fencing 和 Commit Gate。
+- 健康检查区分进程存活与就绪；数据库不可连接或迁移不兼容时不得进入可写就绪状态。
+
+验证：
+
+- 模拟 API 请求结束后 Worker 仍可完成已持久化 AgentRun。
+- 模拟进程重启后从 PostgreSQL 读取未完成运行，并按 Player/Coach 各自恢复策略处理。
+- 扫描部署配置，确认不存在 SQLite、本地数据库路径或数据库卷依赖。
+- 验证模型调用和 SSE 发布都不发生在 PostgreSQL 事务内部。
+
+完成标准：
+
+- 单常驻服务满足已确认的网络、安全、身份和健康检查设计后可以上线运行，同时不把正确性绑定到单进程；未来拆分 API/Worker 不改变 AgentRun、Runtime 或 Commit Gate 契约。
 
 ## 13. 明确延期项
 

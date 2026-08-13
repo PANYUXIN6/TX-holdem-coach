@@ -858,6 +858,16 @@ export const PublicSessionSnapshotSchema = z
     let userCount = 0
 
     snapshot.seats.forEach((seat, index) => {
+      if (
+        index > 0 &&
+        seat.seatNumber <= snapshot.seats[index - 1]!.seatNumber
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '公开座位必须按座位号严格升序。',
+          path: ['seats', index, 'seatNumber'],
+        })
+      }
       if (seatNumbers.has(seat.seatNumber)) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -894,6 +904,44 @@ export const PublicSessionSnapshotSchema = z
         path: ['seats'],
       })
     }
+    const hasActiveDecision = snapshot.activeDecision !== null
+    if ((snapshot.agentRunState === 'thinking') !== hasActiveDecision) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '思考态必须且只能携带活动决策摘要。',
+        path: ['activeDecision'],
+      })
+    }
+    if (snapshot.activeDecision !== null) {
+      const actorSeat = snapshot.seats.find(
+        (seat) => seat.seatNumber === snapshot.activeDecision?.actorSeatNumber,
+      )
+      if (
+        actorSeat === undefined ||
+        actorSeat.isUser ||
+        snapshot.hand?.currentActorSeatNumber !==
+          snapshot.activeDecision.actorSeatNumber
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '活动决策必须指向当前行动的 AI 座位。',
+          path: ['activeDecision', 'actorSeatNumber'],
+        })
+      }
+    }
+    if (
+      snapshot.lifecycleStatus === 'ended' &&
+      (snapshot.pokerPhase !== 'betweenHands' ||
+        snapshot.hand !== null ||
+        snapshot.agentRunState !== 'idle' ||
+        snapshot.activeDecision !== null)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '已结束场次必须处于空闲的两手之间状态。',
+        path: ['lifecycleStatus'],
+      })
+    }
     if (
       (snapshot.pokerPhase === 'inHand' &&
         (snapshot.hand === null ||
@@ -906,6 +954,21 @@ export const PublicSessionSnapshotSchema = z
         path: ['pokerPhase'],
       })
     if (snapshot.hand !== null) {
+      const userCanAct =
+        snapshot.lifecycleStatus === 'active' &&
+        snapshot.agentRunState === 'idle' &&
+        snapshot.hand.currentActorSeatNumber === 0
+      if (
+        snapshot.hand.heroHoleCards === null ||
+        (userCanAct && snapshot.hand.legalActions.length === 0) ||
+        (!userCanAct && snapshot.hand.legalActions.length !== 0)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '当前手的用户底牌和合法动作必须与行动权一致。',
+          path: ['hand'],
+        })
+      }
       let previous = -1
       const publicSeatNumbers = new Set(
         snapshot.seats.map((seat) => seat.seatNumber),
@@ -980,6 +1043,7 @@ export const SseEventSchema = z
   })
   .superRefine((event, context) => {
     if (
+      event.sessionId !== event.payload.snapshot.sessionId ||
       event.eventSeq !== event.payload.snapshot.eventSeq ||
       event.stateVersion !== event.payload.snapshot.stateVersion
     )

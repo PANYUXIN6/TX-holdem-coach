@@ -8,6 +8,7 @@ import type { PersonaCatalog } from '../personas/catalog.js'
 import type { ProviderHealthService } from '../providers/provider-health-service.js'
 import type { PlayerAgentSettingsService } from '../settings/player-agent-settings-service.js'
 import type { SessionDataDeletionService } from '../sessions/session-data-deletion-service.js'
+import type { CommittedSessionEventHub } from '../sessions/public-projection/committed-session-event-hub.js'
 import { registerAgentSettingsRoutes } from './agent-settings-routes.js'
 import type { ApiVariables } from './api-context.js'
 import { registerDataRoutes } from './data-routes.js'
@@ -29,6 +30,7 @@ export interface ApiRuntime {
   readonly personaCatalog: PersonaCatalog
   readonly deletion: SessionDataDeletionService
   readonly sessionHttp?: SessionHttpPorts
+  readonly committedSessionEvents?: CommittedSessionEventHub
 }
 
 export interface ApiAppOptions {

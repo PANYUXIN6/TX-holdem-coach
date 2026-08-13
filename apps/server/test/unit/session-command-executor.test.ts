@@ -44,6 +44,7 @@ async function createExecutionFixture(input: {
   preparedResult: PrepareCommandResult
   lifecycleAfter: 'active' | 'ended'
   logPointerRepair?: (repair: unknown) => void
+  publish?: (events: readonly unknown[]) => void
 }) {
   const sessionId = '22222222-2222-4222-8222-222222222222'
   const commandId = '33333333-3333-4333-8333-333333333333'
@@ -197,6 +198,9 @@ async function createExecutionFixture(input: {
     ...(input.logPointerRepair === undefined
       ? {}
       : { logPointerRepair: input.logPointerRepair }),
+    ...(input.publish === undefined
+      ? {}
+      : { committedEventPublisher: { publish: input.publish } }),
   }
   const executor = createSessionCommandExecutor(executorInput)
   return {
@@ -563,6 +567,7 @@ describe('session command execution', () => {
   })
 
   test('assigns one final version and persists a validated stateChanged command', async () => {
+    const publish = vi.fn()
     const baseline = createTestPokerState()
     const poker = createTestPokerState({
       seats: baseline.seats.map((seat) =>
@@ -588,6 +593,7 @@ describe('session command execution', () => {
       commandType: 'rebuy',
       state,
       lifecycleAfter: 'active',
+      publish,
       preparedResult: {
         kind: 'prepared',
         mutation: {
@@ -663,6 +669,8 @@ describe('session command execution', () => {
     expect(fixture.applyRelations).toHaveBeenCalledOnce()
     expect(fixture.completeCommand).toHaveBeenCalledOnce()
     expect(Object.isFrozen(result)).toBe(true)
+    expect(publish).toHaveBeenCalledOnce()
+    expect(publish.mock.calls[0]?.[0]).toMatchObject([{ eventSeq: 20 }])
   })
 
   test('keeps the version and omits the snapshot for stateUnchanged lifecycle events', async () => {
@@ -985,7 +993,7 @@ describe('session command execution', () => {
         payload: { amount: 500 },
       }),
     ).rejects.toBeInstanceOf(SessionCommandInvariantError)
-    expect(fixture.validateSessionMutation).toHaveBeenCalledOnce()
+    expect(fixture.validateSessionMutation).not.toHaveBeenCalled()
     expect(fixture.binding.bindWritePort).not.toHaveBeenCalled()
     expect(fixture.applyRelations).not.toHaveBeenCalled()
     expect(fixture.persistSessionMutation).not.toHaveBeenCalled()

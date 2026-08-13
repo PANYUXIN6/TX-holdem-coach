@@ -52,6 +52,7 @@ import type {
   SnapshotProjectionInput,
   SnapshotProjectorBinding,
 } from './snapshot-projector.js'
+import type { CommittedSessionEventPublisher } from '../public-projection/committed-session-event-hub.js'
 
 export type StableSessionCommandErrorCode =
   | StableCommandRejectionCode
@@ -271,6 +272,12 @@ export function createSessionCommandExecutor(input: {
   readonly now: () => string
   readonly nextEventId: () => string
   readonly logPointerRepair?: (repair: unknown) => void
+  readonly committedEventPublisher?: CommittedSessionEventPublisher
+  readonly logPublishFailure?: (input: {
+    readonly eventCount: number
+    readonly firstEventSeq: number
+    readonly lastEventSeq: number
+  }) => void
 }): SessionCommandExecutor {
   const {
     sql,
@@ -284,6 +291,8 @@ export function createSessionCommandExecutor(input: {
     now,
     nextEventId,
     logPointerRepair,
+    committedEventPublisher,
+    logPublishFailure,
   } = input
   if (recoveryRepository.sessionMutationRepository !== mutationRepository) {
     throw new SessionCommandCompositionError()
@@ -573,19 +582,25 @@ export function createSessionCommandExecutor(input: {
               }
               eventIds.add(eventId)
               const eventSeq = recovery.locked.nextEventSeq + index
-              const publicSnapshot = PublicSessionSnapshotSchema.parse({
+              const publicSnapshot = PublicSessionSnapshotSchema.safeParse({
                 ...finalSnapshot,
                 eventSeq,
               })
-              const publicEvent = SseEventSchema.parse({
+              if (!publicSnapshot.success) {
+                throw new SessionCommandInvariantError()
+              }
+              const publicEvent = SseEventSchema.safeParse({
                 protocolVersion: 1,
                 eventId,
                 sessionId: recovery.locked.sessionId,
                 eventSeq,
                 stateVersion: finalStateVersion,
                 type: draft.type,
-                payload: { snapshot: publicSnapshot },
+                payload: { snapshot: publicSnapshot.data },
               })
+              if (!publicEvent.success) {
+                throw new SessionCommandInvariantError()
+              }
               return deepFreeze({
                 eventId,
                 eventSeq,
@@ -597,7 +612,7 @@ export function createSessionCommandExecutor(input: {
                   mutationRepository.currentPrivateEventProtocol.encodeCurrent(
                     draft,
                   ),
-                publicEvent,
+                publicEvent: publicEvent.data,
                 createdAt: commandAt,
               })
             })
@@ -681,6 +696,28 @@ export function createSessionCommandExecutor(input: {
             logPointerRepair(pointerRepair)
           } catch {
             // 提交后诊断日志不改变命令结果。
+          }
+        }
+        if (
+          executionResult.kind === 'completed' &&
+          executionResult.origin === 'newCommit' &&
+          committedEventPublisher !== undefined
+        ) {
+          try {
+            committedEventPublisher.publish(
+              executionResult.newlyPersistedEvents,
+            )
+          } catch {
+            try {
+              logPublishFailure?.({
+                eventCount: executionResult.newlyPersistedEvents.length,
+                firstEventSeq: executionResult.newlyPersistedEvents[0].eventSeq,
+                lastEventSeq:
+                  executionResult.newlyPersistedEvents.at(-1)!.eventSeq,
+              })
+            } catch {
+              // 提交后诊断日志不改变命令结果。
+            }
           }
         }
         return deepFreeze(executionResult)

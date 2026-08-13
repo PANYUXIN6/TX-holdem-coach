@@ -142,6 +142,29 @@ test('adapts injectable session ports without installing a production projector'
   )
   expect(mismatch.status).toBe(400)
   expect(execute).toHaveBeenCalledOnce()
+
+  const retryAgent = await app.request(
+    `${baseUrl}/api/sessions/${sessionId}/commands`,
+    {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: 1,
+        command: {
+          sessionId,
+          commandId: '5907e1bc-26d9-403e-9bcb-e18a7bedf10a',
+          expectedStateVersion: 1,
+          type: 'retryAgent',
+          payload: {},
+        },
+      }),
+    },
+  )
+  expect(retryAgent.status).toBe(409)
+  await expect(retryAgent.json()).resolves.toMatchObject({
+    code: 'COMMAND_NOT_ALLOWED_IN_PHASE',
+  })
+  expect(execute).toHaveBeenCalledOnce()
 })
 
 function commandRequest(commandId: string) {

@@ -140,8 +140,14 @@ function projectSnapshot(input: {
             pot: input.state.poker.hand.pot,
             currentActorSeatNumber:
               input.state.poker.hand.currentActorSeatNumber,
-            heroHoleCards: null,
-            legalActions: [],
+            heroHoleCards: [
+              { rank: 'A' as const, suit: 'spades' as const },
+              { rank: 'K' as const, suit: 'spades' as const },
+            ],
+            legalActions:
+              input.state.poker.hand.currentActorSeatNumber === 0
+                ? [{ type: 'fold' as const }]
+                : [],
             actionTimeline: [],
           },
     lastCompletedHandSummary: null,
@@ -370,6 +376,7 @@ describe('session creation service', () => {
 
   test('atomically creates the first hand and returns the fixed Kimi warning after commit', async () => {
     const dependencies = createDependencies()
+    const publish = vi.fn()
     let identityCalls = 0
     const service = createSessionCreationService({
       sql: dependencies.boundary.sql,
@@ -410,6 +417,7 @@ describe('session creation service', () => {
           },
         },
       },
+      committedEventPublisher: { publish },
     })
 
     const result = await service.create(currentCatalogRequest())
@@ -432,6 +440,12 @@ describe('session creation service', () => {
     expect(result.newlyPersistedEvents.map((event) => event.eventSeq)).toEqual([
       0, 1,
     ])
+    expect(publish).toHaveBeenCalledOnce()
+    expect(
+      (publish.mock.calls[0]?.[0] as { readonly eventSeq: number }[]).map(
+        (event) => event.eventSeq,
+      ),
+    ).toEqual([0, 1])
     expect(dependencies.calls).toEqual([
       'lockOwner',
       'checkActive',

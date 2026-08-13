@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-08-11（M3.5 Hono 安全边界、设置/Provider/人物/删除生产 API 与 PostgreSQL 原子设置验收已完成；场次/命令生产绑定与 SSE 等待 M3.6/M3.7，生产 Commit Gate 待 M4/M8）
+更新时间：2026-08-13（M3.6 同步公开投影、一致事实读取、场次/命令生产绑定与提交后进程内发布已落地；SSE HTTP 传输等待 M3.7）
 
 ## 当前目录与职责
 
@@ -16,6 +16,7 @@
 - `docs/superpowers/specs/2026-08-09-m3-3-player-action-hand-completion-design.md`：M3.3 正式事实源；冻结座位 0 用户行动、M1.9 类型化拒绝、`playerAction` 专属关系计划/verifier、统一命令时间，以及 Hand 完成、Session mutation、事件和账本的同事务提交。完成后保持 `active + betweenHands`，不自动开下一手。
 - `docs/superpowers/specs/2026-08-09-m3-4-rebuy-next-hand-session-end-design.md`：M3.4 正式事实源；冻结两手间用户补码、下一手 AI 自动买入、命令前 checkpoint、正常结束不推进状态版本，以及暂停中止恢复与唯一 failed Player leaf 关联。三种 Handler、命令 verifier、窄读取端口和 `m34` PostgreSQL 验收均已落地，不增加 Contracts、Schema 或 migration。
 - `docs/superpowers/specs/2026-08-11-m3-5-hono-api-error-mapping-design.md`：M3.5 正式事实源；冻结依赖注入 Hono 工厂、本地 Host/Origin/JSON 边界、统一错误映射、Provider 手动检测、Player 设置锁内部分更新、人物与删除 API，以及等待 M3.6 投影后才能安装的场次/命令生产绑定。
+- `docs/superpowers/specs/2026-08-12-m3-6-public-snapshot-sse-safe-projection-design.md`：M3.6 正式事实源；冻结同步有界的唯一生产投影核心、核心外异步事实加载、普通查询单语句读取视图、提交后发布和 M4.8 前 `retryAgent` 在执行器/账本前关闭。
 - `docs/superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md`：M1.7 以后非 Agent 运行时唯一重基线，定义纯引擎、会话聚合、版本、事件、持久化、公开投影和前端同步的事实归属。
 - `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md`：Agent 大模块总体事实源，定义 Foundation、Runtime、权限、运行生命周期、策略事实源、数据模型与当前/未来边界。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
@@ -48,6 +49,7 @@
 - `apps/server/src/poker/poker-engine.ts`：M1 对会话层唯一可调用的行为入口，编排初始化、开手、行动推进与同步结算，绝不返回内部终止状态。
 - `apps/server/src/personas/`：M2.3 人物私有配置落点；原始定义模块不得在求值期解析，配置模块承载永久 Payload Schema、Active 准入、规范 JSON 与快照哈希，目录模块只由 `bootstrap()` 显式加载并生成深冻结的私有目录和公开摘要。
 - `apps/server/src/http/`：M3.5 唯一 HTTP 适配边界；`create-app.ts` 组合安全中间件与路由，其他模块只做严格 Schema 解析、端口调用、状态映射和公开响应复验，不读取环境、不创建数据库连接、不拼装公开快照。
+- `apps/server/src/sessions/public-projection/`：M3.6 生产公开投影边界；同步核心只消费完整事实值，bindings/query service 编排核心外 I/O，进程内 Hub 只分发已提交事件且不保存历史。`persistence/public-projection-repository.ts` 独占 SQL 与版本解码，不读 `public_event_payload` 作为当前事实。
 - `apps/server/src/providers/` 与 `src/settings/`：前者拥有 Provider 固定模型目录检测、10 秒超时、脱敏分类和同 Provider 单飞缓存；后者在同一数据库事务内调用 Player 设置部分更新入口。缓存不保存 Key 或供应商原文，设置服务不维护数据库外镜像。
 - `apps/server/src/persistence/`：PostgreSQL Repository 落点；`database-transaction.ts` 是应用服务共享的最外层事务适配器，只把 BEGIN/COMMIT/连接壳失败归一化为 `DatabaseOperationError`，并原样恢复事务回调主动抛出的领域/不变量错误；M3.1 组合命令账本与 mutation/recovery，M3.2 的 `session-creation-repository.ts` 独占 Owner/来源锁与 roster 写入资格；M3.4 的 `session-lifecycle-repository.ts` 只读取当前 inProgress Hand checkpoint，并按 Owner/Session/Hand/Participant/状态版本解析唯一未替代 failed Player leaf。既有设置、Hand/Agent 审计和删除职责保持不变。
 - `apps/server/src/sessions/command-execution/`：M3.1 Session 命令编排与 M3.3/M3.4 生产 Handler 落点；包含不可变启用 Handler 映射、两阶段候选/capability、命令级 verifier、投影端口、每场尾队列和单事务执行器。`player-action-handler.ts` 组合 M2.7 完成手审计；`rebuy-handler.ts` 只改变用户资金；`start-next-hand-handler.ts` 组合 AI 自动买入、M1.9 与新 Hand；`end-session-handler.ts` 处理正常结束或暂停中止。`aiAction` 与 `retryAgent` 仍安全拒绝；该目录不含 HTTP/SSE 路由或内存业务状态缓存。
@@ -62,9 +64,9 @@
 
 ## 当前主链路
 
-本节描述 M3.5 完成后的代码现状；会话版本仍属于 `PrivateTableState`，纯扑克规则与审计 Repository 都不自行推进它。
+本节描述 M3.6 完成后的代码现状；会话版本仍属于 `PrivateTableState`，纯扑克规则与审计 Repository 都不自行推进它。
 
-根 pnpm 脚本编排三个 workspace；`verify` 固定执行格式检查、类型检查与后端分类测试，且不读取模型 Key、数据库凭据或联网。Server 启动门依次执行配置、人物目录、数据库/迁移精确检查、固定 Owner 解析、M3.5 服务与 `createApp()` 组合，再只监听回环地址。生产已安装健康、Provider、Player 设置、只读人物和删除 API；场次创建/读取/命令适配器已有假端口服务测试，但在 M3.6 提供生产公开 projector 前不进入组合根，SSE 与 Agent 调用仍未实现。
+根 pnpm 脚本编排三个 workspace；`verify` 固定执行格式检查、类型检查与后端分类测试，且不读取模型 Key、数据库凭据或联网。Server 启动门依次执行配置、人物目录、数据库/迁移精确检查、固定 Owner 解析、M3.5 服务、M3.6 事实读取/同步投影/查询/事件 Hub 与 `createApp()` 组合，再只监听回环地址。生产已安装健康、Provider、Player 设置、只读人物、删除、场次创建/读取和命令 API；命令与创建只在事务 COMMIT 后向进程内 Hub 发布新事件，SSE HTTP 传输与 Agent 调用仍未实现。
 
 M3.3 用户行动链固定为“恢复并锁定 Session → 登记命令 → `playerAction.prepare` 调用一次 M1.9 → 专属 verifier → 预验证 mutation → 可选 `completeHandAudit` → Session/快照/事件持久化 → 完成账本 → COMMIT”。M3.4 在同一执行器中增加三条链：补码只写用户资金；下一手在一个事务内写 AI 自动买入、checkpoint、新 Hand、事件和快照；正常结束不写快照或推进状态版本；暂停中止按 `Session → Hand → AgentRun` 锁序恢复 checkpoint、标记 Hand aborted 并结束 Session。`aiAction` 仍由后续里程碑拥有。
 

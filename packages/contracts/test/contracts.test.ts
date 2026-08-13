@@ -475,6 +475,17 @@ describe('共享外部协议', () => {
       SseEventSchema.safeParse({
         protocolVersion: 1,
         eventId: ids.event,
+        sessionId: ids.command,
+        eventSeq: 8,
+        stateVersion: 4,
+        type: 'handStarted',
+        payload: { snapshot: publicSnapshot },
+      }).success,
+    ).toBe(false)
+    expect(
+      SseEventSchema.safeParse({
+        protocolVersion: 1,
+        eventId: ids.event,
         sessionId: ids.session,
         eventSeq: 8,
         stateVersion: 3,
@@ -923,6 +934,60 @@ describe('共享外部协议', () => {
     expect(PublicSessionSnapshotSchema.safeParse(duplicateAiSeat).success).toBe(
       false,
     )
+    expect(
+      PublicSessionSnapshotSchema.safeParse({
+        ...publicSnapshot,
+        seats: [...publicSnapshot.seats].reverse(),
+      }).success,
+    ).toBe(false)
+  })
+
+  it('保持公开决策、行动权和结束态一致', () => {
+    const thinkingSnapshot = {
+      ...publicSnapshot,
+      agentRunState: 'thinking' as const,
+      activeDecision: {
+        decisionRequestId: ids.command,
+        actorSeatNumber: 1,
+      },
+      hand: {
+        ...publicSnapshot.hand,
+        currentActorSeatNumber: 1,
+        legalActions: [],
+      },
+    }
+    expect(
+      PublicSessionSnapshotSchema.safeParse(thinkingSnapshot).success,
+    ).toBe(true)
+    for (const snapshot of [
+      { ...publicSnapshot, agentRunState: 'thinking', activeDecision: null },
+      {
+        ...thinkingSnapshot,
+        activeDecision: {
+          ...thinkingSnapshot.activeDecision,
+          actorSeatNumber: 0,
+        },
+      },
+      {
+        ...publicSnapshot,
+        hand: { ...publicSnapshot.hand, heroHoleCards: null },
+      },
+      {
+        ...publicSnapshot,
+        hand: {
+          ...publicSnapshot.hand,
+          currentActorSeatNumber: 1,
+        },
+      },
+      {
+        ...publicSnapshot,
+        lifecycleStatus: 'ended',
+      },
+    ]) {
+      expect(PublicSessionSnapshotSchema.safeParse(snapshot).success).toBe(
+        false,
+      )
+    }
   })
 
   it('以严格且状态一致的 Provider 设置协议表达健康摘要', () => {

@@ -22,6 +22,7 @@ import {
 import type { StableSessionCommandErrorCode } from '../sessions/command-execution/session-command-executor.js'
 import { HttpBoundaryError } from './request-boundary.js'
 import { HttpOutputValidationError } from './response.js'
+import { SessionReadonlyDiagnosticError } from '../sessions/public-projection/errors.js'
 
 export type StableSessionHttpErrorCode = StableSessionCommandErrorCode
 
@@ -98,6 +99,12 @@ export function mapHttpError(error: unknown): {
         code: 'COMMAND_ID_CONFLICT',
         message: '命令标识已绑定到不同请求。',
       }),
+    }
+  }
+  if (error instanceof SessionReadonlyDiagnosticError) {
+    return {
+      status: 409,
+      response: errorResponse({ code: error.code, message: error.message }),
     }
   }
   if (

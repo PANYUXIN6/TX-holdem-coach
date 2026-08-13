@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import { serve } from '@hono/node-server'
 import { createApp, type ApiRuntime } from './app.js'
 import {
   loadServerConfig,
   ServerConfigurationError,
   type ServerConfig,
+  getProviderCreationPolicy,
 } from './config.js'
 import { initializeDatabase, StartupError } from './startup.js'
 import type { DatabaseClient } from './db/client.js'
@@ -18,6 +20,25 @@ import { createProviderHealthService } from './providers/provider-health-service
 import { createHealthService } from './http/health-service.js'
 import { createPlayerAgentSettingsService } from './settings/player-agent-settings-service.js'
 import { createSessionDataDeletionService } from './sessions/session-data-deletion-service.js'
+import { createSessionCreationRepository } from './persistence/session-creation-repository.js'
+import { productionSessionMutationRepository } from './persistence/session-mutation-repository.js'
+import { productionSessionRecoveryRepository } from './persistence/session-recovery-repository.js'
+import { insertInProgressHandAudit } from './persistence/hand-audit-repository.js'
+import { createPublicProjectionFactsRepository } from './persistence/public-projection-repository.js'
+import { productionSnapshotVersionRegistry } from './sessions/authoritative-state/snapshot-version-registry.js'
+import { productionPrivateEventVersionRegistry } from './sessions/authoritative-state/private-event-version-registry.js'
+import { SECURE_RANDOM_SOURCE } from './poker/random-source.js'
+import { createSessionCreationIdentityGraph } from './sessions/session-creation/session-creation-consistency.js'
+import { createSessionCreationService } from './sessions/session-creation/session-creation-service.js'
+import { createSessionCommandHandlerMap } from './sessions/command-execution/command-handler-map.js'
+import { createPlayerActionHandlerBinding } from './sessions/command-execution/player-action-handler.js'
+import { createRebuyHandlerBinding } from './sessions/command-execution/rebuy-handler.js'
+import { createStartNextHandHandlerBinding } from './sessions/command-execution/start-next-hand-handler.js'
+import { createEndSessionHandlerBinding } from './sessions/command-execution/end-session-handler.js'
+import { createSessionCommandExecutor } from './sessions/command-execution/session-command-executor.js'
+import { createCommittedSessionEventHub } from './sessions/public-projection/committed-session-event-hub.js'
+import { createPublicSessionBindings } from './sessions/public-projection/public-session-bindings.js'
+import { createPublicSessionQueryService } from './sessions/public-projection/public-session-query-service.js'
 
 function createLocalWebOrigins(port: number): ReadonlySet<string> {
   return new Set([
@@ -39,6 +60,78 @@ export async function createApiRuntime(
   } catch {
     throw new StartupError('databaseConnectionFailed')
   }
+  const committedSessionEvents = createCommittedSessionEventHub({
+    onListenerError: () =>
+      console.error(JSON.stringify({ category: 'sse_listener_failed' })),
+  })
+  const projectionBindings = createPublicSessionBindings(owner)
+  const mutationRepository = productionSessionMutationRepository
+  const recoveryRepository = productionSessionRecoveryRepository
+  const creationRepository = createSessionCreationRepository()
+  const logPublishFailure = (entry: {
+    readonly eventCount: number
+    readonly firstEventSeq: number
+    readonly lastEventSeq: number
+  }) =>
+    console.error(
+      JSON.stringify({ category: 'committed_event_publish_failed', ...entry }),
+    )
+  const creation = createSessionCreationService({
+    sql: database.sql,
+    catalog: personaCatalog,
+    readProviderPolicy: () => getProviderCreationPolicy(config),
+    createIdentityGraph: (seatNumbers) =>
+      createSessionCreationIdentityGraph(seatNumbers),
+    randomSource: SECURE_RANDOM_SOURCE,
+    now: () => new Date().toISOString(),
+    creationRepository,
+    mutationRepository,
+    handAuditWriter: {
+      insertInProgress: (transaction, scopedOwner, input) =>
+        insertInProgressHandAudit(transaction, scopedOwner, input),
+    },
+    snapshotProjectorBinding: projectionBindings.creation,
+    activeSessionSnapshotReaderBinding: projectionBindings.activeReader,
+    committedEventPublisher: committedSessionEvents,
+    logPublishFailure,
+  })
+  const handlers = createSessionCommandHandlerMap({
+    enabledCommandTypes: [
+      'playerAction',
+      'rebuy',
+      'startNextHand',
+      'endSession',
+    ],
+    bindings: [
+      createPlayerActionHandlerBinding({ owner }),
+      createRebuyHandlerBinding(),
+      createStartNextHandHandlerBinding({
+        owner,
+        nextHandId: randomUUID,
+        randomSource: SECURE_RANDOM_SOURCE,
+      }),
+      createEndSessionHandlerBinding({ owner }),
+    ],
+  })
+  const commands = createSessionCommandExecutor({
+    sql: database.sql,
+    owner,
+    handlers,
+    mutationRepository,
+    recoveryRepository,
+    recoveryRegistries: {
+      snapshot: productionSnapshotVersionRegistry,
+      privateEvent: productionPrivateEventVersionRegistry,
+    },
+    snapshotProjectorBinding: projectionBindings.command,
+    now: () => new Date().toISOString(),
+    nextEventId: randomUUID,
+    committedEventPublisher: committedSessionEvents,
+    logPublishFailure,
+  })
+  const query = createPublicSessionQueryService(
+    createPublicProjectionFactsRepository({ sql: database.sql, owner }),
+  )
   return Object.freeze({
     health: createHealthService(database.sql),
     providerHealth: createProviderHealthService({
@@ -52,6 +145,8 @@ export async function createApiRuntime(
     }),
     personaCatalog,
     deletion: createSessionDataDeletionService({ sql: database.sql, owner }),
+    sessionHttp: { creation, query, commands },
+    committedSessionEvents,
   })
 }
 

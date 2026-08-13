@@ -16,6 +16,7 @@ import { assertM32SessionCreation } from './database-m32-assertions.js'
 import { assertM33PlayerActionHandCompletion } from './database-m33-assertions.js'
 import { assertM34RebuyNextHandSessionEnd } from './database-m34-assertions.js'
 import { assertM35HttpAndAtomicSettings } from './database-m35-assertions.js'
+import { assertM36PublicProjectionRuntime } from './database-m36-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -209,6 +210,12 @@ registerMilestoneTest(
   'm35',
   'M3.5 HTTP, transactions, and atomic Player settings',
   (sql, runtimeUrl) => assertM35HttpAndAtomicSettings(sql, runtimeUrl),
+  300_000,
+)
+registerMilestoneTest(
+  'm36',
+  'M3.6 public projection runtime',
+  (sql, runtimeUrl) => assertM36PublicProjectionRuntime(sql, runtimeUrl),
   300_000,
 )
 registerMilestoneTest(

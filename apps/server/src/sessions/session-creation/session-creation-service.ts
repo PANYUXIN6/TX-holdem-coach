@@ -41,6 +41,7 @@ import type {
   ActiveSessionSnapshotReaderBinding,
   SessionCreationSnapshotProjectorBinding,
 } from './session-creation-projector.js'
+import type { CommittedSessionEventPublisher } from '../public-projection/committed-session-event-hub.js'
 
 export interface ProviderCreationPolicy {
   readonly deepSeekConfigured: boolean
@@ -132,6 +133,12 @@ export function createSessionCreationService(input: {
   readonly handAuditWriter: HandAuditCreationWriter
   readonly snapshotProjectorBinding: SessionCreationSnapshotProjectorBinding
   readonly activeSessionSnapshotReaderBinding: ActiveSessionSnapshotReaderBinding
+  readonly committedEventPublisher?: CommittedSessionEventPublisher
+  readonly logPublishFailure?: (input: {
+    readonly eventCount: number
+    readonly firstEventSeq: number
+    readonly lastEventSeq: number
+  }) => void
 }): SessionCreationService {
   const {
     sql,
@@ -145,6 +152,8 @@ export function createSessionCreationService(input: {
     handAuditWriter,
     snapshotProjectorBinding,
     activeSessionSnapshotReaderBinding,
+    committedEventPublisher,
+    logPublishFailure,
   } = input
 
   const assertRosterMirrorsPlan = (
@@ -255,7 +264,7 @@ export function createSessionCreationService(input: {
       const plan = createSessionCreationPlan({ identityGraph, randomSource })
       const mutationAt = now()
 
-      return runDatabaseTransaction(sql, async (transaction) => {
+      const result = await runDatabaseTransaction(sql, async (transaction) => {
         const lockedOwner =
           await creationRepository.lockOwnerForSessionCreation(
             transaction,
@@ -481,6 +490,22 @@ export function createSessionCreationService(input: {
           ],
         })
       })
+      if (result.kind === 'created' && committedEventPublisher !== undefined) {
+        try {
+          committedEventPublisher.publish(result.newlyPersistedEvents)
+        } catch {
+          try {
+            logPublishFailure?.({
+              eventCount: result.newlyPersistedEvents.length,
+              firstEventSeq: result.newlyPersistedEvents[0].eventSeq,
+              lastEventSeq: result.newlyPersistedEvents.at(-1)!.eventSeq,
+            })
+          } catch {
+            // 提交后诊断日志不改变创建结果。
+          }
+        }
+      }
+      return result
     },
   })
 }

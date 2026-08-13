@@ -49,6 +49,7 @@ export type DataCorruptionKind =
   | 'invalidInitialMemory'
   | 'invalidCommandLedger'
   | 'invalidSessionMutationState'
+  | 'invalidPublicProjectionFacts'
   | 'invalidHandAudit'
   | 'invalidAgentRunAudit'
   | 'invalidAgentAttemptAudit'

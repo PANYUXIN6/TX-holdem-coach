@@ -87,7 +87,10 @@ import { createSessionCommandHandlerMap } from '../../src/sessions/command-execu
 import { createSessionCommandExecutor } from '../../src/sessions/command-execution/session-command-executor.js'
 import type { PreparedMutationCapability } from '../../src/sessions/command-execution/command-handler.js'
 import type { SnapshotProjectionInput } from '../../src/sessions/command-execution/snapshot-projector.js'
-import { createTestPokerState } from '../poker/create-test-poker-state.js'
+import {
+  createTestBettingPokerState,
+  createTestPokerState,
+} from '../poker/create-test-poker-state.js'
 import { createDatabaseFixtureContext } from './database-fixture-context.js'
 import {
   createDatabaseTestSqlForRole,
@@ -3615,11 +3618,29 @@ function createM27ThinkingMutationBatch(input: {
     nextEventSeq: 0,
     mutationAt: '2026-08-04T13:00:00.000Z',
   })
+  const poker = createTestBettingPokerState({
+    hand: {
+      handId: input.handId,
+      currentActorSeatNumber: input.actorSeatNumber,
+    },
+  })
+  const privateState = createPrivateTableState({
+    stateVersion: base.finalStateVersion,
+    poker,
+    completedHandCount: 0,
+    seatAccounting: poker.seats.map((seat) => ({
+      seatNumber: seat.seatNumber,
+      cumulativeBuyIn: 2_000,
+    })),
+    lastCompletedHandSummary: null,
+  })
   return {
     ...base,
+    currentHandId: input.handId,
     agentRunState: 'thinking',
     activePlayerRunId: input.agentRunId,
     activeDecisionRequestId: input.decisionRequestId,
+    snapshot: encodeSnapshotV1(privateState),
     events: base.events.map((event) => ({
       ...event,
       publicEvent: {
@@ -3627,10 +3648,26 @@ function createM27ThinkingMutationBatch(input: {
         payload: {
           snapshot: {
             ...event.publicEvent.payload.snapshot,
+            pokerPhase: 'inHand',
             agentRunState: 'thinking',
             activeDecision: {
               decisionRequestId: input.decisionRequestId,
               actorSeatNumber: input.actorSeatNumber,
+            },
+            hand: {
+              handId: input.handId,
+              street: poker.hand!.street,
+              board: [...poker.hand!.board],
+              pot: poker.hand!.pot,
+              currentActorSeatNumber: input.actorSeatNumber,
+              heroHoleCards:
+                poker
+                  .hand!.holeCards.find(
+                    (holeCards) => holeCards.seatNumber === 0,
+                  )
+                  ?.cards.map((card) => ({ ...card })) ?? null,
+              legalActions: [],
+              actionTimeline: [],
             },
           },
         },

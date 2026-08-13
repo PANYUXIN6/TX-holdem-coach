@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-08-11（M3.5 Hono 安全边界与设置/Provider/人物/删除 API 已落地；场次/命令生产绑定和 SSE 等待 M3.6/M3.7，生产 Commit Gate 仍待 M4/M8）
+更新时间：2026-08-13（M3.6 公开投影、场次/命令生产绑定和提交后进程内发布已落地；SSE HTTP 传输等待 M3.7）
 
 ## Workspace 边界
 
@@ -15,6 +15,7 @@
 - M3.1 已新增 `src/sessions/command-execution/`，以不可变启用 Handler 映射、两阶段事务端口和每场 Promise 尾队列组合 M2.4–M2.6；M3.3/M3.4 在同一边界增加 `playerAction`、`rebuy`、`startNextHand`、`endSession` 生产 Handler、类型化稳定拒绝和专属 verifier。执行器在关系写入前冻结并验证最终状态、V2 私有事件、公开投影、SSE 与提交批次，只在 COMMIT 后返回本次新事件。用户行动按 `Session → Hand` 完成审计；下一手原子插入 Hand；暂停中止通过 `session-lifecycle-repository.ts` 读取唯一 failed Player leaf，并按 `Session → Hand → AgentRun` 恢复 checkpoint 和中止 Hand。`aiAction`、`retryAgent` 仍等待后续 verifier。详细事实源见 [M3.1 设计](./superpowers/specs/2026-08-05-m3-1-session-command-executor-design.md)、[M3.3 设计](./superpowers/specs/2026-08-09-m3-3-player-action-hand-completion-design.md)与 [M3.4 设计](./superpowers/specs/2026-08-09-m3-4-rebuy-next-hand-session-end-design.md)。
 - M3.2 已新增 `src/sessions/session-creation/` 与 `src/persistence/session-creation-repository.ts`。创建服务在事务外严格解析、读取 Provider 能力、准备阵容并一次生成身份/首手计划；事务内按 `Owner → active Session → 可选来源 ended Session → 新 Session` 锁序取得一次性 roster capability，组合 M2.7 Hand writer 与 M2.5 mutation writer，原子提交 roster、空记忆、首手、两条 V2 事件和最终快照；latest-ended 的来源缺失、来源变化和模型失效在服务边界分别稳定为 `ROSTER_SOURCE_NOT_FOUND|ROSTER_SOURCE_CHANGED|ROSTER_MODEL_INACTIVE`。创建不登记命令账本；当前只提供测试 projector/active reader，尚未安装生产路由。详细事实源见 [M3.2 设计](./superpowers/specs/2026-08-09-m3-2-session-creation-roster-snapshot-design.md)。
 - M3.5 已新增 `src/http/`、`src/providers/`、`src/settings/` 与删除应用服务。`createApp()` 是唯一 HTTP 组合入口，先执行回环 Host、精确 Origin、JSON MIME、流式 64 KiB、无查询参数和安全响应头门禁，再由路由严格解析 Contracts、调用应用端口并复验公开输出；请求日志只记录 requestId、方法、路由模板、状态、稳定错误码和耗时。Provider 检测只访问固定 models 端点，使用覆盖响应正文读取的端到端 10 秒超时、流式 256 KiB 响应上限、同 Provider 单飞和进程缓存，并只记录 Provider、公开分类和耗时；Player 设置部分更新通过默认行竞争与 `FOR UPDATE` 在锁内重读、合并、完整复验和更新。生产只安装健康、Provider、设置、人物和删除路由，场次/命令适配器等待 M3.6 公开投影。详细事实源见 [M3.5 设计](./superpowers/specs/2026-08-11-m3-5-hono-api-error-mapping-design.md)。
+- M3.6 已新增 `src/sessions/public-projection/` 与 `src/persistence/public-projection-repository.ts`。SQL adapter 在同一读取视图加载并严格解码事实，同步 projector 只消费完整事实值；创建、命令与查询共用该核心。生产现已安装四组场次路由，进程内 Hub 只分发 COMMIT 后事件且不保存历史；M3.7 将以 `subscribe()` 为实时入口并从 PostgreSQL 补发。
 - `apps/server/.env.example` 提供脱敏占位的线上运行/迁移连接与 Provider Key；`.env.test.example` 只提供两条测试 URL。真实值只存在于后端、Git 忽略的 `.env.test.local` 或部署环境，project ref 不由环境声明。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与 `service/` 分类。普通 `verify` 明确不收集远程数据库测试文件。受控启动器支持迁移-only、单个 `m22…m28`/`m31`/`m32`/`m33`/`m34`/`m35`、显式遗留事务清理和最终 full，并在首个失败或阶段超时后停止调度后续里程碑；`m35` 通过真实 Hono app 与双 PostgreSQL 连接验收设置默认/重启读取、已有行/首次建行的并发 HTTP PATCH、人物零写、场次/命令映射、删除矩阵和真实事务壳失败回滚。所有测试连接继续携带 Run ID 标签和数据库侧超时。
 - M2.4–M2.8 单元测试只通过公开构造器、Codec、纯决策和 Repository API 验证契约、capability、写前拒绝及错误转换；`db:test:full` 额外以真实 PostgreSQL 验证 Owner 条件、级联/回滚、`FOR UPDATE` 阻塞、双连接竞争、15 张 Session-scoped 子表清除、设置保留，以及当前/历史阵容创建的 Owner 与精确来源锁协议。默认离线验证不执行该远程文件。
@@ -23,7 +24,7 @@
 
 ## 依赖方向
 
-共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路只由 `poker-engine.ts` 对上层组合；M2.5/M2.6 固定为 `poker/state + hand-result → authoritative-state → mutation/recovery Repository → postgres.js`；M3.1/M3.3/M3.4 为 `command-execution → poker-engine + Hand audit + lifecycle reader + ledger + mutation + recovery`，执行器拥有唯一外层事务；M3.2 为 `session-creation → poker-engine + creation Repository + Hand writer + mutation writer`；M3.5 为 `Hono routes → application services → persistence/provider/persona ports`，HTTP 不反向进入领域或 Repository。生产公开投影与 SSE 仍由 M3.6/M3.7 安装，生产 Player/Coach Commit Gate 仍由 M4/M8 实现。
+共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路只由 `poker-engine.ts` 对上层组合；M2.5/M2.6 固定为 `poker/state + hand-result → authoritative-state → mutation/recovery Repository → postgres.js`；M3.1/M3.3/M3.4 为 `command-execution → poker-engine + Hand audit + lifecycle reader + ledger + mutation + recovery`，执行器拥有唯一外层事务；M3.2 为 `session-creation → poker-engine + creation Repository + Hand writer + mutation writer`；M3.5/M3.6 为 `Hono routes → application services → public projection bindings → persistence/provider/persona ports`，HTTP 不反向进入领域或 Repository。生产公开投影已由 M3.6 安装；SSE HTTP 传输由 M3.7 安装，生产 Player/Coach Commit Gate 仍由 M4/M8 实现。
 
 ## 设计评审开发工具边界
 
@@ -31,7 +32,7 @@
 
 ## 当前运行链路
 
-`pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 不启动服务、不联网，也不读取模型 Key 或数据库凭据。Server 入口按“加载 dotenv → 校验私有配置 → 显式加载并校验人物目录 → 创建运行时客户端 → `SELECT 1` → 只读 `exact` 核验迁移日志 → 解析固定 Owner → 创建进程级 Provider/设置/删除服务 → `createApp()` → 仅监听 `127.0.0.1`”运行；组合失败在监听前关闭已创建客户端。M3.2 场次创建服务当前不进入生产 HTTP 组合，直到 M3.6 提供公开 projector。
+`pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 不启动服务、不联网，也不读取模型 Key 或数据库凭据。Server 入口按“加载 dotenv → 校验私有配置 → 显式加载并校验人物目录 → 创建运行时客户端 → `SELECT 1` → 只读 `exact` 核验迁移日志 → 解析固定 Owner → 创建进程级 Provider/设置/删除服务 → 创建 M3.6 事实读取、同步投影、查询与提交后事件 Hub → `createApp()` → 仅监听 `127.0.0.1`”运行；组合失败在监听前关闭已创建客户端。生产 HTTP 已安装场次创建、活动场次、按 ID 查询和命令入口；`retryAgent` 在执行器与账本登记前稳定拒绝，SSE HTTP 传输等待 M3.7。
 
 M2.4 调用链固定为“事务外严格 prepare 命令与解析 Owner → 上层事务锁定 Session → `registerCommand` → 业务事实/事件/快照 → `completeCommand` 或可安全提交的 `failCommand`”。登记只以冲突安全插入实际返回一行为 acquired 判据，未插入后才读取同键既有状态；重放再次校验载荷版本、Contracts Schema、Session/版本镜像和终态矩阵。Repository 自身不开启事务、不锁 Session、不推进扑克状态、不分配事件序号，也不发布 SSE；基础设施与未知异常由上层整笔回滚。
 

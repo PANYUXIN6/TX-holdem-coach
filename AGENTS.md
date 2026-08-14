@@ -28,3 +28,10 @@
 - 远程数据库测试必须串行执行，不得并行运行 full 和 milestone。
 - 最终报告必须明确列出已执行和未执行的测试，不得把 milestone 通过描述为 full 通过。
 
+## 代码简化
+
+- `simplify-codebase` 触发后必须先阅读 `docs/DEFENSIVE_PATTERNS.md`；不得把版本 Codec、legacy reader、migration、事务防御或 SSE 生命周期机械合并。
+- 孤立的 unused import、variable 或类型属于普通 lint，不调用 `simplify-codebase`。轻量清理依次执行定向测试、`pnpm run simplify:light`；定向测试由改动所在 workspace 选择。
+- 深度清理依次执行 lint/unused、Knip、重复报告、`pnpm run verify`、`pnpm run build` 和 `pnpm --filter @tx-holdem-coach/server run verify:migration-assets`，可用 `pnpm run simplify:deep` 聚合后续步骤。
+- 数据库相关变更仍严格遵循本文件既有 milestone/full 规则；不得把远程数据库测试硬编码进每次 deep cleanup。
+- 不得为了通过分析器扩大 ignore。每个排除项必须有仓库事实理由；工具结果只产生候选，删除前仍需消费者与契约证据。

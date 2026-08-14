@@ -1,0 +1,45 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  "ignore": [
+    ".superpowers/**",
+    "node_modules/**",
+    ".pnpm-store/**",
+    "dist/**",
+    "coverage/**",
+    "apps/web/public/poker/**",
+    "apps/server/src/db/migrations/**"
+  ],
+  "workspaces": {
+    "apps/server": {
+      "entry": [
+        "src/index.ts",
+        "scripts/*.mjs",
+        "drizzle.config.ts",
+        "drizzle.integration.config.ts",
+        "drizzle.release.config.ts",
+        "vitest.config.ts",
+        "test/**/*.{test,spec}.{ts,mjs}",
+        "test/integration/database-infrastructure.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "scripts/**/*.mjs",
+        "*.config.ts",
+        "test/**/*.{ts,mjs}"
+      ],
+      "ignore": ["src/db/migrations/**"],
+      "drizzle": false,
+      "vitest": false,
+      "vite": false
+    },
+    "apps/web": {
+      "entry": ["src/main.tsx", "vite.config.ts"],
+      "project": ["src/**/*.{ts,tsx}", "vite.config.ts"],
+      "vite": false
+    },
+    "packages/contracts": {
+      "entry": ["src/index.ts", "test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.test.ts"]
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "minTokens": 60,
+  "minLines": 6,
+  "format": ["typescript", "tsx"],
+  "ignore": [
+    "**/.superpowers/**",
+    "**/node_modules/**",
+    "**/.pnpm-store/**",
+    "**/dist/**",
+    "**/coverage/**",
+    "**/test/**",
+    "**/migrations/**",
+    "**/*.generated.*",
+    "apps/web/public/poker/**"
+  ],
+  "reporters": ["console"],
+  "noGitignore": false
+}

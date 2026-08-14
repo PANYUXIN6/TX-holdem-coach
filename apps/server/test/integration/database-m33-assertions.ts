@@ -4,7 +4,6 @@ import {
   ErrorResponseSchema,
   SseEventSchema,
   type PokerAction,
-  type SseEvent,
 } from '@tx-holdem-coach/contracts'
 import type { Sql, TransactionSql } from 'postgres'
 import { expect } from 'vitest'

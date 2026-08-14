@@ -27,10 +27,11 @@
 - `docs/superpowers/plans/2026-07-26-agent-module-development-tasks.md`：Agent 大模块 A0–A9 详细任务、依赖、测试闭环和完成定义。
 - `docs/superpowers/plans/2026-07-26-six-to-nine-player-code-refactor.md`：记录从 2–6 人改为 6–9 人后的 M0 Contracts 与人物目录返工范围及完成状态。
 - `docs/ARCHITECTURE.md`：M0.1 建立的 workspace 边界、入口点和依赖方向。
-- `.agents/skills/review-design-contracts/`：仓库级设计文档评审工具入口；主链为“显式 Skill → Runner 生成 `fork_turns: none` 封闭任务包 → Native Subagent 串行执行 L1/L2、按配置有界分批执行单候选 L3 → Runner 推进证据门禁 → 人工逐条仲裁”。L1 响应被确定性拆成契约账本与隔离候选，L2 不接收 L1 候选；任一层合法声明输入不足都会以 `INSUFFICIENT_INPUT` 原子终止，不产生部分人工结果。`human-review.md` 只用稳定短序号展示当前批次，完整 finding ID 留在 Markdown 注释中；Skill 编排层负责中文选择、自然语言原因映射和提交前确认，Runner 负责原因注册表与 Schema 一致性、批次完整性、理由审计和修复队列准入。运行制品只写入被忽略的 `.superpowers/design-reviews/`，不属于产品运行时。
 - `apps/web/public/poker/`：唯一的扑克牌静态资源目录，含 52 张标准牌、牌背和两张 Joker；Vite 浏览器路径为 `/poker/<filename>`，不得替换或修改资源内容。
 - `apikey.txt`：用户本地密钥文件；不作为运行时配置源，开发中不得读取或记录。
-- 根 `package.json`：pnpm workspace 的开发、构建、类型检查、格式检查与测试编排入口；`verify` 按“格式检查 → 类型检查 → 后端测试”执行，`pnpm-lock.yaml` 锁定其依赖树。
+- 根 `package.json`：pnpm workspace 的开发、构建、类型检查、格式检查与测试编排入口；三处 workspace 使用 TypeScript 7。`lint` 先构建 Contracts 声明，再执行含类型感知的 Oxlint；`verify` 按“地图关键路径 → 格式检查 → 类型检查 → 后端测试”执行；`simplify:light` 聚合格式、Oxlint 与 typecheck，`simplify:deep` 再顺序执行 Knip/jscpd 报告、verify、build 与迁移制品校验，远程数据库测试不被硬编码其中；`pnpm-lock.yaml` 锁定其依赖树。
+- `.oxlintrc.json`、`knip.json`、`.jscpd.json`：仓库级静态分析配置。Oxlint 是普通 lint 门禁，使用 `oxlint-tsgolint` 的 TypeScript 7 类型信息；Knip 和 jscpd 只生成候选，入口与排除理由见 `docs/DEFENSIVE_PATTERNS.md`，不能授权删除代码。
+- `scripts/verify-repository-map-paths.mjs`：读取 `docs/REPO_MAP.md` 与 `docs/ARCHITECTURE.md`，校验其中从仓库根起算的明确关键路径仍然存在，防止已删除模块继续被地图声明为当前结构。
 - `pnpm-workspace.yaml`：pnpm 的 workspace 包范围定义。
 - `tsconfig.base.json`：各 workspace 继承的严格 TypeScript 基础选项。
 

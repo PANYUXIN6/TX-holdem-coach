@@ -26,13 +26,13 @@
 
 共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路只由 `poker-engine.ts` 对上层组合；M2.5/M2.6 固定为 `poker/state + hand-result → authoritative-state → mutation/recovery Repository → postgres.js`；M3.1/M3.3/M3.4 为 `command-execution → poker-engine + Hand audit + lifecycle reader + ledger + mutation + recovery`；M3.2 为 `session-creation → poker-engine + creation Repository + Hand writer + mutation writer`；M3.5–M3.7 为 `Hono routes → query/stream application services → public projection bindings + replay persistence + committed Hub`，HTTP 不反向进入领域或 Repository，replay persistence 不持有 Hono stream。生产 Player/Coach Commit Gate 仍由 M4/M8 实现。
 
-## 设计评审开发工具边界
+## 代码分析工具边界
 
-`.agents/skills/review-design-contracts/` 位于产品运行时之外。Native Subagent 只产出候选和对抗结果，Runner 是状态推进、Schema、证据门禁和修复队列准入的唯一机器边界。人工交互适配属于 `SKILL.md`：它用 `human-review.md` 的短序号收集“确认存在违反路径”或带原因的“驳回此发现”，只在含义唯一时把自然语言映射到 `human-rejection-reasons.json` 的稳定枚举，并在提交前再次请求确认。Runner 不解释自然语言，只校验当前批次完整覆盖、拒绝理由非空、注册表与 Schema 一致，并把原始理由写入审计制品；只有人工确认存在违反路径的 finding 才能进入 `fix-queue.json`。
+Oxlint 使用 TypeScript 7 类型信息覆盖普通未使用项、静态错误和未处理 Promise；Contracts 声明先构建以供 monorepo 解析。Knip、jscpd 只报告候选。它们不在产品运行链路、不读取本地凭据，也不能据此删除版本 Codec、legacy reader、迁移、事务防御或 M3.7 SSE 生命周期代码。具体本地事实、排除项和修改验证在 `docs/DEFENSIVE_PATTERNS.md`；远程数据库测试仍由 AGENTS.md 的里程碑规则控制。
 
 ## 当前运行链路
 
-`pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 不启动服务、不联网，也不读取模型 Key 或数据库凭据。Server 入口按“加载 dotenv → 校验私有配置 → 显式加载并校验人物目录 → 创建运行时客户端 → `SELECT 1` → 只读 `exact` 核验迁移日志 → 解析固定 Owner → 创建进程级 Provider/设置/删除服务 → 创建 M3.6 事实读取、同步投影、查询与提交后事件 Hub → 创建 M3.7 replay Repository/stream service → `createApp()` → 仅监听 `127.0.0.1`”运行；组合失败在监听前关闭已创建客户端。生产 HTTP 已安装场次创建、读取、命令和 SSE 入口；`retryAgent` 仍在执行器与账本登记前稳定拒绝。
+`pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 先校验仓库地图声明的明确关键路径，再执行现有离线验证，不启动服务、不联网，也不读取模型 Key 或数据库凭据。Server 入口按“加载 dotenv → 校验私有配置 → 显式加载并校验人物目录 → 创建运行时客户端 → `SELECT 1` → 只读 `exact` 核验迁移日志 → 解析固定 Owner → 创建进程级 Provider/设置/删除服务 → 创建 M3.6 事实读取、同步投影、查询与提交后事件 Hub → 创建 M3.7 replay Repository/stream service → `createApp()` → 仅监听 `127.0.0.1`”运行；组合失败在监听前关闭已创建客户端。生产 HTTP 已安装场次创建、读取、命令和 SSE 入口；`retryAgent` 仍在执行器与账本登记前稳定拒绝。
 
 M2.4 调用链固定为“事务外严格 prepare 命令与解析 Owner → 上层事务锁定 Session → `registerCommand` → 业务事实/事件/快照 → `completeCommand` 或可安全提交的 `failCommand`”。登记只以冲突安全插入实际返回一行为 acquired 判据，未插入后才读取同键既有状态；重放再次校验载荷版本、Contracts Schema、Session/版本镜像和终态矩阵。Repository 自身不开启事务、不锁 Session、不推进扑克状态、不分配事件序号，也不发布 SSE；基础设施与未知异常由上层整笔回滚。
 

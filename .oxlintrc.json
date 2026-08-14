@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    ".superpowers/**",
+    "node_modules/**",
+    ".pnpm-store/**",
+    "dist/**",
+    "coverage/**",
+    "apps/web/public/poker/**",
+    "apps/server/src/db/migrations/**"
+  ],
+  "options": {
+    "typeAware": true
+  },
+  "plugins": ["typescript"],
+  "rules": {
+    "no-constant-condition": "error",
+    "no-dupe-else-if": "error",
+    "no-unused-vars": [
+      "error",
+      {
+        "args": "all",
+        "argsIgnorePattern": "^_",
+        "caughtErrors": "all",
+        "caughtErrorsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-floating-promises": ["error", { "ignoreVoid": true }],
+    "typescript/no-unnecessary-type-constraint": "error"
+  }
+}

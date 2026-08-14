@@ -275,7 +275,7 @@ export function createGuardedPort<Port>(
         ? function () {}
         : Object.create(Object.getPrototypeOf(source) as object | null)
     const proxy = new Proxy(facade as object, {
-      get(_target, property, receiver) {
+      get(_target, property, _receiver) {
         assertActive()
         return guard(Reflect.get(source, property, source))
       },

@@ -495,7 +495,7 @@ describe('command ledger repository', () => {
   test('consumes prepared after not-found, conflict, corruption, or SQL failure', async () => {
     const owner = await resolvedOwner()
     for (const createResponses of [
-      (prepared: ReturnType<typeof prepareCommandRegistration>) => [[], []],
+      (_prepared: ReturnType<typeof prepareCommandRegistration>) => [[], []],
       (prepared: ReturnType<typeof prepareCommandRegistration>) => [
         [],
         [ledgerRow(prepared, { canonicalPayloadDigest: 'a'.repeat(64) })],

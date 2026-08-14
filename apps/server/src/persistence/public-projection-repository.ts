@@ -13,7 +13,6 @@ import type {
   CommittedPrivateEventFact,
   ProjectionRosterSeat,
   PublicProjectionFactsRepository,
-  PublicProjectionReadPort,
   ActivePublicProjectionReadPort,
   PublicSessionProjectionFacts,
   PublicProjectionFactsLookup,

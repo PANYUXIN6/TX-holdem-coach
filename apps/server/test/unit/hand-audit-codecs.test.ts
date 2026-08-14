@@ -3,6 +3,10 @@ import {
   initializePokerTable,
   startPokerHand,
 } from '../../src/poker/poker-engine.js'
+import {
+  POKER_RULE_SET_VERSION,
+  POKER_RULE_SET_VERSION_V1,
+} from '../../src/poker/poker-rule-set.js'
 import { createPokerTableState } from '../../src/poker/state.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
@@ -11,6 +15,12 @@ import {
   decodeCurrentHandStartCheckpointV1,
   encodeHandStartCheckpointV1,
 } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v1.js'
+import {
+  CHECKPOINT_V2_SCHEMA_VERSION,
+  decodeCurrentHandStartCheckpointV2,
+  encodeHandStartCheckpointV2,
+  HAND_START_CHECKPOINT_V2_PAYLOAD_VERSION,
+} from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v2.js'
 import {
   createHandStartCheckpointVersionRegistry,
   productionHandStartCheckpointVersionRegistry,
@@ -72,7 +82,7 @@ function createCheckpointInput() {
 }
 
 describe('hand audit codecs', () => {
-  test('round-trips an auto-rebuy-aware hand-start checkpoint as a deep-frozen value', () => {
+  test('keeps the V1 checkpoint codec frozen and readable', () => {
     const input = createCheckpointInput()
 
     const encoded = encodeHandStartCheckpointV1(input)
@@ -106,8 +116,36 @@ describe('hand audit codecs', () => {
     ).toBe(true)
   })
 
-  test('dispatches current and explicitly injected legacy checkpoint versions without mutating storage', () => {
-    const current = encodeHandStartCheckpointV1(createCheckpointInput())
+  test('round-trips the current V2 checkpoint with its bound rule set', () => {
+    const input = {
+      pokerRuleSetVersion: POKER_RULE_SET_VERSION,
+      ...createCheckpointInput(),
+    }
+    const encoded = encodeHandStartCheckpointV2(input)
+
+    expect({
+      rowVersion: HAND_START_CHECKPOINT_V2_PAYLOAD_VERSION,
+      envelopeVersion: CHECKPOINT_V2_SCHEMA_VERSION,
+    }).toEqual({ rowVersion: 2, envelopeVersion: 2 })
+    expect(encoded).toEqual({
+      payloadVersion: 2,
+      payload: {
+        checkpointSchemaVersion: 2,
+        checkpoint: input,
+      },
+    })
+    expect(
+      decodeCurrentHandStartCheckpointV2(structuredClone(encoded)),
+    ).toEqual(encoded)
+    expect(Object.isFrozen(encoded)).toBe(true)
+    expect(Object.isFrozen(encoded.payload.checkpoint)).toBe(true)
+  })
+
+  test('dispatches current V2 and deterministically migrates stored V1 without mutating storage', () => {
+    const current = encodeHandStartCheckpointV2({
+      pokerRuleSetVersion: POKER_RULE_SET_VERSION,
+      ...createCheckpointInput(),
+    })
 
     expect(
       productionHandStartCheckpointVersionRegistry.read(
@@ -118,6 +156,21 @@ describe('hand audit codecs', () => {
       kind: 'decoded',
       value: current.payload.checkpoint,
     })
+    const legacy = encodeHandStartCheckpointV1(createCheckpointInput())
+    const legacySnapshot = structuredClone(legacy)
+    expect(
+      productionHandStartCheckpointVersionRegistry.read(
+        legacy.payloadVersion,
+        legacy.payload,
+      ),
+    ).toEqual({
+      kind: 'decoded',
+      value: {
+        pokerRuleSetVersion: POKER_RULE_SET_VERSION_V1,
+        ...legacy.payload.checkpoint,
+      },
+    })
+    expect(legacy).toEqual(legacySnapshot)
     expect(
       productionHandStartCheckpointVersionRegistry.read(99, {
         checkpointSchemaVersion: 99,
@@ -129,7 +182,10 @@ describe('hand audit codecs', () => {
         kind: 'legacy',
         identity: { rowPayloadVersion: 7, envelopeSchemaVersion: 3 },
         decode: () => ({ legacy: true }),
-        migrate: () => createCheckpointInput(),
+        migrate: () => ({
+          pokerRuleSetVersion: POKER_RULE_SET_VERSION,
+          ...createCheckpointInput(),
+        }),
       },
     ])
     expect(

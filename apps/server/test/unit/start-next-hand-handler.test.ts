@@ -1,6 +1,7 @@
 import type { Sql, TransactionSql } from 'postgres'
 import { describe, expect, test } from 'vitest'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
+import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { createStartNextHandHandlerBinding } from '../../src/sessions/command-execution/start-next-hand-handler.js'
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
@@ -116,6 +117,9 @@ describe('start next hand handler', () => {
       handId,
       checkpoint: { stateBeforeStartCommand: state },
     })
+    expect(prepared.mutation.relationPlan.checkpoint.pokerRuleSetVersion).toBe(
+      POKER_RULE_SET_VERSION,
+    )
     expect(
       prepared.mutation.relationPlan.checkpoint.startedHand.startingStacks.find(
         (seat) => seat.seatNumber === 1,

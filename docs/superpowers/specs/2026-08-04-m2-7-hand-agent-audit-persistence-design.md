@@ -168,6 +168,8 @@ interface HandStartCheckpointV1 {
 
 检查点保存 `StartedHandFacts`，使正常完成时可以验证按钮、庄盲、位置、参与座位和起始筹码，而无需从关系表或事件重建开手事实。
 
+后续 M4.5 在不改写已实现 V1 的前提下发布 `HandStartCheckpointV2`，新增手牌级 `pokerRuleSetVersion`。首版规范值为 `nlhe-cash-6to9-10-20-v1`；V1 Decoder 只能因历史上不存在其他规则集而确定性迁移到该值。开手 writer、Player 观察和 Coach 复盘必须读取同一手牌绑定值，不能使用部署时 current 常量重新解释历史手牌。该演进只修改 JSON Codec/Registry 与相关 writer/reader，不需要新增数据库列或 migration。
+
 ### 4.3 `CompletedHandResultV1`
 
 V1 直接保存 M1.9 的 `CompletedHandResult`，不得创建第二套结算结果模型。当前 Decoder 优先复用 M1.9 已有严格构造边界，并只验证：

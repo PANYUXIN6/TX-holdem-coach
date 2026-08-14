@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-08-14（M0–M2 与 M3.1–M3.7 实施状态已同步）
+更新时间：2026-08-14（M0–M2、M3.1–M3.7 与 M4.1 实施状态已同步）
 
 ## Workspace 边界
 
@@ -11,6 +11,7 @@
 - M2.5 已实现“权威状态契约与当前版本 Codec → 事务内原子持久化”分层：`src/sessions/authoritative-state/` 不依赖数据库，严格构造 `PrivateTableState`，并以四条独立版本序列编码当前快照及只含四种 M1.9 Poker 事件的累积私有事件 V1；`src/persistence/session-mutation-repository.ts` 只消费调用方事务，通过 Owner-scoped Session 行锁 capability 验证并按 Session、可选快照、完整事件三阶段写入。M2.5b 与 M2.4 并列且互不依赖，M3 才负责领域命令和事务组合。详细事实源见 [M2.5 设计](./superpowers/specs/2026-08-03-m2-5-authoritative-state-codecs-atomic-persistence-design.md)。
 - M2.6 已在同一纯模块边界增加完全独立的快照/私有事件复合版本注册表和确定性恢复核心；`src/persistence/session-recovery-repository.ts` 复用 M2.5 Session 行锁，在调用方事务内读取完整私有恢复事实，只修复可重建 `currentHandId` 或写入当前阻断性诊断，并提供保留首次诊断语义的显式重试。诊断字段与生命周期由 `0003_modern_supreme_intelligence.sql` 的回填和互斥约束闭合。详细事实源见 [M2.6 设计](./superpowers/specs/2026-08-03-m2-6-multiversion-recovery-design.md)。
 - M2.7 已在既有 M2.2 Schema 上增加 Hand 与 Agent Foundation 审计持久化，不新增迁移。`src/sessions/hand-audit/` 保存“开手命令前状态 + StartedHandFacts”和完整 M1.9 结算结果；`src/agents/audit/` 保存严格 Run Config、Budget、Attempt 载荷并定义固定 Player/Coach Decoder 端口；两个 persistence Repository 只消费调用方事务，分别闭合 Hand 状态与 Foundation 审计事实。详细事实源见 [M2.7 设计](./superpowers/specs/2026-08-04-m2-7-hand-agent-audit-persistence-design.md)。
+- M4.1 已新增 `src/agents/foundation/`、Player/Coach 静态定义及唯一 `production-runtime-registry.ts` 组合点。Foundation 只实现不可变 Runtime/预算/能力/Context/执行状态协议和纯校验，权威状态目录只增加决策身份与读取端口；没有 AgentRun writer、Worker、ModelGateway、Commit Gate 行为或 bootstrap 接线。详细事实源见 [M4.1 设计](./superpowers/specs/2026-08-14-m4-1-agent-foundation-core-protocol-static-registry-design.md)。
 - M2.8 已在既有外键图上增加 `session-deletion-repository.ts`，不新增迁移。ended 单场删除按 `Session → Runs(id ASC)`，Owner 清空按 `Owner → Sessions(id ASC) → Runs(id ASC)`；两者先取消非终态 Run、清租约且保留 fencing，再成组清理 Player 三指针并删除 Session 根。`owners` 与 `app_settings` 保留，删除路径不解码 JSONB。详细事实源见 [M2.8 设计](./superpowers/specs/2026-08-04-m2-8-session-data-deletion-design.md)。
 - M3.1 已新增 `src/sessions/command-execution/`，以不可变启用 Handler 映射、两阶段事务端口和每场 Promise 尾队列组合 M2.4–M2.6；M3.3/M3.4 在同一边界增加 `playerAction`、`rebuy`、`startNextHand`、`endSession` 生产 Handler、类型化稳定拒绝和专属 verifier。执行器在关系写入前冻结并验证最终状态、V2 私有事件、公开投影、SSE 与提交批次，只在 COMMIT 后返回本次新事件。用户行动按 `Session → Hand` 完成审计；下一手原子插入 Hand；暂停中止通过 `session-lifecycle-repository.ts` 读取唯一 failed Player leaf，并按 `Session → Hand → AgentRun` 恢复 checkpoint 和中止 Hand。`aiAction`、`retryAgent` 仍等待后续 verifier。详细事实源见 [M3.1 设计](./superpowers/specs/2026-08-05-m3-1-session-command-executor-design.md)、[M3.3 设计](./superpowers/specs/2026-08-09-m3-3-player-action-hand-completion-design.md)与 [M3.4 设计](./superpowers/specs/2026-08-09-m3-4-rebuy-next-hand-session-end-design.md)。
 - M3.2 已新增 `src/sessions/session-creation/` 与 `src/persistence/session-creation-repository.ts`。创建服务在事务外严格解析、读取 Provider 能力、准备阵容并一次生成身份/首手计划；事务内按 `Owner → active Session → 可选来源 ended Session → 新 Session` 锁序取得一次性 roster capability，组合 M2.7 Hand writer 与 M2.5 mutation writer，原子提交 roster、空记忆、首手、两条 V2 事件和最终快照；latest-ended 的来源缺失、来源变化和模型失效在服务边界分别稳定为 `ROSTER_SOURCE_NOT_FOUND|ROSTER_SOURCE_CHANGED|ROSTER_MODEL_INACTIVE`。创建不登记命令账本；生产 projector/active reader 与 Hono 场次创建路由已由 M3.6 补齐。详细事实源见 [M3.2 设计](./superpowers/specs/2026-08-09-m3-2-session-creation-roster-snapshot-design.md)。
@@ -24,7 +25,7 @@
 
 ## 依赖方向
 
-共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路只由 `poker-engine.ts` 对上层组合；M2.5/M2.6 固定为 `poker/state + hand-result → authoritative-state → mutation/recovery Repository → postgres.js`；M3.1/M3.3/M3.4 为 `command-execution → poker-engine + Hand audit + lifecycle reader + ledger + mutation + recovery`；M3.2 为 `session-creation → poker-engine + creation Repository + Hand writer + mutation writer`；M3.5–M3.7 为 `Hono routes → query/stream application services → public projection bindings + replay persistence + committed Hub`，HTTP 不反向进入领域或 Repository，replay persistence 不持有 Hono stream。生产 Player/Coach Commit Gate 仍由 M4/M8 实现。
+共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M1 的纯规则链路只由 `poker-engine.ts` 对上层组合；M2.5/M2.6 固定为 `poker/state + hand-result → authoritative-state → mutation/recovery Repository → postgres.js`；M3.1/M3.3/M3.4 为 `command-execution → poker-engine + Hand audit + lifecycle reader + ledger + mutation + recovery`；M3.2 为 `session-creation → poker-engine + creation Repository + Hand writer + mutation writer`；M3.5–M3.7 为 `Hono routes → query/stream application services → public projection bindings + replay persistence + committed Hub`。M4.1 为 `production-runtime-registry → player/coach static definitions → foundation protocols`，Foundation 不反向导入 Player/Coach，且该链不进入 HTTP、数据库或启动组合。生产 Player/Coach Commit Gate 仍由 M4.7/M8 实现。
 
 ## 代码分析工具边界
 
@@ -65,16 +66,19 @@ M3.5 调用链固定为“回环 Host/精确 Origin/JSON/大小/查询门禁 →
 
 目标行动链为 `PokerTableState + PokerCommand → poker-engine.ts → PokerEngineResult`，开手也只调用同一模块并取得 `StartedHandFacts`。M3 只消费门面结果，不得直接持久化 `showdown/complete`，也不得自行组合发牌、庄盲、推进与结算模块；M2/M3/M5 可直接消费 `hand-result.ts` 的纯领域数据契约。
 
-## 已实现的 Agent 审计基础与尚未实现的 Runtime 边界
+## 已实现的 Agent 审计与 M4.1 协议基础
 
-M2.7 已实现严格审计 Codec、Foundation Repository 与 Runtime Decoder 组合端口，但没有实现 Agent 状态机、Worker 或 Player/Coach 业务载荷 writer。后续实现以 [Agent Foundation 与受限 Runtime](./superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md)、[Agent 大模块开发任务](./superpowers/plans/2026-07-26-agent-module-development-tasks.md) 和 Player/Coach 专项设计为准：
+M2.7 已实现严格审计 Codec、Foundation Repository 与 Runtime Decoder 组合端口；M4.1 已实现独立于数据库生命周期的执行状态机、静态 Registry、预算/能力/Context 协议和 Player/Coach 隔离端口，但仍没有 Worker、AgentRun 生命周期 writer、模型调用或业务 Commit Gate。后续实现以 [Agent Foundation 与受限 Runtime](./superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md)、[M4.1 设计](./superpowers/specs/2026-08-14-m4-1-agent-foundation-core-protocol-static-registry-design.md)、[Agent 大模块开发任务](./superpowers/plans/2026-07-26-agent-module-development-tasks.md) 和 Player/Coach 专项设计为准：
 
-- 共享 Foundation 只提供静态 Runtime 注册、AgentRun、预算、能力授权、模型网关、租约、审计和恢复，不理解扑克目标。
-- Player Runtime 负责“赢”，从权威状态中枢取得座位级观察，经确定性数学、策略、人物和对手预处理后让模型在候选中有界选择，再由专属 Commit Gate 输出扑克命令。
+- 共享 Foundation 当前只提供静态 Runtime 注册、不可变预算、默认拒绝能力授权、Context 信封和执行状态协议，不理解扑克目标；AgentRun、模型网关、租约与恢复仍由后续里程碑实现。
+- Player Runtime 负责“赢”，从权威状态中枢取得座位级观察并先通过信息防火墙；服务端随后固化规则集版本、名义/实际盲注、大盲行动权和 call/delta/target/累计投入语义，规范 6–9 人 spot 与行动响应拓扑，按主池/边池资格计算 Hero 可争夺金额和逐对手有效筹码，生成翻前原子类别、翻后最佳五张/比较元组、听牌与原子牌面变化，再投影每个候选的必然未跟注返还、真正风险、强制 runout、响应者、可加注者、关闭语义和下一街空间。模型只在这些已验证候选中选择 `candidateActionId`，最后由专属 Commit Gate 输出扑克命令；无法可靠定义的 clean outs、范围条件权益/EV、fold equity、对手响应概率或多街反事实明确标记 `unavailable`，不让模型猜测。
+- Runtime 先保存完整、仅供审计回放的 `DecisionAuditSnapshot`，再生成精简 `PlayerModelProjection`；完整快照不得直接发送给模型，模型上下文中同一概念只有一种权威表达，不重复原始行动史、不要求重算 SPR，也不混用总底池与可争夺底池。候选频率/权重只是参考分布，首版 LLM 选择不承诺精确混合频率校准。
+- 所有进入 Player 或 Coach 模型的派生事实都必须可追溯到允许来源、决策截止点、Schema/算法/数据版本和适用假设，并区分 `available | unavailable | notApplicable` 及 `ruleFact | formulaFact | datasetBaseline | statisticalEvidence | heuristicJudgment | modelGeneratedText`。程序结果可复现不代表它就是客观真理；`wet/dry`、范围角色、心理和情绪等解释性结论必须保留证据等级或明确不可用。
 - Coach 负责“教”，只对正常完成（`completed`）的内部手牌手动生成只读结构化复盘；`aborted` 手牌不是已结算事实，必须在复盘入口拒绝。
 - Player 与 Coach 只复用 Foundation 和版本化策略事实源；Context、Prompt、记忆、业务 Validator、信息投影和 Commit Gate 严格分离。
 - Player 与 Coach 的模型都没有自主工具调用权；确定性流水线由各自 Runtime 固定编排。
-- Coach 先由确定性分类器冻结标签、严重度、基准对比和 EV 状态，再由看不到事后事实的 Analyzer 解释，最后由 Hindsight 补充事后信息；任何 Coach 失败均不得影响牌局状态。
+- Agent 使用的首版扑克规则指纹为 `nlhe-cash-6to9-10-20-v1`，固定对应 6–9 人、10/20 盲注、无前注、无 straddle、无抽水、单牌面一次 runout；项目永久不设计 `ante`/`anteModel`、`rakeModel` 或对应策略分支。M4.5 通过 `HandStartCheckpointV2` 在开手时固化该值，Player 与 Coach 读取目标手牌绑定版本，既有 V1 仅可确定性迁移到该唯一历史规则集。
+- Coach 先由分类器冻结 `assessmentBasis`、`epistemicStatus`、可证明行为偏差、教学假设、严重度、基准支持情况和 EV 状态；referenceOnly/heuristic、受支持的低频混合动作和推测心理不能自动变成客观错误。看不到事后事实的 Analyzer 只解释冻结判断；`HindsightFactProjector` 再从权威完成手冻结牌型比较、实际后续、返还和逐池结算，Hindsight LLM 只负责教学表达。任何 Coach 失败均不得影响牌局状态。
 - 当前身份仍为固定 `local-user` OwnerScope，服务为只监听回环地址的单个 Hono 进程且 Agent Worker 尚未实现；Supabase Postgres 已经是唯一运行数据库，M2.1–M2.8 的数据库基础、Schema、Repository、恢复与审计持久化已经落地，不存在 SQLite 产品数据库或本地数据库持久卷。未来上线目标是常驻 Hono 服务连接容器外的 Supabase PostgreSQL；公网监听、Host/Origin、TLS 与真实身份必须先独立设计。之后可以替换队列唤醒和独立 Worker，但不得让浏览器或 Agent 绕过 Hono 直连数据库，也不预建 RAG、动态插件、Agent Cron 或 Agent 间协作。
 
 后续计划中的其余服务端落点：

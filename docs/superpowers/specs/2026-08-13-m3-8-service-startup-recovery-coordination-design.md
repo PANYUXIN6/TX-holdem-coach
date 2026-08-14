@@ -61,7 +61,9 @@ M3.8 完成时必须能证明：
 - 旧 request、旧 attempt、旧租约或旧 fencing token 的迟到结果无法写检查点、完成旧 Run 或提交扑克命令；
 - 新运行只保留 M4.8 允许继承的场次固化版本，以新 `decisionRequestId` 从路由起点排队；第一次 DeepSeek Attempt 由 M4.3 在 Worker 领取后创建；
 - `readonlyDiagnostic` 结果提交后服务仍可启动，但该场不启动 Agent，修改命令继续由既有 M2.6/M3 错误边界拒绝；
+- M4.8 返回联合在事务 callback 返回前完成严格解码，非法 UUID、事件或 kind/字段组合使本场回滚；
 - 任一未分类的恢复错误、M4 端口契约破坏、Worker 启动失败或 HTTP 绑定失败都会阻止 ready，并关闭已创建资源；
+- 启动期间到达的 `SIGINT/SIGTERM` 被锁存，不会越过恢复、Worker 或 HTTP 绑定阶段进入 ready；
 - 已提交恢复不会因后续事件 Hub 发布失败、唤醒提示失败或进程再次退出而丢失；下一次启动和持久 Worker 扫描可以收敛；
 - 日志不包含私有快照、底牌、Prompt、模型输入输出、API Key、数据库消息或原始异常。
 
@@ -101,7 +103,7 @@ M3.8 不负责：
 M3.8 开始实现前必须同时满足：
 
 1. M3.7 已完成 PostgreSQL 补发和 M3.6 Hub 实时接入；Player 协调事件只要已提交，就能沿统一 `eventSeq` 被实时分发或重连补发。
-2. M4.2 已提供持久化 Worker、Player 独立槽位、停止态构造、显式 `start/stop/wake` 生命周期端口、租约和 fencing writer。
+2. M4.2 已提供持久化 Worker、Player 独立槽位、停止态构造、显式 `start/stop/wake/fatal` 生命周期端口、租约和 fencing writer；可恢复循环错误由 M4.2 内部监督，不可恢复退出通过稳定 fatal 上报。
 3. M4.3 已证明 Worker 领取新 Player Run 后从运行固化路由起点创建 DeepSeek Attempt；唤醒端口本身不调用 Provider。
 4. M4.7 已在写检查点、写结果和提交标准扑克命令时复验 Owner、Session、Run、request、租约、fencing、行动者和当前状态版本。
 5. M4.8 已提供本文第 5 节的进程重启事务端口，并完成 Player 私有事件 V3、Session 协调 mutation、替代运行唯一约束和严格审计 Decoder。
@@ -163,7 +165,7 @@ apps/server/src/
 - `sessions/startup-recovery/`：拥有候选顺序、逐场事务组合、结果汇总和提交后效果缓冲；完成后把只包含已提交 `replacementRunIds` 的不可变结果交还 `bootstrap.ts`，不依赖 Worker 生命周期端口，也不判定服务 ready；
 - `persistence/startup-recovery-candidate-repository.ts`：只列出当前 Owner 的活动 Session ID，不读取或修改 AgentRun，不开启长事务；
 - `bootstrap.ts`：是 `PlayerWorkerLifecyclePort`、HTTP server handle 和服务 ready 判定的唯一调用方；构造 stopped Worker、恢复服务及依赖，调用恢复并接收已提交替代运行缓冲，仅调用一次 `start()`，再消费该缓冲调用 `wake()`，随后创建 app、启动监听并等待端口绑定；成功后返回可幂等关闭的运行句柄，失败时关闭已创建资源；
-- `index.ts`：只拥有 `SIGINT/SIGTERM` 进程信号接线，把正常关闭请求交给 `bootstrap.ts` 返回的运行句柄；不直接关闭 Worker 或数据库；
+- `index.ts`：在调用 `bootstrap()` 前安装 `SIGINT/SIGTERM` 监听并用内部 `AbortController` 锁存首次关闭请求，把 signal 传给 bootstrap；ready 后把关闭请求交给返回的运行句柄。它统一消费稳定启动/关闭错误并设置退出码，不直接关闭 Worker 或数据库；
 - M2.6 Repository：继续拥有权威状态恢复，不依赖启动模块；
 - M4.8：继续拥有 Player restart 语义和写入，不依赖 `bootstrap.ts`；
 - M4.2 Worker：继续以 PostgreSQL 持久队列为事实源，`wake` 只是提示。
@@ -206,7 +208,9 @@ type ServiceLifecyclePhase =
 固定顺序：
 
 ```text
-loadServerConfig
+index 安装 SIGINT/SIGTERM 并创建 AbortSignal
+→ bootstrap(signal)
+→ loadServerConfig
 → loadAndValidatePersonaCatalog
 → initializeDatabase（SELECT 1 + exact migration gate）
 → resolveOwnerScope
@@ -226,7 +230,7 @@ loadServerConfig
 - Worker 构造不得自动领取任务；只有显式 `start()` 后才可轮询或领取。
 - `createApp()` 可以在恢复前后构造，但 `listen()` 必须在恢复、Worker start/wake 完成后发生。首版为降低半初始化对象的清理复杂度，在恢复和 Worker 启动成功后才创建 app。
 - `listen()` 返回第 5.4 节的 server handle；调用返回只表示已创建监听对象，不表示端口绑定成功。
-- `ready` 的唯一判据是启动恢复完成、必需 Worker 已启动、唤醒提示已处理且 `server.bound` 已成功 resolve；数据库连接成功或 `listen()` 同步返回都不等于服务 ready。
+- `ready` 的唯一判据是启动恢复完成、必需 Worker 已启动、唤醒提示已处理、`server.bound` 已成功 resolve，且 signal/HTTP/Worker fatal 均未先行 settle；数据库连接成功或 `listen()` 同步返回都不等于服务 ready。
 - 启动恢复不调用外部模型，因此不会把 Provider 延迟放入服务监听门禁。
 
 ### 4.3 启动失败与正常关闭
@@ -236,10 +240,19 @@ loadServerConfig
 1. `listen()` 同步抛出或 `server.bound` reject 时不得进入 ready；若已取得 server handle，先调用其幂等 `close()`。
 2. Worker 一旦尝试过 `start()`，无论成功还是 reject，都调用一次幂等 `stop()`，覆盖部分启动后失败的实现。
 3. 最后关闭数据库客户端。
-4. 清理步骤失败不得跳过后续资源；记录稳定、脱敏的启动失败分类并设置退出码 1，保留最初启动失败为主错误。
+4. 清理步骤失败不得跳过后续资源；保留最初启动失败为主错误，清理完成后由 `index.ts` 统一记录稳定脱敏分类并设置退出码。
 5. 不把已提交的前序恢复事务回滚声明为失败写入。
 
-端口绑定成功后，`bootstrap()` 返回深冻结的 `RunningServiceHandle`。`index.ts` 对 `SIGINT`、`SIGTERM` 使用同一单次处理器调用 `shutdown()`；重复信号或并发调用共享同一个关闭 Promise，不重复关闭资源。正常关闭顺序固定为：
+`index.ts` 必须在调用 `bootstrap()` 前安装 `SIGINT/SIGTERM` 监听。首次信号只调用一次 `AbortController.abort()` 并锁存关闭请求；重复信号不得启动第二条清理路径。启动期 abort 规则固定为：
+
+1. bootstrap 在每个新阶段和每个候选开始前检查 signal；已 abort 就不启动新工作，直接进入统一启动清理。信号在数据库初始化或其他异步阶段中到达时，当前调用先 settle，再清理已取得资源。
+2. 信号在 M2.6/M4.8 事务中到达时，不用进程取消强拆事务；允许当前事务原子 COMMIT/ROLLBACK，事务 settle 后不再处理下一候选，再进入清理。
+3. 信号在 `playerWorker.start()` 中到达时，不进入 wake/app/listen；等待 start settle 后调用幂等 `stop()`。即使 start reject，也走同一清理路径。
+4. 信号在等待 `server.bound` 时到达，与绑定结果竞速；abort 胜出后立即关闭已取得的 server handle，再停止 Worker 和数据库，不进入 ready。
+
+上述启动期信号是正常终止请求，不记录为启动故障、不把已提交恢复事务描述为回滚，也不返回运行句柄。端口绑定成功后，`bootstrap()` 才返回深冻结的 `RunningServiceHandle`；若关闭请求已在 bound 同一调度点被锁存，abort 优先且仍不得进入 ready。
+
+ready 后，`index.ts` 把已经锁存或新到达的关闭请求交给 `RunningServiceHandle.shutdown()`；重复信号或并发调用共享同一个关闭 Promise，不重复关闭资源。正常关闭顺序固定为：
 
 1. 进入 `shuttingDown`，请求 HTTP server handle 停止接受新连接并开始有界关闭现有 HTTP/SSE 连接。
 2. 调用 Worker 的幂等 `stop()`，停止新领取并使本进程在途请求按 M4.2/M4.7 规则失效或有界收敛。
@@ -248,7 +261,19 @@ loadServerConfig
 
 实现上先保存 `server.close()` 返回的 Promise，再调用并等待 `playerWorker.stop()`，随后等待 HTTP close Promise，最后关闭数据库；不能先 await HTTP drain 再停止 Worker，也不能在前两者 settle 前关闭数据库。
 
-任何正常关闭步骤失败都记录资源种类和稳定分类、继续其余步骤，并在全部清理完成后设置非零退出码；不得记录原始异常。数据库必须最后关闭，因为 HTTP drain 和 Worker stop 仍可能需要访问持久事实。
+任何正常关闭步骤失败都记录资源种类和稳定分类、继续其余步骤；全部清理完成后，`shutdown()` reject 稳定 `ServiceShutdownError`，由 `index.ts` 设置非零退出码。不得记录原始异常。数据库必须最后关闭，因为 HTTP drain 和 Worker stop 仍可能需要访问持久事实。
+
+ready 后 HTTP server 或 Worker 上报不可恢复 `fatal` 时，`index.ts` 使用同一个 `shutdown()` 执行上述顺序并设置退出码 1。M3.8 不自行重启 HTTP server 或 Worker；可恢复错误与内部监督分别归 HTTP adapter 和 M4.2，M3.8 只负责防止关键资源已经永久退出而进程继续假活。
+
+### 4.4 Bootstrap 返回与失败契约
+
+`bootstrap()` 的成功类型只能是 `Promise<RunningServiceHandle>`：只在恢复、Worker、wake 处理和 HTTP 绑定全部完成后 resolve。它不得以 `undefined`、`void` 或“已设置 exitCode”表示失败。
+
+- 配置、数据库、恢复、Worker 或监听失败：bootstrap 先完成第 4.3 节清理，再 reject 只携带稳定分类的 `ServiceStartupError`；
+- 启动期收到进程信号：bootstrap 清理后 reject 内部 `ServiceStartupAborted`，不携带原始 signal/error；
+- bootstrap 不写 `process.exitCode`、不打印原始或面向用户的错误；`index.ts` 是稳定日志和退出码的唯一 Owner；
+- `index.ts` 对 `ServiceStartupAborted` 视为正常终止；对 `ServiceStartupError` 或未知异常只输出稳定脱敏分类并设置退出码 1；
+- 清理错误不能覆盖最初启动结果，但必须继续剩余清理，并作为稳定资源分类附加记录。
 
 ## 5. 启动与运行时端口
 
@@ -294,7 +319,7 @@ interface PlayerProcessRestartRecoveryPort {
         SessionRecoveryTransactionResult,
         { readonly kind: 'ready' }
       >
-      readonly recoveryAt: string
+      readonly recoveryAt: CanonicalUtcTimestamp
     },
   ): Promise<PlayerProcessRestartRecoveryResult>
 }
@@ -315,6 +340,8 @@ type PlayerProcessRestartRecoveryResult =
 
 端口契约：
 
+- `CanonicalUtcTimestamp` 是现有 M2.6 `CanonicalUtcTimestampSchema` 成功解码后的内部窄类型，不接受未校验普通字符串，也不新增公开 Contract；
+- `recoverAtStartup()` 在候选扫描前只调用一次注入时钟，解码生成一个 `startupRecoveryAt`；它必须采用 UTC 毫秒格式（`YYYY-MM-DDTHH:mm:ss.sssZ`），并原样传给本次启动的每个 M2.6 与 M4.8 调用，不得按 Session 重新取时；
 - 必须消费 M2.6 当前事务绑定的 `ready` 结果，不能在另一个事务中重新建立不相关的 Session 锁；
 - 必须遵守 M4.8 已确认的 Session/Hand/AgentRun 锁序；M3.8 不自行锁 Agent 表；
 - `unchanged` 表示当前事实无需 Player 重启写入，例如 Session 为 `idle` 且没有需要接替的有效 Player 运行；
@@ -322,6 +349,10 @@ type PlayerProcessRestartRecoveryResult =
 - `reconciledWithoutReplacement` 表示 M4.8 已原子关闭失效旧事实，但当前状态不再需要 AI 行动；是否以及如何调整 Session 协调状态和写事件完全由 M4.8 决定；
 - `replacementQueued` 只在新 Run、request、Session 指针、审计关联和必要 Player V3 协调事件已在同一事务写完后返回；
 - 返回的 `newlyPersistedEvents` 此时仍只是“事务内已写入候选”。只有外层 `runDatabaseTransaction()` 成功返回后，M3.8 才能发布；
+- M3.8 必须用 strict discriminated union Decoder 校验完整返回值：拒绝未知字段，校验 `replacementRunId` 为规范 UUID、每个事件通过共享 `SseEventSchema`，并校验 `kind` 与字段组合精确对应；
+- `unchanged|paused` 必须没有事件或 replacement 字段，`reconciledWithoutReplacement` 必须没有 replacement ID，`replacementQueued` 必须同时包含有效 replacement ID 和非空事件批次；
+- 对含事件的结果，Decoder 还必须以当前 M2.6 锁定事实做关系校验：每个 `event.sessionId` 等于当前候选 `recovery.locked.sessionId`，批次内 `eventId` 唯一，数组索引 `i` 的 `eventSeq` 精确等于 `recovery.locked.nextEventSeq + i`；不得先排序再接受重复、乱序、跳号或属于其他 Session 的事件；
+- Decoder 必须在 `runDatabaseTransaction()` callback 内、callback 返回前执行。任何 UUID、事件或联合形状失败都抛出 `playerRestartRecoveryContractInvalid`，使 M2.6/M4.8 本场全部写入回滚；不得先 COMMIT 再校验；
 - 端口不得调用 Worker、Hub、Provider、ModelGateway、Attempt 或网络。
 
 M4.8 可以使用更丰富的私有结果，但暴露给 M3.8 的视图不得包含旧/新 Prompt、模型配置、候选动作、检查点、输出或原始错误。
@@ -331,7 +362,12 @@ M4.8 可以使用更丰富的私有结果，但暴露给 M3.8 的视图不得包
 M4.2 提供：
 
 ```ts
+interface PlayerWorkerFatal {
+  readonly category: 'playerWorkerTerminatedUnexpectedly'
+}
+
 interface PlayerWorkerLifecyclePort {
+  readonly fatal: Promise<PlayerWorkerFatal>
   start(): Promise<void>
   wake(runIds: readonly string[]): void
   stop(): Promise<void>
@@ -346,6 +382,8 @@ interface PlayerWorkerLifecyclePort {
 - `wake()` 只能由 `bootstrap.ts` 在 `start()` 成功后调用，输入只来自本次恢复服务返回的已提交 `replacementRunIds`；
 - `wake()` 只提示持久队列中可能存在工作，不携带 Run 配置或执行载荷，不替代数据库查询；
 - `wake()` 丢失或抛出不能使已提交 Run 消失。Worker 的周期扫描必须最终发现 queued Run；
+- M4.2 负责 Worker 轮询循环内部的可恢复错误处理；只有循环不可恢复地永久退出时才 resolve `fatal`，且只返回稳定分类，不携带原始异常；
+- 主动 `stop()` 导致的正常终止不得 resolve `fatal`；`fatal` 最多 resolve 一次，M3.8 不尝试重启 Worker；
 - `stop()` 从构造完成起就必须幂等可调用，包括 `start()` 尚未调用、成功或部分启动后 reject；只由 `bootstrap.ts` 在启动失败或进程关闭清理路径调用。
 
 ### 5.4 HTTP 监听与运行句柄
@@ -353,8 +391,15 @@ interface PlayerWorkerLifecyclePort {
 M3.8 把当前返回 `void` 的监听 seam 收窄为可观测、可关闭端口：
 
 ```ts
+const HTTP_BIND_TIMEOUT_MS = 10_000
+
+interface HttpServerFatal {
+  readonly category: 'httpServerTerminatedUnexpectedly'
+}
+
 interface HttpServerHandle {
   readonly bound: Promise<void>
+  readonly fatal: Promise<HttpServerFatal>
   close(): Promise<void>
 }
 
@@ -365,18 +410,33 @@ interface HttpServerLifecyclePort {
   ): HttpServerHandle
 }
 
+type ServiceRuntimeFatal =
+  | PlayerWorkerFatal
+  | HttpServerFatal
+
 interface RunningServiceHandle {
+  readonly fatal: Promise<ServiceRuntimeFatal>
   shutdown(): Promise<void>
 }
+
+interface BootstrapInput {
+  readonly signal: AbortSignal
+}
+
+function bootstrap(input: BootstrapInput): Promise<RunningServiceHandle>
 ```
 
 约束：
 
 - Node/Hono adapter 必须保留 `serve()` 返回的 server，并把 listening 回调或等价事件映射为 `bound` resolve；
 - 同步创建失败由 `listen()` 抛出，端口占用等绑定前异步错误使 `bound` reject；二者都映射为 `httpListenFailed`，不得进入 ready；
+- HTTP adapter 负责连接级可恢复错误；端口已经绑定后若 server 未经主动 `close()` 就永久终止，只 resolve 一次 `fatal`，且不携带原始异常。主动关闭不得 resolve `fatal`；
+- `bootstrap.ts` 以单一竞速等待 `server.bound`、`server.fatal`、`playerWorker.fatal`、启动 signal abort 和固定 `HTTP_BIND_TIMEOUT_MS`；资源 fatal 在 ready 前分别映射为 `httpServerTerminatedUnexpectedly|playerWorkerTerminatedUnexpectedly` 启动失败，超时映射为 `httpListenFailed`，全部走第 4.3 节清理；
+- 竞速任一分支 settle 后必须清除内部 timer 和临时监听器；超时或 abort 胜出时先关闭 server handle，再按第 4.3 节继续清理；
 - `close()` 必须幂等；即使绑定尚未完成、绑定失败或从未成功监听，也能安全收敛，并在固定内部宽限期后关闭剩余 HTTP/SSE 连接；
 - `bootstrap.ts` 必须先保存 handle，再 await `bound`，从而保证等待绑定期间发生失败时仍可关闭 server；
-- `bootstrap()` 只在 `bound` resolve 后返回深冻结的 `RunningServiceHandle`；其 `shutdown()` 按第 4.3 节单次关闭 HTTP、Worker 和数据库；
+- `bootstrap()` 在 Worker start 成功后立即保留其 fatal Promise，取得 server handle 后、await bound 前建立两者的 fatal 聚合；只有 `bound` resolve 且 signal/HTTP/Worker fatal 均未 settle 才返回深冻结的 `RunningServiceHandle`，同一调度点已锁存的 abort/fatal 优先于 ready；handle 的 `fatal` 继续监督运行期不可恢复终止，`shutdown()` 按第 4.3 节单次关闭 HTTP、Worker 和数据库；
+- `index.ts` 必须在取得 handle 后立即观察 `handle.fatal`。ready 后任一 fatal 都记录 `service_runtime_resource_failed` 的稳定资源分类、调用同一个 `shutdown()`，清理完成后设置退出码 1；fatal 与进程信号并发时仍共享单次关闭 Promise；
 - 不把 Node `Server`、socket、原始 `error` 或 Hono adapter 类型暴露给恢复应用服务。
 
 ## 6. 逐场事务协议
@@ -395,6 +455,7 @@ runDatabaseTransaction
       ready              → M4.8 recoverAfterProcessRestart
       ended              → 跳过 M4.8
       readonlyDiagnostic → 跳过 M4.8
+  → 在事务 callback 内 strict decode M4.8 完整返回联合及候选关系
   → 返回纯 StartupSessionRecoveryOutcome
 COMMIT
   → 尽力发布 newlyPersistedEvents
@@ -406,6 +467,7 @@ COMMIT
 - 在候选扫描事务内循环全部 Session；
 - 持有 Session 锁等待 Worker、Hub、网络、定时器或模型；
 - 在事务提交前发布 SSE 或唤醒 Worker；
+- 在事务 callback 返回或 COMMIT 后才校验 M4.8 返回的 UUID、事件和联合形状；
 - 因事件发布失败重新执行恢复事务；
 - 用 Promise 并行处理同一 Owner 的多个 Session。
 
@@ -457,7 +519,7 @@ interface StartupCommittedEffects {
 
 1. 仅调用一次 `playerWorker.start()`；失败则阻止 listen，并按第 4.3 节清理。
 2. 对返回的 `replacementRunIds` 去重并按 UUID 升序；集合非空时调用一次 `wake()`，为空时不调用。
-3. `wake()` 抛出时记录稳定分类，但只要 Worker 的持久轮询已经成功启动，服务仍可 ready；周期扫描负责最终发现 queued Run。
+3. `wake()` 抛出时记录固定 category `startup_worker_wake_failed`，但只要 Worker 的持久轮询已经成功启动，服务仍可 ready；周期扫描负责最终发现 queued Run。
 4. 完成上述步骤后由 `bootstrap.ts` 创建 app、取得 HTTP server handle 并 await `server.bound`；只有端口绑定成功才进入 ready，不等待 Run 被领取、Attempt 开始或模型返回。
 
 因此空候选与非空候选都只有一个 Worker 启动调用点，不受 M4.2 选择“重复 `start()` 稳定拒绝”语义影响；同时避免恢复扫描过程中 Worker 抢先领取尚待协调的旧运行，也不把外部模型可用性变成服务启动条件。
@@ -551,7 +613,7 @@ M3.8 的正确性依赖 PostgreSQL，不依赖进程内互斥：
 - M4.8 在首次写 Player 协调事件前发布累积私有事件 V3；M3.8 不接受 V2 临时事件或只写公开 payload 的旁路；
 - Player 重启协调不改变扑克内容时保持同一 `stateVersion`，但每条已持久化协调事件递增 `eventSeq`；
 - 是否写一条或多条事件及其类型由 M4.8 决定；同一事务批次必须使用最终协调状态的公开快照；
-- M3.8 只校验返回批次已经通过共享 `SseEventSchema`，不重建私有事件或最新投影；
+- M3.8 在事务 callback 返回前按第 5.2 节 strict decode 完整 M4.8 联合、共享 `SseEventSchema` 及当前候选的 Session/eventId/eventSeq 关系；它不重建私有事件或最新投影；
 - Coach 恢复不写 `session_events`，不占扑克 `eventSeq`。
 
 ### 10.3 不新增公开协议
@@ -569,13 +631,28 @@ type ServiceStartupFailure =
   | 'candidateScanFailed'
   | 'sessionRecoveryFailed'
   | 'playerRestartRecoveryFailed'
+  | 'playerRestartRecoveryContractInvalid'
   | 'workerStartFailed'
+  | 'playerWorkerTerminatedUnexpectedly'
   | 'httpListenFailed'
+  | 'httpServerTerminatedUnexpectedly'
+
+type ShutdownResource = 'httpServer' | 'playerWorker' | 'database'
+
+class ServiceStartupError extends Error {
+  readonly failure: ServiceStartupFailure
+}
+
+class ServiceStartupAborted extends Error {}
+
+class ServiceShutdownError extends Error {
+  readonly resources: readonly ShutdownResource[]
+}
 ```
 
 已有 M2.6/M4 错误在边界映射为上述稳定分类。`readonlyDiagnostic`、`skippedEnded` 和 `skippedMissing` 是结果，不是异常。
 
-正常关闭失败统一记录 `service_shutdown_resource_failed`，并用 `httpServer | playerWorker | database` 标识资源；不得把原始异常放入分类、运行句柄或退出日志。
+非阻断 Worker 唤醒失败固定记录 `startup_worker_wake_failed`。ready 后关键资源 fatal 固定记录 `service_runtime_resource_failed`；正常关闭失败统一记录 `service_shutdown_resource_failed`，两者都用 `httpServer | playerWorker | database` 标识资源，不得把原始异常放入分类、运行句柄或退出日志。
 
 ### 11.2 日志
 
@@ -612,6 +689,12 @@ Session/Run UUID 默认不需要进入启动摘要。定向诊断若确需关联
 - COMMIT 后事件才发布，replacement ID 才进入缓冲；
 - 返回缓冲只包含本次调用中已提交的 replacement ID，不调用任何 Worker 生命周期方法；
 - publisher 失败不重跑事务，已提交 replacement ID 仍进入返回缓冲；
+- M4.8 返回非法 `replacementRunId`：在事务 callback 返回前以 `playerRestartRecoveryContractInvalid` 失败，本场全部写入回滚，零发布、零缓冲；
+- M4.8 返回未通过 `SseEventSchema` 的事件：在 COMMIT 前失败并回滚，零发布、零缓冲；
+- M4.8 返回 `kind` 与字段不匹配或带未知字段：strict union 拒绝并回滚，例如 `paused` 携带 replacement ID、`replacementQueued` 缺少非空事件批次；
+- M4.8 返回 Schema 合法但 `sessionId` 不等于当前候选的事件：关系校验拒绝，本场回滚、零发布、零缓冲；
+- M4.8 返回从锁定 `nextEventSeq` 开始但重复、乱序或跳号的批次：按数组索引校验失败并回滚，不得排序后接受；
+- 注入时钟在一次 `recoverAtStartup()` 中只调用一次，所得规范 UTC `startupRecoveryAt` 原样传给全部 M2.6/M4.8 调用；
 - 第二个候选失败时第一个已提交结果不执行伪补偿。
 
 ### 12.2 Bootstrap 测试
@@ -636,16 +719,23 @@ config
 
 - 空候选：`start()` 恰好一次、`wake()` 零次，`httpBound` 后才返回运行句柄；
 - 非空候选：`start()` 恰好一次，之后使用去重并按 UUID 升序的 ID 调用 `wake()` 恰好一次，再创建 app 和监听；
-- `wake()` 抛出：记录稳定分类但不重跑恢复，仍创建 app、等待绑定并进入 ready；
+- `wake()` 抛出：只记录 `startup_worker_wake_failed` 且不重跑恢复，仍创建 app、等待绑定并进入 ready；
 - `start()` reject：调用 `stop()` 恰好一次，不创建 app、不调用 listen，并关闭数据库；
 - `listen()` 同步抛出：停止 Worker、关闭数据库，不进入 ready；
 - `server.bound` reject：先关闭已取得的 server handle，再停止 Worker、关闭数据库，不进入 ready；
-- `server.bound` 未 settle：bootstrap 不返回运行句柄，也不提前宣称 ready；
+- `server.bound` 未 settle：超时前 bootstrap 不返回运行句柄；推进可控时钟至 `HTTP_BIND_TIMEOUT_MS` 后，以 `httpListenFailed` reject，并依次关闭 server handle、Worker 和数据库；
+- 恢复事务中收到 signal：当前事务先 settle，不开启下一候选，零 Worker start/listen，清理数据库后 reject `ServiceStartupAborted`；
+- Worker start 中收到 signal：start settle 后调用 `stop()`，零 wake/app/listen，关闭数据库后 reject `ServiceStartupAborted`；
+- HTTP binding 中收到 signal：abort 赢得竞速，关闭 server handle、Worker 和数据库，零 ready，reject `ServiceStartupAborted`；
+- bootstrap 成功只 resolve `RunningServiceHandle`；所有失败只在清理后 reject 稳定错误，从不成功返回 `undefined|void`，也不自行设置退出码；
+- Worker 在 ready 后 resolve `fatal`：只记录 `service_runtime_resource_failed/playerWorker`，调用同一 `shutdown()`，关闭 HTTP、Worker、数据库并由 `index.ts` 设置退出码 1；
+- HTTP server 在 ready 后未经主动 close 就 resolve `fatal`：只记录 `service_runtime_resource_failed/httpServer`，执行同一关闭序列并非零退出；
+- 主动 `shutdown()` 造成的 HTTP/Worker 正常终止不 resolve `fatal`；fatal、进程信号和重复 shutdown 并发时每个资源仍最多关闭一次；
 - `shutdown()` 重复或并发调用：共享同一 Promise；HTTP close 请求先于 Worker stop，数据库最后关闭，每个资源最多关闭一次；
-- HTTP、Worker 或数据库任一关闭失败：仍尝试关闭其他资源，最终设置非零退出码并只记录稳定分类；
-- `SIGINT` 与 `SIGTERM`：`index.ts` 都只委托同一个 `shutdown()`，不直接操作资源。
+- HTTP、Worker 或数据库任一关闭失败：仍尝试关闭其他资源，`shutdown()` 最终 reject `ServiceShutdownError`，由 `index.ts` 设置非零退出码并只记录稳定分类；
+- `SIGINT` 与 `SIGTERM`：`index.ts` 在 bootstrap 前安装监听、锁存首次请求并传入同一个 signal；ready 后只委托同一个 `shutdown()`，不直接操作资源。
 
-测试使用监听和信号替身，不绑定真实端口，不访问网络或真实 Provider。
+测试使用可控 Promise、fake timer、监听和信号替身，不真实等待 10 秒，不绑定真实端口，不访问网络或真实 Provider。
 
 ### 12.3 M4 端口契约测试
 
@@ -692,9 +782,9 @@ M3.8 本身不新增 Schema、migration 或共享事务基础设施，因此默�
 | 1 | 同步开发计划依赖：M3.8 后置于 M4.2/3/7/8 | 计划链接与责任矩阵无重复 Owner |
 | 2 | 候选 reader 与严格解码 | Owner、active-only、稳定排序、数据库错误 |
 | 3 | 启动恢复应用服务纯编排 | 结果矩阵、每场短事务、提交效果缓冲 |
-| 4 | 接入 M2.6 与 M4.8 生产端口 | 锁内顺序、ready-only 调用、回滚零效果 |
+| 4 | 接入 M2.6 与 M4.8 生产端口 | 锁内顺序、ready-only 调用、事务内 strict decode、非法联合回滚零效果 |
 | 5 | 接入 Hub 与 Worker 生命周期 | COMMIT 后发布、全量恢复后 start/wake |
-| 6 | 接入 bootstrap HTTP 绑定门禁和生命周期清理 | bound 后 ready、启动失败清理、信号关闭幂等且数据库最后关闭 |
+| 6 | 接入 bootstrap HTTP 绑定门禁和生命周期清理 | 启动信号锁存、10 秒绑定超时、bound 后 ready、失败签名唯一、关闭幂等且数据库最后关闭 |
 | 7 | `m38` PostgreSQL 集成 | 重启三态、并发、fencing、崩溃 seam |
 | 8 | 地图与说明同步 | 真实入口、责任、流、依赖顺序可定位 |
 
@@ -704,7 +794,8 @@ M3.8 本身不新增 Schema、migration 或共享事务基础设施，因此默�
 
 ### 14.1 对 M4.2
 
-- Worker 必须支持 stopped 构造、显式 start、持久轮询、wake hint 和幂等 stop；
+- Worker 必须支持 stopped 构造、显式 start、持久轮询、wake hint、幂等 stop 和稳定 fatal Promise；
+- 可恢复轮询错误由 M4.2 内部监督；循环永久退出才 resolve fatal，主动 stop 不得产生 fatal，M3.8 不实现 Worker 重启器；
 - Run 是否可领取由数据库生命周期/租约决定，不由 M3.8 传入的内存队列决定；
 - M3.8 不接受“构造即自动启动”的 Worker。
 
@@ -738,12 +829,15 @@ M3.8 只有在以下条件全部满足时才完成：
 - 开发计划已经明确 M3.8 是 M4.2/M4.3/M4.7/M4.8 后置集成，编号不代表实施顺序；
 - M3.8 没有实现或复制任何 M4 生命周期、Attempt、Commit Gate 或 Player 重启业务规则；
 - 启动时 Owner-scoped 扫描活动场次，每场在独立事务中先 M2.6、后 M4.8；
+- M4.8 完整返回联合在 COMMIT 前严格解码；非法 Run ID、事件、kind/字段组合，以及 Session 不匹配、eventId 重复、eventSeq 非连续全部回滚；
 - Worker 在全部恢复完成前不领取，Hono 在恢复和 Worker start 成功前不监听，只有 HTTP 端口确认绑定后才 ready；
 - 只有提交后的事件被发布、提交后的替代 Run 被唤醒；
 - `thinking`、`paused`、不再需要 AI、ended/missing 和 readonlyDiagnostic 都有通过证据；
 - 并发恢复和旧 fencing 迟到结果不能造成双 Run 或双行动；
 - 崩溃在事务前、中、后均能依靠 PostgreSQL 和下一次启动收敛；
-- 启动失败能关闭所有已创建资源，`SIGINT/SIGTERM` 能通过幂等运行句柄有界关闭 HTTP/SSE、Worker 和数据库；
+- `index.ts` 在 bootstrap 前锁存 `SIGINT/SIGTERM`；启动期信号和 ready 后关闭都能有界清理 HTTP/SSE、Worker 和数据库；
+- HTTP 绑定超过固定内部 10 秒即以 `httpListenFailed` 清理退出，bootstrap 只 resolve 运行句柄或 reject 稳定错误，不返回 `undefined|void`；
+- `recoveryAt` 每次启动只生成一次规范 UTC 时间并用于全部候选；ready 后 HTTP/Worker 不可恢复退出由运行句柄监督、统一 shutdown 并非零退出；
 - 目标测试、`pnpm run verify` 与 `m38` 按仓库策略通过，未运行的 full 被明确报告；
 - `REPO_MAP.md`、`ARCHITECTURE.md` 和集成测试 README 已按最终实现同步；
 - 日志和公开投影没有泄露私有牌、Prompt、模型输入输出、Key、SQL 或数据库错误。

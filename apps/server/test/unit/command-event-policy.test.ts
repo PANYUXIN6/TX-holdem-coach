@@ -3,6 +3,7 @@ import {
   applyPokerAction,
   startPokerHand,
 } from '../../src/poker/poker-engine.js'
+import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { isCommandMutationConsistent } from '../../src/sessions/command-execution/command-event-policy.js'
 import {
@@ -10,7 +11,7 @@ import {
   createTestPokerState,
 } from '../poker/create-test-poker-state.js'
 import { createPokerTableState } from '../../src/poker/state.js'
-import { createHandStartCheckpointV1 } from '../../src/sessions/hand-audit/hand-start-checkpoint.js'
+import { createHandStartCheckpointV2 } from '../../src/sessions/hand-audit/hand-start-checkpoint.js'
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
 const handId = '10000000-0000-4000-8000-000000000001'
@@ -367,7 +368,8 @@ describe('command event policy', () => {
         kind: 'startNextHand' as const,
         sessionId,
         handId,
-        checkpoint: createHandStartCheckpointV1({
+        checkpoint: createHandStartCheckpointV2({
+          pokerRuleSetVersion: POKER_RULE_SET_VERSION,
           stateBeforeStartCommand: before,
           startedHand: started.startedHand,
         }),
@@ -615,7 +617,8 @@ describe('command event policy', () => {
         handId,
         failedPlayerRunId: '70000000-0000-4000-8000-000000000001',
         failureReasonCode: 'provider_timeout',
-        checkpoint: createHandStartCheckpointV1({
+        checkpoint: createHandStartCheckpointV2({
+          pokerRuleSetVersion: POKER_RULE_SET_VERSION,
           stateBeforeStartCommand: restored,
           startedHand: started.startedHand,
         }),

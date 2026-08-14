@@ -12,6 +12,7 @@ import {
   initializePokerTable,
   startPokerHand,
 } from '../../src/poker/poker-engine.js'
+import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { createPokerTableState } from '../../src/poker/state.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import { PERSONA_CATALOG_DEFINITIONS } from '../../src/personas/catalog-definitions.js'
@@ -3005,6 +3006,7 @@ function createM27HandAuditFixture(
 
   return Object.freeze({
     checkpoint: {
+      pokerRuleSetVersion: POKER_RULE_SET_VERSION,
       stateBeforeStartCommand: createPrivateTableState({
         stateVersion: 7,
         poker: stateBeforeStartPoker,

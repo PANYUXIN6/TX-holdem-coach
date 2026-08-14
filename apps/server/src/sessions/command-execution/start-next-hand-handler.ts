@@ -5,11 +5,12 @@ import { insertInProgressHandAudit } from '../../persistence/hand-audit-reposito
 import type { ResolvedOwnerScope } from '../../persistence/owner-scope.js'
 import { startPokerHand } from '../../poker/poker-engine.js'
 import type { RandomSource } from '../../poker/random-source.js'
+import { POKER_RULE_SET_VERSION } from '../../poker/poker-rule-set.js'
 import { createPokerTableState } from '../../poker/state.js'
 import { createPrivateEventV2 } from '../authoritative-state/private-event-v2.js'
 import {
-  createHandStartCheckpointV1,
-  type HandStartCheckpointV1,
+  createHandStartCheckpointV2,
+  type HandStartCheckpointV2,
 } from '../hand-audit/hand-start-checkpoint.js'
 import {
   defineSessionCommandHandlerBinding,
@@ -25,13 +26,13 @@ export interface StartNextHandRelationPlan {
   readonly kind: 'startNextHand'
   readonly sessionId: string
   readonly handId: string
-  readonly checkpoint: HandStartCheckpointV1
+  readonly checkpoint: HandStartCheckpointV2
 }
 
 interface StartNextHandWritePort {
   insertHand(input: {
     readonly sessionId: string
-    readonly checkpoint: HandStartCheckpointV1
+    readonly checkpoint: HandStartCheckpointV2
     readonly startedAt: string
   }): Promise<{ readonly handId: string; readonly handNumber: number }>
 }
@@ -71,7 +72,7 @@ export function parseStartNextHandRelationPlan(
   const parsed = StartNextHandPlanInputSchema.safeParse(input)
   if (!parsed.success) return null
   try {
-    const checkpoint = createHandStartCheckpointV1(parsed.data.checkpoint)
+    const checkpoint = createHandStartCheckpointV2(parsed.data.checkpoint)
     if (!uuidEquals(checkpoint.startedHand.handId, parsed.data.handId)) {
       return null
     }
@@ -218,7 +219,8 @@ export function createStartNextHandHandlerBinding(input: {
           completedHandCountBeforeStart: state.completedHandCount,
           randomSource: input.randomSource,
         })
-        const checkpoint = createHandStartCheckpointV1({
+        const checkpoint = createHandStartCheckpointV2({
+          pokerRuleSetVersion: POKER_RULE_SET_VERSION,
           stateBeforeStartCommand: state,
           startedHand: startResult.startedHand,
         })
@@ -290,7 +292,7 @@ export function createStartNextHandHandlerBinding(input: {
       Object.freeze({
         insertHand: (insertInput: {
           readonly sessionId: string
-          readonly checkpoint: HandStartCheckpointV1
+          readonly checkpoint: HandStartCheckpointV2
           readonly startedAt: string
         }) => insertInProgressHandAudit(transaction, input.owner, insertInput),
       }),

@@ -12,10 +12,10 @@ import {
   HandAuditPayloadVersionError,
 } from '../sessions/hand-audit/errors.js'
 import {
-  encodeHandStartCheckpointV1,
-  type StoredHandStartCheckpointV1,
-} from '../sessions/hand-audit/hand-start-checkpoint-codec-v1.js'
-import type { HandStartCheckpointV1 } from '../sessions/hand-audit/hand-start-checkpoint.js'
+  encodeHandStartCheckpointV2,
+  type StoredHandStartCheckpointV2,
+} from '../sessions/hand-audit/hand-start-checkpoint-codec-v2.js'
+import type { HandStartCheckpointV2 } from '../sessions/hand-audit/hand-start-checkpoint.js'
 import {
   DatabaseOperationError,
   HandAuditTransitionError,
@@ -98,7 +98,7 @@ const HandAuditRowSchema = z.strictObject({
 
 export interface InsertInProgressHandAuditInput {
   readonly sessionId: string
-  readonly checkpoint: HandStartCheckpointV1
+  readonly checkpoint: HandStartCheckpointV2
   readonly startedAt: string
 }
 
@@ -126,7 +126,7 @@ interface HandAuditBase {
   readonly participantSeatNumbers: readonly number[]
   readonly startedAt: string
   readonly updatedAt: string
-  readonly checkpoint: HandStartCheckpointV1
+  readonly checkpoint: HandStartCheckpointV2
 }
 
 export type HandAudit =
@@ -300,9 +300,9 @@ function parseHandAuditRow(row: unknown, owner: ResolvedOwnerScope): HandAudit {
   })
 }
 
-function decodeCheckpointForWrite(input: unknown): StoredHandStartCheckpointV1 {
+function decodeCheckpointForWrite(input: unknown): StoredHandStartCheckpointV2 {
   try {
-    return encodeHandStartCheckpointV1(input)
+    return encodeHandStartCheckpointV2(input)
   } catch (error) {
     if (
       error instanceof HandAuditPayloadValidationError ||
@@ -335,7 +335,7 @@ function toDatabaseTimestamp(value: string): string {
 }
 
 function assertCompletionMirrors(
-  checkpoint: HandStartCheckpointV1,
+  checkpoint: HandStartCheckpointV2,
   result: CompletedHandResult,
 ): void {
   const startedHand = checkpoint.startedHand

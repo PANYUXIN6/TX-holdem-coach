@@ -1,4 +1,5 @@
 import { ZodError } from 'zod'
+import { POKER_RULE_SET_VERSION_V1 } from '../../poker/poker-rule-set.js'
 import {
   HandAuditPayloadValidationError,
   HandAuditVersionRegistryConfigurationError,
@@ -9,8 +10,14 @@ import {
   HAND_START_CHECKPOINT_PAYLOAD_VERSION,
 } from './hand-start-checkpoint-codec-v1.js'
 import {
-  createHandStartCheckpointV1,
+  CHECKPOINT_V2_SCHEMA_VERSION,
+  decodeCurrentHandStartCheckpointV2,
+  HAND_START_CHECKPOINT_V2_PAYLOAD_VERSION,
+} from './hand-start-checkpoint-codec-v2.js'
+import {
+  createHandStartCheckpointV2,
   type HandStartCheckpointV1,
+  type HandStartCheckpointV2,
 } from './hand-start-checkpoint.js'
 
 export interface HandStartCheckpointVersionIdentity {
@@ -22,7 +29,7 @@ export type HandStartCheckpointVersionRegistration =
   | {
       readonly kind: 'current'
       readonly identity: HandStartCheckpointVersionIdentity
-      readonly decode: (input: unknown) => HandStartCheckpointV1
+      readonly decode: (input: unknown) => HandStartCheckpointV2
     }
   | {
       readonly kind: 'legacy'
@@ -32,7 +39,7 @@ export type HandStartCheckpointVersionRegistration =
     }
 
 export type HandStartCheckpointVersionReadResult =
-  | { readonly kind: 'decoded'; readonly value: HandStartCheckpointV1 }
+  | { readonly kind: 'decoded'; readonly value: HandStartCheckpointV2 }
   | { readonly kind: 'unknownVersion' }
   | { readonly kind: 'invalidPayload' }
 
@@ -102,7 +109,7 @@ export function createHandStartCheckpointVersionRegistry(
         const value =
           registration.kind === 'current'
             ? registration.decode(row)
-            : createHandStartCheckpointV1(
+            : createHandStartCheckpointV2(
                 registration.migrate(registration.decode(row)),
               )
         return deepFreeze({ kind: 'decoded', value })
@@ -124,10 +131,23 @@ export const productionHandStartCheckpointVersionRegistry =
     {
       kind: 'current',
       identity: {
+        rowPayloadVersion: HAND_START_CHECKPOINT_V2_PAYLOAD_VERSION,
+        envelopeSchemaVersion: CHECKPOINT_V2_SCHEMA_VERSION,
+      },
+      decode: (input) =>
+        decodeCurrentHandStartCheckpointV2(input).payload.checkpoint,
+    },
+    {
+      kind: 'legacy',
+      identity: {
         rowPayloadVersion: HAND_START_CHECKPOINT_PAYLOAD_VERSION,
         envelopeSchemaVersion: CHECKPOINT_SCHEMA_VERSION,
       },
       decode: (input) =>
         decodeCurrentHandStartCheckpointV1(input).payload.checkpoint,
+      migrate: (checkpoint) => ({
+        pokerRuleSetVersion: POKER_RULE_SET_VERSION_V1,
+        ...(checkpoint as HandStartCheckpointV1),
+      }),
     },
   ])

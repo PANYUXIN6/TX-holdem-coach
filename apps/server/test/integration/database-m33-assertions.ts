@@ -34,7 +34,7 @@ import {
 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
 import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
 import { decodeCurrentCompletedHandResultV1 } from '../../src/sessions/hand-audit/completed-hand-result-codec-v1.js'
-import { decodeCurrentHandStartCheckpointV1 } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v1.js'
+import { productionHandStartCheckpointVersionRegistry } from '../../src/sessions/hand-audit/hand-start-checkpoint-version-registry.js'
 import { createSessionCommandHandlerMap } from '../../src/sessions/command-execution/command-handler-map.js'
 import { createPlayerActionHandlerBinding } from '../../src/sessions/command-execution/player-action-handler.js'
 import { createSessionCommandExecutor } from '../../src/sessions/command-execution/session-command-executor.js'
@@ -458,15 +458,19 @@ async function readPersistenceMirror(
       : ledgerRow.ledgerStatus === 'completed'
         ? CommandResponseSchema.parse(ledgerRow.responsePayload)
         : ErrorResponseSchema.parse(ledgerRow.responsePayload)
+  const checkpoint = productionHandStartCheckpointVersionRegistry.read(
+    row.checkpointPayloadVersion,
+    row.checkpointPayload,
+  )
+  if (checkpoint.kind !== 'decoded') {
+    throw new Error('M3.3 Hand checkpoint 无法解码。')
+  }
   return Object.freeze({
     ...row,
     eventCount: events.length,
     completedResultPresent: completedResult !== null,
     completedResult,
-    checkpoint: decodeCurrentHandStartCheckpointV1({
-      payloadVersion: row.checkpointPayloadVersion,
-      payload: row.checkpointPayload,
-    }).payload.checkpoint,
+    checkpoint: checkpoint.value,
     snapshot: decodeCurrentSnapshotV1({
       payloadVersion: row.snapshotPayloadVersion,
       payload: row.snapshotPayload,

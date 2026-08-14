@@ -4,6 +4,7 @@ import { PersistenceDataCorruptionError } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { loadPausedAbortContext } from '../../src/persistence/session-lifecycle-repository.js'
 import { startPokerHand } from '../../src/poker/poker-engine.js'
+import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { encodeHandStartCheckpointV1 } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v1.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
@@ -94,7 +95,10 @@ describe('session lifecycle repository', () => {
 
     expect(context).toEqual({
       handId,
-      checkpoint: encodeHandStartCheckpointV1(checkpoint()).payload.checkpoint,
+      checkpoint: {
+        pokerRuleSetVersion: POKER_RULE_SET_VERSION,
+        ...encodeHandStartCheckpointV1(checkpoint()).payload.checkpoint,
+      },
       failedPlayerRunId,
       failureReasonCode: 'provider_timeout',
     })

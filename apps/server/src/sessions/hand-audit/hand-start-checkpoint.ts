@@ -4,6 +4,10 @@ import {
   type StartedHandFacts,
 } from '../../poker/hand-result.js'
 import {
+  POKER_RULE_SET_VERSION_V1,
+  type PokerRuleSetVersion,
+} from '../../poker/poker-rule-set.js'
+import {
   createPrivateTableState,
   type PrivateTableState,
 } from '../authoritative-state/private-table-state.js'
@@ -54,10 +58,19 @@ const HandStartCheckpointInputSchema = z.strictObject({
   stateBeforeStartCommand: z.unknown(),
   startedHand: StartedHandFactsSchema,
 })
+const HandStartCheckpointV2InputSchema = z.strictObject({
+  pokerRuleSetVersion: z.literal(POKER_RULE_SET_VERSION_V1),
+  stateBeforeStartCommand: z.unknown(),
+  startedHand: StartedHandFactsSchema,
+})
 
 export interface HandStartCheckpointV1 {
   readonly stateBeforeStartCommand: PrivateTableState
   readonly startedHand: StartedHandFacts
+}
+
+export interface HandStartCheckpointV2 extends HandStartCheckpointV1 {
+  readonly pokerRuleSetVersion: PokerRuleSetVersion
 }
 
 function deepFreeze<Value>(value: Value): Value {
@@ -108,6 +121,25 @@ export function createHandStartCheckpointV1(
       throw new Error('Hand-start checkpoint mirrors do not match.')
     }
     return deepFreeze({ stateBeforeStartCommand, startedHand })
+  } catch (error) {
+    if (error instanceof HandAuditPayloadValidationError) throw error
+    throw new HandAuditPayloadValidationError()
+  }
+}
+
+export function createHandStartCheckpointV2(
+  input: unknown,
+): HandStartCheckpointV2 {
+  try {
+    const parsed = HandStartCheckpointV2InputSchema.parse(input)
+    const checkpointV1 = createHandStartCheckpointV1({
+      stateBeforeStartCommand: parsed.stateBeforeStartCommand,
+      startedHand: parsed.startedHand,
+    })
+    return deepFreeze({
+      pokerRuleSetVersion: POKER_RULE_SET_VERSION_V1,
+      ...checkpointV1,
+    })
   } catch (error) {
     if (error instanceof HandAuditPayloadValidationError) throw error
     throw new HandAuditPayloadValidationError()

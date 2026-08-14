@@ -6,6 +6,7 @@ import {
 } from '../../poker/poker-engine.js'
 import type { RandomSource } from '../../poker/random-source.js'
 import type { StartedHandFacts } from '../../poker/hand-result.js'
+import { POKER_RULE_SET_VERSION } from '../../poker/poker-rule-set.js'
 import {
   createPrivateEventV2,
   type PrivateEventV2,
@@ -15,8 +16,8 @@ import {
   type PrivateTableState,
 } from '../authoritative-state/private-table-state.js'
 import {
-  createHandStartCheckpointV1,
-  type HandStartCheckpointV1,
+  createHandStartCheckpointV2,
+  type HandStartCheckpointV2,
 } from '../hand-audit/hand-start-checkpoint.js'
 
 const IdentityGraphSchema = z.strictObject({
@@ -64,7 +65,7 @@ export interface SessionCreationPlanInput {
 export interface SessionCreationPlan {
   readonly identityGraph: SessionCreationIdentityGraph
   readonly stateBeforeStart: PrivateTableState
-  readonly checkpoint: HandStartCheckpointV1
+  readonly checkpoint: HandStartCheckpointV2
   readonly startedHand: StartedHandFacts
   readonly finalState: PrivateTableState
   readonly privateEventDrafts: readonly [PrivateEventV2, PrivateEventV2]
@@ -192,7 +193,8 @@ export function createSessionCreationPlan(
       completedHandCountBeforeStart: 0,
       randomSource: input.randomSource,
     })
-    const checkpoint = createHandStartCheckpointV1({
+    const checkpoint = createHandStartCheckpointV2({
+      pokerRuleSetVersion: POKER_RULE_SET_VERSION,
       stateBeforeStartCommand: stateBeforeStart,
       startedHand: startResult.startedHand,
     })

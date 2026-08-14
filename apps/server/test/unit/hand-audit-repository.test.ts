@@ -4,6 +4,7 @@ import {
   initializePokerTable,
   startPokerHand,
 } from '../../src/poker/poker-engine.js'
+import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import {
   abortHandAudit,
   completeHandAudit,
@@ -19,6 +20,7 @@ import {
 } from '../../src/persistence/errors.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { encodeHandStartCheckpointV1 } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v1.js'
+import { encodeHandStartCheckpointV2 } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v2.js'
 import { encodeCompletedHandResultV1 } from '../../src/sessions/hand-audit/completed-hand-result-codec-v1.js'
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
@@ -63,6 +65,13 @@ function createCheckpoint() {
   }
 }
 
+function createCurrentCheckpoint() {
+  return {
+    pokerRuleSetVersion: POKER_RULE_SET_VERSION,
+    ...createCheckpoint(),
+  }
+}
+
 function createTransactionMock(responses: readonly unknown[]): TransactionSql {
   const pending = [...responses]
   const transaction = ((template: TemplateStringsArray) => {
@@ -84,8 +93,10 @@ async function resolvedOwner() {
   return resolveOwnerScope(sql, { ownerId: 'local-user' })
 }
 
-function inProgressRow() {
-  const checkpoint = encodeHandStartCheckpointV1(createCheckpoint())
+function inProgressRow(options: { readonly current?: boolean } = {}) {
+  const checkpoint = options.current
+    ? encodeHandStartCheckpointV2(createCurrentCheckpoint())
+    : encodeHandStartCheckpointV1(createCheckpoint())
   return {
     handId,
     sessionId,
@@ -151,7 +162,7 @@ describe('hand audit repository', () => {
     await expect(
       insertInProgressHandAudit(transaction, await resolvedOwner(), {
         sessionId,
-        checkpoint: createCheckpoint(),
+        checkpoint: createCurrentCheckpoint(),
         startedAt,
       }),
     ).resolves.toEqual({ handId, handNumber: 1 })
@@ -163,15 +174,17 @@ describe('hand audit repository', () => {
     await expect(
       insertInProgressHandAudit(transaction, await resolvedOwner(), {
         sessionId,
-        checkpoint: createCheckpoint(),
+        checkpoint: createCurrentCheckpoint(),
         startedAt,
       }),
     ).rejects.toBeInstanceOf(ResourceNotFoundError)
   })
 
-  test('reads one owner-scoped in-progress hand through the current checkpoint registry', async () => {
-    const checkpoint = encodeHandStartCheckpointV1(createCheckpoint())
-    const transaction = createTransactionMock([[inProgressRow()]])
+  test('reads one owner-scoped in-progress hand through the current V2 checkpoint registry', async () => {
+    const checkpoint = encodeHandStartCheckpointV2(createCurrentCheckpoint())
+    const transaction = createTransactionMock([
+      [inProgressRow({ current: true })],
+    ])
 
     const audit = await readHandAudit(
       transaction,
@@ -261,6 +274,7 @@ describe('hand audit repository', () => {
       updatedAt: '2026-08-04T12:03:00.000000Z',
     })
     expect(audit.checkpoint.stateBeforeStartCommand.stateVersion).toBe(7)
+    expect(audit.checkpoint.pokerRuleSetVersion).toBe(POKER_RULE_SET_VERSION)
   })
 
   test('reads an aborted hand only when the referenced Run mirrors Player ownership and identity', async () => {

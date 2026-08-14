@@ -13,8 +13,8 @@ import {
 } from '../../persistence/session-lifecycle-repository.js'
 import { createPrivateEventV2 } from '../authoritative-state/private-event-v2.js'
 import {
-  createHandStartCheckpointV1,
-  type HandStartCheckpointV1,
+  createHandStartCheckpointV2,
+  type HandStartCheckpointV2,
 } from '../hand-audit/hand-start-checkpoint.js'
 import {
   defineSessionCommandHandlerBinding,
@@ -31,7 +31,7 @@ export type EndSessionRelationPlan =
       readonly handId: string
       readonly failedPlayerRunId: string
       readonly failureReasonCode: string
-      readonly checkpoint: HandStartCheckpointV1
+      readonly checkpoint: HandStartCheckpointV2
     }
 
 interface EndSessionReadPort {
@@ -96,7 +96,7 @@ export function parseEndSessionRelationPlan(
   const parsed = AbortHandPlanInputSchema.safeParse(input)
   if (!parsed.success) return null
   try {
-    const checkpoint = createHandStartCheckpointV1(parsed.data.checkpoint)
+    const checkpoint = createHandStartCheckpointV2(parsed.data.checkpoint)
     if (!uuidEquals(checkpoint.startedHand.handId, parsed.data.handId)) {
       return null
     }

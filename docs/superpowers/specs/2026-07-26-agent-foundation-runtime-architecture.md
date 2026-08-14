@@ -2,7 +2,7 @@
 
 - 状态：已确认
 - 日期：2026-07-26
-- 最后更新：2026-08-13
+- 最后更新：2026-08-14
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - Player 专项设计：[Player Agent Runtime](./2026-07-23-poker-practice-agent-harness-design.md)
 - Coach 专项设计：[Coach Agent](./2026-07-26-poker-coach-agent-design.md)
@@ -18,7 +18,7 @@
 
 - 目标、信息、权限和副作用边界可证明。
 - 运行可恢复、可审计、可限额。
-- 模型不负责不擅长的数学、范围查询和样本判断。
+- 模型不负责可由程序可靠完成的数学、牌力/听牌结构、范围查询和样本判断。
 - Prompt、模型、策略数据和分类规则升级可回归。
 - 首版模块化单体不提前引入分布式调度基础设施，但保留未来多租户上线所需的窄适配边界。
 
@@ -28,7 +28,32 @@
 
 Foundation 只提供通用运行机制，不理解扑克目标。Runtime 拥有完整业务状态机、私有上下文、能力清单、预算、路由、校验和 Commit Gate。
 
+Player 与 Coach 共同采用“确定性核心 + 概率性边缘”：凡是与当前决策相关、具有明确规则且可重复测试的事实或约束，必须在模型调用前由程序计算、查询或分类；LLM 只接收经过信息边界处理的派生事实和受限候选，负责多个合理候选之间的角色化选择或教学表达。不能可靠定义的 clean outs、对手范围条件权益或精确 EV 必须显式标记不可用，不能转交模型猜测。该原则不要求穷举无关特征，也不允许预处理服务在存在真实选择空间时静默提交最终动作。程序输出“可复现”不等于它就是客观真理：规则、公式、数据集、统计、启发式和模型文本必须分别标注证据性质。
+
 Player 与 Coach 都服务于本项目的 6–9 人无限注德州扑克规则。翻前策略按 `tableSize + logicalPosition + actionNode` 建立更陡的位置梯度；翻后计算与匹配代码在 6–9 人间复用，但仍携带翻前范围、位置、行动线和实际入池人数，不能假设结果必然相同。
+
+### 1.1 客观事实前置规则
+
+“尽量处理所有已知客观事实”限定为：对当前决策有用、能从允许信息中可靠导出、具有稳定语义并可版本化回放的事实。Runtime 不把完整内部状态或无关历史全部塞给模型，而是先形成完整的确定性分析结果，再由决策包投影仅选择本次需要的字段。
+
+模型调用前至少处理以下类别：
+
+1. **规则与状态事实**：固定规则集版本、街次、行动者、按钮、名义/实际盲注投入、短盲 all-in、大盲行动权、合法动作、最小/最大目标金额、最后一次足额加注、是否重新开放加注、主池/边池资格、有效请求和权威状态版本。
+2. **标准化局面与响应拓扑**：桌型、逻辑位置、存活及入池人数、待行动人数、每名对手与 Hero 的位置关系、行动顺序、Hero 后方玩家、翻前/当前街主动玩家、规范行动线、谁可能响应每个候选、谁仍可加注、Hero 是否还可能再次面对行动，以及 Hero 当前行动完成与本轮下注立即关闭两个不同事实。
+3. **原子可见牌事实**：翻前的对子/同花、点数间隔、连张、Broadway、A-wheel 潜力；翻后的最佳五张牌、稳定比较元组、底牌使用数、对子关系、踢脚、超牌数、同花与顺子高张、听牌/后门听牌、重叠改善组；牌面的花色结构、配对结构、顺子窗口、点数连接度，以及新街带来的可证明变化。
+4. **可争夺底池与当前数学**：按对手有效筹码、主池/边池及资格拆分 Hero 当前真正可争夺的金额，再计算跟注成本、底池赔率、翻后 SPR、合法下注/加注边界和统一精度下的尺度比例；不能用总底池替代 Hero 的可争夺底池。
+5. **候选结果事实**：每个候选的跟注额、本次新增投入、本街行动后总投入、本手累计投入、必然返还的未跟注超额、真正风险金额、执行后的可争夺底池、剩余筹码、逐对手有效筹码、预计下一街 SPR（若有下一街）、是否强制 runout、剩余发牌街数、是否强制摊牌、响应者集合、后续可加注者、Hero 是否还会面对行动、本轮是否立即关闭及合法后继空间；只在响应假设明确时输出盈亏平衡阈值。
+6. **策略事实**：策略数据集、版本、完整 spot 键、匹配等级、场景假设、基准候选与参考动作执行频率；下注尺度与执行频率使用不同字段。
+7. **人物与对手派生事实**：人物政策对候选权重的有界确定性调整，以及截止当前事件的公开样本、样本门槛、置信度和剥削偏离上限。
+8. **Coach 评价证据**：决策时点重建、基准支持情况、数学偏差和证据充分性；只有证据等级允许时才形成行为偏差标签、质量评价、严重度或 EV 损失，并在教学模型调用前冻结。
+
+每项派生事实必须携带或可追溯到 `sourceRef`、`asOfEventSeq/stateVersion`、Schema/算法/数据版本、适用假设、`available | unavailable | notApplicable` 状态，以及 `epistemicKind: ruleFact | formulaFact | datasetBaseline | statisticalEvidence | heuristicJudgment | modelGeneratedText`。`unavailable` 表示当前缺少可靠输入或版本化算法，`notApplicable` 表示概念不适用于该节点；两者不能用 `null` 混为一谈，也不能要求 LLM 补算。
+
+`wet/dry`、`blank/scareCard`、`capped/uncapped`、`value/bluff/protection`、`bluffCatcher` 等词不能直接作为无条件客观事实。首版优先保存上述原子结构；确需使用语义标签时，必须由版本化规则或明确范围假设映射，并标记为 `heuristicJudgment` 或相应数据证据。情绪、恐惧、tilt、动机和“为何如此行动”不能由牌谱直接证明，只能作为带证据限制的教学假设，不能写入客观事实或自动画像。
+
+以下值在首版没有显式、版本化范围、响应模型或 Solver 时不得生成：clean outs、范围条件权益/胜率/EV、domination 概率、fold equity、对手 call/raise 概率、隐含赔率/反向隐含赔率单值、多街反事实收益，以及仅由 SPR 推导的唯一动作。可以确定性枚举结构性改善牌或合法的对手胜/平组合，但必须明确它们分别不等于 clean outs、对手范围或概率。
+
+Player LLM 的剩余职责只有：在程序生成且验证过的多个候选之间，结合已冻结人物形象选择一个 `candidateActionId`，并可生成简短说明。Coach LLM 的剩余职责只有：把已冻结的过程评价和事后事实组织成可理解、可迁移的教学解释。两者都不得新增、覆盖或重新解释客观事实。
 
 ## 2. 能力取舍
 
@@ -271,15 +296,26 @@ Foundation 只提供两类端口：
 flowchart TD
     PS["权威牌局状态中枢"] --> OB["PlayerObservationBuilder"]
     OB --> IF["PlayerInformationBoundaryGuard"]
+    IF --> SN["SpotNormalizer"]
+    IF --> HF["HandFeatureAnalyzer"]
+    IF --> PT["ContestablePotProjector"]
     IF --> DM["DecisionMetricsEngine"]
-    IF --> SP["PlayerStrategyProjection"]
+    SN --> SP["PlayerStrategyProjection"]
+    HF --> SP
     SP --> HC["HeuristicCandidateGenerator<br/>仅在策略不支持时"]
     SP --> PD["PersonaDeviationPolicy"]
     HC --> PD
     PD --> OF["OpponentFeatureProjector"]
     OF --> EA["ExploitAdjustmentPolicy"]
-    DM --> PDP["PlayerDecisionPacketBuilder"]
-    EA --> PDP
+    EA --> CO["CandidateOutcomeProjector"]
+    PT --> DM
+    PT --> CO
+    DM --> CO
+    HF --> AS["DecisionAuditSnapshotBuilder"]
+    DM --> AS
+    SN --> AS
+    CO --> AS
+    AS --> PDP["PlayerModelProjectionBuilder"]
     PDP --> PG["PlayerDecisionPacketLeakGuard"]
     PG --> BC["LLM Bounded Choice"]
     BC --> V["PlayerDecisionValidator"]
@@ -288,11 +324,51 @@ flowchart TD
 
 ### 6.2 预处理职责
 
+`SpotNormalizer`：
+
+- 把 6–9 人桌的安全观察转换为版本化、可复现的策略节点，不做策略建议。
+- 至少规范化桌型、逻辑位置、逐对手位置关系、仍在手/已入池/待行动人数、行动顺序与 Hero 后方玩家、街次、翻前节点、底池类型、翻前/当前街主动玩家、最后足额加注目标与增量、是否重新开放加注、行动历史及其尺度和有效筹码档。
+- 固化 `pokerRuleSetVersion`。首版规范值为 `nlhe-cash-6to9-10-20-v1`，对应 6–9 人、10/20 盲注、无前注、无 straddle、无抽水、单牌面一次 runout；永久不设计可配置 `ante`/`anteModel` 或 `rakeModel`。任何会改变合法动作、结算、位置或策略节点解释的规则变化都必须发布新值，不能复用该版本。
+- `pokerRuleSetVersion` 的权威来源是目标手牌开手时固化的 Hand 检查点，不是 Runtime 部署时的 current 常量。M4.5 发布 `HandStartCheckpointV2` 保存该值；既有 V1 只能因历史上不存在第二套规则而确定性迁移为 `nlhe-cash-6to9-10-20-v1`。Player、Coach、策略查询和检查点复用均读取同一手牌绑定值。
+- 输出 `forcedPosts[] { seatNumber, kind, nominalAmount, actualAmount, isAllIn }` 和 `bigBlindOptionAvailable`，短码盲注的实际投入不能覆盖名义 10/20 下注基准。`bigBlindOptionAvailable=true` 当且仅当当前为翻前、当前行动者是未 all-in 且尚未自愿行动的大盲、下注层级仍为名义大盲 20、`amountToCall=0`，并且合法动作同时包含 `check` 和至少一种主动提高下注层级的 `raise | allIn`；其他情况一律为 `false`。
+- 显式输出 `heroActionCompletes`、`bettingRoundClosesImmediately` 与 `canFaceFurtherAction`，不能用一个含混的 `closesAction` 同时表达三者；候选级响应者和可加注者由结果投影补充。
+- 规范键保留多人池、边池、limp、冷跟注、挤压、重新加注和不足额全下等会改变节点语义的事实，不能为命中模板而静默降级成单挑或标准单加注底池。
+- 输出携带 `spotSchemaVersion` 与 `normalizerVersion`；无法规范化或输入矛盾时在模型调用前失败。
+
+`HandFeatureAnalyzer`：
+
+- 只消费 `PlayerInformationBoundaryGuard` 放行的本座位底牌、当前公共牌和规则事实，不能读取对手隐藏牌、牌堆、未来牌或 Coach 事后事实。
+- 输出携带 `handFeatureSchemaVersion` 与 `analyzerVersion`。翻前至少输出 `isPair`、`isSuited`、`rankGap`、`isConnector`、`isBroadway`、`aceWheelPotential`，使 K2s 等牌不再由模型自由命名结构。翻后至少输出 `bestFiveCards`、`handRankTuple`、`holeCardsUsed`、`pairRelation`、`kickerRank`、`overcardCount`、`flushRank`、`straightHighRank`、`drawTypes[]`、`backdoorDraws[]`、`overlappingOutGroups[]`、绝对 nuts、redraw、`cardRemovalFacts[]` 和 `counterfeitRiskFacts[]`。
+- 牌面输出以 `suitPattern`、`pairedness`、`straightWindows`、`rankConnectivity`、`streetDelta`、`handTransition` 等原子事实为主；`wet/dry`、`blank/scareCard` 仅能是有版本的派生 heuristic，不能替代原子字段。
+- `structuralOuts` 只表示按当前可见牌能够完成听牌或改善既有牌型的未知牌，不等于一定获胜的 clean outs，也不等于权益或 EV。
+- `cardRemovalFacts[]` 只描述 Hero 与公共牌已占用哪些牌、因此从未知组合空间中排除了什么，不输出“适合诈唬”等战略 blocker 价值。`counterfeitRiskFacts[]` 只描述未来牌可能使 Hero 底牌不再参与最佳五张或改变当前可证明牌型结构的路径，不声称 Hero 会因此输牌。
+- 绝对 nuts、redraw 和上述结构事实只描述当前可见牌能够证明的组合结构；任何依赖对手持牌分布的获胜概率、domination、“安全牌”、战略 blocker 价值或实际 reverse outs 判断不进入该层。
+- clean outs、实际 reverse outs、对手范围条件权益和 EV 只有在存在显式、版本化的对手持牌/范围与算法时才能计算，否则为 `unavailable`；不得交给 LLM 心算或猜测。Coach 的 Hindsight 阶段可以基于已揭示对手底牌另行冻结实际牌张比较，但不能反向写入决策时点事实。
+- 该纯分析能力可被 Player 和 Coach 的当时信息阶段复用，但两者必须通过各自的信息投影调用，不能共享 Context 对象。
+- 它位于共享纯扑克领域层，并分别组合进既有 `player.compute-decision-metrics` 与 `coach.compute-decision-metrics` 的实现；不为 M4.1 Registry 新增 Capability。算法或输出语义变化必须升级对应输出 Schema/Runtime 定义，不能静默改变历史 Run。
+
 `DecisionMetricsEngine`：
 
-- 计算有效筹码 BB、底池赔率、翻后 SPR、下注比例和合法金额边界。
+- 基于 `ContestablePotProjector` 计算按对手有效筹码、Hero 可争夺底池、底池赔率、翻后 SPR、下注比例和合法金额边界。
+- 对当前动作和每个候选分开保存 `amountToCall`、`contributionDelta`、`targetStreetCommitment`、`streetContributionAfter` 和 `totalContributionAfter`；`targetStreetCommitment` 始终表示行动后本街总投入，不得解释为“再加多少”。不适用字段使用 `notApplicable`。
 - 翻前不计算 SPR。
 - 不输出建议动作。
+
+`ContestablePotProjector`：
+
+- 从权威投入、全下状态与主池/边池资格确定性输出 `effectiveStacksByOpponent[]`、`potBreakdown[] { potId, amount, eligibleSeats[] }`、`heroContestablePotBefore`、`heroMaximumContestableAmount`；候选级再输出 `marginalContestablePotByCandidate`。
+- 多人池中的底池赔率只使用 Hero 新增投入能够争夺的金额，不盲目使用桌面总底池；资格或金额矛盾时在模型调用前失败。
+- 它是共享纯领域组件，不是模型工具，也不新增 M4.1 Capability。
+
+`CandidateOutcomeProjector`：
+
+- 对最终候选逐项应用相同筹码规则，计算 `amountToCall`、`contributionDelta`、`targetStreetCommitment`、`streetContributionAfter`、`totalContributionAfter`、`guaranteedUncalledReturn`、`amountActuallyAtRisk`、`contestableAmountAdded`、`potAfterAction`、`heroContestablePotAfterAction`、`marginalContestablePot`、`heroStackAfterAction`、`effectiveStacksByOpponentAfterAction[]`、`nextStreetSpr`、`isAllIn`、`forcesRunout`、`remainingStreetsToDeal`、`furtherBettingPossible`、`showdownForced`、`responders[]`、`canRaiseSeats[]`、`canFaceFurtherAction`、`bettingRoundClosesImmediately`、`heroActionCompletes` 和合法后继空间，不选择候选。
+- `nextStreetSpr` 只在该候选之后仍可能进入下一街时输出；翻前候选可以输出预计翻牌 SPR，但不能把它标记为当前 SPR。
+- `forcesRunout=true` 时没有下一街决策，`nextStreetSpr.status=notApplicable`，并由 `remainingStreetsToDeal` 表达仍需自动发出的公共牌街；不得为 LLM 生成转牌或河牌行动候选。
+- `guaranteedUncalledReturn` 只计算按当前权威筹码结构必然无人能够匹配的超额；`amountActuallyAtRisk = contributionDelta - guaranteedUncalledReturn`，不能把移动到桌面的全部筹码都描述为风险。
+- 跟注所需最低权益、纯诈唬即时盈亏平衡弃牌率等阈值只有在公式假设完整且适用于当前单挑/多人节点时才输出，并同时保存假设；否则为 `unavailable`。
+- “底池承诺”不是无条件客观事实；如未来需要 `commitmentBand`，必须明确标记为版本化 heuristic 政策结果，不能混入纯数学字段或据此直接生成 call/raise 建议。
+- 等价动作/尺度候选在入包前按标准动作语义合并；只有存在可证明的严格支配关系时才可删除候选，不能用启发式偏好冒充 dominance。
 
 `PlayerStrategyProjection`：
 
@@ -321,14 +397,31 @@ flowchart TD
 
 ### 6.3 `PlayerDecisionPacket`
 
-模型接收的是决策包，不是未经加工的私有牌局状态：
+Runtime 先生成完整可回放的 `DecisionAuditSnapshot`，再投影模型最小必要的 `PlayerDecisionPacket`。两者不能是同一个对象，也不能把审计快照直接发给模型：
+
+```text
+DecisionAuditSnapshot
+├── pokerRuleSetVersion
+├── safeObservationSnapshot
+├── normalizedSpot
+├── atomicHandAndBoardFacts
+├── contestablePotTopology
+├── deterministicMetrics
+├── strategyAndEvidenceSnapshots
+├── finalCandidatesAndOutcomes
+└── fullFactManifest
+```
+
+模型接收的决策包是压缩后的 `PlayerModelProjection`：
 
 ```text
 PlayerDecisionPacket
 ├── packetSchemaVersion
+├── pokerRuleSetVersion
 ├── stateVersion
 ├── decisionRequestId
-├── visibleObservation
+├── normalizedSpot
+├── necessaryHandAndBoardFacts
 ├── deterministicMetrics
 ├── strategyMatch
 ├── candidateActions[]
@@ -338,12 +431,16 @@ PlayerDecisionPacket
 │   ├── personaAdjustedWeight
 │   ├── exploitAdjustedWeight
 │   ├── confidence
+│   ├── outcomeProjection
 │   └── evidenceRefs
 ├── personaSummary
+├── factManifest
 └── executionConstraints
 ```
 
-LLM 只能在 `candidateActions` 中选择，不得重新计算数学、引入新动作或越过尺度边界。
+`factManifest` 记录进入决策包的派生事实版本、截止点、可用性、`epistemicKind` 和来源引用；完整清单保存在审计快照，模型投影只保留被发送字段的引用。每个概念在模型上下文中只有一种权威表达：不同时发送原始行动历史和重复语义叙述，不要求模型从筹码重算 SPR，不混用总底池与可争夺底池。LLM 只能在 `candidateActions` 中选择，不得重新计算或覆盖 spot、牌力、听牌、outs、数学、候选结果、策略或样本判断，不得引入新动作或越过尺度边界。
+
+候选上的 `actionFrequency`、`baseWeight` 或调整后权重是数据集/政策的参考分布，不保证由 LLM 选择实现长期频率校准。首版保留 LLM 最终有界选择以表达人物与动态偏离；若未来产品要求精确混合策略频率，必须由服务端 `PolicySampler` 使用可审计随机种子抽样，LLM 仅解释已抽中的候选，不能同时宣称“LLM 自由选择”和“严格复现频率”。
 
 ### 6.4 信息防火墙
 
@@ -384,7 +481,8 @@ flowchart TD
     A --> FA["冻结 DecisionAssessment"]
     FA --> DA["CoachDecisionAnalyzer"]
     DA --> FP["ProcessAnalysisFreezer<br/>冻结 ProcessAnalysis"]
-    FP --> HFG["HindsightContextBoundaryGuard"]
+    FP --> HP["HindsightFactProjector"]
+    HP --> HFG["HindsightContextBoundaryGuard"]
     HFG --> HE["CoachHindsightExplainer"]
     HE --> CO["CoachReviewComposer"]
     CO --> VA["CoachReviewValidator"]
@@ -394,7 +492,7 @@ flowchart TD
 ### 7.2 信息阶段
 
 - Decision 阶段只接收用户当时可见信息和确定性证据。
-- Hindsight 阶段只接收冻结的 ProcessAnalysis 和最小必要事后事实。
+- Hindsight 阶段只接收冻结的 ProcessAnalysis 和 `HindsightFactProjector` 生成的最小必要事后事实。
 - 两个阶段使用不同 Context Schema、Builder 和 Boundary Guard。
 - 两个阶段在模型发送前都经过 Adapter Boundary Guard。
 - Hindsight 不能覆盖 ProcessAnalysis。
@@ -406,9 +504,16 @@ flowchart TD
 ```text
 DecisionAssessment
 ├── assessment: sound | questionable | likelyMistake | unrated
-├── decisionTags[]
+├── assessmentBasis: ruleInvariant | exactStrategy | referenceStrategy | solverEv | heuristicPolicy | insufficientEvidence
+├── epistemicStatus: objective | modelBased | heuristic | unrated
+├── observedDeviationTags[]
+├── teachingHypotheses[]
 ├── severity: low | medium | high | unavailable
 ├── baselineComparison
+│   ├── matchStatus
+│   ├── actionSupported
+│   ├── sizeSupported
+│   └── actualActionFrequency
 ├── evLoss
 │   ├── status: exact | estimated | unavailable
 │   ├── valueBb
@@ -419,16 +524,21 @@ DecisionAssessment
 └── classifierVersion
 ```
 
-- LLM 不能新增标签、修改严重度或估算 EV。
+- LLM 不能新增行为偏差标签、修改评价/严重度或估算 EV；`teachingHypotheses[]` 只能由有版本规则生成并明确标记为假设，不能伪装成用户动机。
 - 没有 Solver/EV 数据时必须返回 `unavailable`。
-- 决策标签只描述该次决策，不自动形成长期用户画像。
+- `referenceOnly` 或 heuristic 基准不能单独自动分类为 `likelyMistake`；混合策略中的低频动作也不能因频率低自动判错。
+- 严重度没有 Solver EV 或版本化、可审计阈值时必须为 `unavailable`。
+- 行为偏差标签只描述可由该次决策证明的偏差，不自动形成长期用户画像；`spr_misread`、`ignore_position`、情绪化跟注等推测认知或动机的词只能进入教学假设或后续画像 TODO。
 - `CoachDecisionAnalyzer` 只解释冻结判断。
+
+`HindsightFactProjector` 只从正常完成手的权威事实生成 `revealedHandRanks[]`、`runoutTransitions[]`、`actualContinuation[]`、`potAwards[]`、`uncalledReturns[]`、`heroNetChips` 和 `showdownComparisonsByPot[] { potIndex, eligibleSeatNumbers[], winningSeatNumbers[], handRankRefs[] }`。摊牌比较必须按主池/每个边池的独立资格集合生成，不能压缩成一个全局赢家关系。它负责比较牌型、重建实际后续和结算；Hindsight LLM 只解释这些冻结事实，不自行比较手牌、不重算输赢，也不生成没有模型依据的因果反事实路线。
 
 ### 7.4 检查点与策略版本
 
 可复用检查点必须与该运行固定的以下版本完全一致：
 
 - Runtime、Context 和 Prompt 模块版本。
+- `pokerRuleSetVersion`。
 - 策略数据集标识与版本。
 - 分类器版本。
 - Metric/Evidence Schema 版本和 `asOfEventSeq`。
@@ -569,7 +679,7 @@ Player 固定场景：
 
 Coach 固定场景：
 
-- 标签、严重度、EV 可用性和基准比较。
+- 证据基础、认识状态、行为偏差/教学假设、严重度、EV 可用性和基准比较。
 - 两阶段隔离、冻结数据和事实引用。
 - 策略版本升级与检查点恢复。
 
@@ -600,6 +710,10 @@ Coach 固定场景：
 ```text
 apps/server/src/
 ├── poker/
+│   ├── decision-spot.ts
+│   ├── hand-features.ts
+│   ├── contestable-pot.ts
+│   ├── candidate-outcomes.ts
 │   └── *.ts
 ├── sessions/
 │   ├── authoritative-state/
@@ -618,6 +732,7 @@ apps/server/src/
     │   ├── observation/
     │   ├── information-boundary/
     │   ├── decision-preprocessing/
+    │   ├── decision-audit-snapshot/
     │   ├── decision-packet/
     │   ├── bounded-choice/
     │   ├── validator/
@@ -630,6 +745,7 @@ apps/server/src/
         ├── assessment-classifier/
         ├── decision-analyzer/
         ├── process-analysis-freezer/
+        ├── hindsight-fact-projector/
         ├── hindsight-explainer/
         ├── review-composer/
         ├── validator/
@@ -644,10 +760,10 @@ apps/server/src/
 1. Player 与 Coach 通过静态 Registry 运行，不能动态增加能力。
 2. Foundation 不导入扑克私有状态或主动查询业务上下文。
 3. 每次运行都有 OwnerScope、版本、预算、租约、审计和稳定最终状态。
-4. Player 模型只接收经过计算、策略加工和三道防火墙的决策包。
+4. Player 模型只接收经过 Spot 规范化、可见牌结构、当前/候选结果数学、策略加工和三道防火墙的决策包；可确定事实在模型前完成，模型不重新计算。
 5. Player 策略未覆盖时只使用明确 heuristic 候选，不让模型自由扩展动作。
-6. Coach 的 DecisionAssessment 由确定性分类器生成并在 LLM 解释前冻结。
-7. Coach Hindsight 不能覆盖标签、严重度、EV 或过程分析。
+6. Coach 的 DecisionAssessment 由分类器按证据等级生成并在 LLM 解释前冻结。
+7. Coach Hindsight 不能覆盖证据基础、评价、行为偏差、教学假设、严重度、EV 或过程分析。
 8. `coachReviewId + decisionId` 唯一标识单份复盘中的一个决策评价。
 9. Worker 崩溃、租约过期、迟到响应和 stale 都不会重复提交动作或报告。
 10. Player stale 后由 Session Coordinator 根据当前权威状态决定是否创建替代运行；进程重启则取消旧 Player 运行并从 DeepSeek 创建新运行。
@@ -657,3 +773,11 @@ apps/server/src/
 14. 本地身份仍固定为 `local-user`；Agent 持久化使用与牌局共享的 Supabase Postgres，但不依赖 Supabase Auth、Realtime、Storage、Edge Functions、消息队列或监控平台。
 15. Player 与 Coach 有独立容量，Player 全部供应商尝试共享一个总 deadline。
 16. 删除/清空后的迟到结果在 Runtime 专属 Commit Gate 被拒绝，且不能创建替代运行。
+17. 所有派生事实可追溯到允许来源、决策截止点、Schema/算法/数据版本和假设；`unavailable` 与 `notApplicable` 不混淆，也不交给模型补算。
+18. 多人/边池节点按可争夺底池和逐对手有效筹码计算，Hero 行动完成、本轮立即关闭与未来仍可能面对行动使用不同字段。
+19. 完整 `DecisionAuditSnapshot` 与精简 `PlayerModelProjection` 分离，模型上下文不存在同一概念的重复权威表达。
+20. Coach 评价保存证据基础与认识状态；参考/启发式基准、低频混合动作和推测心理均不会自动变成客观错误。
+21. Hindsight 按主池/每个边池资格集合冻结牌型比较，并冻结实际后续与结算事实；LLM 只负责解释，不生成单一全局赢家关系。
+22. 短码盲注保留名义/实际投入，大盲 option 使用严格判定；候选金额明确区分跟注额、新增投入、本街目标与本手累计投入。
+23. 候选 all-in 明确必然返还、真正风险和强制 runout 状态；强制 runout 后模型不会收到不存在的后续街决策。
+24. 当前规则集固定无前注、无抽水，且不存在 `ante`/`anteModel` 或 `rakeModel` 扩展点；`pokerRuleSetVersion` 在开手时绑定，历史复盘不读取部署时 current 版本。

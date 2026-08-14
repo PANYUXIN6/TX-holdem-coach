@@ -116,6 +116,20 @@ M1.R
 - 运行时事务均为异步 PostgreSQL 事务；写命令使用 `SELECT ... FOR UPDATE`、数据库唯一约束和 UPSERT。进程内队列只优化竞争，不承担正确性。
 - 默认验证始终离线；临时 PostgreSQL 集成测试和非生产 Supabase smoke 都是显式可选步骤。
 
+### 2.4 2026-08-14 Agent 客观事实前置补充
+
+Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允许信息可靠导出的客观事实，最后才调用 LLM”的边界。该补充不要求返工 M1–M3 的扑克状态、命令、持久化、HTTP/SSE 契约，也不修改已完成 M4.1 的 Runtime Registry、Capability Manifest 或 Foundation 公共协议。
+
+- 共享纯实现由 M4.5 新增 `SpotNormalizer`、扩展 `HandFeatureAnalyzer`，并新增 `CandidateOutcomeProjector`；它们只消费信息防火墙放行的值，不推进权威状态。
+- M4.5 同时增加规则集版本、名义/实际盲注与大盲行动权、金额语义、可争夺底池/逐对手有效筹码、all-in 未跟注返还/真正风险/强制 runout、行动响应拓扑和原子手牌/牌面事实；Hero 行动完成、本轮立即关闭与未来仍可能面对行动分字段表达。
+- M4.6 先保存完整 `DecisionAuditSnapshot`，再把规范 spot、必要原子事实、当前数学、候选结果、事实来源/截止点/版本/假设/可用性与证据性质投影进精简 `PlayerModelProjection`；模型上下文不重复同一事实。
+- M8.2 复用相同版本的纯分析器重建用户每个决策时点；M8.5 在 Coach LLM 前按证据基础冻结事实清单和评价结果，并由 `HindsightFactProjector` 冻结牌型比较、实际后续与结算事实。
+- 新增纯分析输出先使用版本化 Runtime 私有 Schema 和现有 JSONB 审计载荷，不预先新增数据库列或公共 Contracts；只有未来出现独立查询、索引或前端公共协议需求时才单独设计迁移或 Contracts 变更。
+- 任何无法由当前允许输入和版本化算法可靠得出的值必须为 `unavailable`；概念不适用时为 `notApplicable`。两者不能交给模型猜测，也不能与可用值混用。
+- 每项事实区分 `ruleFact | formulaFact | datasetBaseline | statisticalEvidence | heuristicJudgment | modelGeneratedText`；确定性程序输出不自动等于客观真理。referenceOnly/heuristic、低频混合动作和推测心理不能自动判错。
+- 这些补充仍不返工 M1.1–M3.8 或已完成 M4.1；只有未来新增 Foundation 公共类型/Capability、改变状态机，或改为服务端采样最终动作时才需另立 M4.1 兼容设计。
+- 当前规则集永久固定无前注、无抽水，不设计 `ante`/`anteModel`、`rakeModel` 或对应策略分支；无 straddle、单牌面一次 runout 同样进入版本化规则指纹。
+
 ## 3. 后端测试闭环规则
 
 ### 3.1 测试层级
@@ -829,6 +843,10 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M4.1 建立 Foundation 核心协议与静态 Registry
 
+详细契约见 [M4.1 Agent Foundation 核心协议与静态 Registry 设计](../specs/2026-08-14-m4-1-agent-foundation-core-protocol-static-registry-design.md)。该里程碑只交付共享协议、静态定义与窄端口，不解除 M3.8 对 M4.2、M4.3、M4.7、M4.8 的实施门禁。
+
+实施状态：已于 2026-08-14 完成；M3.8 的后续实施门禁保持关闭。
+
 产出：
 
 - 定义 `OwnerScope`、`RuntimeDefinition`、`ExecutionBudget`、`CapabilityManifest`、`ContextEnvelope`、Runtime 状态机和专属 Commit Gate 端口。
@@ -887,15 +905,36 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
+- 在 `apps/server/src/poker/decision-spot.ts` 实现共享纯 `SpotNormalizer`，输出 `spotSchemaVersion` 与 `normalizerVersion`；规范化桌型、逻辑位置、逐对手位置关系、入池/待行动人数、行动顺序、Hero 后方玩家、街次、翻前节点、底池类型、翻前/当前街主动玩家、行动线及尺度、最后足额加注、是否重新开放和有效筹码档，并拒绝矛盾输入。
+- 固化首版 `pokerRuleSetVersion = nlhe-cash-6to9-10-20-v1`，并输出名义/实际盲注、短盲 all-in 与大盲行动权；固定规则为 6–9 人、10/20、无前注、无 straddle、无抽水、单牌面一次 runout。任何影响合法动作、结算、位置或策略节点解释的规则变化必须发布新版本。
+- 发布 `HandStartCheckpointV2`，在开手时保存 `pokerRuleSetVersion`；Player 和 Coach 都从目标手牌检查点读取。既有 V1 只因历史上没有第二套规则而确定性迁移为 `nlhe-cash-6to9-10-20-v1`，不得用部署时 current 版本覆盖历史绑定；保持 JSON Codec 版本演进，不新增数据库列或 migration。
+- 同步现有 Hand 审计代码：新增 V2 Codec/Decoder 与 Registry 当前版本，更新 `hand-audit-repository`、创建场次/开始下一手 writer、恢复/中止 reader 及对应 Codec、Repository、Handler 测试；V1 文件和载荷保持只读兼容。该兼容改动属于 M4.5 前置工作，不改 M4.1 Foundation 协议、Capability Manifest 或状态机。
+- Spot 规范化保留多人池、边池、limp、冷跟注、挤压、重新加注和不足额全下，不能为了命中策略模板静默折叠节点。
+- `SpotNormalizer` 分离 `heroActionCompletes`、`bettingRoundClosesImmediately`、`canFaceFurtherAction`，候选级再明确响应者与可加注者。
+- 在 `apps/server/src/poker/hand-features.ts` 实现共享纯 `HandFeatureAnalyzer`：翻前输出对子/同花、点数间隔、连张、Broadway、A-wheel 潜力；翻后输出最佳五张、比较元组、底牌使用、对子/踢脚/超牌、同花/顺子高张、听牌/后门听牌、重叠改善组、绝对 nuts、redraw、`cardRemovalFacts[]`、`counterfeitRiskFacts[]`，以及原子牌面结构和街间变化。战略 blocker 价值和实际 reverse outs 需要显式对手持牌/范围与版本化算法，否则为 `unavailable`。
+- 在 `apps/server/src/poker/contestable-pot.ts` 实现共享纯 `ContestablePotProjector`，输出逐对手有效筹码、主池/边池金额与资格、Hero 当前/最大可争夺金额；多人底池赔率不得包含 Hero 无资格获得的边池。
 - `DecisionMetricsEngine` 计算合法动作、金额、底池赔率和翻后 SPR；翻前不计算 SPR。
+- 金额字段分离 `amountToCall`、`contributionDelta`、`targetStreetCommitment`、`streetContributionAfter`、`totalContributionAfter`；`targetStreetCommitment` 固定表示行动后本街总投入。
 - `PlayerStrategyProjection` 返回 `exact | referenceOnly | unsupported`。
 - unsupported 时由 `HeuristicCandidateGenerator` 生成明确标记、受限且非 GTO 的候选。
+- 在 `apps/server/src/poker/candidate-outcomes.ts` 实现共享纯 `CandidateOutcomeProjector`，为每个最终候选计算必然未跟注返还、真正风险金额、可争夺新增额、执行后总/可争夺底池、边际可争夺金额、剩余筹码、逐对手有效筹码、预计下一街 SPR、是否强制 runout、剩余发牌街数、是否强制摊牌、响应者、可加注者、行动完成/关闭状态和合法后继空间，不推进权威状态。
+- 强制 runout 后 `nextStreetSpr.status=notApplicable`，不生成不存在的后续街候选；all-in 必然返还部分不计入真正风险。
+- 预计翻牌 SPR 与当前翻后 SPR 分字段；最低所需权益或即时盈亏平衡弃牌率只有在参与人数和响应假设明确时输出，否则为 `unavailable`。
 - `PersonaDeviationPolicy` 按具体 spot 有界调整，不使用全局范围乘数。
 - 对手证据包含分子、分母、过滤条件、截止事件和置信度；样本不足不做剥削调整。
+- clean outs、对手范围条件权益和 EV 只有存在显式版本化范围及算法时才能生成，否则必须 unavailable；不能交给 LLM 猜测。
+- domination 概率、fold equity、对手响应概率、隐含/反向隐含赔率单值、多街反事实收益和范围角色标签同样需要显式范围、响应模型或 Solver；`wet/dry`、`blank/scareCard` 等只能是有版本的 heuristic 派生。
+- 等价候选按标准动作语义合并，只有可证明严格支配时才删除候选。
+- Spot、手牌和候选结果纯分析组合进既有 Player 固定预处理，不修改已完成的 M4.1 Capability Manifest；算法或输出语义变化必须升级对应输出 Schema 与 Runtime 定义。
 
 后端测试闭环：
 
-- 数学、策略命中/回退、人物偏离和样本门槛都可复现。
+- Spot 键、手牌特征、结构性 outs、当前/候选结果数学、策略命中/回退、人物偏离和样本门槛都可复现。
+- 覆盖 6–9 人位置关系、单挑/多人节点、公共牌成牌、底牌参与成牌、绝对 nuts、主要听牌/redraw、重复 outs 去重、river 无 outs、`cardRemovalFacts[]`、`counterfeitRiskFacts[]` 和原子牌面结构；隐藏牌、未来牌或完整牌堆不能进入分析器，缺少显式持牌/范围时实际 reverse outs 与战略 blocker 价值保持 `unavailable`。
+- 覆盖 K2s 同花但非 connector、最佳五张/比较元组、原子牌面字段、主池/多边池资格和 Hero 无资格边池不进入 pot odds。
+- 覆盖多人/不足额全下中的行动完成、本轮关闭、未来响应、候选响应者和仍可加注者。
+- 覆盖正常/短码盲注、严格大盲 option 判定、call/delta/target/累计投入、all-in 超额返还和三种强制 runout 起点；只有翻前未 all-in 且尚未自愿行动的 BB 在名义 20 层级面对零跟注额，并同时拥有 check 与主动 raise/allIn 时，`bigBlindOptionAvailable=true`。
+- 每个候选都具有合法、确定性的结果投影；无法投影的候选在调用模型前拒绝。
 - 不同下注尺度是不同候选，动作执行频率与下注尺度字段不混淆。
 - 预处理不能引入非法动作。
 
@@ -903,14 +942,22 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- 决策包组合安全观察、确定性指标、候选来源、人物/对手调整和有界记忆。
+- `DecisionAuditSnapshot` 保存 `pokerRuleSetVersion`、完整安全观察、全部派生结果、策略/证据快照、最终候选和完整事实清单，永不直接发送给模型；`PlayerModelProjectionBuilder` 再生成精简决策包。
+- 决策包组合规范 spot、必要原子手牌/牌面事实、当前指标、候选结果投影、候选来源、人物/对手调整和有界记忆。
+- `factManifest` 记录进入模型的派生事实来源、截止点、Schema/算法/数据版本、假设、`available | unavailable | notApplicable` 状态和 `epistemicKind`；完整内部状态与无关派生事实不发送给模型。
+- `PlayerDecisionPacket` 显式携带 `pokerRuleSetVersion`，规则版本不匹配时不得复用候选或策略结果。
+- 同一概念只发送一种权威表达，不重复原始行动史与规范叙述，不让模型重算 SPR，不混用总底池和 Hero 可争夺底池。
 - 模型工具集合为空，只能输出 `candidateActionId` 和可选受限摘要。
+- 模型不能重新计算或覆盖规范 spot、成牌、听牌、outs、当前/候选结果数学、策略来源和样本判断。
+- 决策包与候选快照保存 Spot、手牌分析与候选结果的 Schema/算法版本，历史审计不得用 current 分析器覆盖旧事实。
 - 当前手牌和候选集合不因记忆上限被裁剪。
+- 候选 `actionFrequency`/权重只表示参考分布；首版 LLM 选择不保证长期频率校准。精确混合策略若未来需要，由另行设计的服务端审计采样器负责。
 
 后端测试闭环：
 
 - 未知候选、自由 action、自由 amount、工具调用和额外字段全部拒绝。
 - 10 手与 1,000 手牌的 Context 大小不随历史线性增长。
+- 完整审计快照无法进入 Model Adapter；模型投影不存在重复事实或“严格按频率抽样”的虚假声明。
 
 ### M4.7 实现 Player Validator 与 Command Commit Gate
 
@@ -1320,15 +1367,25 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 产出：
 
 - `HandReviewCaseBuilder` 只从正常完成（`completed`）的内部手牌和权威历史事实构建复盘案例；`aborted` 手牌在入口处拒绝。
+- `HandReviewCaseBuilder` 从目标手牌的开手检查点读取 `pokerRuleSetVersion`；既有 V1 只允许通过版本注册表迁移到唯一历史值 `nlhe-cash-6to9-10-20-v1`，不得使用 Coach 运行时 current 版本回填。
 - 为用户每个实际决策固化当时可见状态、合法动作、实际动作、筹码投入和对手证据截止点。
-- `compute_decision_metrics` 计算有效筹码 BB、翻后 SPR、底池赔率、下注尺度和合法金额边界，不返回建议动作。
+- `compute_decision_metrics` 组合与 Player 同版本的共享纯 `SpotNormalizer`、`HandFeatureAnalyzer`、`ContestablePotProjector` 与 `DecisionMetricsEngine`，生成规则集版本、名义/实际盲注、大盲行动权、规范 spot、原子牌/牌面事实、行动响应拓扑、逐对手有效筹码、可争夺底池、金额语义、翻后 SPR、底池赔率、下注尺度和合法金额边界；不能使用事后牌修正过程评价，也不返回建议动作。
+- 规范 spot 保留 6–9 人逐对手位置关系、行动顺序、Hero 后方玩家、入池/待行动人数、主动权、最后足额加注、重新开放状态、完整行动线及尺度、多人/边池和非标准翻前节点；无法规范化时在模型调用前失败。
+- 策略基准返回后，共享纯 `CandidateOutcomeProjector` 计算实际动作和可比较候选的必然未跟注返还、真正风险、执行后总/可争夺底池、边际可争夺金额、逐对手有效筹码、预计下一街 SPR、强制 runout、响应者、可加注者、行动完成/关闭语义与合法后继空间。
+- 手牌结构包含翻前原子分类，或翻后最佳五张、比较元组、底牌使用、成牌/听牌/后门听牌、绝对 nuts、redraw、`cardRemovalFacts[]`、`counterfeitRiskFacts[]` 和原子牌面变化；这些只描述当时可见牌，不推断战略 blocker 价值、实际 reverse outs 或对手范围条件胜率。
+- 无显式版本化对手范围和算法时，clean outs、权益与 EV 必须 unavailable，不能让 Coach LLM 补算。
+- Coach assessment 保存 Spot、手牌分析、可争夺底池和候选结果的 Schema/算法版本，以及事实来源、截止点、假设、`available | unavailable | notApplicable` 状态和 `epistemicKind`；检查点复用必须全部匹配，且不修改 M4.1 Capability Manifest。
 - 逻辑位置使用服务端固化的 6–9 人映射；缺失 `tableSize` 或位置不一致时拒绝构建。
 
 后端测试闭环：
 
 - 分别覆盖 6、7、8、9 人桌和翻前、翻牌、转牌、河牌决策。
-- 覆盖多人池、边池、短码、全下、无面对下注时 `potOdds=null`。
+- 覆盖多人池、边池、短码和全下。
 - 翻前不输出 SPR；所有筹码计算使用整数并满足统一精度规则。
+- 无面对下注时 `potOdds.status = notApplicable`；输入或算法不足使用 `unavailable`。
+- Player 与 Coach 对规则版本、严格大盲 option 判定、短码盲注、金额语义、all-in 返还/风险和强制 runout 产生同版本结果；当前规则集没有 `ante`/`anteModel` 或 `rakeModel`。
+- Player 与 Coach 对相同决策时点安全可见事实产生一致的规范 spot、确定性手牌特征与候选结果；覆盖主要成牌/听牌、outs 去重和 river 无 outs。
+- 覆盖 K2s 同花但非 connector、最佳五张/比较元组、主池/多边池资格、Hero 无资格边池不进入 pot odds，以及行动完成/本轮关闭/未来响应三种语义。
 - 验证事后信息、未发牌和完整牌堆不进入决策分析输入。
 
 ### M8.3 完成版本化策略 Repository 的 Coach 投影
@@ -1369,12 +1426,16 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- `ReviewOrchestrator` 对每个用户决策固定执行指标、基准和证据查询。
-- `DecisionAssessmentClassifier` 在任何模型调用前生成并冻结 assessment、`decisionTags[]`、severity、baselineComparison、evLoss 和 evidenceRefs。
+- `ReviewOrchestrator` 对每个用户决策固定执行 Spot/手牌/当前数学、策略基准、候选结果和对手证据处理。
+- `DecisionAssessmentClassifier` 在任何模型调用前生成并冻结 assessment、`assessmentBasis`、`epistemicStatus`、`observedDeviationTags[]`、`teachingHypotheses[]`、severity、baselineComparison、evLoss、evidenceRefs 和 `factManifest`。
+- `assessmentBasis` 使用 `ruleInvariant | exactStrategy | referenceStrategy | solverEv | heuristicPolicy | insufficientEvidence`；`epistemicStatus` 使用 `objective | modelBased | heuristic | unrated`。`baselineComparison` 至少包含 `matchStatus`、`actionSupported`、`sizeSupported`、`actualActionFrequency`。
 - 没有 Solver/EV 数据时 `evLoss.status=unavailable` 且值为空；LLM 禁止自行估算 EV。
-- `CoachDecisionAnalyzer` 只接收当时信息、确定性证据和冻结 assessment，负责解释而不重新分类。
+- referenceOnly/heuristic 不能单独触发 likelyMistake；受支持的低频混合动作不因频率低判错；没有 Solver EV 或版本化阈值时 severity unavailable。
+- `observedDeviationTags` 只记录证据可证明的行为偏差；认知、情绪、动机及 `spr_misread`/`ignore_position` 等解释只能作为明确教学假设或长期画像 TODO。
+- `CoachDecisionAnalyzer` 只接收当时信息、全部确定性派生事实、证据和冻结 assessment，负责解释而不重新计算或分类。
 - `ProcessAnalysisFreezer` 在 Hindsight 前冻结过程分析。
-- `CoachHindsightExplainer` 只接收冻结结果和最小必要事后事实，只能补充事后解释。
+- `HindsightFactProjector` 从正常完成手的权威事实冻结 `revealedHandRanks[]`、`runoutTransitions[]`、`actualContinuation[]`、`potAwards[]`、`uncalledReturns[]`、`heroNetChips` 和 `showdownComparisonsByPot[] { potIndex, eligibleSeatNumbers[], winningSeatNumbers[], handRankRefs[] }`；每个主池/边池按自己的资格集合比较，禁止生成单一全局赢家关系。
+- `CoachHindsightExplainer` 只接收冻结结果和上述最小事后事实，只能补充事后解释，不自行比较手牌、重算结算或生成无依据因果反事实。
 - `CoachReviewComposer` 确定性合并，`CoachReviewValidator` 校验决策完整性、事实引用、匹配状态和样本边界。
 - Coach 通过 Foundation `ModelGateway` 使用独立 Route Policy；只复用底层客户端、超时、错误分类、脱敏和允许降级的基础设施规则。
 - 同厂商内容纠错最多两次，最终失败只影响复盘请求。
@@ -1382,7 +1443,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 后端测试闭环：
 
 - 使用可编程假模型分别验证两个阶段的输入字段。
-- 验证 Analyzer 和 Hindsight 均不能新增或修改标签、严重度、基准对比和 EV。
+- 验证 Analyzer 和 Hindsight 均不能新增或修改冻结事实、证据基础、评价、行为偏差、教学假设、严重度、基准对比和 EV。
+- 验证 referenceOnly/heuristic、受支持低频混合动作和推测心理不会升级为客观错误；事后牌型比较、实际后续、返还和逐池结算与权威完成手一致。
 - 第二阶段尝试改写评价、替代路线或三层分析时被 Schema 拒绝。
 - 虚构底池、筹码、动作、频率、牌面或证据引用时进入纠错。
 - DeepSeek 成功、允许降级、禁止降级、纠错耗尽、迟到响应和最终失败均不修改扑克状态。
@@ -1465,6 +1527,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 验证上下文连续、角色隔离、审计完整和敏感信息脱敏。
 - 在九人桌中验证八个 AI 的人物配置、观察和本场记忆互不串线。
 - 验证 Player 有独立保留槽位，Coach 长任务不能阻塞行动；所有 Player 尝试共享总 deadline。
+- 固定夹具验证规范 spot、可见牌结构、当前数学和候选结果在模型调用前完成，事实版本/截止点/可用性进入审计；假模型尝试重算或改写时被拒绝。
+- 验证 `unavailable` 和 `notApplicable` 不被模型补值，策略未覆盖时只能在明确 heuristic 候选中选择。
 
 ### M9.3 完成恢复、幂等和 SSE 验收
 

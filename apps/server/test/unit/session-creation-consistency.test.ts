@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import {
   createSessionCreationIdentityGraph,
   createSessionCreationPlan,
@@ -51,6 +52,7 @@ describe('session creation consistency', () => {
         },
       })
       expect(plan.startedHand.handNumber).toBe(1)
+      expect(plan.checkpoint.pokerRuleSetVersion).toBe(POKER_RULE_SET_VERSION)
       expect(plan.startedHand.buttonSeatNumber).toBe(
         plan.stateBeforeStart.poker.buttonSeatNumber,
       )

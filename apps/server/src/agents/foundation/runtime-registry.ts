@@ -1,0 +1,205 @@
+import {
+  RuntimeComponentReferenceSchema,
+  RuntimeCommitGateReferenceSchema,
+  RuntimeDefinitionVersionSchema,
+  RuntimeTypeSchema,
+  type AnyRuntimeDefinition,
+  type RuntimeDefinitionMap,
+  type RuntimeType,
+} from './runtime-definition.js'
+import {
+  RuntimeRegistryConfigurationError,
+  RuntimeResolutionError,
+} from './errors.js'
+import { createRuntimeStateMachineDefinition } from './runtime-state-machine.js'
+
+export interface RuntimeRegistry<
+  TDefinitions extends RuntimeDefinitionMap = RuntimeDefinitionMap,
+> {
+  resolveCurrent<TRuntime extends RuntimeType>(
+    runtimeType: TRuntime,
+  ): TDefinitions[TRuntime]
+  resolveExact<TRuntime extends RuntimeType>(
+    runtimeType: TRuntime,
+    runtimeDefinitionVersion: number,
+  ): TDefinitions[TRuntime]
+  listCurrent(): readonly [TDefinitions['player'], TDefinitions['coach']]
+}
+
+function cloneValue<Value>(value: Value): Value {
+  if (Array.isArray(value)) {
+    return value.map((entry) => cloneValue(entry)) as Value
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, cloneValue(entry)]),
+    ) as Value
+  }
+  return value
+}
+
+function deepFreeze<Value>(value: Value): Value {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const nestedValue of Object.values(value)) deepFreeze(nestedValue)
+    Object.freeze(value)
+  }
+  return value
+}
+
+function isRuntimeCompatibleReference(
+  runtimeType: RuntimeType,
+  id: string,
+): boolean {
+  return (
+    id.startsWith(`${runtimeType}.`) ||
+    id.startsWith('foundation.') ||
+    id.startsWith('provider.')
+  )
+}
+
+function validateDefinition(definition: AnyRuntimeDefinition): void {
+  const references = [
+    definition.contextPolicy,
+    ...definition.promptModules,
+    definition.routePolicy,
+    definition.outputSchema,
+    definition.validator,
+    definition.recoveryPolicy,
+  ]
+  if (
+    !RuntimeTypeSchema.safeParse(definition.runtimeType).success ||
+    !RuntimeDefinitionVersionSchema.safeParse(
+      definition.runtimeDefinitionVersion,
+    ).success ||
+    !RuntimeDefinitionVersionSchema.safeParse(definition.contextSchemaVersion)
+      .success ||
+    definition.contextKinds.length === 0 ||
+    new Set(definition.contextKinds).size !== definition.contextKinds.length ||
+    definition.contextKinds.some(
+      (kind) => !/^[a-z][A-Za-z0-9]{0,79}$/.test(kind),
+    ) ||
+    new Set(
+      definition.promptModules.map(
+        (reference) => `${reference.id}@${String(reference.version)}`,
+      ),
+    ).size !== definition.promptModules.length ||
+    references.some(
+      (reference) =>
+        !RuntimeComponentReferenceSchema.safeParse(reference).success ||
+        !isRuntimeCompatibleReference(definition.runtimeType, reference.id),
+    ) ||
+    !RuntimeCommitGateReferenceSchema.safeParse(definition.commitGate)
+      .success ||
+    definition.commitGate.runtimeType !== definition.runtimeType ||
+    !definition.commitGate.id.startsWith(`${definition.runtimeType}.commit-`) ||
+    definition.capabilityManifest.runtimeType !== definition.runtimeType ||
+    definition.budgetPolicy.runtimeType !== definition.runtimeType ||
+    !RuntimeDefinitionVersionSchema.safeParse(
+      definition.budgetPolicy.policyVersion,
+    ).success ||
+    definition.stateMachine.runtimeType !== definition.runtimeType ||
+    definition.modelToolPolicy !== 'none'
+  ) {
+    throw new RuntimeRegistryConfigurationError('invalidDefinition')
+  }
+  for (const grant of definition.capabilityManifest.grants) {
+    if (
+      grant.runtimeType !== definition.runtimeType ||
+      !grant.capability.id.startsWith(`${definition.runtimeType}.`) ||
+      grant.capability.id.startsWith(`${definition.runtimeType}.commit-`)
+    ) {
+      throw new RuntimeRegistryConfigurationError('crossRuntimeReference')
+    }
+  }
+  try {
+    createRuntimeStateMachineDefinition(definition.stateMachine)
+  } catch {
+    throw new RuntimeRegistryConfigurationError('invalidStateMachine')
+  }
+}
+
+function definitionKey(runtimeType: RuntimeType, version: number): string {
+  return `${runtimeType}:${String(version)}`
+}
+
+export function createRuntimeRegistry<
+  TDefinitions extends RuntimeDefinitionMap,
+>(input: {
+  readonly definitions: readonly AnyRuntimeDefinition[]
+  readonly currentVersions: Readonly<Record<RuntimeType, number>>
+}): RuntimeRegistry<TDefinitions> {
+  if (
+    !Array.isArray(input.definitions) ||
+    Object.keys(input.currentVersions).sort().join(',') !== 'coach,player'
+  ) {
+    throw new RuntimeRegistryConfigurationError('invalidDefinition')
+  }
+  const currentPlayer = RuntimeDefinitionVersionSchema.safeParse(
+    input.currentVersions.player,
+  )
+  const currentCoach = RuntimeDefinitionVersionSchema.safeParse(
+    input.currentVersions.coach,
+  )
+  if (!currentPlayer.success || !currentCoach.success) {
+    throw new RuntimeRegistryConfigurationError('missingCurrentRuntime')
+  }
+  const currentVersions = Object.freeze({
+    player: currentPlayer.data,
+    coach: currentCoach.data,
+  })
+
+  const byKey = new Map<string, AnyRuntimeDefinition>()
+  for (const inputDefinition of input.definitions) {
+    validateDefinition(inputDefinition)
+    const definition = deepFreeze(cloneValue(inputDefinition))
+    const key = definitionKey(
+      definition.runtimeType,
+      definition.runtimeDefinitionVersion,
+    )
+    if (byKey.has(key)) {
+      throw new RuntimeRegistryConfigurationError('duplicateRuntimeVersion')
+    }
+    byKey.set(key, definition)
+  }
+
+  for (const [runtimeType, version] of [
+    ['player', currentPlayer.data],
+    ['coach', currentCoach.data],
+  ] as const) {
+    if (!byKey.has(definitionKey(runtimeType, version))) {
+      throw new RuntimeRegistryConfigurationError('unknownCurrentVersion')
+    }
+  }
+
+  function resolveExact<TRuntime extends RuntimeType>(
+    runtimeType: TRuntime,
+    runtimeDefinitionVersion: number,
+  ): TDefinitions[TRuntime] {
+    if (!RuntimeTypeSchema.safeParse(runtimeType).success) {
+      throw new RuntimeResolutionError('unsupportedRuntime')
+    }
+    const version = RuntimeDefinitionVersionSchema.safeParse(
+      runtimeDefinitionVersion,
+    )
+    if (!version.success) {
+      throw new RuntimeResolutionError('unknownRuntimeVersion')
+    }
+    const definition = byKey.get(definitionKey(runtimeType, version.data))
+    if (definition === undefined) {
+      throw new RuntimeResolutionError('unknownRuntimeVersion')
+    }
+    return definition as TDefinitions[TRuntime]
+  }
+
+  const registry: RuntimeRegistry<TDefinitions> = {
+    resolveCurrent: <TRuntime extends RuntimeType>(runtimeType: TRuntime) =>
+      resolveExact(runtimeType, currentVersions[runtimeType]),
+    resolveExact,
+    listCurrent: () =>
+      Object.freeze([
+        resolveExact('player', currentPlayer.data),
+        resolveExact('coach', currentCoach.data),
+      ]) as readonly [TDefinitions['player'], TDefinitions['coach']],
+  }
+  return Object.freeze(registry)
+}

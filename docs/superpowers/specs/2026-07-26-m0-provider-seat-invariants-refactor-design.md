@@ -1,6 +1,6 @@
 # M0：Provider 投影与固定用户座位返工设计
 
-- 状态：已确认
+- 状态：已确认，已实现并验证
 - 日期：2026-07-26
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)、[后端设计](./2026-07-23-poker-practice-backend-design.md)、[开发任务](../plans/2026-07-23-poker-practice-development-tasks.md)
 

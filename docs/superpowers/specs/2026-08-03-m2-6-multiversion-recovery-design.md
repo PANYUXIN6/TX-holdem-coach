@@ -1,6 +1,6 @@
 # M2.6 多版本识别、迁移与诊断恢复设计
 
-- 状态：已批准并实现；离线验证通过，真实远程 PostgreSQL 与隔离旧 Schema 升级测试待授权执行
+- 状态：已批准并实现；离线、真实 PostgreSQL 与隔离旧 Schema 升级验收通过
 - 日期：2026-08-03
 - 任务来源：[项目开发任务 M2.6](../plans/2026-07-23-poker-practice-development-tasks.md#m26-实现多版本识别迁移与诊断恢复)
 - 上位架构：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)

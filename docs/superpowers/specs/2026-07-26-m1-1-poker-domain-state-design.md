@@ -1,8 +1,8 @@
 # M1.1：纯扑克领域状态与命令设计
 
-> 2026-07-28 非 Agent 运行时重新基线：本设计中的扑克规则字段与校验构造模式继续有效，但 `stateVersion` 已确认移到场次级 `PrivateTableState`，纯状态将在后续前置返工中重命名为 `PokerTableState`，稳定阶段删除不可观察的 `setup`。参与座位还将收紧为“非 `out` 座位集合 = 底牌座位集合”。当前代码尚未实施该返工，具体以 [非 Agent 运行时架构重新基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md) 为准。
+> 2026-07-28 非 Agent 运行时重新基线：本设计中的扑克规则字段与校验构造模式继续有效，但 `stateVersion` 已移到场次级 `PrivateTableState`，纯状态已重命名为 `PokerTableState`，稳定阶段已删除不可观察的 `setup`。参与座位已收紧为“非 `out` 座位集合 = 底牌座位集合”。具体以 [非 Agent 运行时架构重新基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md) 为准。
 
-- 状态：已确认
+- 状态：已确认，已实现并验证
 - 日期：2026-07-26
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)、[后端设计](./2026-07-23-poker-practice-backend-design.md)
 - 关联任务：[M1.1 定义纯领域状态与命令](../plans/2026-07-23-poker-practice-development-tasks.md)

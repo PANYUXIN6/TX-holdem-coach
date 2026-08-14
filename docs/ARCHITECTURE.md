@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-08-13（M3.7 SSE transport、固定 high watermark 分页补发与串行 writer 已落地）
+更新时间：2026-08-14（M0–M2 与 M3.1–M3.7 实施状态已同步）
 
 ## Workspace 边界
 
@@ -13,8 +13,8 @@
 - M2.7 已在既有 M2.2 Schema 上增加 Hand 与 Agent Foundation 审计持久化，不新增迁移。`src/sessions/hand-audit/` 保存“开手命令前状态 + StartedHandFacts”和完整 M1.9 结算结果；`src/agents/audit/` 保存严格 Run Config、Budget、Attempt 载荷并定义固定 Player/Coach Decoder 端口；两个 persistence Repository 只消费调用方事务，分别闭合 Hand 状态与 Foundation 审计事实。详细事实源见 [M2.7 设计](./superpowers/specs/2026-08-04-m2-7-hand-agent-audit-persistence-design.md)。
 - M2.8 已在既有外键图上增加 `session-deletion-repository.ts`，不新增迁移。ended 单场删除按 `Session → Runs(id ASC)`，Owner 清空按 `Owner → Sessions(id ASC) → Runs(id ASC)`；两者先取消非终态 Run、清租约且保留 fencing，再成组清理 Player 三指针并删除 Session 根。`owners` 与 `app_settings` 保留，删除路径不解码 JSONB。详细事实源见 [M2.8 设计](./superpowers/specs/2026-08-04-m2-8-session-data-deletion-design.md)。
 - M3.1 已新增 `src/sessions/command-execution/`，以不可变启用 Handler 映射、两阶段事务端口和每场 Promise 尾队列组合 M2.4–M2.6；M3.3/M3.4 在同一边界增加 `playerAction`、`rebuy`、`startNextHand`、`endSession` 生产 Handler、类型化稳定拒绝和专属 verifier。执行器在关系写入前冻结并验证最终状态、V2 私有事件、公开投影、SSE 与提交批次，只在 COMMIT 后返回本次新事件。用户行动按 `Session → Hand` 完成审计；下一手原子插入 Hand；暂停中止通过 `session-lifecycle-repository.ts` 读取唯一 failed Player leaf，并按 `Session → Hand → AgentRun` 恢复 checkpoint 和中止 Hand。`aiAction`、`retryAgent` 仍等待后续 verifier。详细事实源见 [M3.1 设计](./superpowers/specs/2026-08-05-m3-1-session-command-executor-design.md)、[M3.3 设计](./superpowers/specs/2026-08-09-m3-3-player-action-hand-completion-design.md)与 [M3.4 设计](./superpowers/specs/2026-08-09-m3-4-rebuy-next-hand-session-end-design.md)。
-- M3.2 已新增 `src/sessions/session-creation/` 与 `src/persistence/session-creation-repository.ts`。创建服务在事务外严格解析、读取 Provider 能力、准备阵容并一次生成身份/首手计划；事务内按 `Owner → active Session → 可选来源 ended Session → 新 Session` 锁序取得一次性 roster capability，组合 M2.7 Hand writer 与 M2.5 mutation writer，原子提交 roster、空记忆、首手、两条 V2 事件和最终快照；latest-ended 的来源缺失、来源变化和模型失效在服务边界分别稳定为 `ROSTER_SOURCE_NOT_FOUND|ROSTER_SOURCE_CHANGED|ROSTER_MODEL_INACTIVE`。创建不登记命令账本；当前只提供测试 projector/active reader，尚未安装生产路由。详细事实源见 [M3.2 设计](./superpowers/specs/2026-08-09-m3-2-session-creation-roster-snapshot-design.md)。
-- M3.5 已新增 `src/http/`、`src/providers/`、`src/settings/` 与删除应用服务。`createApp()` 是唯一 HTTP 组合入口，先执行回环 Host、精确 Origin、JSON MIME、流式 64 KiB、无查询参数和安全响应头门禁，再由路由严格解析 Contracts、调用应用端口并复验公开输出；请求日志只记录 requestId、方法、路由模板、状态、稳定错误码和耗时。Provider 检测只访问固定 models 端点，使用覆盖响应正文读取的端到端 10 秒超时、流式 256 KiB 响应上限、同 Provider 单飞和进程缓存，并只记录 Provider、公开分类和耗时；Player 设置部分更新通过默认行竞争与 `FOR UPDATE` 在锁内重读、合并、完整复验和更新。生产只安装健康、Provider、设置、人物和删除路由，场次/命令适配器等待 M3.6 公开投影。详细事实源见 [M3.5 设计](./superpowers/specs/2026-08-11-m3-5-hono-api-error-mapping-design.md)。
+- M3.2 已新增 `src/sessions/session-creation/` 与 `src/persistence/session-creation-repository.ts`。创建服务在事务外严格解析、读取 Provider 能力、准备阵容并一次生成身份/首手计划；事务内按 `Owner → active Session → 可选来源 ended Session → 新 Session` 锁序取得一次性 roster capability，组合 M2.7 Hand writer 与 M2.5 mutation writer，原子提交 roster、空记忆、首手、两条 V2 事件和最终快照；latest-ended 的来源缺失、来源变化和模型失效在服务边界分别稳定为 `ROSTER_SOURCE_NOT_FOUND|ROSTER_SOURCE_CHANGED|ROSTER_MODEL_INACTIVE`。创建不登记命令账本；生产 projector/active reader 与 Hono 场次创建路由已由 M3.6 补齐。详细事实源见 [M3.2 设计](./superpowers/specs/2026-08-09-m3-2-session-creation-roster-snapshot-design.md)。
+- M3.5 已新增 `src/http/`、`src/providers/`、`src/settings/` 与删除应用服务。`createApp()` 是唯一 HTTP 组合入口，先执行回环 Host、精确 Origin、JSON MIME、流式 64 KiB、无查询参数和安全响应头门禁，再由路由严格解析 Contracts、调用应用端口并复验公开输出；请求日志只记录 requestId、方法、路由模板、状态、稳定错误码和耗时。Provider 检测只访问固定 models 端点，使用覆盖响应正文读取的端到端 10 秒超时、流式 256 KiB 响应上限、同 Provider 单飞和进程缓存，并只记录 Provider、公开分类和耗时；Player 设置部分更新通过默认行竞争与 `FOR UPDATE` 在锁内重读、合并、完整复验和更新。M3.5 初始里程碑安装健康、Provider、设置、人物和删除路由；M3.6 已补齐场次创建、读取与命令生产适配器，M3.7 已补齐 SSE 路由。详细事实源见 [M3.5 设计](./superpowers/specs/2026-08-11-m3-5-hono-api-error-mapping-design.md)。
 - M3.6/M3.7 的 `src/sessions/public-projection/` 同时拥有同步公开投影和事件流应用协议。当前事实仍由 `public-projection-repository.ts` 的一致读取视图投影；历史只由 `public-event-replay-repository.ts` 读取固化 `public_event_payload`。stream service 先订阅 Hub，再冻结 bootstrap high watermark、全量分页预验证并以 proof 二次读取；连接用容量一页交接和 64 项实时队列合流，HTTP 层只有一个 writer 串行写 replay、校准、实时事件与心跳。
 - `apps/server/.env.example` 提供脱敏占位的线上运行/迁移连接与 Provider Key；`.env.test.example` 只提供两条测试 URL。真实值只存在于后端、Git 忽略的 `.env.test.local` 或部署环境，project ref 不由环境声明。
 - `apps/server/test` 是非运行时测试层；Vitest 以 Node 环境和 V8 coverage 运行 `unit/`、`integration/` 与 `service/` 分类。普通 `verify` 明确不收集远程数据库测试文件。受控启动器支持迁移-only、单个 `m22…m28`/`m31`…`m37`、显式遗留事务清理和最终 full，并在首个失败或阶段超时后停止调度后续里程碑；`m37` 以真实 PostgreSQL、生产 Runtime 和 Hono SSE 路由验收持久化补发与首次校准。所有测试连接继续携带 Run ID 标签和数据库侧超时。
@@ -54,9 +54,9 @@ M3.4 调用链固定为“严格 `rebuy|startNextHand|endSession` → Session re
 
 M3.5 调用链固定为“回环 Host/精确 Origin/JSON/大小/查询门禁 → 共享 Schema 输入 → 应用端口 → 共享 Schema 输出 → 统一状态与脱敏错误”。Player 设置 PATCH 为“事务内默认行冲突安全建立 → `FOR UPDATE` → 锁内最新值解码/合并/完整复验 → UPDATE/COMMIT”；删除为“M2.8 Repository 事务提交 → 尽力中断本进程 Run”；Provider 检测不进入数据库事务，GET 零网络，POST 只更新进程内脱敏摘要。
 
-## 已实现的 M1 门面、M2.5 权威状态与待实施的非 Agent 重基线
+## 已实现的非 Agent 主链与后续边界
 
-[非 Agent 运行时架构重基线](./superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)已确认；M1.R/M1.8/M1.9 已实施，后续任务仍待完成：
+[非 Agent 运行时架构重基线](./superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)已确认；M1.R/M1.8/M1.9、M0.2、M2.1–M2.8 与 M3.1–M3.7 已实施，M3.8 按 M4 依赖后置，M5–M7 仍待完成：
 
 - `apps/server/src/poker/poker-engine.ts` 已成为 M1 唯一行为入口，通过 `initializePokerTable()` 封装初始按钮，通过 `startPokerHand()` 封装开手，通过 `applyPokerAction()` 封装 M1.7 内部终止和 M1.8 同步结算。
 - M1.9 的手牌结果模块已输出不可变 `CompletedHandResult`、最近完成手摘要和不含基础设施字段的事件草稿。

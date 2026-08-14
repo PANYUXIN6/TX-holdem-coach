@@ -1,6 +1,6 @@
 # M3.5 Hono API、统一错误映射与本地安全边界设计
 
-- 状态：已确认并进入实现
+- 状态：已确认，已实现并验证
 - 日期：2026-08-11
 - 任务来源：[项目开发任务 M3.5](../plans/2026-07-23-poker-practice-development-tasks.md#m35-实现-hono-api-和统一错误映射)
 - 产品边界：[Poker Practice PRD](./2026-07-23-poker-practice-prd.md)
@@ -64,7 +64,7 @@ M3.5 不负责：
 
 M3.5 的责任所有者是新的 `apps/server/src/http/` 边界；它依赖 `sessions/` 应用服务、`persistence/` Repository、人物目录和 Provider/设置服务，Repository 不反向依赖 HTTP。`app.ts` 只做路由与中间件组合，`bootstrap.ts` 只做生命周期组合。M3.5 不改变 `poker/`、数据库 Schema 或依赖方向。
 
-当前 `docs/REPO_MAP.md` 与 `docs/ARCHITECTURE.md` 对入口、M3.1–M3.3 责任和“生产 HTTP/投影待实现”的描述与源码一致。设计阶段不改地图；实现完成后再按真实落点同步。
+设计时的 `docs/REPO_MAP.md` 与 `docs/ARCHITECTURE.md` 对入口、M3.1–M3.3 责任和“生产 HTTP/投影待实现”的描述与当时源码一致，因此设计阶段没有抢先修改地图。M3.5–M3.7 实现完成后，地图已按真实落点同步。
 
 ## 3. 路由所有权与分阶段安装
 

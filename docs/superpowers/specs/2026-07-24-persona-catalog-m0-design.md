@@ -1,8 +1,8 @@
 # M0.2：AI 预设人物目录设计
 
-- 状态：已确认
+- 状态：已确认，已实现并验证
 - 日期：2026-07-24
-- 最后更新：2026-07-29
+- 最后更新：2026-08-14
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)、[后端设计](./2026-07-23-poker-practice-backend-design.md)
 - 数据库边界：[Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)
 - 关联任务：[M0.2 共享契约](../plans/2026-07-23-poker-practice-development-tasks.md)

@@ -1,6 +1,6 @@
 # M2.2 完整私有 Schema 设计
 
-- 状态：M2.2 Schema 已完成，Repository 适配待 M2.3
+- 状态：M2.2 Schema 与后续 M2.3 Repository 适配均已完成并验证
 - 日期：2026-07-29
 - 任务来源：[M2.2 实现完整 Schema](../plans/2026-07-23-poker-practice-development-tasks.md#m22-实现完整-schema)
 - 上位设计：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)、[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)、[Player Agent Runtime](./2026-07-23-poker-practice-agent-harness-design.md)、[Coach Agent](./2026-07-26-poker-coach-agent-design.md)、[Supabase Postgres 与 Drizzle 迁移设计](./2026-07-29-supabase-postgres-drizzle-migration-design.md)

@@ -1,6 +1,6 @@
 # M1.7 手牌推进与一次性补完公共牌设计
 
-> 2026-07-28 非 Agent 运行时重新基线：本设计的行动位、街道、runout 和终止类型规则继续有效；`stateVersion + 1` 与“由 `hand-progression.ts` 直接返回最终对外状态”的接口部分已被后续架构取代。M1.R 会把当前 `applyPokerAction()` 重命名为底层 `progressPokerAction()`，纯引擎不再处理版本；M1.9 的 `poker-engine.ts.applyPokerAction()` 将统一编排 M1.7、M1.8 和结果输出，M3 对完整场次命令只递增一次版本。当前代码尚未实施该返工，具体以 [非 Agent 运行时架构重新基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md) 为准。
+> 2026-07-28 非 Agent 运行时重新基线：本设计的行动位、街道、runout 和终止类型规则继续有效；`stateVersion + 1` 与“由 `hand-progression.ts` 直接返回最终对外状态”的接口部分已被后续架构取代。M1.R 已把原 `applyPokerAction()` 重命名为底层 `progressPokerAction()`，纯引擎不再处理版本；M1.9 的 `poker-engine.ts.applyPokerAction()` 已统一编排 M1.7、M1.8 和结果输出，M3 对完整场次命令只递增一次版本。具体以 [非 Agent 运行时架构重新基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md) 为准。
 
 - 状态：已确认，已实现
 - 日期：2026-07-28

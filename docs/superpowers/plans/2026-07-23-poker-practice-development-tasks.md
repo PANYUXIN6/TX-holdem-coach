@@ -1,8 +1,8 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构、预设人物与 Supabase Postgres 迁移方案已纳入
+- 状态：进行中；M0、M1、M2 与 M3.1–M3.7 已完成，M3.8 按依赖后置，M4–M9 待开发
 - 日期：2026-07-23
-- 最后更新：2026-07-29
+- 最后更新：2026-08-14
 - 本文不包含工期、人数或里程碑时间估算。
 - 上位文档：
   - [产品需求文档](../specs/2026-07-23-poker-practice-prd.md)
@@ -15,6 +15,17 @@
   - [Coach Agent 专项设计](../specs/2026-07-26-poker-coach-agent-design.md)
   - [Agent 大模块开发任务](./2026-07-26-agent-module-development-tasks.md)
   - [6–9 人局代码返工说明](./2026-07-26-six-to-nine-player-code-refactor.md)
+
+## 0. 当前实施进度
+
+| 范围 | 状态 |
+| --- | --- |
+| M0 工程底座与共享契约 | 已完成并验证 |
+| M1 确定性牌局引擎 | 已完成并验证 |
+| M2 Supabase Postgres 持久化与恢复 | 已完成并验证 |
+| M3.1–M3.7 会话服务、HTTP API 与 SSE | 已完成并验证 |
+| M3.8 服务启动恢复协调 | 按依赖后置，等待 M4.2、M4.3、M4.7、M4.8 |
+| M4–M9 | 待开发 |
 
 ## 1. 拆分目标
 
@@ -63,7 +74,7 @@ M6 可以在后端开发期间基于共享契约和固定夹具先行，但不�
 | `apps/server/src/poker/state.ts` | `createPokerState` 固定用户座位 `0`，其他座位均为 AI `1..8` | 增加用户换座与 AI 占用 `0` 的回归测试 |
 | 服务端人物目录测试 | 现有八个人物数值已经符合规范表；补充八个 V1 公开投影逐字段回归 | 不改人物值，只锁定版本语义 |
 
-会话创建、首手按钮选择、Provider HTTP/联网检测服务和正式组桌 UI 尚未实现，不属于已完成代码返工；分别按 M1.4、M3.2、M3.5 和 M7 实现。M0.3 只落实从私有环境配置到共享 Provider 初始摘要的静态投影，不提前执行网络检测。
+会话创建、首手按钮选择和 Provider HTTP/联网检测服务已分别由 M3.2、M1.4、M3.5 实现；正式组桌 UI 仍按 M7 待实现。M0.3 当时只落实从私有环境配置到共享 Provider 初始摘要的静态投影，没有提前执行网络检测。
 
 ### 2.2 2026-07-28 非 Agent 运行时架构重基线
 
@@ -77,7 +88,7 @@ M1.7 以后所有非 Agent 任务以[非 Agent 运行时架构重基线](../spec
 - 只有 M3 在成功命令事务中为 `PrivateTableState` 递增一次版本，并为事件草稿补齐事件序号、ID、时间与最终 `stateVersion`。
 - 在 M1.8 开发前必须先完成 M1.R；M1.R 只重构状态所有权和调用边界，不改变 M1.2–M1.7 已确认的扑克规则。
 
-从当前代码基线继续时，默认按单任务、逐项验收的顺序执行：
+该重基线当时确定的单任务实施顺序如下；截至 2026-08-14，M1.R–M3.7 已完成，M3.8 按依赖后置，M5 与 M6/M7 尚未实施：
 
 ```text
 M1.R
@@ -100,8 +111,8 @@ M1.R
 数据库相关任务以 [Supabase Postgres 与 Drizzle 迁移设计](../specs/2026-07-29-supabase-postgres-drizzle-migration-design.md) 为最高事实源：
 
 - Supabase 只托管 PostgreSQL；Hono 继续作为唯一服务入口，不引入 `supabase-js`、Auth、Data API、Realtime、Storage 或 Edge Functions。
-- 本轮已实现代码只令 `ServerConfig` 校验并私有保存 `DATABASE_URL`，安装 Drizzle/`postgres.js` 依赖并移除旧数据库配置、依赖和测试夹具；当前不建立数据库连接，也不提前创建 M2 的 Drizzle 配置、schema、Repository 或迁移。
-- M2 生产数据库仍未实现。M2.1 未来先建立 `app_private`、运行时 `6543` transaction pooler 连接、独立 `5432` migration 连接、显式发布迁移和启动兼容门控，随后才实现业务表与 Repository。
+- 数据库重基线最初只令 `ServerConfig` 校验并私有保存 `DATABASE_URL`，安装 Drizzle/`postgres.js` 依赖并移除旧数据库配置、依赖和测试夹具；该阶段没有提前创建 M2 的连接、Schema、Repository 或迁移。
+- 当前 M2.1–M2.8 已完成：`app_private`、运行时 `6543` transaction pooler 连接、独立 `5432` migration 连接、显式发布迁移、启动兼容门控、业务 Schema、Repository、原子持久化、恢复、审计和删除均已落地。
 - 运行时事务均为异步 PostgreSQL 事务；写命令使用 `SELECT ... FOR UPDATE`、数据库唯一约束和 UPSERT。进程内队列只优化竞争，不承担正确性。
 - 默认验证始终离线；临时 PostgreSQL 集成测试和非生产 Supabase smoke 都是显式可选步骤。
 
@@ -215,7 +226,7 @@ M1.R
 - 现有 `getServerCapabilities` 必须从同一 Provider 设置投影派生只读能力和警告，不得独立重复判断 DeepSeek/Kimi 配置。
 - Key 缺失不阻止查看页面和历史；DeepSeek Key 缺失只阻止创建场次，Kimi Key 缺失只产生降级不可用警告。
 - M0.3 不调用供应商网络、不保存检测结果，也不产生 `available/unavailable`；这些行为留给 M3.5。
-- 未通过配置校验时不启动；数据库连接与 schema 兼容门控由未来 M2.1 接入，服务启动不得自动执行迁移。
+- 未通过配置校验时不启动；M0.3 当时不接数据库，连接与 Schema 兼容门控随后已由 M2.1 接入，服务启动仍不得自动执行迁移。
 - 提供中文、脱敏的启动错误。
 - 仓库当前存在 `apikey.txt`；实现本任务时不得读取或记录其内容。若其中保存真实密钥，应在用户确认后迁移到 `.env` 并排除版本控制，不能把普通文本密钥文件继续作为运行时配置源。
 
@@ -377,7 +388,7 @@ M1.R
 - 正确结束每个下注轮并推进 preflop、flop、turn、river、showdown、complete。
 - 只剩一名未弃牌玩家时立即结束。
 - 至少两名未弃牌玩家但无法继续相互下注时，一次性发完剩余公共牌；每个尚未发出的街道仍照常先 burn 一张。
-- `showdown/complete` 是通过私有 Schema 校验、等待 M1.8 同步结算的内部终止状态，不表示资金已闭环，不得被 M3 单独持久化或公开。
+- `showdown/complete` 是通过私有 Schema 校验、供 M1.8 同步结算消费的内部终止状态，不表示资金已闭环，不得被 M3 单独持久化或公开。
 - 纯推进逻辑不读取或修改 `stateVersion`；整条扑克命令最终是否递增版本由 M3 在事务中统一决定。
 - 不支持 run-it-twice。
 
@@ -396,8 +407,8 @@ M1.R
 - 从纯引擎状态、M1.5 动作迁移和 M1.7 推进中移除 `stateVersion` 及递增逻辑。
 - 将 M1.7 当前公开的 `applyPokerAction()` 重命名为底层 `progressPokerAction()`；M1.9 门面占用正式 `applyPokerAction()` 名称并负责终止后同步结算。
 - 收紧纯状态不变量：6–9 个参与座位与底牌集合一致，非参与座位为 `out` 且零投入，按钮属于参与者，牌堆、burn、公共牌和底牌全局唯一。
-- 保留 M1.2/M1.4 的独立纯函数边界：M1.2 只改状态类型引用；M1.4 继续接收显式 `completedHandCountBeforeStart: number`，两者都不得依赖尚未实现的 `poker-engine.ts` 或 `PrivateTableState`。
-- 将 M1.7 的终止结果标记为扑克模块内部类型，供后续 M1.9c 接入；M1.R 不负责建立尚未存在的服务层门面或证明 M3 调用边界。
+- 保留 M1.2/M1.4 的独立纯函数边界：M1.2 只改状态类型引用；M1.4 继续接收显式 `completedHandCountBeforeStart: number`，两者都不依赖 `poker-engine.ts` 或 `PrivateTableState`。
+- 将 M1.7 的终止结果标记为扑克模块内部类型，供 M1.9c 接入；M1.R 本身不负责建立服务层门面或证明 M3 调用边界。
 - 不改变发牌、行动合法性、下注、加注重开、街道推进或按钮轮转规则。
 
 后端测试闭环：
@@ -449,7 +460,7 @@ M1.R
 2. **M1.9b 初始化与开手门面**：实现 `initializePokerTable()`、`startPokerHand()` 和 `handStarted` 草稿；依赖 M1.R、M1.9a。
 3. **M1.9c 行动与完成门面**：实现 `applyPokerAction()`、内部 `progressPokerAction()` → M1.8 接缝、完成结果和终止事件顺序；依赖 M1.8、M1.9a。
 
-默认逐项领取顺序为 M1.9a → M1.9b → M1.9c，每项分别提交和验收；M1.9c 通过前不得把 M1 门面对 M3 标记为完成。M1.9b 测试直接传入 `completedHandCountBeforeStart = 0/1/...`，不等待 M2；只有 M3 集成时才从 `PrivateTableState.completedHandCount` 读取该值。
+历史逐项领取顺序为 M1.9a → M1.9b → M1.9c，每项分别提交和验收；三项现已全部完成。M1.9b 测试直接传入 `completedHandCountBeforeStart = 0/1/...`，不依赖 M2；M3 集成从 `PrivateTableState.completedHandCount` 读取该值。
 
 后端测试闭环：
 
@@ -759,10 +770,10 @@ M1.R
 
 - 私有权威状态映射为当前用户可见快照。
 - `PublicSessionSnapshot` 由 `PrivateTableState`、`sessions` 会话协调状态、当前手已提交的私有行动事件和可见性规则组合生成，不直接序列化任一数据库表，也不成为新的事实源。
-- SSE 只发布已持久化事件。
+- SSE 业务事件只发布已持久化事件。M3.7 为首次连接、补发完成与异常游标发送的 `type: snapshot` 当前快照校准信封是唯一例外：它不是业务事件，不写入 `session_events`、不占用新 `eventSeq`、不进入 Commit Gate 或 Hub，且只能由 M3.7 以已有高水位作为 wire `id` 发送。
 - SSE `id` 使用 `eventSeq`，负载包含 `eventId`、`stateVersion` 和对外 `protocolVersion`。
 - 每条 SSE 信封的 `eventSeq/stateVersion` 必须与负载快照一致；同命令多事件共享最终业务状态、使用各自连续游标，不公开原子命令的中间状态。
-- 包含 `handAborted` 在内的 SSE 事件统一使用 `payload: { snapshot }`；`type` 仅表示已持久化事件原因，不引入按类型分支的 SSE 负载。
+- 包含 `handAborted` 在内的持久化 SSE 业务事件统一使用 `payload: { snapshot }`；对这些业务事件，`type` 仅表示已持久化事件原因，不引入按类型分支的 SSE 负载。M3.7 的 `type: snapshot` 仅用于上述非持久化校准例外。
 - 公开快照同时提供进行中手牌的公开行动序列、两手之间的最新公开结算摘要和脱敏 Agent 运行摘要；这些字段的精确共享 Schema 在 M1.9 领域结果输出完成后定义。
 - 事件不携带完整牌堆、burn card、未公开底牌或原始敏感调用。
 
@@ -793,21 +804,24 @@ M1.R
 
 ### M3.8 实现服务启动恢复协调
 
+依赖说明：M3.8 是 M4.2、M4.3、M4.7、M4.8 完成后的后置集成里程碑，编号只用于需求追踪，不表示实施顺序。详细契约见 [M3.8 服务启动恢复协调设计](../specs/2026-08-13-m3-8-service-startup-recovery-coordination-design.md)。
+
 产出：
 
-- 启动时读取活动场次和最新快照。
-- `thinking` 的旧 Player AgentRun 标记为 `cancelled(process_restart)`，旧请求、attempts、租约和 fencing 全部失效。
-- 重新读取权威状态；仍为 `active + inHand`、仍轮到同一 AI 且无其他有效运行时，创建带 `supersedesRunId` 的新运行、新请求和新 attempts，从 DeepSeek 开始，并沿用本场固化版本。
-- 状态已变化或不再需要 AI 行动时不创建替代运行。
-- `paused` 保持暂停，等待人工重试。
-- 只读诊断场次不启动 Agent 或接受修改。
+- Worker 保持停止时，Owner-scoped 扫描活动场次，并按稳定顺序为每场启动独立短事务。
+- 每场先调用 M2.6 恢复权威状态；只有 `ready` 活动场次才调用 M4.8 的 Player `process_restart` 恢复端口。
+- M3.8 不实现 AgentRun 生命周期、租约/fencing、ModelGateway/Attempt、Player Commit Gate 或重启接替策略；这些分别由 M4.2、M4.3、M4.7、M4.8 拥有。
+- 每场事务提交后才发布已持久化 Player 协调事件并记录替代运行唤醒意图；全部候选处理完成后启动 Worker、批量唤醒，再开始 Hono 监听。
+- `paused` 与既有只读诊断保持不变；M2.6 新判定的只读诊断提交后不启动 Agent，但不阻止其他健康场次和服务进入就绪。
+- 数据库、恢复契约或 Worker 启动失败时拒绝监听并清理资源；提交后事件发布或 Worker 唤醒提示失败不撤销数据库事实，由 PostgreSQL 补发和持久 Worker 扫描收敛。
 
 后端测试闭环：
 
-- 模拟进程重建验证三种恢复状态。
-- 旧 Worker 或旧 fencing token 的迟到结果不能提交。
-- 同一 `(sessionId, stateVersion, actorSeat)` 恢复后最多一个有效 AgentRun。
-- 验证新运行不继承旧供应商位置、纠错次数、输出或检查点，旧审计仍可关联。
+- 验证“数据库/迁移门禁 → 运行时组合 → M2.6/M4.8 启动恢复 → Worker 启动/唤醒 → Hono 监听”的精确顺序，恢复完成前 Worker 不领取、HTTP 不监听。
+- 模拟进程重建覆盖 `thinking` 替代、`paused` 保持、状态已变化不替代、ended/missing 跳过和 `readonlyDiagnostic` 零 Agent 五类结果。
+- 事务回滚时零事件发布、零 Worker 唤醒；提交后事件发布或唤醒提示失败不重跑恢复事务。
+- 复用 M4.7 验收旧 Worker、旧请求或旧 fencing token 的迟到结果不能提交；并发恢复后同一 `(sessionId, stateVersion, actorSeat)` 最多一个有效 AgentRun。
+- 复用 M4.3/M4.8 验收新运行由 Worker 领取后从 DeepSeek 创建第一次 Attempt，不继承旧供应商位置、纠错次数、attempt、输出或检查点，旧审计仍可通过 `supersedesRunId` 关联。
 
 ## 8. M4：Agent Foundation 与 Player Runtime
 
@@ -1084,9 +1098,9 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 使用 `Last-Event-ID` 重连。
 - SSE 断开时禁止提交新的玩家动作，重连并校准最新快照后恢复。
 - HTTP Query、Mutation 响应和 SSE 事件必须进入同一个快照接收器；TanStack Query 是唯一服务端实体缓存，Zustand 不保存镜像。
-- `eventSeq <= localEventSeq` 一律忽略；更高 `eventSeq` 即使 `stateVersion` 相同也接收会话协调变化。
+- 普通增量 SSE 事件在增量模式中应用 `eventSeq <= localEventSeq` 一律忽略；更高 `eventSeq` 即使 `stateVersion` 相同也接收会话协调变化。
 - 新快照的 `stateVersion` 小于本地版本视为协议错误并重新校准；`eventSeq` 出现缺口时暂停动作并重新获取权威快照。
-- SSE 事件按增量模式接收；成功 Mutation、当前场次 GET 和 SSE 补发后的校准快照按权威校准模式接收，可以跨过已由完整快照覆盖的事件缺口。
+- 接收器必须先根据来源与信封类型选择接收模式，再执行该模式的游标规则：普通 SSE 业务事件按增量模式接收；成功 Mutation、当前场次 GET 和 SSE `type: snapshot` 校准信封按权威校准模式接收。校准信封不先套用普通增量事件的 `eventSeq <= localEventSeq` 去重；即使补发已把 `localEventSeq` 推进到相同高水位，也必须接收完整快照并以其 `eventSeq` 覆盖本地游标，因而可以跨过已由完整快照覆盖的事件缺口。
 - 不对筹码、行动位、底池或牌面做乐观更新。
 - 重连后重新获取最新场次。
 

@@ -1,8 +1,8 @@
 # 非 Agent 运行时架构重新基线
 
-- 状态：已确认；M1.7–M1.9 与 M0.2 已实现，M2/M3、M5–M7 待实现
+- 状态：已确认；M1.7–M1.9、M0.2、M2 与 M3.1–M3.7 已实现，M3.8 按依赖后置，M5–M7 待实现
 - 日期：2026-07-28
-- 最后更新：2026-07-29
+- 最后更新：2026-08-14
 - 范围：M1.7–M3、M5–M7，以及 M9 中非 Agent 的验收
 - 不包含：Agent Foundation、Player Runtime、Coach Runtime 及其持久化、恢复和前端流程
 
@@ -312,7 +312,7 @@ M1.8 不生成持久化事件；M1.9 根据结算事实生成 `uncalledBetReturn
 
 ## 7. M2 持久化模型
 
-M2 的生产数据库尚未实现。本节描述未来位于 Supabase 托管 PostgreSQL 非公开 `app_private` schema 中的目标模型，不表示当前仓库已有 Drizzle schema、Repository 或迁移。Hono 始终是唯一业务入口；浏览器和 Supabase Data API 不直连业务表。
+M2.1–M2.8 的生产数据库基础、Schema、Repository、恢复、审计与删除已经实现。本节描述位于 Supabase 托管 PostgreSQL 非公开 `app_private` schema 中的现行模型。Hono 始终是唯一业务入口；浏览器和 Supabase Data API 不直连业务表。
 
 字段类型固定为：标识符使用 `uuid`，业务和事件时间使用 `timestamptz`，版本化快照、完成结果和私有事件信封使用 `jsonb` 并经私有 Zod Schema 校验。筹码、投入、累计买入、`stateVersion`、`eventSeq`、fencing token、手牌序号等可能增长到 JavaScript 安全整数上限的非负持久化值使用 PostgreSQL `bigint`，由 Drizzle 映射为 `number`，并由私有 Zod 与数据库 `CHECK` 双重限制在 `0..Number.MAX_SAFE_INTEGER`；这不改变或缩窄既有 Contracts/领域 `number`。`seatNumber`、牌张/位置索引、枚举序数和重试次数等小型有界值继续使用 `integer`。关系、唯一、检查和级联规则必须落为 PostgreSQL 约束，不能只依赖应用校验。
 
@@ -562,7 +562,7 @@ HTTP Mutation、普通 Query 和 SSE 统一经过同一个快照接收器。接�
 - 移除纯状态和 M1.7 中的版本处理。
 - 把版本断言移到 M3 服务/事务测试。
 - 补齐全部 `inHand` 参与集合、底牌和底池不变量。
-- M1.2 只修改纯状态类型引用；M1.4 继续接收显式 `completedHandCountBeforeStart`。两者不依赖尚未实现的 M1.9 或 M2。
+- M1.2 只修改纯状态类型引用；M1.4 继续接收显式 `completedHandCountBeforeStart`。两者不依赖 M1.9 或 M2。
 - M1.R 只为 M1.9 门面准备底层边界，不把“服务层只能调用门面”作为本任务可独立完成的验收项；该边界在 M1.9c/M3 验收。
 - 保持 M1.1–M1.7 已确认扑克规则不变。
 
@@ -580,7 +580,7 @@ HTTP Mutation、普通 Query 和 SSE 统一经过同一个快照接收器。接�
 
 M1.9b 依赖 M1.R/M1.9a；M1.9c 依赖 M1.8/M1.9a。只有三个切片全部通过，M1 对 M3 的门面才算完成。
 
-默认单任务开发顺序固定为 M1.8 → M1.9a → M1.9b → M1.9c。依赖图允许 M1.8 与 M1.9a 并行准备，但线性流程先完成 M1.8，使 M1.9a 直接使用稳定结算事实而不定义临时占位类型。M1.9b 的测试直接提供 `completedHandCountBeforeStart`，不等待 M2。
+历史单任务开发顺序固定为 M1.8 → M1.9a → M1.9b → M1.9c，现已全部完成。依赖图当时允许 M1.8 与 M1.9a 并行准备，但线性流程先完成 M1.8，使 M1.9a 直接使用稳定结算事实而不定义临时占位类型。M1.9b 的测试直接提供 `completedHandCountBeforeStart`，不依赖 M2。
 
 ### 13.4 M2/M3
 

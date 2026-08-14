@@ -1,6 +1,6 @@
 # M0.2 公开协议返工设计
 
-- 状态：已确认，待实现
+- 状态：已确认，已实现并验证
 - 日期：2026-07-29
 - 任务来源：[开发任务分解 M0.2](../plans/2026-07-23-poker-practice-development-tasks.md)
 - 上位设计：[非 Agent 运行时架构重新基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)

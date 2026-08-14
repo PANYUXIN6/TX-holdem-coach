@@ -1,6 +1,6 @@
 # M3.1 既有场次串行命令执行器与私有事件 V2 设计
 
-- 状态：设计章节已确认，待文档复核
+- 状态：已确认，已实现并验证
 - 日期：2026-08-05
 - 任务来源：[项目开发任务 M3.1](../plans/2026-07-23-poker-practice-development-tasks.md#m31-实现每场串行命令执行器)
 - 上位架构：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)

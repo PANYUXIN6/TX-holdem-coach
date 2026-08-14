@@ -17,6 +17,7 @@ import { assertM33PlayerActionHandCompletion } from './database-m33-assertions.j
 import { assertM34RebuyNextHandSessionEnd } from './database-m34-assertions.js'
 import { assertM35HttpAndAtomicSettings } from './database-m35-assertions.js'
 import { assertM36PublicProjectionRuntime } from './database-m36-assertions.js'
+import { assertM37SessionEventReplay } from './database-m37-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -216,6 +217,12 @@ registerMilestoneTest(
   'm36',
   'M3.6 public projection runtime',
   (sql, runtimeUrl) => assertM36PublicProjectionRuntime(sql, runtimeUrl),
+  300_000,
+)
+registerMilestoneTest(
+  'm37',
+  'M3.7 SSE reconnection and event replay',
+  (sql, runtimeUrl) => assertM37SessionEventReplay(sql, runtimeUrl),
   300_000,
 )
 registerMilestoneTest(

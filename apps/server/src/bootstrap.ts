@@ -39,6 +39,8 @@ import { createSessionCommandExecutor } from './sessions/command-execution/sessi
 import { createCommittedSessionEventHub } from './sessions/public-projection/committed-session-event-hub.js'
 import { createPublicSessionBindings } from './sessions/public-projection/public-session-bindings.js'
 import { createPublicSessionQueryService } from './sessions/public-projection/public-session-query-service.js'
+import { createPublicEventReplayRepository } from './persistence/public-event-replay-repository.js'
+import { createSessionEventStreamService } from './sessions/public-projection/session-event-stream-service.js'
 
 function createLocalWebOrigins(port: number): ReadonlySet<string> {
   return new Set([
@@ -132,6 +134,12 @@ export async function createApiRuntime(
   const query = createPublicSessionQueryService(
     createPublicProjectionFactsRepository({ sql: database.sql, owner }),
   )
+  const sessionEvents = createSessionEventStreamService({
+    repository: createPublicEventReplayRepository({ sql: database.sql, owner }),
+    hub: committedSessionEvents,
+    nextEventId: randomUUID,
+    diagnose: (entry) => console.error(JSON.stringify(entry)),
+  })
   return Object.freeze({
     health: createHealthService(database.sql),
     providerHealth: createProviderHealthService({
@@ -147,6 +155,7 @@ export async function createApiRuntime(
     deletion: createSessionDataDeletionService({ sql: database.sql, owner }),
     sessionHttp: { creation, query, commands },
     committedSessionEvents,
+    sessionEvents,
   })
 }
 

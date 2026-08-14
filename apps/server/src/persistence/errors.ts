@@ -50,6 +50,7 @@ export type DataCorruptionKind =
   | 'invalidCommandLedger'
   | 'invalidSessionMutationState'
   | 'invalidPublicProjectionFacts'
+  | 'invalidPublicEventReplay'
   | 'invalidHandAudit'
   | 'invalidAgentRunAudit'
   | 'invalidAgentAttemptAudit'

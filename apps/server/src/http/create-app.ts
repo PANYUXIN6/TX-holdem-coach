@@ -9,6 +9,7 @@ import type { ProviderHealthService } from '../providers/provider-health-service
 import type { PlayerAgentSettingsService } from '../settings/player-agent-settings-service.js'
 import type { SessionDataDeletionService } from '../sessions/session-data-deletion-service.js'
 import type { CommittedSessionEventHub } from '../sessions/public-projection/committed-session-event-hub.js'
+import type { SessionEventStreamService } from '../sessions/public-projection/session-event-stream-service.js'
 import { registerAgentSettingsRoutes } from './agent-settings-routes.js'
 import type { ApiVariables } from './api-context.js'
 import { registerDataRoutes } from './data-routes.js'
@@ -22,6 +23,7 @@ import {
   registerSessionRoutes,
   type SessionHttpPorts,
 } from './session-routes.js'
+import { registerSessionEventRoutes } from './session-event-routes.js'
 
 export interface ApiRuntime {
   readonly health: HealthService
@@ -31,6 +33,7 @@ export interface ApiRuntime {
   readonly deletion: SessionDataDeletionService
   readonly sessionHttp?: SessionHttpPorts
   readonly committedSessionEvents?: CommittedSessionEventHub
+  readonly sessionEvents?: SessionEventStreamService
 }
 
 export interface ApiAppOptions {
@@ -56,6 +59,7 @@ function isKnownRoute(
   method: string,
   path: string,
   sessions: boolean,
+  sessionEvents = false,
 ): boolean {
   method = routeLookupMethod(method)
   const fixed = new Set([
@@ -72,6 +76,9 @@ function isKnownRoute(
   }
   if (/^\/api\/agent-personas\/[^/]+$/.test(path)) return method === 'GET'
   if (sessions && path === '/api/sessions/active') return method === 'GET'
+  if (sessionEvents && /^\/api\/sessions\/[^/]+\/events$/.test(path)) {
+    return method === 'GET'
+  }
   if (/^\/api\/sessions\/[^/]+$/.test(path)) {
     return method === 'DELETE' || (sessions && method === 'GET')
   }
@@ -84,6 +91,7 @@ function requestRouteTemplate(
   method: string,
   path: string,
   sessions: boolean,
+  sessionEvents = false,
 ): string | null {
   method = routeLookupMethod(method)
   const fixed = new Map([
@@ -107,6 +115,13 @@ function requestRouteTemplate(
   }
   if (sessions && method === 'GET' && path === '/api/sessions/active') {
     return '/api/sessions/active'
+  }
+  if (
+    sessionEvents &&
+    method === 'GET' &&
+    /^\/api\/sessions\/[^/]+\/events$/.test(path)
+  ) {
+    return '/api/sessions/:sessionId/events'
   }
   if (/^\/api\/sessions\/[^/]+$/.test(path)) {
     if (method === 'DELETE' || (sessions && method === 'GET')) {
@@ -182,6 +197,7 @@ export function createApp(
         context.req.method.toUpperCase(),
         new URL(context.req.url).pathname,
         runtime.sessionHttp !== undefined,
+        runtime.sessionEvents !== undefined,
       )
       options.logRequest?.({
         requestId: context.get('requestId'),
@@ -264,6 +280,7 @@ export function createApp(
         requestedMethod.toUpperCase(),
         new URL(context.req.url).pathname,
         runtime.sessionHttp !== undefined,
+        runtime.sessionEvents !== undefined,
       )
     ) {
       throw new HttpBoundaryError(404, 'ROUTE_NOT_FOUND', '接口不存在。')
@@ -272,7 +289,12 @@ export function createApp(
       'Access-Control-Allow-Methods',
       requestedMethod.toUpperCase(),
     )
-    context.header('Access-Control-Allow-Headers', 'Content-Type')
+    context.header(
+      'Access-Control-Allow-Headers',
+      /^\/api\/sessions\/[^/]+\/events$/.test(new URL(context.req.url).pathname)
+        ? 'Last-Event-ID'
+        : 'Content-Type',
+    )
     return context.body(null, 204)
   })
 
@@ -283,6 +305,9 @@ export function createApp(
   registerDataRoutes(app, runtime.deletion)
   if (runtime.sessionHttp !== undefined) {
     registerSessionRoutes(app, runtime.sessionHttp)
+  }
+  if (runtime.sessionEvents !== undefined) {
+    registerSessionEventRoutes(app, runtime.sessionEvents)
   }
 
   app.notFound((context) =>

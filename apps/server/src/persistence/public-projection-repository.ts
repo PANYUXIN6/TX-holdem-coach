@@ -153,7 +153,9 @@ function sessionView(row: z.infer<typeof SessionRowSchema>): LockedSessionView {
   })
 }
 
-function mapFacts(input: unknown): PublicSessionProjectionFacts {
+export function mapPublicSessionProjectionFacts(
+  input: unknown,
+): PublicSessionProjectionFacts {
   const parsed = SessionRowSchema.safeParse(input)
   if (!parsed.success) return corruption()
   if (
@@ -192,7 +194,7 @@ function mapLookup(input: unknown): PublicProjectionFactsLookup {
     return READONLY_DIAGNOSTIC_FACTS
   }
   if (hasDiagnostic) return corruption()
-  return mapFacts(parsed.data)
+  return mapPublicSessionProjectionFacts(parsed.data)
 }
 
 async function readRows(
@@ -335,7 +337,7 @@ export function createTransactionPublicProjectionReadPort(
       const rows = await readRows(transaction, owner, { kind: 'id', sessionId })
       if (rows.length === 0) return null
       if (rows.length !== 1) return corruption()
-      return mapFacts(rows[0])
+      return mapPublicSessionProjectionFacts(rows[0])
     },
   }
   return Object.freeze(port)

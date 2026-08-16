@@ -2,7 +2,7 @@
 
 - 状态：待开发
 - 日期：2026-07-26
-- 最后更新：2026-08-14
+- 最后更新：2026-08-16
 - 总体架构：[Agent Foundation 与受限 Runtime](../specs/2026-07-26-agent-foundation-runtime-architecture.md)
 - Player 设计：[Player Agent Runtime 专项设计](../specs/2026-07-23-poker-practice-agent-harness-design.md)
 - Coach 设计：[Coach Agent Runtime](../specs/2026-07-26-poker-coach-agent-design.md)
@@ -40,6 +40,8 @@
 | A7 | Coach Runtime | A0–A5 | 证据、确定性分类、两阶段解释和复盘持久化 |
 | A8 | 观测、保留、Replay 与 Eval | A2–A7 | 可观测、可删除、可回放、可回归 |
 | A9 | 集成与发布验收 | A0–A8 | API、前端契约、E2E 和发布门禁 |
+| A10（后置） | Coach 长期漏洞记忆 | A2、A7、A8；A9 后单独确认 | taxonomy 聚合维度、日/周/月趋势、教学重点投影、画像快照和用户控制 |
+| A11（后置） | 针对性练习与复测 | A5、A7、A10；A10 后单独确认 | 漏洞到练习、训练 Session、评分、复测与改善退出 |
 
 推荐主路径：
 
@@ -47,6 +49,8 @@
 A0 → A1 → A2 → A3/A4
   └────────→ A5
 A3/A4/A5 → A6 → A7 → A8 → A9
+                   └────→ A10（首版后置）
+                              └────→ A11（独立后置）
 ```
 
 Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制 Foundation、策略 Repository 或权威状态投影。
@@ -296,14 +300,20 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 
 保存：
 
-- 复盘版本快照、状态、报告和来源手牌。
+- 复盘版本快照、状态、报告和来源手牌；版本快照包含 `DecisionGradePolicy` 与 `TeachingProjectionPolicy`。
 - 每个 Hero 决策的冻结分类：
   - assessment
   - assessmentBasis
   - epistemicStatus
+  - decisionGrade
+  - decisionGradePolicyVersion
+  - primaryDeviationCode
   - observedDeviationTags
+  - mistakeTaxonomyVersion
   - teachingHypotheses
   - severity
+  - severityBasis
+  - severityPolicyVersion
   - baselineComparison
   - evLoss
   - evidenceRefs
@@ -315,6 +325,7 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 - 同一 review 内重复 assessment 写入失败。
 - 新 review 不覆盖旧 review。
 - EV 不可用时 `status=unavailable` 且 `valueBb=null`。
+- 主错误码、辅助标签、severity 与各自版本字段能够原样回读，Repository 不重新分类。
 
 完成标准：
 
@@ -535,11 +546,14 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 - 记录 tableSize、位置、行动线、有效筹码、池类型、牌面、下注尺度和执行频率。
 - “75%”必须明确为 `actionFrequency=75%` 或 `betSizePotRatio=75%`。
 - 翻前覆盖 6–9 人位置梯度；翻后逻辑复用同一单挑/多人池场景定义。
+- 定义版本化 `StrategyAbstractionProfile`，记录原始 Solver/专业策略/教学模板来源、覆盖范围、动作分组和抽象损失；复杂下注树只投影为 `fold | check | call | smallBet | mediumBet | largeBet | allIn` 等受支持候选。
+- 首版运行时只查询发布后的静态 `StrategyPack`，不在线运行 Solver；没有可追溯 Solver EV 的策略记录不能生成精确 EV。
 
 验证：
 
 - 数据校验拒绝来源、适用范围或频率/尺度语义不明的记录。
 - 不支持场景返回 `unsupported`，不伪造最近邻 GTO。
+- 未声明抽象来源、覆盖或信息损失的策略包拒绝发布；动作分组不得混淆执行频率和下注尺度。
 
 完成标准：
 
@@ -870,9 +884,13 @@ Coach 投影：
   - `assessment`
   - `assessmentBasis`
   - `epistemicStatus`
+  - `decisionGrade`
+  - `decisionGradePolicyVersion`
+  - `primaryDeviationCode`
   - `observedDeviationTags[]`
   - `teachingHypotheses[]`
   - `severity`
+  - `severityBasis`
   - `baselineComparison`
   - `evLoss`
   - `evidenceRefs`
@@ -880,8 +898,11 @@ Coach 投影：
   - `classifierVersion`
 - `assessmentBasis` 使用 `ruleInvariant | exactStrategy | referenceStrategy | solverEv | heuristicPolicy | insufficientEvidence`；`epistemicStatus` 使用 `objective | modelBased | heuristic | unrated`。
 - `baselineComparison` 至少包含 `matchStatus`、`actionSupported`、`sizeSupported`、`actualActionFrequency`。
-- 行为偏差标签来自有限枚举，只记录当前证据可证明的偏差；推测认知、情绪和动机只能是明确的教学假设。
-- severity 使用 low、medium、high、unavailable。
+- `DecisionGradeProjector` 按版本化 `DecisionGradePolicy` 从冻结的匹配等级、动作频率和可比较 EV 生成 `highestFrequency | supportedAlternative | lowCostDeviation | unsupportedAction | majorEvMistake | unrated`；该等级不是漏洞标签。
+- 只有 `exactStrategy` 能在展示层使用“GTO 最高频/GTO 不采用”；referenceOnly 或教学模板只能称为基准。零频率不自动等于重大错误，受支持低频动作不判错，无可比较 EV 时不生成 `majorEvMistake`。
+- `primaryDeviationCode` 与行为偏差标签来自版本化 `DecisionMistakeTaxonomyV1`，限于 `action_selection_error | sizing_error | range_construction_error | overfold | overcall | missed_value | unsupported_bluff | stack_depth_adaptation_error`；每个标签引用使其成立的规则、策略或 EV 证据。每个 decision 最多一个主错误码，辅助标签不得重复归因完整 EV。
+- 街道、位置、底池类型、筹码档和原子牌面事实作为独立字段保存，不编码进错误名称；推测认知、情绪和动机只能是明确的教学假设。
+- severity 使用 low、medium、high、unavailable；`severityBasis` 使用 `evLoss | rulePolicy | unavailable`。无可比 EV 时只有版本化规则政策可以给出规则型严重度。
 - 无 Solver/EV 数据时 EV 必须 unavailable，禁止 LLM 估算。
 - referenceOnly 或 heuristic 基准不能单独自动分类为 likelyMistake；受支持的低频混合动作不能只因频率低判错。
 - 没有 Solver EV 或版本化严重度阈值时 severity 必须 unavailable。
@@ -889,6 +910,7 @@ Coach 投影：
 验证：
 
 - 同一证据与分类器版本结果可复现。
+- 同一证据与 `DecisionGradePolicy` 版本产生相同等级；等级政策阈值变化必须发布新版本。
 - LLM 输出不能新增、删除或修改冻结事实、证据基础、评价、行为偏差、教学假设、严重度和 EV。
 - `spr_misread`、`ignore_position`、恐惧、tilt、情绪化跟注等认知/动机词不会被保存为客观行为偏差。
 - 冻结结果满足数据库 Schema。
@@ -925,6 +947,9 @@ Coach 投影：
 - 不重新判断行动质量，不修改分类。
 - Hindsight LLM 不自行比较手牌、不重算结果/行动线，也不生成没有显式模型依据的因果反事实。
 - `CoachReviewComposer` 确定性合并逐街报告、AI 对比和课后练习。
+- `CoachReviewComposer` 同时生成本手 `decisionPrioritySummary`：按街道分别统计四种 assessment；只在 EV 方法可比较时给出 `largestEvLossDecision`，否则为 `unavailable`；只有 `severityBasis=rulePolicy` 的高严重度、EV 不可用决策才能单独列出且不能称为最贵。
+- `CoachReviewComposer` 按版本化 `TeachingProjectionPolicy` 生成默认教学投影：展开一个核心决策、最多两个次要决策，其余决策压缩但不丢失；默认只突出一条核心教训和一条自然语言练习建议。
+- 核心决策优先使用可比较 EV 最大错误；EV 不可用时按版本化规则严重度和稳定顺序选择。LLM 不参与排序，也不能把内部 taxonomy 代码直接当作教学标题。
 - `CoachReviewValidator` 复验事实、引用、频率/尺度语义和完整性。
 
 验证：
@@ -932,6 +957,7 @@ Coach 投影：
 - 对手实际持有诈唬牌不会把 sound 决策改成 mistake。
 - 牌型比较、未跟注返还、逐池分配和 Hero 净筹码与权威完成手完全一致。
 - 无可用后见事实时仍能生成完整过程报告。
+- 教学投影降噪后仍可展开查看每一条完整决策报告；没有可评价决策时明确数据不足而不是强选核心错误。
 - 6–9 人位置名称与策略适用范围正确。
 
 完成标准：
@@ -942,7 +968,7 @@ Coach 投影：
 
 实现：
 
-- 同一 run 继续时固定 Runtime、Prompt、Context、`pokerRuleSetVersion`、Classifier、Metrics、Evidence 和 Strategy 版本。
+- 同一 run 继续时固定 Runtime、Prompt、Context、`pokerRuleSetVersion`、Classifier、`DecisionGradePolicy`、`TeachingProjectionPolicy`、Metrics、Evidence 和 Strategy 版本。
 - `pokerRuleSetVersion` 必须来自目标手牌开手检查点；历史手牌复盘不得改用部署时 current 版本。
 - 版本升级后使用当前标准复盘必须创建新 `coachReviewId` 和新 run。
 - 旧版本 revoked 时明确失败，不混入新版本继续。
@@ -1172,9 +1198,70 @@ Coach 投影：
 - Agent 间消息、委派、协商或协作式 Multi-Agent。
 - 服务端精确混合策略 `PolicySampler`；首版 LLM 选择只把频率/权重视为参考分布。
 - 结构改善概率、合法胜平组合枚举、几何全下尺度、blocker removal effect 和多街反事实 EV；未来实现时必须分别声明“不是权益/范围概率”的边界或提供版本化范围、响应模型与 Solver。
-- 扩展机会口径对手统计，以及版本化课程/练习目录的确定性选择。
+- 扩展机会口径对手统计。
 
-延期项未来必须通过新的设计评审进入，不能仅通过配置打开。
+延期项未来必须通过新的设计评审进入，不能仅通过配置打开。长期漏洞聚合已确认以下 A10 后置拆分，但仍不计入 A0–A9 首版完成范围。
+
+### A10.1 定义聚合维度与牌面 taxonomy
+
+- 复用 A7.4 的 `DecisionMistakeTaxonomyV1`，为跨手牌聚合定义独立上下文维度；taxonomy 语义变化只能发布新版本，不能重写历史 assessment。
+- 街道、位置、底池类型、有效筹码档和牌面是独立聚合维度；认知、情绪和动机不能进入错误枚举。
+- 发布基于原子牌面事实的版本化 `BoardTaxonomy`；主观牌面词必须保留规则、范围假设和 heuristic 证据等级。
+- 提供旧 taxonomy 快照的只读解释策略，禁止静默重分类历史 assessment。
+
+### A10.2 实现 EV/严重度政策与漏洞聚合
+
+- 复用 A7.4 的版本化 `SeverityPolicy` 和 `severityBasis`；EV 不可用时只有规则政策可以产生严重度，否则为 `unavailable`。
+- `LeakAggregationService` 按 Owner、时间窗口、taxonomy、街道、人数、位置、底池类型、筹码档、牌面类别、策略/评价方法聚合机会数、发生数、发生率、EV 样本和置信度。
+- 固化 `AssessmentSelectionPolicyVersion`，同一 `decisionId` 的多次复盘至多选择一个兼容 assessment，禁止重复计数；结果论字段不能进入过程漏洞统计。
+- 分别输出 `largestEvLeaks`、`mostFrequentDeviations`、`highSeverityUnknownEv`，禁止把频率或主观严重度冒充累计 EV。
+- `largestEvLeaks` 只按互斥 `primaryDeviationCode` 归因；辅助标签不得重复累计完整 EV。未来拆分归因必须发布 `EvAttributionPolicyVersion`。
+- 单手最大损失决策和跨手牌最贵漏洞均由程序排序；LLM 不参与统计。
+- 实现版本化 `LeakLifecyclePolicy`，使用 `observation → watch → confirmed → improving → resolved | expired` 表示证据阶段；一次错误不能直接成为正式长期漏洞。
+- 生成按用户时区切分的日、周、月 `LeakTrendSnapshot`，分别保存 `supportedRate`、`inaccuracyRate`、`mistakeRate`、`majorMistakeRate`、`coverageRate`、分子分母、当前周期状态和置信度。
+- 错误率分母是可评价决策机会而不是总手数；可比较时单独生成 `evLossBbPer100ComparableDecisions` 与 `evCoverageRate`，禁止与错误率合成不透明总分，分母为 0 时返回 unavailable。
+- 不同策略、分类器、等级政策、桌型或评价方法不能静默合并趋势；样本不足或当前周期未结束时显式标记。
+
+### A10.3 实现 Coach 画像快照与记忆投影
+
+- 从聚合结果生成带 Schema 版本、`asOf`、窗口、适用场景、证据引用和过期策略的 `CoachProfileSnapshot`，不覆盖逐决策事实。
+- 使用 `coach_leak_aggregate_snapshots` 和 `coach_profile_snapshots` 等独立派生存储；具体 Schema 必须通过新 migration 落地，不能塞入通用 AgentRun JSON。
+- `CoachMemoryContextBuilder` 只向当前复盘注入少量相关聚合，限制条目数和序列化大小，不引入 RAG 或自然语言自动召回。
+- LLM 只能解释重复模式并给出自然语言练习建议，不能创建训练任务，也不能修改 taxonomy、EV、严重度、排名、置信度或正式画像。
+- 稳定倾向、当前场次状态、教学偏好和未经证明的情绪假设使用不同字段与生命周期。
+- 按版本化 `TeachingPriorityPolicy` 生成 `TeachingFocusProjection`：`primaryFocus` 恰好最多一个、`watchlist` 最多两个、`improved` 默认折叠；选择依据使用可比较 EV、规则严重度、重复率、置信度和稳定顺序，LLM 不参与排名。
+
+### A10.4 实现用户控制、前端与验收
+
+- 提供查看、删除和重置画像的 Owner-scoped API；重置写入 `memoryResetBoundary`，清除派生记忆并阻止旧 assessment 自动重新进入画像，但不删除原始牌谱与逐手复盘。用户设置与行为画像分开展示。
+- 前端明确区分“最贵漏洞”“最常见偏差”“EV 暂不可用的高优先级问题”，显示样本、窗口、置信度和数据不足。
+- 前端默认只展示一个当前教学重点和最多两个观察项；日/周/月趋势同时展示机会数、可评价覆盖率和周期是否完整，不直接暴露机器 taxonomy 代码。
+- 覆盖 taxonomy/策略/EV 方法升级、相互矛盾证据、时间窗口变化、删除/重建、Context 上限和 LLM 越权回写测试。
+- 验证画像重置不会改写原始手牌和复盘；删除手牌/场次后派生快照不能继续引用已删除来源。
+
+M10/A10 到此只负责“发现、聚合和呈现漏洞”。它不创建训练牌局、不维护练习 Session，也不根据练习结果宣告改善。
+
+### A11.1 定义针对性训练契约与课程目录
+
+- 仅消费 A10 已确认漏洞和版本化课程/Spot 目录；定义 `PracticePlan`、`PracticeSession`、题目来源、评分口径和复测窗口，不从自由文本标签直接生成训练事实。
+- 明确区分从固定题库选择、对真实错误做参数化变体和未来 Solver 支持的动态题目；每种来源都保存策略、抽象和评分版本。
+- A7/M8 的 `practiceSuggestions` 仍是自然语言建议，不能被当作已创建的训练任务。
+
+### A11.2 实现漏洞到练习的确定性选择
+
+- 根据 `primaryFocus`、适用场景、课程先修关系和策略覆盖选择有限练习，不让 LLM 自由编排题库或生成权威答案。
+- 无受支持练习时明确 unavailable，不通过相似文本或模糊标签硬匹配。
+
+### A11.3 实现训练 Session、评分与复测
+
+- 保存训练机会、决策等级、可比较 EV、完成状态和版本；训练评分复用 A5/A7 的策略与分级边界。
+- 复测使用独立窗口和最低机会数，区分训练内表现与真实牌局表现；不能因为一次练习通过就把长期漏洞标记为已解决。
+
+### A11.4 实现改善退出与验收
+
+- `LeakLifecyclePolicy` 结合真实牌局与复测证据生成 `improving | resolved` 候选，最终状态仍由程序规则决定，LLM 只解释。
+- 覆盖题库版本升级、重复题、策略不支持、样本不足、中断恢复和重置长期记忆后的练习隔离。
+- A11 是否进入正式产品范围必须在 A10 的长期漏洞质量可评估后由用户单独确认，不属于 A0–A9 首版或 A10 的完成门禁。
 
 ## 14. 大模块完成定义
 

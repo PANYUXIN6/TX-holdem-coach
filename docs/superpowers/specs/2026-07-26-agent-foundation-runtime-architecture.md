@@ -2,7 +2,7 @@
 
 - 状态：已确认
 - 日期：2026-07-26
-- 最后更新：2026-08-14
+- 最后更新：2026-08-16
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - Player 专项设计：[Player Agent Runtime](./2026-07-23-poker-practice-agent-harness-design.md)
 - Coach 专项设计：[Coach Agent](./2026-07-26-poker-coach-agent-design.md)
@@ -80,6 +80,26 @@ Player LLM 的剩余职责只有：在程序生成且验证过的多个候选之
 - 用户可覆盖协议的自由 Prompt。
 - Redis、云消息队列、真实认证和 OpenTelemetry 平台。
 - `supabase-js`、Supabase Auth、Realtime、Storage 和 Edge Functions；Supabase 只托管 Agent 与牌局共享的 PostgreSQL。
+
+### 2.1 Coach 长期记忆的后置边界
+
+长期漏洞聚合和用户画像属于强类型、明确作用域的 Coach 长期记忆，不属于 Foundation 通用自动召回，也不需要 RAG。其固定依赖方向为：
+
+```text
+不可变 DecisionAssessment
+  → 版本化错误/牌面 taxonomy
+  → 确定性 LeakAggregationService
+  → 日/周/月 LeakTrendSnapshot + 有时效的 CoachProfileSnapshot
+  → 有界 TeachingFocusProjection
+  → 有界 CoachMemoryProjection
+  → Coach LLM
+```
+
+Foundation 未来最多提供版本化载荷、OwnerScope、保留/删除和 Context 大小门禁，不理解扑克错误类型，也不聚合 EV。Coach Runtime 拥有 taxonomy、聚合、画像投影和只读 Context Builder。LLM 只消费投影，不直接读取全量历史，不写回 assessment、聚合或画像。
+
+必须区分三类信息：不可覆盖的逐决策事实、可从事实重建的聚合统计、带窗口与证据的阶段性画像。出现频率、累计 EV 和高严重度但 EV 不可用的偏差分别排名；没有可比较 EV 时不能产生“最贵漏洞”。错误率以可评价决策机会为分母并单独报告覆盖率，用户默认只接收一个当前重点和最多两个观察项。首版继续延期该能力，完整契约见 Coach 专项设计第 15 节。
+
+针对漏洞创建训练牌局、管理练习 Session、评分、复测并改变改善状态属于更后的 M11/A11，不是 Foundation Memory，也不是 M10/A10 画像投影的隐式副作用。Foundation 只为这些后置业务提供相同的 OwnerScope、版本化载荷、生命周期和保留删除机制。
 
 ## 3. 总体架构
 
@@ -604,6 +624,7 @@ Agent Foundation、Player 与 Coach 共享 Supabase 托管的 PostgreSQL 持久�
 `coach_decision_assessments`：
 
 - 每个 Hero 决策一条。
+- 保存 `primaryDeviationCode`、辅助偏差标签、`mistakeTaxonomyVersion`、severity、`severityBasis`、`severityPolicyVersion`、EV 状态和证据引用；Repository 只保存冻结结果，不重新分类。
 - 业务唯一约束为 `UNIQUE (coachReviewId, decisionId)`。
 - `decisionId` 由 `handId + street + authoritativeSequence` 稳定组成。
 - 同街多轮决策具有不同序号。

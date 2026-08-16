@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-08-14（M0–M2、M3.1–M3.7 与 M4.1 实施状态已同步）
+更新时间：2026-08-16（M0–M2、M3.1–M3.7、M4.1 实施状态及 Coach 后置规划已同步）
 
 ## 当前目录与职责
 
@@ -22,10 +22,10 @@
 - `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md`：Agent 大模块总体事实源，定义 Foundation、Runtime、权限、运行生命周期、策略事实源、数据模型与当前/未来边界。
 - `docs/superpowers/specs/2026-08-14-m4-1-agent-foundation-core-protocol-static-registry-design.md`：M4.1 正式事实源；冻结 Foundation 核心协议、Player/Coach 隔离定义、静态 Registry、预算/能力/Context/状态机和专属 Commit Gate 类型，并明确不解除 M3.8 的后续门禁。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
-- `docs/superpowers/specs/2026-07-26-poker-coach-agent-design.md`：已确认的 Coach Agent 唯一详细设计源，约束手动复盘、两阶段信息隔离、确定性工具、策略数据、输出契约和验收。
+- `docs/superpowers/specs/2026-07-26-poker-coach-agent-design.md`：已确认的 Coach Agent 唯一详细设计源，约束手动复盘、两阶段信息隔离、确定性工具、策略抽象、决策分级、教学降噪、长期趋势/画像边界、后置训练闭环和验收。
 - `docs/superpowers/plans/`：开发任务的依赖顺序与验收清单。
-- `docs/superpowers/plans/2026-07-23-poker-practice-development-tasks.md`：项目总计划；M4 实现 Agent Foundation 与 Player Runtime，M8 实现 Coach Runtime，M9 统一收口。
-- `docs/superpowers/plans/2026-07-26-agent-module-development-tasks.md`：Agent 大模块 A0–A9 详细任务、依赖、测试闭环和完成定义。
+- `docs/superpowers/plans/2026-07-23-poker-practice-development-tasks.md`：项目总计划；M4 实现 Agent Foundation 与 Player Runtime，M8 实现 Coach Runtime，M9 统一收口，M10/M11 分别后置长期漏洞记忆与针对性练习复测。
+- `docs/superpowers/plans/2026-07-26-agent-module-development-tasks.md`：Agent 大模块 A0–A9 首版详细任务，以及后置 A10 长期漏洞记忆、A11 针对性练习复测的依赖、测试闭环和完成定义。
 - `docs/superpowers/plans/2026-07-26-six-to-nine-player-code-refactor.md`：记录从 2–6 人改为 6–9 人后的 M0 Contracts 与人物目录返工范围及完成状态。
 - `docs/ARCHITECTURE.md`：M0.1 建立的 workspace 边界、入口点和依赖方向。
 - `apps/web/public/poker/`：唯一的扑克牌静态资源目录，含 52 张标准牌、牌背和两张 Joker；Vite 浏览器路径为 `/poker/<filename>`，不得替换或修改资源内容。

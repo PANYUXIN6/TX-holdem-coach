@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-08-14（M0–M2、M3.1–M3.7 与 M4.1 实施状态已同步）
+更新时间：2026-08-16（M0–M2、M3.1–M3.7、M4.1 实施状态及 Coach 后置规划已同步）
 
 ## Workspace 边界
 
@@ -78,7 +78,10 @@ M2.7 已实现严格审计 Codec、Foundation Repository 与 Runtime Decoder 组
 - Player 与 Coach 只复用 Foundation 和版本化策略事实源；Context、Prompt、记忆、业务 Validator、信息投影和 Commit Gate 严格分离。
 - Player 与 Coach 的模型都没有自主工具调用权；确定性流水线由各自 Runtime 固定编排。
 - Agent 使用的首版扑克规则指纹为 `nlhe-cash-6to9-10-20-v1`，固定对应 6–9 人、10/20 盲注、无前注、无 straddle、无抽水、单牌面一次 runout；项目永久不设计 `ante`/`anteModel`、`rakeModel` 或对应策略分支。M4.5 通过 `HandStartCheckpointV2` 在开手时固化该值，Player 与 Coach 读取目标手牌绑定版本，既有 V1 仅可确定性迁移到该唯一历史规则集。
-- Coach 先由分类器冻结 `assessmentBasis`、`epistemicStatus`、可证明行为偏差、教学假设、严重度、基准支持情况和 EV 状态；referenceOnly/heuristic、受支持的低频混合动作和推测心理不能自动变成客观错误。看不到事后事实的 Analyzer 只解释冻结判断；`HindsightFactProjector` 再从权威完成手冻结牌型比较、实际后续、返还和逐池结算，Hindsight LLM 只负责教学表达。任何 Coach 失败均不得影响牌局状态。
+- Coach 先由分类器冻结 `assessmentBasis`、`epistemicStatus`、可证明行为偏差、教学假设、严重度、基准支持情况和 EV 状态；`DecisionGradeProjector` 再按版本化政策区分最高频、受支持混合动作、低成本偏离、不支持动作、重大 EV 错误与无法评价。`TeachingProjectionPolicy` 只默认展开一个核心决策和最多两个次要决策，不删除完整报告，也不让 LLM 排名。referenceOnly/heuristic、受支持的低频混合动作和推测心理不能自动变成客观错误。看不到事后事实的 Analyzer 只解释冻结判断；`HindsightFactProjector` 再从权威完成手冻结牌型比较、实际后续、返还和逐池结算，Hindsight LLM 只负责教学表达。任何 Coach 失败均不得影响牌局状态。
+- 策略层不在线运行“简化 Solver”，而是查询带 `StrategyAbstractionProfile` 的版本化静态 `StrategyPack`；动作分组、执行频率、下注尺度、来源、覆盖和抽象损失分别保存，没有可追溯 Solver EV 时不能输出精确 EV。
+- 后置的 Coach 长期记忆采用“不可变逐决策 assessment → 版本化错误/牌面 taxonomy → 确定性漏洞聚合 → 日/周/月趋势与有时效画像快照 → 有界只读 Context”链路。发生最频繁、累计 EV 最贵和高严重度但 EV 不可用是三种不同排名；用户默认只看到一个当前重点、最多两个观察项和折叠的改善项。错误率以可评价机会为分母并单独展示 coverage；没有可比较 EV 时不得生成“最贵漏洞”。该能力不使用 RAG，LLM 不直接读写画像，且不属于首版 M8/A7。
+- “漏洞 → 练习 → 复测”是 M11/A11 独立后置模块：它才拥有课程/Spot 目录、训练 Session、评分、复测和改善退出。M8 的自然语言练习建议和 M10 的漏洞呈现都不能冒充已经建立训练闭环。
 - 当前身份仍为固定 `local-user` OwnerScope，服务为只监听回环地址的单个 Hono 进程且 Agent Worker 尚未实现；Supabase Postgres 已经是唯一运行数据库，M2.1–M2.8 的数据库基础、Schema、Repository、恢复与审计持久化已经落地，不存在 SQLite 产品数据库或本地数据库持久卷。未来上线目标是常驻 Hono 服务连接容器外的 Supabase PostgreSQL；公网监听、Host/Origin、TLS 与真实身份必须先独立设计。之后可以替换队列唤醒和独立 Worker，但不得让浏览器或 Agent 绕过 Hono 直连数据库，也不预建 RAG、动态插件、Agent Cron 或 Agent 间协作。
 
 后续计划中的其余服务端落点：

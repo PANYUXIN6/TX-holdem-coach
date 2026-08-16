@@ -1,8 +1,8 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2 与 M3.1–M3.7 已完成，M3.8 按依赖后置，M4–M9 待开发
+- 状态：进行中；M0、M1、M2 与 M3.1–M3.7 已完成，M3.8 按依赖后置，M4–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
-- 最后更新：2026-08-14
+- 最后更新：2026-08-16
 - 本文不包含工期、人数或里程碑时间估算。
 - 上位文档：
   - [产品需求文档](../specs/2026-07-23-poker-practice-prd.md)
@@ -26,6 +26,8 @@
 | M3.1–M3.7 会话服务、HTTP API 与 SSE | 已完成并验证 |
 | M3.8 服务启动恢复协调 | 按依赖后置，等待 M4.2、M4.3、M4.7、M4.8 |
 | M4–M9 | 待开发 |
+| M10 Coach 长期漏洞记忆 | 首版后置，等待 M8 数据质量评估后确认 |
+| M11 针对性练习与复测 | 独立后置，等待 M10 质量评估后确认 |
 
 ## 1. 拆分目标
 
@@ -55,10 +57,12 @@
 | M7 | 前端产品功能 | M3、M4、M5、M6 | 训练首页、预设人物选择、组桌、移动牌桌、全屏手牌流程、历史、统计、设置和调试 |
 | M8 | Coach Runtime | M2、M4 的 Foundation、M5、M6、M7.7 | 确定性证据与分类、两阶段教学分析、结构化报告和手机端复盘 |
 | M9 | 全链路验收与收口 | M1–M8 | 自动化后端验收、人工前端验收和非功能检查 |
+| M10（后置） | Coach 长期漏洞记忆 | M8；M9 后单独确认 | 漏洞聚合、日/周/月趋势、教学重点投影和用户控制 |
+| M11（后置） | 针对性练习与复测 | M5、M8、M10；M10 后单独确认 | 漏洞到练习、训练 Session、评分、复测和改善退出 |
 
 推荐实现主线：
 
-`M0 → M1 → M2 → M3 → M4/M5 → M6/M7 → M8 → M9`
+`M0 → M1 → M2 → M3 → M4/M5 → M6/M7 → M8 → M9 → M10（后置）→ M11（后置）`
 
 M6 可以在后端开发期间基于共享契约和固定夹具先行，但不得在前端复制一套扑克规则。
 
@@ -1348,7 +1352,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- 在 `packages/contracts` 定义 Coach 请求状态、`CoachReview`、逐决策四层分析、基准匹配状态和 `rangeChartSpec` 的严格 Zod Schema。
+- 在 `packages/contracts` 定义 Coach 请求状态、`CoachReview`、逐决策四层分析、`decisionGrade`、`teachingProjection`、基准匹配状态和 `rangeChartSpec` 的严格 Zod Schema。
 - 动作频率使用 `0..1` 的 `actionFrequency`；下注尺度使用独立的 `betSize` 结构，禁止 `cbet 75%` 等模糊字符串。
 - 服务端私有定义 `HandReviewCase`、决策分析输入和事后解释输入；私有审计事实不进入共享协议。
 - `PlayerDecisionPacket`、玩家输出 Schema、Coach 决策上下文、Coach 事后上下文和 Coach 输出 Schema 互不转换。
@@ -1397,6 +1401,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 首版覆盖 6–9 人 100BB 的明确翻前节点，以及覆盖清单内的少量单挑翻牌持续下注场景。
 - `lookup_strategy_baseline` 返回 `exact | referenceOnly | unsupported`，不实现 `SPR → 唯一动作` 转换。
 - 人工模板统一标记为教学策略基准；只有来源可追溯的 Solver 或等价数据可以标记为 GTO。
+- 通过版本化 `StrategyAbstractionProfile` 把复杂下注树投影为 `fold | check | call | smallBet | mediumBet | largeBet | allIn` 等有限候选，并记录来源、覆盖范围、动作分组和抽象损失；运行时只查询静态 `StrategyPack`，不在线运行 Solver。
+- 没有可追溯 Solver EV 的策略包不能输出精确 EV；`actionFrequency` 与 `betSizePotRatio` 在抽象后仍保持独立字段。
 
 后端测试闭环：
 
@@ -1427,16 +1433,22 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 产出：
 
 - `ReviewOrchestrator` 对每个用户决策固定执行 Spot/手牌/当前数学、策略基准、候选结果和对手证据处理。
-- `DecisionAssessmentClassifier` 在任何模型调用前生成并冻结 assessment、`assessmentBasis`、`epistemicStatus`、`observedDeviationTags[]`、`teachingHypotheses[]`、severity、baselineComparison、evLoss、evidenceRefs 和 `factManifest`。
+- `DecisionAssessmentClassifier` 在任何模型调用前生成并冻结 assessment、`assessmentBasis`、`epistemicStatus`、`primaryDeviationCode`、`observedDeviationTags[]`、`teachingHypotheses[]`、severity、`severityBasis`、baselineComparison、evLoss、evidenceRefs 和 `factManifest`。
+- `DecisionGradeProjector` 按版本化政策从冻结的频率支持、匹配等级和可比较 EV 生成 `highestFrequency | supportedAlternative | lowCostDeviation | unsupportedAction | majorEvMistake | unrated`；它是用户展示等级，不是新的漏洞标签。
 - `assessmentBasis` 使用 `ruleInvariant | exactStrategy | referenceStrategy | solverEv | heuristicPolicy | insufficientEvidence`；`epistemicStatus` 使用 `objective | modelBased | heuristic | unrated`。`baselineComparison` 至少包含 `matchStatus`、`actionSupported`、`sizeSupported`、`actualActionFrequency`。
 - 没有 Solver/EV 数据时 `evLoss.status=unavailable` 且值为空；LLM 禁止自行估算 EV。
 - referenceOnly/heuristic 不能单独触发 likelyMistake；受支持的低频混合动作不因频率低判错；没有 Solver EV 或版本化阈值时 severity unavailable。
+- 只有 `exactStrategy` 可以使用“GTO 最高频/GTO 不采用”的文案；零频率不自动等于重大错误，无可比较 EV 时不生成 `majorEvMistake`。
 - `observedDeviationTags` 只记录证据可证明的行为偏差；认知、情绪、动机及 `spr_misread`/`ignore_position` 等解释只能作为明确教学假设或长期画像 TODO。
+- `primaryDeviationCode` 与 `observedDeviationTags` 使用版本化 `DecisionMistakeTaxonomyV1`，限于动作选择、尺度、范围构建、过度弃牌/跟注、错失价值、不受支持诈唬和筹码深度适配等可观察偏差；标签必须引用规则、策略或 EV 证据。每个 decision 最多一个主错误码，辅助标签不得重复归因完整 EV。
+- `severityBasis` 使用 `evLoss | rulePolicy | unavailable`；无可比 EV 时只有版本化规则政策可以给出规则型严重度，否则 severity unavailable。
 - `CoachDecisionAnalyzer` 只接收当时信息、全部确定性派生事实、证据和冻结 assessment，负责解释而不重新计算或分类。
 - `ProcessAnalysisFreezer` 在 Hindsight 前冻结过程分析。
 - `HindsightFactProjector` 从正常完成手的权威事实冻结 `revealedHandRanks[]`、`runoutTransitions[]`、`actualContinuation[]`、`potAwards[]`、`uncalledReturns[]`、`heroNetChips` 和 `showdownComparisonsByPot[] { potIndex, eligibleSeatNumbers[], winningSeatNumbers[], handRankRefs[] }`；每个主池/边池按自己的资格集合比较，禁止生成单一全局赢家关系。
 - `CoachHindsightExplainer` 只接收冻结结果和上述最小事后事实，只能补充事后解释，不自行比较手牌、重算结算或生成无依据因果反事实。
 - `CoachReviewComposer` 确定性合并，`CoachReviewValidator` 校验决策完整性、事实引用、匹配状态和样本边界。
+- `CoachReviewComposer` 确定性生成本手决策优先级摘要：按街道分别统计四种 assessment；仅在 EV 方法可比较时指出本手最大损失决策；只有规则政策认定的高严重度、EV 不可用决策可以单列且不能称为最贵，禁止 LLM 排名。
+- `CoachReviewComposer` 按版本化 `TeachingProjectionPolicy` 默认展开一个核心决策、最多两个次要决策，其余决策压缩但仍可查看；默认只突出一条核心教训和一条自然语言练习建议，LLM 不参与核心决策排序。
 - Coach 通过 Foundation `ModelGateway` 使用独立 Route Policy；只复用底层客户端、超时、错误分类、脱敏和允许降级的基础设施规则。
 - 同厂商内容纠错最多两次，最终失败只影响复盘请求。
 
@@ -1456,10 +1468,11 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - 使用通用 `agent_runs`、`agent_attempts`、`agent_capability_invocations` 保存执行生命周期；增加 `coach_reviews` 与 `coach_decision_assessments` Repository 和级联关系。
 - 每个 Hero 决策保存一条冻结 assessment，业务唯一键为 `(coachReviewId, decisionId)`；`decisionId` 由 `handId + street + authoritativeSequence` 稳定组成。
+- assessment 持久化 `decisionGrade`、`decisionGradePolicyVersion`、`primaryDeviationCode`、辅助标签、`mistakeTaxonomyVersion`、severity、`severityBasis`、`severityPolicyVersion`、EV 状态和证据引用；Repository 不重新分类。
 - `POST /api/hands/:id/coach-reviews` 只接受 `completed` 手牌及幂等 `requestId`，`aborted` 明确拒绝；提供手牌复盘列表与单份报告查询。
 - 生命周期为 `pending | running | completed | failed`。
 - 相同请求返回原结果；重新生成使用新请求和新 `coachReviewId`，旧报告只读。
-- 固化上下文版本、策略数据集版本、指标、证据截止点、结构化报告和脱敏尝试。
+- 固化上下文版本、策略数据集版本、分类器、`DecisionGradePolicy`、`TeachingProjectionPolicy`、指标、证据截止点、结构化报告和脱敏尝试。
 - 检查点只能在 Runtime、Context、Prompt、策略、分类器、Metrics/Evidence Schema 和截止事件版本一致时复用；策略升级后的新标准必须创建新复盘。
 - Coach 不写扑克命令账本、`session_events` 或 SSE `eventSeq`，删除整场时同步删除 Coach 数据。
 
@@ -1478,6 +1491,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - `completed` 手牌详情提供“请求教练复盘”，进行中或 `aborted` 手牌不显示。
 - 使用 TanStack Query 管理复盘列表、状态和报告；Zustand 不保存服务端报告副本。
 - 按街道和决策顺序展示策略基准、局面约束、对手证据与独立事后解释。
+- 默认完整展开核心决策，最多提示两个次要决策，其余决策折叠但可查看；机器 taxonomy 代码不作为用户教学标题。
 - 显示策略来源、版本、假设、`exact | referenceOnly | unsupported` 和样本不足提示。
 - `RangeMatrix` 根据 `rangeChartSpec` 渲染 13×13 矩阵并高亮实际手牌。
 - 失败可重新生成，旧报告可查看；请求不阻塞返回牌桌或开始下一手。
@@ -1498,12 +1512,13 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 验证动作频率与下注尺度端到端保持不同字段。
 - 验证决策分析与事后解释的信息隔离、证据截止点和旧报告可复现。
 - 验证确定性标签与严重度不可被模型改写、无 EV 数据时保持 unavailable、策略版本升级不混用检查点。
+- 验证五级决策评价加 unrated 的条件、教学降噪投影、策略抽象来源和 GTO/教学基准文案边界。
 - 验证供应商降级、纠错、失败、重新生成和删除不会影响扑克状态或玩家 Agent。
 
 完成标准：
 
 - Coach Agent 专项设计第 14 节的全部自动化与人工验收项均有明确验证归属。
-- 决策标签只描述当前决策；不实现长期用户画像、重复错误聚合、实时 Coach、自动复盘、外部 Hand History 或自由理论问答。
+- 决策标签只描述当前决策；自然语言 `practiceSuggestions` 不创建训练任务。不实现长期用户画像、重复错误聚合、漏洞到练习/复测、实时 Coach、自动复盘、外部 Hand History 或自由理论问答。
 
 ## 13. M9：全链路验收与收口
 
@@ -1602,7 +1617,72 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 前端视觉问题不通过增加无意义快照测试来掩盖。
 - 若缺陷属于协议或状态同步，补充对应的最小回归测试。
 
-## 14. 建议的任务领取边界
+## 14. M10：Coach 长期漏洞记忆（首版后置）
+
+M10 不属于 M0–M9 首版完成门禁，不得夹带进 M8。它只消费已经冻结的 `coach_decision_assessments`，不改变牌局、Player 或既有 Coach 报告。
+
+### M10.1 定义聚合维度与牌面 taxonomy
+
+- 复用 M8.5 的 `DecisionMistakeTaxonomyV1`，为跨手牌聚合定义独立上下文维度；语义变化发布新版本，不重写历史 assessment。
+- 街道、位置、人数、底池类型、有效筹码和牌面类别作为独立上下文维度；认知、情绪和动机不进入错误枚举。
+- `BoardTaxonomy` 从版本化原子牌面事实生成稳定 `boardClassId`；主观语义标签必须声明 heuristic 或范围假设。
+
+### M10.2 实现确定性漏洞聚合
+
+- 实现 `LeakAggregationService`，按 Owner、窗口、机会分母和上下文维度聚合发生数、发生率、可比 EV 损失与置信度。
+- 固化 `AssessmentSelectionPolicyVersion`，同一 `decisionId` 的多次复盘至多选取一条兼容 assessment；不使用事后输赢、亮牌或重复 review 增加错误次数。
+- 复用 M8.5 的版本化 `SeverityPolicy` 与 `severityBasis`；无 Solver/估算数据时只有规则政策可以产生严重度，否则保持 `unavailable`。
+- 分别产出累计 EV 最贵、出现最频繁、严重但 EV 不可用三个榜单，不允许 LLM 统计或混称。
+- 累计 EV 只按互斥 `primaryDeviationCode` 归因，辅助标签不得重复累计完整 EV；未来如需拆分归因必须版本化归因政策。
+- 使用版本化 `LeakLifecyclePolicy` 管理 `observation → watch → confirmed → improving → resolved | expired`；一次错误不能直接成为正式长期漏洞。
+- 按用户时区生成日、周、月 `LeakTrendSnapshot`，分别保存 `supportedRate`、`inaccuracyRate`、`mistakeRate`、`majorMistakeRate`、`coverageRate`、分子分母、当前周期状态和置信度。
+- 错误率按可评价决策机会计算，不按总手数计算；可比较时单独生成 `evLossBbPer100ComparableDecisions` 与 `evCoverageRate`，分母为 0 时返回 unavailable；不同策略、分类器、等级政策或评价方法不能静默合并趋势。
+
+### M10.3 实现画像快照与 Coach Context 投影
+
+- 保存带 Schema 版本、`asOf`、时间窗口、适用场景、证据引用和过期策略的 `CoachProfileSnapshot`；逐决策事实保持不可覆盖。
+- 使用独立的漏洞聚合与画像快照表，通过未来 migration 落地，不把派生记忆塞入通用 AgentRun 载荷。
+- `CoachMemoryContextBuilder` 生成条目数和字节数都有上限的只读投影，不引入 RAG、向量数据库或自由文本召回。
+- Coach Prompt 只负责解释和练习建议，禁止写回 taxonomy、聚合、EV、严重度、排名或画像。
+- 由版本化 `TeachingPriorityPolicy` 生成 `TeachingFocusProjection`：`primaryFocus` 最多一个、`watchlist` 最多两个、`improved` 默认折叠；选择依据使用可比较 EV、规则严重度、重复率、置信度和稳定顺序，LLM 不参与排名。
+
+### M10.4 实现用户控制与验收
+
+- 提供 Owner-scoped 查看、删除和重置画像能力；重置清除派生快照并写入 `memoryResetBoundary`，使旧 assessment 不会自动重新进入画像，同时保留原始牌谱和逐手复盘。用户主动设置的级别、平台和教学偏好与行为画像分离。
+- 前端显示统计窗口、样本、置信度和 EV 可用性，明确区分“最贵”“最常见”和“暂时无法定价”。
+- 前端默认只显示一个当前教学重点和最多两个观察项；日/周/月趋势同时显示机会数、可评价覆盖率和当前周期是否完整，不直接展示机器 taxonomy 代码。
+- 验证 taxonomy/策略/EV 方法版本变化、相互矛盾证据、时间衰减、删除/重建、Context 上限和 LLM 越权回写。
+- M10 是否进入正式产品范围必须在 M8 数据质量和 EV 覆盖度可评估后由用户单独确认。
+
+M10 到此只负责“发现、聚合和呈现漏洞”。它不创建训练牌局、不维护练习 Session，也不根据练习结果宣告改善。
+
+## 15. M11：针对性练习与复测（独立后置）
+
+M11 不属于 M0–M9 首版，也不是 M10 的完成条件。只有 M10 的长期漏洞质量、策略覆盖和课程来源经过单独评审后才启动。
+
+### M11.1 定义练习契约与课程目录
+
+- 定义 `PracticePlan`、`PracticeSession`、题目来源、评分口径和复测窗口；只消费 M10 已确认漏洞及版本化课程/Spot 目录。
+- 区分固定题库、真实错误的参数化变体和未来 Solver 支持的动态题目；每种来源保存策略、抽象和评分版本。
+- M8 的自然语言 `practiceSuggestions` 不是训练任务，不能直接进入练习进度。
+
+### M11.2 实现漏洞到练习的确定性选择
+
+- 根据 `primaryFocus`、适用场景、课程先修关系和策略覆盖选择有限练习；LLM 不自由编排题库，也不生成权威答案。
+- 没有受支持练习时明确 unavailable，不使用相似文本或模糊标签硬匹配。
+
+### M11.3 实现训练 Session、评分与复测
+
+- 保存训练机会、决策等级、可比较 EV、完成状态和版本，评分复用 M8 的策略与分级边界。
+- 复测使用独立窗口和最低机会数，区分训练内表现与真实牌局表现；一次练习通过不能直接把长期漏洞改成 resolved。
+
+### M11.4 实现改善退出与验收
+
+- `LeakLifecyclePolicy` 结合真实牌局与复测证据生成 `improving | resolved` 候选，状态由程序规则决定，LLM 只解释。
+- 覆盖题库版本升级、重复题、策略不支持、样本不足、中断恢复和重置长期记忆后的练习隔离。
+- M11 是否进入正式产品范围必须在 M10 数据质量可评估后由用户单独确认。
+
+## 16. 建议的任务领取边界
 
 为减少跨任务冲突，小任务领取时遵循：
 
@@ -1614,8 +1694,9 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 6. M6 可以使用共享 Schema 和固定假数据并行开发，但 M7 最终只接真实 API，不保留第二套 Mock 数据模式。
 7. 任一任务若需要改变已确认的资源边界或产品行为，应先更新对应设计文档，不在实现中静默偏离。
 8. M8 的确定性证据、分类器、两阶段模型和前端渲染保持独立边界；不得把 Coach 作为 Player Runtime 的新模式或一个自由工具循环实现。
+9. M10 只负责长期漏洞与教学重点，M11 才负责训练 Session 和复测；不得用自然语言建议绕过版本化题库与评分边界。
 
-## 15. 开发完成总标准
+## 17. 开发完成总标准
 
 首版开发完成需要同时满足：
 

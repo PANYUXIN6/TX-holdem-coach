@@ -6,6 +6,7 @@ import {
 } from '../foundation/capability-protocol.js'
 import {
   createExecutionBudget,
+  createRuntimeBudgetPolicy,
   type PlayerRuntimeBudgetInput,
   type RuntimeBudgetPolicy,
 } from '../foundation/execution-budget.js'
@@ -75,9 +76,14 @@ const PlayerBudgetInputSchema = z
   )
 
 export const playerRuntimeBudgetPolicyV1: RuntimeBudgetPolicy<'player'> =
-  Object.freeze({
+  createRuntimeBudgetPolicy({
     runtimeType: 'player',
     policyVersion: 1,
+    validationInput: {
+      runtimeType: 'player',
+      attemptTimeoutSeconds: 15,
+      decisionDeadlineSeconds: 45,
+    },
     createSnapshot: (input: PlayerRuntimeBudgetInput) => {
       const parsed = PlayerBudgetInputSchema.parse(input)
       return createExecutionBudget({

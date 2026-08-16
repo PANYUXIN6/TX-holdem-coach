@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { coachRuntimeDefinitionV1 } from '../../src/agents/coach/foundation-definition.js'
 import { createRuntimeRegistry } from '../../src/agents/foundation/runtime-registry.js'
+import { createRuntimeBudgetPolicy } from '../../src/agents/foundation/execution-budget.js'
 import type {
   AnyRuntimeDefinition,
   RuntimeDefinitionMap,
@@ -100,6 +101,38 @@ describe('M4.1 static runtime registry', () => {
           coachRuntimeDefinitionV1,
         ],
         currentVersions: { player: 1, coach: 1 },
+      }),
+    ).toThrow()
+  })
+
+  test('rejects unauthenticated policies and invalid policy snapshots during configuration', () => {
+    expect(() =>
+      createRuntimeRegistry<RuntimeDefinitionMap>({
+        definitions: [
+          {
+            ...playerRuntimeDefinitionV1,
+            budgetPolicy: {
+              runtimeType: 'player',
+              policyVersion: 1,
+              createSnapshot: () => ({}),
+            } as never,
+          },
+          coachRuntimeDefinitionV1,
+        ],
+        currentVersions: { player: 1, coach: 1 },
+      }),
+    ).toThrow()
+
+    expect(() =>
+      createRuntimeBudgetPolicy({
+        runtimeType: 'player',
+        policyVersion: 1,
+        validationInput: {
+          runtimeType: 'player',
+          attemptTimeoutSeconds: 15,
+          decisionDeadlineSeconds: 45,
+        },
+        createSnapshot: () => ({}),
       }),
     ).toThrow()
   })

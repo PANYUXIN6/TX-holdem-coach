@@ -34,3 +34,17 @@ export interface RuntimeCommitAuthority<TRuntime extends RuntimeType> {
   readonly fencingToken: number
   readonly [runtimeCommitAuthorityBrand]: never
 }
+
+const runtimeCommitAuthorities = new WeakSet<object>()
+
+export function isRuntimeCommitAuthority<TRuntime extends RuntimeType>(
+  value: unknown,
+  runtimeType: TRuntime,
+): value is RuntimeCommitAuthority<TRuntime> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    runtimeCommitAuthorities.has(value) &&
+    (value as { readonly runtimeType?: unknown }).runtimeType === runtimeType
+  )
+}

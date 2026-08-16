@@ -122,6 +122,22 @@ const baseForbiddenFieldNames = new Set([
   'reasoning_content',
 ])
 
+const sharedContextSourcePrefixes = Object.freeze(['provider.'] as const)
+
+function isAllowedContextSource(
+  runtimeType: RuntimeType,
+  { source, contentVersion }: ContextSourceVersion,
+): boolean {
+  if (source.id === 'foundation.token-estimator') {
+    return source.version === 1 && contentVersion === 'v1'
+  }
+  return (
+    source.id.startsWith(`${runtimeType}.`) ||
+    source.id.startsWith('foundation.') ||
+    sharedContextSourcePrefixes.some((prefix) => source.id.startsWith(prefix))
+  )
+}
+
 function referencesEqual(
   left: readonly RuntimeComponentReference[],
   right: readonly RuntimeComponentReference[],
@@ -253,6 +269,10 @@ export function prepareContextEnvelope<
         ({ source }) => `${source.id}@${String(source.version)}`,
       ),
     ).size !== envelope.sourceVersions.length ||
+    envelope.sourceVersions.some(
+      (sourceVersion) =>
+        !isAllowedContextSource(envelope.runtimeType, sourceVersion),
+    ) ||
     !envelope.sourceVersions.some(
       ({ source, contentVersion }) =>
         source.id === 'foundation.token-estimator' &&

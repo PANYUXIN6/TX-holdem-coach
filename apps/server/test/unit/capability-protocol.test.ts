@@ -8,6 +8,7 @@ import {
   playerCapabilityDefinitionsV1,
   playerRuntimeDefinitionV1,
 } from '../../src/agents/player/foundation-definition.js'
+import { isRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
 
 describe('M4.1 capability protocol', () => {
   test('authorizes only the exact state-declared, manifested definition', () => {
@@ -96,5 +97,19 @@ describe('M4.1 capability protocol', () => {
         maxCapabilityInvocations: 1,
       }),
     ).toThrow()
+  })
+
+  test('rejects a hand-built Runtime Commit Authority', () => {
+    expect(
+      isRuntimeCommitAuthority(
+        {
+          runtimeType: 'player',
+          runId: '00000000-0000-4000-8000-000000000001',
+          leaseOwner: 'worker-1',
+          fencingToken: 1,
+        },
+        'player',
+      ),
+    ).toBe(false)
   })
 })

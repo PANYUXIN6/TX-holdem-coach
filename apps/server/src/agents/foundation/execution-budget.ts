@@ -61,6 +61,48 @@ export interface RuntimeBudgetPolicy<TRuntime extends RuntimeType> {
   createSnapshot(input: RuntimeBudgetInput<TRuntime>): ExecutionBudget
 }
 
+const runtimeBudgetPolicies = new WeakSet<object>()
+
+export function createRuntimeBudgetPolicy<TRuntime extends RuntimeType>(input: {
+  readonly runtimeType: TRuntime
+  readonly policyVersion: number
+  readonly validationInput: RuntimeBudgetInput<TRuntime>
+  readonly createSnapshot: (input: RuntimeBudgetInput<TRuntime>) => unknown
+}): RuntimeBudgetPolicy<TRuntime> {
+  if (
+    (input.runtimeType !== 'player' && input.runtimeType !== 'coach') ||
+    !Number.isSafeInteger(input.policyVersion) ||
+    input.policyVersion <= 0 ||
+    typeof input.createSnapshot !== 'function'
+  ) {
+    throw new FoundationProtocolError('invalidExecutionBudget')
+  }
+
+  const createValidatedSnapshot = (
+    snapshotInput: RuntimeBudgetInput<TRuntime>,
+  ): ExecutionBudget =>
+    createExecutionBudget(input.createSnapshot(snapshotInput))
+
+  createValidatedSnapshot(input.validationInput)
+  const policy = Object.freeze({
+    runtimeType: input.runtimeType,
+    policyVersion: input.policyVersion,
+    createSnapshot: createValidatedSnapshot,
+  })
+  runtimeBudgetPolicies.add(policy)
+  return policy
+}
+
+export function isRuntimeBudgetPolicy(
+  value: unknown,
+): value is RuntimeBudgetPolicy<RuntimeType> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    runtimeBudgetPolicies.has(value)
+  )
+}
+
 export const ExecutionUsageSchema = z.strictObject({
   attempts: NonnegativeSafeIntegerSchema,
   inputTokens: NonnegativeSafeIntegerSchema,
@@ -71,6 +113,19 @@ export const ExecutionUsageSchema = z.strictObject({
 })
 
 export type ExecutionUsage = Readonly<z.infer<typeof ExecutionUsageSchema>>
+
+const AnticipatedExecutionUsageSchema = ExecutionUsageSchema.omit({
+  attempts: true,
+})
+
+const ExecutionBudgetCheckSchema = z.strictObject({
+  purpose: z.enum(['continue', 'startAttempt']),
+  anticipatedUsage: AnticipatedExecutionUsageSchema,
+})
+
+export type ExecutionBudgetCheck = Readonly<
+  z.infer<typeof ExecutionBudgetCheckSchema>
+>
 
 export type BudgetDecision =
   | { readonly kind: 'allowed'; readonly remainingWallClockMs: number }
@@ -97,7 +152,7 @@ export function createExecutionBudget(input: unknown): ExecutionBudget {
 export function evaluateExecutionBudget(
   budgetInput: unknown,
   usageInput: unknown,
-  purpose: 'continue' | 'startAttempt' = 'continue',
+  checkInput: unknown,
 ): BudgetDecision {
   let budget: ExecutionBudget
   try {
@@ -110,26 +165,55 @@ export function evaluateExecutionBudget(
     throw new FoundationProtocolError('invalidExecutionBudget')
   }
 
+  const check = ExecutionBudgetCheckSchema.safeParse(checkInput)
+  if (!check.success) {
+    throw new FoundationProtocolError('invalidExecutionBudget')
+  }
+  const anticipatedAttempts = check.data.purpose === 'startAttempt' ? 1 : 0
+
   const limits = [
-    ['attempts', usage.data.attempts, budget.maxAttempts],
-    ['inputTokens', usage.data.inputTokens, budget.maxInputTokens],
-    ['outputTokens', usage.data.outputTokens, budget.maxOutputTokens],
+    ['attempts', usage.data.attempts, anticipatedAttempts, budget.maxAttempts],
+    [
+      'inputTokens',
+      usage.data.inputTokens,
+      check.data.anticipatedUsage.inputTokens,
+      budget.maxInputTokens,
+    ],
+    [
+      'outputTokens',
+      usage.data.outputTokens,
+      check.data.anticipatedUsage.outputTokens,
+      budget.maxOutputTokens,
+    ],
     [
       'capabilityInvocations',
       usage.data.capabilityInvocations,
+      check.data.anticipatedUsage.capabilityInvocations,
       budget.maxCapabilityInvocations,
     ],
-    ['cost', usage.data.costMicrounits, budget.maxCostMicrounits],
-    ['wallClock', usage.data.elapsedMs, budget.maxWallClockMs],
+    [
+      'cost',
+      usage.data.costMicrounits,
+      check.data.anticipatedUsage.costMicrounits,
+      budget.maxCostMicrounits,
+    ],
+    [
+      'wallClock',
+      usage.data.elapsedMs,
+      check.data.anticipatedUsage.elapsedMs,
+      budget.maxWallClockMs,
+    ],
   ] as const
 
-  for (const [reason, consumed, maximum] of limits) {
-    if (consumed >= maximum) return Object.freeze({ kind: 'exhausted', reason })
+  for (const [reason, consumed, anticipated, maximum] of limits) {
+    if (consumed > maximum || anticipated > maximum - consumed) {
+      return Object.freeze({ kind: 'exhausted', reason })
+    }
   }
 
   const remainingWallClockMs = budget.maxWallClockMs - usage.data.elapsedMs
   if (
-    purpose === 'startAttempt' &&
+    check.data.purpose === 'startAttempt' &&
     remainingWallClockMs < budget.minimumAttemptStartRemainingMs
   ) {
     return Object.freeze({

@@ -5,6 +5,7 @@ import {
 } from '../foundation/capability-protocol.js'
 import {
   createExecutionBudget,
+  createRuntimeBudgetPolicy,
   type RuntimeBudgetPolicy,
 } from '../foundation/execution-budget.js'
 import type {
@@ -61,9 +62,10 @@ export const coachCapabilityDefinitionsV1: readonly CapabilityDefinition<'coach'
   )
 
 export const coachRuntimeBudgetPolicyV1: RuntimeBudgetPolicy<'coach'> =
-  Object.freeze({
+  createRuntimeBudgetPolicy({
     runtimeType: 'coach',
     policyVersion: 1,
+    validationInput: { runtimeType: 'coach' },
     createSnapshot: () =>
       createExecutionBudget({
         budgetSchemaVersion: 1,

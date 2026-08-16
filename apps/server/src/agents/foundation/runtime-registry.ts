@@ -12,6 +12,7 @@ import {
   RuntimeResolutionError,
 } from './errors.js'
 import { createRuntimeStateMachineDefinition } from './runtime-state-machine.js'
+import { isRuntimeBudgetPolicy } from './execution-budget.js'
 
 export interface RuntimeRegistry<
   TDefinitions extends RuntimeDefinitionMap = RuntimeDefinitionMap,
@@ -27,6 +28,7 @@ export interface RuntimeRegistry<
 }
 
 function cloneValue<Value>(value: Value): Value {
+  if (isRuntimeBudgetPolicy(value)) return value
   if (Array.isArray(value)) {
     return value.map((entry) => cloneValue(entry)) as Value
   }
@@ -93,6 +95,7 @@ function validateDefinition(definition: AnyRuntimeDefinition): void {
     definition.commitGate.runtimeType !== definition.runtimeType ||
     !definition.commitGate.id.startsWith(`${definition.runtimeType}.commit-`) ||
     definition.capabilityManifest.runtimeType !== definition.runtimeType ||
+    !isRuntimeBudgetPolicy(definition.budgetPolicy) ||
     definition.budgetPolicy.runtimeType !== definition.runtimeType ||
     !RuntimeDefinitionVersionSchema.safeParse(
       definition.budgetPolicy.policyVersion,

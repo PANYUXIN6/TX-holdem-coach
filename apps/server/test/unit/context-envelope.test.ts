@@ -109,6 +109,36 @@ describe('M4.1 context envelope', () => {
     }
   })
 
+  test('rejects cross-Runtime sources and mismatched Foundation source versions', () => {
+    const base = playerEnvelope()
+    for (const sourceVersions of [
+      [
+        ...base.sourceVersions,
+        {
+          source: { id: 'coach.private-evidence', version: 1 },
+          contentVersion: 'v1',
+        },
+      ],
+      [
+        {
+          source: { id: 'foundation.token-estimator', version: 2 },
+          contentVersion: 'v2',
+        },
+      ],
+    ]) {
+      expect(() =>
+        prepareContextEnvelope({
+          definition: playerRuntimeDefinitionV1,
+          envelope: {
+            ...base,
+            sourceVersions,
+          },
+          budget: playerBudget,
+        }),
+      ).toThrow()
+    }
+  })
+
   test('rejects non-JSON, sensitive and over-budget payloads without truncation', () => {
     const invalidValues = [
       undefined,

@@ -35,7 +35,7 @@ describe('current persisted JSON reader', () => {
   })
 
   test('classifies positive unsupported versions uniformly', () => {
-    expect(read(1, { name: 'legacy' })).toEqual({ kind: 'unknownVersion' })
+    expect(read(1, { name: 'unsupported' })).toEqual({ kind: 'unknownVersion' })
     expect(read(3, null)).toEqual({ kind: 'unknownVersion' })
   })
 

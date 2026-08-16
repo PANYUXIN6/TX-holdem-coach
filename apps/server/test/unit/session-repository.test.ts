@@ -4,7 +4,7 @@ import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import {
   createConfigSnapshotKey,
   PERSONA_CONFIG_PAYLOAD_VERSION,
-  PersonaConfigPayloadV1Schema,
+  PersonaConfigPayloadSchema,
 } from '../../src/personas/config.js'
 import {
   DatabaseOperationError,
@@ -77,12 +77,12 @@ function sessionRow(
   }
 }
 
-function snapshotRows(personaVersion = 1) {
+function snapshotRows() {
   const entries = loadAndValidatePersonaCatalog().list().slice(0, 5)
   return entries.map((entry, index) => {
-    const payload = PersonaConfigPayloadV1Schema.parse({
+    const payload = PersonaConfigPayloadSchema.parse({
       ...entry,
-      personaVersion,
+      personaVersion: 1,
     })
     return {
       hasAgent: true,

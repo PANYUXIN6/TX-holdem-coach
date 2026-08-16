@@ -27,8 +27,8 @@ import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-st
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   currentSnapshotReader,
-  encodeSnapshotV1,
-} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+  encodeSnapshot,
+} from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
 const sessionId = '22222222-2222-4222-8222-222222222222'
@@ -84,7 +84,7 @@ function lockedRow(overrides: Readonly<Record<string, unknown>> = {}) {
 
 function storedRows() {
   const poker = createTestPokerState()
-  const snapshot = encodeSnapshotV1(
+  const snapshot = encodeSnapshot(
     createPrivateTableState({
       stateVersion: 1,
       poker,

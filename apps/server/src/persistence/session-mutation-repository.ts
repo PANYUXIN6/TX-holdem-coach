@@ -9,9 +9,9 @@ import {
   type PrivateEvent,
 } from '../sessions/authoritative-state/private-event.js'
 import {
-  decodeCurrentSnapshotV1,
-  type StoredTableSnapshotV1,
-} from '../sessions/authoritative-state/snapshot-codec-v1.js'
+  decodeCurrentSnapshot,
+  type StoredTableSnapshot,
+} from '../sessions/authoritative-state/snapshot-codec.js'
 import {
   SESSION_DIAGNOSTIC_CODES,
   type SessionDiagnosticCode,
@@ -99,7 +99,7 @@ export interface SessionMutationBatch {
   readonly agentRunState: 'idle' | 'thinking' | 'paused'
   readonly activePlayerRunId: string | null
   readonly activeDecisionRequestId: string | null
-  readonly snapshot: StoredTableSnapshotV1 | null
+  readonly snapshot: StoredTableSnapshot | null
   readonly events: readonly SessionMutationEventInput[]
   readonly mutationAt: string
 }
@@ -297,7 +297,7 @@ function validateSessionMutationFor(
     readonly success: true
     readonly data: z.infer<typeof SessionMutationBatchSchema>
   }
-  readonly snapshot: StoredTableSnapshotV1 | null
+  readonly snapshot: StoredTableSnapshot | null
   readonly events: readonly {
     readonly input: z.infer<typeof SessionMutationBatchSchema>['events'][number]
     readonly privateEvent: StoredPrivateEvent
@@ -315,7 +315,7 @@ function validateSessionMutationFor(
     throw new RepositoryInputValidationError()
   }
 
-  let snapshot: StoredTableSnapshotV1 | null = null
+  let snapshot: StoredTableSnapshot | null = null
   const events: Array<{
     readonly input: z.infer<typeof SessionMutationBatchSchema>['events'][number]
     readonly privateEvent: StoredPrivateEvent
@@ -326,7 +326,7 @@ function validateSessionMutationFor(
     snapshot =
       parsedBatch.data.snapshot === null
         ? null
-        : decodeCurrentSnapshotV1(parsedBatch.data.snapshot)
+        : decodeCurrentSnapshot(parsedBatch.data.snapshot)
     for (const event of parsedBatch.data.events) {
       const publicEvent = SseEventSchema.parse(event.publicEvent)
       events.push({

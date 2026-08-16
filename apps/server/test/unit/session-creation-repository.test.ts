@@ -41,12 +41,12 @@ function preparedRoster() {
   })
 }
 
-function historicalSnapshotRows(personaVersion = 7) {
+function currentSnapshotRows() {
   return loadAndValidatePersonaCatalog()
     .list()
     .slice(0, 5)
     .map((entry, index) => {
-      const payload = { ...entry, personaVersion }
+      const payload = entry
       return {
         hasAgent: true,
         participantId: `88888888-8888-4888-8888-${(index + 1)
@@ -237,8 +237,8 @@ describe('session creation repository', () => {
     expect(boundary.calls).toHaveLength(3)
   })
 
-  test('locks and rereads the exact latest ended roster while preserving old config', async () => {
-    const snapshots = historicalSnapshotRows()
+  test('locks and rereads the exact latest ended roster while preserving current config', async () => {
+    const snapshots = currentSnapshotRows()
     const boundary = createTransaction([
       [{ databaseOwnerId }],
       [],

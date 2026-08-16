@@ -153,7 +153,7 @@ M4.1 的设计和实施均不得被解释为 M3.8 已具备前置能力：
 ### 3.1 当前事实
 
 - `apps/server/src/persistence/owner-scope.ts` 已定义严格 `OwnerScope { ownerId: 'local-user' }`，并通过模块私有 `WeakSet` 生成不可伪造的 `ResolvedOwnerScope`。
-- `apps/server/src/agents/audit/` 已发布 M2.7 的 Run Configuration、Execution Budget 和 Attempt V1 Codec/版本注册表；它们保存审计事实，不实现 RuntimeRegistry 或生命周期。
+- `apps/server/src/agents/audit/` 已发布 M2.7 的 current-only Run Configuration、完整 Execution Budget 和 Attempt Codec；它们保存审计事实，不实现 RuntimeRegistry 或生命周期，也不保留 legacy 注册表。
 - `apps/server/src/persistence/agent-foundation-audit-repository.ts` 只能创建固定 `queued` 初始审计行并保存调用方已决定的事实；它明确不拥有生命周期、租约、fencing、Worker、恢复或 Commit Gate。
 - `app_private.agent_runs` 已有 `player|coach` runtime、生命周期、版本、预算、租约/fencing 和 Player 有效决策点部分唯一约束，但当前没有生产 Runtime writer。
 - `apps/server/src/sessions/authoritative-state/` 已拥有私有会话状态、快照/事件 Codec 与恢复决策，没有 Agent 专属观察或 Coach 复盘投影服务。
@@ -329,7 +329,7 @@ type AnyRuntimeDefinition = RuntimeDefinitionBase<
 >
 ```
 
-`RuntimeComponentReference` 复用 M2.7 `AuditVersionReference` 的规范 ID 与正整数版本规则，不创建同义格式。`runtimeDefinitionVersion` 对该定义的所有字段负责；任何字段、顺序、状态边或预算政策变化都必须发布新版本。
+`RuntimeComponentReference` 复用 M2.7 `AuditVersionReference` 的规范 ID 与正整数版本规则，不创建同义格式。`runtimeDefinitionVersion` 对该定义的所有字段负责。首发前字段、顺序、状态边或预算政策变化直接覆盖唯一当前定义并重建开发数据；首发冻结后，任何审计语义变化才发布新版本。
 
 ### 5.2 Registry API
 
@@ -357,8 +357,7 @@ interface RuntimeRegistry<
 function createRuntimeRegistry<
   TDefinitions extends RuntimeDefinitionMap,
 >(input: {
-  readonly definitions: readonly AnyRuntimeDefinition[]
-  readonly currentVersions: Readonly<Record<RuntimeType, number>>
+  readonly definitions: TDefinitions
 }): RuntimeRegistry<TDefinitions>
 ```
 
@@ -368,15 +367,15 @@ function createRuntimeRegistry<
 productionRuntimeRegistry
 ```
 
-Foundation 的工厂只认识 `RuntimeType`、通用结构和调用方提供的类型映射，不导入 Player/Coach 模块。`agents/production-runtime-registry.ts` 显式导入 `playerRuntimeDefinitionV1`、`coachRuntimeDefinitionV1` 和 Foundation 工厂，由代码内静态数组一次构造生产 Registry。返回接口没有 `register`、`setCurrent`、`replace`、`delete` 或原始 `Map` 暴露。
+Foundation 的工厂只认识 `RuntimeType`、通用结构和调用方提供的类型映射，不导入 Player/Coach 模块。`agents/production-runtime-registry.ts` 显式导入 `playerRuntimeDefinition`、`coachRuntimeDefinition` 和 Foundation 工厂，由代码内固定对象一次构造生产 Registry。Registry 每种 Runtime 只保存一个当前定义，不维护多版本集合或 current 指针；返回接口没有 `register`、`setCurrent`、`replace`、`delete` 或原始 `Map` 暴露。
 
 ### 5.3 构造不变量
 
 Registry 构造时一次性验证并复制/深冻结：
 
 1. Runtime 只能是 `player|coach`。
-2. 每个 `(runtimeType, runtimeDefinitionVersion)` 唯一。
-3. 恰有一个 current Player 和一个 current Coach；current 必须引用已注册版本。
+2. 恰有一个 Player 当前定义和一个 Coach 当前定义，且对象键、定义内 `runtimeType` 必须一致。
+3. `runtimeDefinitionVersion` 为正安全整数；首发前只作为持久化身份，不形成内存多版本集合。
 4. 组件引用 ID 规范、版本为正安全整数；同一字段内引用不得重复。
 5. Context kind 非空、规范、唯一且顺序稳定。
 6. Manifest 的 Runtime、Commit Gate Runtime、状态机 Runtime 与定义判别一致。
@@ -389,15 +388,15 @@ Registry 构造时一次性验证并复制/深冻结：
 
 - 新 Run 只使用 `resolveCurrent(runtimeType)`；
 - 已持久 Run、检查点、审计重放和恢复必须使用 `resolveExact(runtimeType, persistedVersion)`；
-- 未知历史版本明确失败，不能自动使用 current、最近版本或数据库中同名 JSON；
+- 持久版本与唯一当前定义版本不相等时明确失败，不能自动使用当前定义或数据库中同名 JSON；
 - Registry 不读取环境变量、数据库或网络；
-- current 版本切换只能通过代码变更、测试和发布完成，不能在进程内热更新。
+- 首发前当前定义只通过代码变更、测试和开发数据重建直接覆盖，不能在进程内热更新；首发后若开始版本演进，再新增明确的历史读取与迁移设计。
 
 ## 6. ExecutionBudget
 
 ### 6.1 快照结构
 
-M4.1 定义运行时领域预算，不直接改变 M2.7 已发布 V1 审计载荷：
+M4.1 定义运行时领域预算；M2.7 审计载荷在首发前直接收敛为同一完整 current 结构：
 
 ```ts
 interface ExecutionBudget {
@@ -441,9 +440,9 @@ interface RuntimeBudgetPolicy<TRuntime extends RuntimeType> {
 - 初始、纠错和降级共享一个 Run 快照，不为每个 Provider 重置预算；
 - Coach 使用独立政策、独立 Owner/系统并发和成本上限，不能消费 Player 保留容量；
 - 首版 Player/Coach 各自的 `maxSystemConcurrentRuns` 至少保证一个独立槽位，但槽位领取和计数由 M4.2 实现；
-- 尚未冻结的 Token、Attempt 和 Coach 成本具体值只能位于代码发布的 Runtime 政策常量，不能来自 Prompt、请求或环境变量。改变这些值发布新的 `policyVersion` 和 `runtimeDefinitionVersion`。
+- 尚未冻结的 Token、Attempt 和 Coach 成本具体值只能位于代码发布的 Runtime 政策常量，不能来自 Prompt、请求或环境变量。首发前改变这些值直接覆盖唯一当前政策并重建开发数据；首发冻结后才递增 `policyVersion` 和 `runtimeDefinitionVersion`。
 
-M4.1 测试使用明确常量证明协议和快照不可变性，不宣称外部调用已启用。M4.2 创建首个生产 Run 前必须决定当前政策常量、把完整快照写入审计载荷，并在其设计中说明 M2.7 Budget V1 是否足够；不足时发布 V2 Codec。不得丢弃并发、单次超时或最小剩余时间字段。
+M4.1 测试使用明确常量证明协议和快照不可变性，不宣称外部调用已启用。M4.2 创建首个生产 Run 前必须决定当前政策常量，并把完整快照直接写入 current 审计载荷。首发前不保留不完整 Budget 或 V1/V2 兼容分支；不得丢弃并发、单次超时或最小剩余时间字段。
 
 ### 6.3 预算消费契约
 
@@ -524,16 +523,16 @@ Commit Gate 没有 `CapabilityDefinition`，也不能出现在 `grants` 中。Fo
 
 任一步不满足均拒绝。存在 Definition 不等于获得授权；Prompt 或模型输出提到能力名不构成调用意图。
 
-### 7.3 首版命名空间
+### 7.3 当前命名空间
 
-Player v1 只允许后续固定状态机调用：
+Player 当前定义只允许后续固定状态机调用：
 
 - `player.read-session-memory@1`
 - `player.compute-decision-metrics@1`
 - `player.project-strategy@1`
 - `player.project-opponent-features@1`
 
-Coach v1 只允许后续 ReviewOrchestrator 调用：
+Coach 当前定义只允许后续 ReviewOrchestrator 调用：
 
 - `coach.compute-decision-metrics@1`
 - `coach.lookup-strategy-baseline@1`
@@ -601,7 +600,7 @@ candidates
 constraints
 ```
 
-Coach context bundle v1 含两个不可互转 kind：
+Coach 当前 context bundle 含两个不可互转 kind：
 
 ```text
 decisionAnalysis:
@@ -689,7 +688,7 @@ interface RuntimeStateMachineDefinition<
 - 同一 `(from,event)` 只能得到一个 `to`；
 - 没有 `toolRequestedByModel`、`delegate`、`messageAgent` 或任意字符串动态状态。
 
-### 9.3 Player v1 状态
+### 9.3 Player 当前状态
 
 ```text
 contextPending
@@ -705,7 +704,7 @@ outputValidation → modelPending   # 仅服务端 repair/route policy 事件
 
 检查点只允许 `contextPending|modelPending|outputValidation|commitPending`。`preprocessing` 和外部请求在途不作为可恢复检查点；具体 Player 进程重启仍由 M4.8 取消旧 Run，而不是由此状态机续跑。
 
-### 9.4 Coach v1 状态
+### 9.4 Coach 当前状态
 
 ```text
 decisionContextPending
@@ -852,9 +851,9 @@ Player 与 Coach 的具体结果类型分别声明，不能把 Player `committed
 
 ## 12. Player 与 Coach 静态定义
 
-### 12.1 PlayerRuntimeDefinition v1
+### 12.1 PlayerRuntimeDefinition 当前定义
 
-Player v1 固定：
+Player 当前定义固定：
 
 - `runtimeType = player`；
 - 单一 `contextKind = decision`；
@@ -866,9 +865,9 @@ Player v1 固定：
 - Player Budget Policy 从既有超时设置和代码发布常量构造快照；
 - Recovery Policy 引用只声明“process restart 不续跑旧 Run”的身份，M4.8 未实现前不可执行。
 
-### 12.2 CoachRuntimeDefinition v1
+### 12.2 CoachRuntimeDefinition 当前定义
 
-Coach v1 固定：
+Coach 当前定义固定：
 
 - `runtimeType = coach`；
 - `contextKinds = decisionAnalysis|hindsight`；
@@ -899,9 +898,6 @@ M4.1 新增内部错误，不携带原始 cause、Zod issue 或载荷：
 ```ts
 type RuntimeRegistryConfigurationFailure =
   | 'invalidDefinition'
-  | 'duplicateRuntimeVersion'
-  | 'missingCurrentRuntime'
-  | 'unknownCurrentVersion'
   | 'crossRuntimeReference'
   | 'invalidStateMachine'
 
@@ -1053,7 +1049,7 @@ M4.1 不修改数据库、Schema、migration、事务或 Repository，不执行 
 | 4 | Runtime 状态机定义与纯转换 | 图不变量、合法/非法转换、检查点 |
 | 5 | ContextEnvelope 构造、规范化、哈希与认证 | 分区、版本、超限、敏感扫描 |
 | 6 | Player/Coach 专属 Gate/Result/Event 端口 | 类型隔离、无生产副作用 |
-| 7 | Player/Coach v1 Definition 与静态 Registry | current/exact、递归冻结、无动态注册 |
+| 7 | Player/Coach 当前 Definition 与单定义静态 Registry | current/exact、递归冻结、无动态注册或多版本集合 |
 | 8 | 依赖与地图同步 | Foundation 零扑克私有/DB/Hono/SDK 导入，门禁状态准确 |
 
 每一步只实现当前失败测试所需的最小生产代码。不得在 M4.1 测试中构造假 Worker、假 ModelGateway 或永远成功 Gate 来扩张范围。
@@ -1066,7 +1062,7 @@ M4.1 不修改数据库、Schema、migration、事务或 Repository，不执行 
 - 持久化 Runtime/版本/Manifest/预算/Route/Output/Validator/Gate/Recovery 身份；
 - 生成不可伪造 `RuntimeCommitAuthority`，但 Gate 仍在事务中复验；
 - 实现 AgentRun 生命周期、Worker、租约/fencing 与独立 Player/Coach 容量；
-- 若 M2.7 Budget V1 无法无损保存本文完整快照，发布 V2 Codec/注册表并保留 V1 严格读取；
+- 直接以本文完整快照覆盖 M2.7 current Budget Codec；首发前不保留不完整旧载荷、V2 Codec 或版本注册表；
 - 不修改 Registry 为动态形式。
 
 ### 17.2 对 M4.3
@@ -1086,7 +1082,7 @@ M4.1 不修改数据库、Schema、migration、事务或 Repository，不执行 
 
 ### 17.4 对 M4.8 与 M3.8
 
-- M4.8 实现 Player Recovery Policy、协调 writer、V3 事件和 `process_restart`；
+- M4.8 实现 Player Recovery Policy、协调 writer、当前 Session 协调事件和 `process_restart`；
 - M4.8 证明并发唯一有效 Run 与旧能力失效；
 - M3.8 只在 M4.2/M4.3/M4.7/M4.8 全部真实完成后组合启动恢复；
 - M4.1 的 Definition/Gate 引用绝不能作为 M3.8 门禁通过证据。

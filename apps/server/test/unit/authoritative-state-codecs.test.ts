@@ -24,9 +24,9 @@ import {
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   PRIVATE_TABLE_STATE_PAYLOAD_VERSION,
-  decodeCurrentSnapshotV1,
-  encodeSnapshotV1,
-} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+  decodeCurrentSnapshot,
+  encodeSnapshot,
+} from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
@@ -143,26 +143,26 @@ describe('current authoritative-state codecs', () => {
 
   test('round-trips the current snapshot row as a deep-frozen value', () => {
     const state = minimalPrivateTableState()
-    const encoded = encodeSnapshotV1(state)
+    const encoded = encodeSnapshot(state)
 
     expect(encoded).toEqual({
       payloadVersion: 1,
       payload: { state },
     })
-    expect(decodeCurrentSnapshotV1(structuredClone(encoded))).toEqual(encoded)
+    expect(decodeCurrentSnapshot(structuredClone(encoded))).toEqual(encoded)
     expect(Object.isFrozen(encoded)).toBe(true)
     expect(Object.isFrozen(encoded.payload)).toBe(true)
     expect(Object.isFrozen(encoded.payload.state.poker.seats)).toBe(true)
   })
 
   test('classifies snapshot row version, decode corruption and encode input separately', () => {
-    const encoded = encodeSnapshotV1(minimalPrivateTableState())
+    const encoded = encodeSnapshot(minimalPrivateTableState())
 
     for (const [input, target] of [
       [{ ...encoded, payloadVersion: 2 }, 'snapshotRowVersion'],
     ] as const) {
       try {
-        decodeCurrentSnapshotV1(input)
+        decodeCurrentSnapshot(input)
         throw new Error('Expected snapshot version rejection.')
       } catch (error) {
         expect(error).toBeInstanceOf(CurrentPayloadVersionError)
@@ -172,18 +172,16 @@ describe('current authoritative-state codecs', () => {
     }
 
     expect(() =>
-      decodeCurrentSnapshotV1({
+      decodeCurrentSnapshot({
         ...encoded,
         payload: { ...encoded.payload, state: {} },
       }),
     ).toThrow(CurrentPayloadValidationError)
-    expect(() => encodeSnapshotV1({})).toThrow(
-      AuthoritativeStateValidationError,
-    )
+    expect(() => encodeSnapshot({})).toThrow(AuthoritativeStateValidationError)
   })
 
   test('classifies malformed snapshot version fields as payload corruption', () => {
-    const encoded = encodeSnapshotV1(minimalPrivateTableState())
+    const encoded = encodeSnapshot(minimalPrivateTableState())
     const malformedInputs = [
       { ...encoded, payloadVersion: '1' },
       { ...encoded, payloadVersion: null },
@@ -193,7 +191,7 @@ describe('current authoritative-state codecs', () => {
     ]
 
     for (const input of malformedInputs) {
-      expect(() => decodeCurrentSnapshotV1(input)).toThrow(
+      expect(() => decodeCurrentSnapshot(input)).toThrow(
         CurrentPayloadValidationError,
       )
     }

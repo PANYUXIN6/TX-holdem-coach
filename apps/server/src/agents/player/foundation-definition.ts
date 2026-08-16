@@ -41,7 +41,7 @@ const playerCapabilityReferences = Object.freeze([
   { id: 'player.project-opponent-features', version: 1 },
 ] as const satisfies readonly RuntimeComponentReference[])
 
-export const playerCapabilityDefinitionsV1: readonly CapabilityDefinition<'player'>[] =
+export const playerCapabilityDefinitions: readonly CapabilityDefinition<'player'>[] =
   Object.freeze(
     playerCapabilityReferences.map((capability) =>
       createCapabilityDefinition({
@@ -75,7 +75,7 @@ const PlayerBudgetInputSchema = z
       decisionDeadlineSeconds >= attemptTimeoutSeconds,
   )
 
-export const playerRuntimeBudgetPolicyV1: RuntimeBudgetPolicy<'player'> =
+export const playerRuntimeBudgetPolicy: RuntimeBudgetPolicy<'player'> =
   createRuntimeBudgetPolicy({
     runtimeType: 'player',
     policyVersion: 1,
@@ -102,7 +102,7 @@ export const playerRuntimeBudgetPolicyV1: RuntimeBudgetPolicy<'player'> =
     },
   })
 
-const playerCapabilityManifestV1 = createCapabilityManifest({
+const playerCapabilityManifest = createCapabilityManifest({
   manifest: {
     runtimeType: 'player',
     manifestVersion: 1,
@@ -124,7 +124,7 @@ const playerActiveStates = [
   'commitPending',
 ] as const
 
-export const playerRuntimeStateMachineV1 = createRuntimeStateMachineDefinition<
+export const playerRuntimeStateMachine = createRuntimeStateMachineDefinition<
   'player',
   PlayerRuntimeState
 >({
@@ -170,7 +170,7 @@ export const playerRuntimeStateMachineV1 = createRuntimeStateMachineDefinition<
   ],
 })
 
-export type PlayerRuntimeDefinitionV1 = RuntimeDefinitionBase<
+export type PlayerRuntimeDefinition = RuntimeDefinitionBase<
   'player',
   'decision',
   PlayerRuntimeState
@@ -184,7 +184,7 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
-export const playerRuntimeDefinitionV1: PlayerRuntimeDefinitionV1 = deepFreeze({
+export const playerRuntimeDefinition: PlayerRuntimeDefinition = deepFreeze({
   runtimeType: 'player',
   runtimeDefinitionVersion: 1,
   contextSchemaVersion: 1,
@@ -194,8 +194,8 @@ export const playerRuntimeDefinitionV1: PlayerRuntimeDefinitionV1 = deepFreeze({
     { id: 'player.prompt.system', version: 1 },
     { id: 'player.prompt.decision', version: 1 },
   ]),
-  capabilityManifest: playerCapabilityManifestV1,
-  budgetPolicy: playerRuntimeBudgetPolicyV1,
+  capabilityManifest: playerCapabilityManifest,
+  budgetPolicy: playerRuntimeBudgetPolicy,
   routePolicy: { id: 'player.route-policy', version: 1 },
   outputSchema: { id: 'player.output.decision', version: 1 },
   validator: { id: 'player.validator.decision', version: 1 },
@@ -204,6 +204,6 @@ export const playerRuntimeDefinitionV1: PlayerRuntimeDefinitionV1 = deepFreeze({
     id: 'player.recovery.process-restart-cancel',
     version: 1,
   },
-  stateMachine: playerRuntimeStateMachineV1,
+  stateMachine: playerRuntimeStateMachine,
   modelToolPolicy: 'none',
 })

@@ -15,9 +15,9 @@ import {
 import {
   COMPLETED_HAND_RESULT_PAYLOAD_VERSION,
   currentCompletedHandResultReader,
-  decodeCurrentCompletedHandResultV1,
-  encodeCompletedHandResultV1,
-} from '../../src/sessions/hand-audit/completed-hand-result-codec-v1.js'
+  decodeCurrentCompletedHandResult,
+  encodeCompletedHandResult,
+} from '../../src/sessions/hand-audit/completed-hand-result-codec.js'
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
 const handId = '10000000-0000-4000-8000-000000000001'
@@ -154,16 +154,16 @@ describe('hand audit codecs', () => {
   test('round-trips a complete M1.9 hand result as an independently versioned deep-frozen value', () => {
     const result = createTestCompletedPokerResult().completedHand
 
-    const encoded = encodeCompletedHandResultV1(result)
+    const encoded = encodeCompletedHandResult(result)
 
     expect(COMPLETED_HAND_RESULT_PAYLOAD_VERSION).toBe(1)
     expect(encoded).toEqual({
       payloadVersion: 1,
       payload: { result },
     })
-    expect(
-      decodeCurrentCompletedHandResultV1(structuredClone(encoded)),
-    ).toEqual(encoded)
+    expect(decodeCurrentCompletedHandResult(structuredClone(encoded))).toEqual(
+      encoded,
+    )
     expect(Object.isFrozen(encoded.payload.result.remainingDeck)).toBe(true)
     expect(Object.isFrozen(encoded.payload.result.summary)).toBe(true)
   })
@@ -193,7 +193,7 @@ describe('hand audit codecs', () => {
       },
     }
 
-    expect(() => encodeCompletedHandResultV1(invalid)).toThrow(
+    expect(() => encodeCompletedHandResult(invalid)).toThrow(
       '手牌审计载荷无效。',
     )
   })
@@ -208,7 +208,7 @@ describe('hand audit codecs', () => {
     )
 
     expect(() =>
-      encodeCompletedHandResultV1({
+      encodeCompletedHandResult({
         ...result,
         seats,
         uncalledBetReturns,
@@ -242,7 +242,7 @@ describe('hand audit codecs', () => {
     )
 
     expect(() =>
-      encodeCompletedHandResultV1({
+      encodeCompletedHandResult({
         ...result,
         seats,
         uncalledBetReturns,
@@ -278,7 +278,7 @@ describe('hand audit codecs', () => {
     )
 
     expect(() =>
-      encodeCompletedHandResultV1({
+      encodeCompletedHandResult({
         ...result,
         pots: duplicatedPots,
         summary: { ...result.summary, pots: duplicatedPots },
@@ -290,7 +290,7 @@ describe('hand audit codecs', () => {
     const result = createTestCompletedPokerResult().completedHand
 
     expect(() =>
-      encodeCompletedHandResultV1({
+      encodeCompletedHandResult({
         ...result,
         remainingDeck: [
           result.remainingDeck[1]!,
@@ -350,7 +350,7 @@ describe('hand audit codecs', () => {
     })
 
     expect(() =>
-      encodeCompletedHandResultV1({
+      encodeCompletedHandResult({
         ...result,
         pots: redistributedPots,
         seats: redistributedSeats,
@@ -364,7 +364,7 @@ describe('hand audit codecs', () => {
   })
 
   test('reads the current completed result and classifies unknown rows', () => {
-    const current = encodeCompletedHandResultV1(
+    const current = encodeCompletedHandResult(
       createTestCompletedPokerResult().completedHand,
     )
 

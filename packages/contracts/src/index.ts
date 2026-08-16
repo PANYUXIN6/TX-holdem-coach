@@ -37,7 +37,7 @@ export const AgentPersonaStyleSchema = z.strictObject({
 })
 export const AgentPersonaSummarySchema = z.strictObject({
   personaId: AgentPersonaIdSchema,
-  personaVersion: z.number().int().positive(),
+  personaVersion: z.literal(1),
   name: z.string().min(1),
   avatarColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   backgroundDescription: z.string().min(1),
@@ -91,7 +91,7 @@ export const CreateSessionRequestSchema = z.strictObject({
 })
 export const PersonaSnapshotFilterSchema = z.strictObject({
   personaId: AgentPersonaIdSchema,
-  personaVersion: z.number().int().positive().optional(),
+  personaVersion: z.literal(1).optional(),
 })
 
 export const CARD_RANKS = Object.freeze([

@@ -5,12 +5,12 @@ import {
   createRuntimeStateMachineDefinition,
   transitionRuntimeState,
 } from '../../src/agents/foundation/runtime-state-machine.js'
-import { coachRuntimeStateMachineV1 } from '../../src/agents/coach/foundation-definition.js'
-import { playerRuntimeStateMachineV1 } from '../../src/agents/player/foundation-definition.js'
+import { coachRuntimeStateMachine } from '../../src/agents/coach/foundation-definition.js'
+import { playerRuntimeStateMachine } from '../../src/agents/player/foundation-definition.js'
 
 describe('M4.1 runtime state machines', () => {
   test('advances the fixed Player and Coach happy paths', () => {
-    let player = playerRuntimeStateMachineV1.initialState
+    let player = playerRuntimeStateMachine.initialState
     for (const event of [
       'contextPrepared',
       'preprocessingCompleted',
@@ -18,15 +18,11 @@ describe('M4.1 runtime state machines', () => {
       'outputValid',
       'commitSucceeded',
     ]) {
-      player = transitionRuntimeState(
-        playerRuntimeStateMachineV1,
-        player,
-        event,
-      )
+      player = transitionRuntimeState(playerRuntimeStateMachine, player, event)
     }
     expect(player).toBe('succeeded')
 
-    let coach = coachRuntimeStateMachineV1.initialState
+    let coach = coachRuntimeStateMachine.initialState
     for (const event of [
       'decisionContextPrepared',
       'evidencePrepared',
@@ -36,7 +32,7 @@ describe('M4.1 runtime state machines', () => {
       'reportValid',
       'commitSucceeded',
     ]) {
-      coach = transitionRuntimeState(coachRuntimeStateMachineV1, coach, event)
+      coach = transitionRuntimeState(coachRuntimeStateMachine, coach, event)
     }
     expect(coach).toBe('succeeded')
   })
@@ -44,30 +40,30 @@ describe('M4.1 runtime state machines', () => {
   test('permits only declared repair and checkpoint states', () => {
     expect(
       transitionRuntimeState(
-        playerRuntimeStateMachineV1,
+        playerRuntimeStateMachine,
         'outputValidation',
         'repairRequested',
       ),
     ).toBe('modelPending')
     expect(() =>
       transitionRuntimeState(
-        playerRuntimeStateMachineV1,
+        playerRuntimeStateMachine,
         'modelPending',
         'toolRequestedByModel',
       ),
     ).toThrow()
     expect(() =>
       transitionRuntimeState(
-        playerRuntimeStateMachineV1,
+        playerRuntimeStateMachine,
         'succeeded',
         'contextPrepared',
       ),
     ).toThrow()
     expect(() =>
-      assertRuntimeCheckpoint(playerRuntimeStateMachineV1, 'preprocessing'),
+      assertRuntimeCheckpoint(playerRuntimeStateMachine, 'preprocessing'),
     ).toThrow()
     expect(() =>
-      assertRuntimeCheckpoint(playerRuntimeStateMachineV1, 'modelPending'),
+      assertRuntimeCheckpoint(playerRuntimeStateMachine, 'modelPending'),
     ).not.toThrow()
     expect(() =>
       assertModelOutputHasNoRuntimeControlFields({

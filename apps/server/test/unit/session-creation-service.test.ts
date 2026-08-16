@@ -484,7 +484,7 @@ describe('session creation service', () => {
       .list()
       .slice(0, 5)
       .map((entry, index) => {
-        const payload = { ...entry, personaVersion: 7 }
+        const payload = entry
         return {
           hasAgent: true,
           participantId: `88888888-8888-4888-8888-${(index + 1)

@@ -4,7 +4,7 @@ import { z } from 'zod'
 export const PERSONA_CONFIG_PAYLOAD_VERSION = 1
 export const MEMORY_PAYLOAD_VERSION = 1
 
-export const PublishedPersonaModelBundleV1Schema = z.strictObject({
+export const PublishedPersonaModelBundleSchema = z.strictObject({
   deepSeek: z.strictObject({
     modelId: z.literal('deepseek-v4-flash'),
     temperature: z.literal(0.2),
@@ -19,11 +19,11 @@ export const PublishedPersonaModelBundleV1Schema = z.strictObject({
   }),
 })
 
-export type PublishedPersonaModelBundleV1 = z.infer<
-  typeof PublishedPersonaModelBundleV1Schema
+export type PublishedPersonaModelBundle = z.infer<
+  typeof PublishedPersonaModelBundleSchema
 >
 
-export const PERSONA_MODEL_BUNDLE_V1_DEFAULTS = {
+export const PERSONA_MODEL_BUNDLE_DEFAULTS = {
   deepSeek: {
     modelId: 'deepseek-v4-flash',
     temperature: 0.2,
@@ -36,9 +36,9 @@ export const PERSONA_MODEL_BUNDLE_V1_DEFAULTS = {
     maxOutputTokens: 256,
     thinkingMode: 'disabled',
   },
-} as const satisfies PublishedPersonaModelBundleV1
+} as const satisfies PublishedPersonaModelBundle
 
-export const PERSONA_CONFIG_V1_PERSONA_IDS = Object.freeze([
+export const PERSONA_CONFIG_PERSONA_IDS = Object.freeze([
   'nit_fish',
   'lag_rec',
   'tag_pro',
@@ -49,10 +49,8 @@ export const PERSONA_CONFIG_V1_PERSONA_IDS = Object.freeze([
   'trap_specialist',
 ] as const)
 
-const PersonaConfigPayloadV1PersonaIdSchema = z.enum(
-  PERSONA_CONFIG_V1_PERSONA_IDS,
-)
-const PersonaConfigPayloadV1StyleSchema = z.strictObject({
+const PersonaConfigPayloadPersonaIdSchema = z.enum(PERSONA_CONFIG_PERSONA_IDS)
+const PersonaConfigPayloadStyleSchema = z.strictObject({
   tightness: z.number().int().min(0).max(100),
   aggression: z.number().int().min(0).max(100),
   bluffTendency: z.number().int().min(0).max(100),
@@ -60,24 +58,22 @@ const PersonaConfigPayloadV1StyleSchema = z.strictObject({
   riskPreference: z.number().int().min(0).max(100),
 })
 
-export const PersonaConfigPayloadV1Schema = z.strictObject({
-  personaId: PersonaConfigPayloadV1PersonaIdSchema,
-  personaVersion: z.number().int().positive(),
+export const PersonaConfigPayloadSchema = z.strictObject({
+  personaId: PersonaConfigPayloadPersonaIdSchema,
+  personaVersion: z.literal(1),
   name: z.string().trim().min(1),
   avatarColor: z.string().regex(/^#[0-9A-F]{6}$/),
   backgroundDescription: z.string().trim().min(1),
   teachingSummary: z.string().trim().min(1),
-  style: PersonaConfigPayloadV1StyleSchema,
+  style: PersonaConfigPayloadStyleSchema,
   strategyDescription: z.string().trim().min(1).max(2000),
-  models: PublishedPersonaModelBundleV1Schema,
+  models: PublishedPersonaModelBundleSchema,
 })
 
-export type PersonaConfigPayloadV1 = z.infer<
-  typeof PersonaConfigPayloadV1Schema
->
+export type PersonaConfigPayload = z.infer<typeof PersonaConfigPayloadSchema>
 
-export const AgentMemoryPayloadV1Schema = z.strictObject({})
-export type AgentMemoryPayloadV1 = z.infer<typeof AgentMemoryPayloadV1Schema>
+export const AgentMemoryPayloadSchema = z.strictObject({})
+export type AgentMemoryPayload = z.infer<typeof AgentMemoryPayloadSchema>
 
 export type JsonValue =
   | null
@@ -146,7 +142,7 @@ export function canonicalJson(value: JsonValue): string {
 
 export function createConfigSnapshotKey(
   configPayloadVersion: number,
-  configPayload: PersonaConfigPayloadV1,
+  configPayload: PersonaConfigPayload,
 ): string {
   const canonicalPayload = canonicalJson({
     configPayload,
@@ -155,12 +151,12 @@ export function createConfigSnapshotKey(
   return createHash('sha256').update(canonicalPayload, 'utf8').digest('hex')
 }
 
-export function createActiveModelConfigurationV1Schema(
+export function createActiveModelConfigurationSchema(
   activeKeys: ReadonlySet<string>,
 ) {
   const allowedKeys = new Set(activeKeys)
 
-  return PublishedPersonaModelBundleV1Schema.superRefine((models, context) => {
+  return PublishedPersonaModelBundleSchema.superRefine((models, context) => {
     if (!allowedKeys.has(canonicalJson(models))) {
       context.addIssue({
         code: 'custom',
@@ -170,18 +166,18 @@ export function createActiveModelConfigurationV1Schema(
   })
 }
 
-const productionActiveModelConfigurationV1Key = canonicalJson(
-  PERSONA_MODEL_BUNDLE_V1_DEFAULTS,
+const productionActiveModelConfigurationKey = canonicalJson(
+  PERSONA_MODEL_BUNDLE_DEFAULTS,
 )
 
-export const ActiveModelConfigurationV1Schema =
-  createActiveModelConfigurationV1Schema(
-    new Set([productionActiveModelConfigurationV1Key]),
+export const ActiveModelConfigurationSchema =
+  createActiveModelConfigurationSchema(
+    new Set([productionActiveModelConfigurationKey]),
   )
 
 export const ActivePersonaCatalogEntrySchema =
-  PersonaConfigPayloadV1Schema.superRefine((entry, context) => {
-    const result = ActiveModelConfigurationV1Schema.safeParse(entry.models)
+  PersonaConfigPayloadSchema.superRefine((entry, context) => {
+    const result = ActiveModelConfigurationSchema.safeParse(entry.models)
     if (!result.success) {
       context.addIssue({
         code: 'custom',

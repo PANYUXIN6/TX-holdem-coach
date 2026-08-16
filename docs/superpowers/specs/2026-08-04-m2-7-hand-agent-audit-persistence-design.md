@@ -8,7 +8,7 @@
 - Agent 架构：[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
 - 扑克事实源：[M1.9 扑克引擎门面与领域结果设计](./2026-07-28-m1-9-poker-engine-domain-results-design.md)
 - 数据库边界：[M2.2 Schema 设计](./2026-07-29-m2-2-schema-design.md)
-- 版本规则来源：[M2.6 多版本识别、迁移与诊断恢复设计](./2026-08-03-m2-6-multiversion-recovery-design.md)
+- 当前读取规则来源：[M2.6 历史设计](./2026-08-03-m2-6-multiversion-recovery-design.md)；首发前已按 current-only 原则瘦身
 
 ## 1. 决策与范围
 
@@ -35,7 +35,7 @@ M2.7 定位为：
 
 | 模块/里程碑 | 职责 |
 | --- | --- |
-| M2.7 | Hand 与已冻结 Foundation 审计载荷的当前 Codec、版本分派、窄 writer、精确聚合 reader、Runtime 审计 Decoder 组合端口、结构性不变量与持久化测试 |
+| M2.7 | Hand 与已冻结 Foundation 审计载荷的当前 Codec、严格 current reader、窄 writer、精确聚合 reader、Runtime 审计 Decoder 组合端口、结构性不变量与持久化测试 |
 | M3 | 组合命令账本、Session 锁、Hand、快照和事件；验证自动买入差异；决定完成或中止何时合法 |
 | Agent Foundation/Runtime | AgentRun 状态转换、租约、fencing、Worker、恢复策略、迟到响应和 Runtime 专属检查点/结果 |
 | Player Runtime | 首个 Player Decision、真实有界记忆和 Validator 业务载荷 writer |
@@ -75,15 +75,13 @@ Hand、Foundation 审计、Player 审计和 Coach 审计分别拥有自己的严
 ```text
 sessions/hand-audit/
 ├── hand-start-checkpoint.ts
-├── hand-start-checkpoint-codec-v1.ts
-├── hand-start-checkpoint-version-registry.ts
-├── completed-hand-result-codec-v1.ts
-└── completed-hand-result-version-registry.ts
+├── hand-start-checkpoint-codec.ts
+└── completed-hand-result-codec.ts
 
 agents/audit/
-├── run-configuration-audit-codec-v1.ts
-├── execution-budget-audit-codec-v1.ts
-├── attempt-audit-codec-v1.ts
+├── run-configuration-audit-codec.ts
+├── execution-budget-audit-codec.ts
+├── attempt-audit-codec.ts
 └── runtime-audit-extension-decoder.ts
 
 persistence/
@@ -102,9 +100,7 @@ persistence/
 ```text
 PrivateTableState + M1.9 Hand facts
               ↓
-        Hand current Codec
-              ↓
-      Hand version registries
+      Hand current Codec/readers
               ↓
       hand-audit-repository
               ↓
@@ -169,9 +165,9 @@ interface HandStartCheckpoint {
 
 首发前已直接在当前 `HandStartCheckpoint` 中加入手牌级 `pokerRuleSetVersion`，行载荷版本从 `1` 起步。首版规则集身份为 `nlhe-cash-6to9-10-20-v1`；开手 writer、Player 观察和 Coach 复盘必须读取同一手牌绑定值，不能使用部署时 current 常量重新解释历史手牌。该调整不需要新增数据库列或 migration。
 
-### 4.3 `CompletedHandResultV1`
+### 4.3 `CompletedHandResult`
 
-V1 直接保存 M1.9 的 `CompletedHandResult`，不得创建第二套结算结果模型。当前 Decoder 优先复用 M1.9 已有严格构造边界，并只验证：
+当前载荷直接保存 M1.9 的 `CompletedHandResult`，不得创建第二套结算结果模型。当前 Decoder 优先复用 M1.9 已有严格构造边界，并只验证：
 
 - 结构和严格字段集合。
 - 参与座位、位置、底牌和评估集合。
@@ -190,13 +186,13 @@ Encoder 或构造器返回的深冻结对象不具备不可伪造性。每次 Re
 
 ### 5.1 版本规则
 
-每种非空 Agent JSONB 都有独立的数据库行 payload version 和 JSON 信封 schema version。禁止共享版本常量、根据其他载荷推断版本、接受开放键对象或建立通用 Agent 载荷注册表。
+每种非空 Agent JSONB 都有独立的数据库行 payload version，JSON 内不重复保存信封版本。禁止共享版本常量、根据其他载荷推断版本、接受开放键对象或建立通用 Agent 载荷注册表。
 
 配置引用 ID 使用 `CanonicalAuditReferenceId`：长度为 `1..128`、已经 trim、只含小写 ASCII 字母、数字和 `._:/@-`，首尾必须为字母或数字。版本使用正安全整数。引用只用于审计，M2.7 回读时不加载、注册或执行相应 Runtime、Prompt、能力、路由、策略或数据实现。
 
 结构化列中的稳定码使用 `StableAuditCode`：长度为 `1..64`，满足 `^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`，不得保存人类说明、供应商原始错误或任意上下文。M2.7 冻结该语法和空值矩阵，不替尚未实现的 Runtime 发明封闭业务枚举；每个生产者发布自己的版本化码集合，已发布码不得改义或重命名。严格白名单要求 JSON 对象字段与联合分支封闭，并不把审计引用或稳定码误解为 M2.7 可执行的 Runtime 注册项。
 
-### 5.2 `RunConfigurationAuditV1`
+### 5.2 `RunConfigurationAudit`
 
 该严格对象只保存以下稳定引用：
 
@@ -209,7 +205,7 @@ Encoder 或构造器返回的深冻结对象不具备不可伪造性。每次 Re
 
 它不保存 Prompt 原文、API Key、供应商认证、实现配置、动态插件、任意扩展字段或可执行代码。Runtime 类型和 Definition 版本必须与 `agent_runs` 结构化列镜像。
 
-### 5.3 `ExecutionBudgetAuditV1`
+### 5.3 `ExecutionBudgetAudit`
 
 该严格对象保存：
 
@@ -219,14 +215,19 @@ Encoder 或构造器返回的深冻结对象不具备不可伪造性。每次 Re
 - 最大墙钟时间。
 - 最大能力调用数。
 - 最大成本微单位。
+- Owner 最大并发 Run 数。
+- 系统最大并发 Run 数。
+- 启动 Attempt 所需最小剩余窗口。
+- 单次 Attempt 超时。
+- `budgetSchemaVersion` 业务身份。
 
-每个上限按语义验证为正或非负安全整数。Run 的实际 `deadlineAt` 使用结构化列，不在预算载荷复制第二份时间。
+每个上限按 M4.1 `ExecutionBudget` 的同一构造边界验证为正或非负安全整数，并验证 Attempt 超时不超过总墙钟、最小启动窗口不超过 Attempt 超时、Owner 并发不超过系统并发。Run 的实际 `deadlineAt` 使用结构化列，不在预算载荷复制第二份时间。
 
-### 5.4 `AttemptAuditV1`
+### 5.4 `AttemptAudit`
 
 请求/响应哈希的输入是“规范化的脱敏投影”：Provider Adapter 先移除 `reasoning_content`、隐藏推理、认证信息和未获准字段，再计算 SHA-256。M2.7 API 只接收该边界产出的哈希，不接收原始请求/响应对象，也不自行投影或计算哈希；Repository 写入时只能重新验证它是 64 位小写十六进制 SHA-256，不能从摘要反推出其来源。禁止直接基于原始对象计算替代指纹是 Provider Adapter 的生产契约，须由其类型化输出和测试证明，不能声称由 M2.7 Repository 单独证明。
 
-Attempt V1 由行生命周期与载荷共同判别：
+Attempt 当前载荷由行生命周期与载荷共同判别：
 
 | 生命周期 | 结构规则 |
 | --- | --- |
@@ -511,7 +512,7 @@ Repository 不允许调用方自由指定序号：
 - Coach Review 四类载荷。
 - Coach Assessment。
 
-当前空 bundle 没有 Runtime 生产 Decoder；非空 Runtime 载荷统一按 6.3 的确定顺序抛出对应 `UnknownPayloadVersionError`。不得忽略、返回原始 JSON 或降级为开放 `unknown`。Foundation 自有 Run Config、Budget 和 Attempt 仍使用各自不可变生产注册表，不经过 Runtime 扩展端口。
+当前空 bundle 没有 Runtime 生产 Decoder；非空 Runtime 载荷统一按 6.3 的确定顺序抛出对应 `UnknownPayloadVersionError`。不得忽略、返回原始 JSON 或降级为开放 `unknown`。Foundation 自有 Run Config、Budget 和 Attempt 使用各自不可变 current reader，不经过 Runtime 扩展端口。
 
 ### 6.6 实际镜像范围
 
@@ -561,7 +562,7 @@ Agent Attempt 使用跨事务两阶段协议：
 
 ### 8.1 Hand
 
-Hand 使用 Owner + Session + Hand ID 的单行精确读取，并按状态严格解析空值矩阵及当前/历史载荷版本。
+Hand 使用 Owner + Session + Hand ID 的单行精确读取，并按状态严格解析空值矩阵及当前行载荷版本。
 
 ### 8.2 AgentRun
 
@@ -585,15 +586,15 @@ SQL 结果先映射为 Foundation 固定 DTO，再按 6.3 注入的端口解码 
 | 情况 | 稳定结果 |
 | --- | --- |
 | Owner-scoped 资源不存在 | `ResourceNotFoundError` |
-| 版本字段合法但没有生产注册项 | `UnknownPayloadVersionError` |
-| 已注册版本载荷损坏 | `PersistenceDataCorruptionError` |
+| 版本字段是正整数但不是当前行版本 | `UnknownPayloadVersionError` |
+| 当前行版本载荷损坏 | `PersistenceDataCorruptionError` |
 | Hand/Attempt 当前结构不允许目标写入 | 专用结构转换错误 |
 | 输入、时间、哈希、版本引用或序号非法 | `RepositoryInputValidationError` |
 | PostgreSQL 异常 | 脱敏 `DatabaseOperationError` |
 
 恢复原则：
 
-- 历史 Decoder/迁移器只产生内存中的当前领域对象，不自动回写数据库。
+- current reader 不迁移、不默认补齐，也不自动回写数据库。
 - 不从事件、关系表或 Agent 子记录重建 Hand 结果。
 - 不对损坏数据执行尽力读取。
 - Repository 不重试 SQL；调用方决定是否重试完整事务。
@@ -643,19 +644,19 @@ M3 已确认 active + inHand + paused
 关闭原连接
   → 建立新数据库连接与调用方事务
   → Owner-scoped 精确聚合读取
-  → 版本分派与严格 Decoder
+  → current reader 与严格 Decoder
   → 深冻结 HandAudit 或 AgentRunAudit
 ```
 
-该流程不领取 Run、不续跑 Attempt、不恢复租约、不增加 fencing、不创建替代 Run、不调用模型，也不重写旧版本载荷。
+该流程不领取 Run、不续跑 Attempt、不恢复租约、不增加 fencing、不创建替代 Run、不调用模型，也不重写已持久化载荷。
 
 ## 11. 测试闭环
 
-### 11.1 当前 Codec 与版本注册表
+### 11.1 当前 Codec
 
 - 检查点允许自动买入造成的筹码差异，但要求参与座位集合与手牌序号关系正确；玩家 ID 和用户标记从检查点状态与完成结果镜像。
 - “无自动买入时筹码必须相等”明确由 M3 测试，不在 M2.7 复制命令事实。
-- Hand 两类当前 round-trip、深冻结、独立版本、未知版本、损坏载荷和测试注入式旧版迁移。
+- Hand 两类 current round-trip、深冻结、独立行载荷身份、未知版本和损坏载荷。
 - 完成结果的 52 张牌全集、座位集合、摘要镜像和精确金额算术。
 - 构造结构与算术自洽的夹具，证明 Decoder 不调用牌型或结算算法重新判定胜者、边池或派奖。
 - Run Config、Budget 的严格字段、规范 ID、唯一有序引用和正安全整数版本。
@@ -715,7 +716,7 @@ M2.7 当前没有 Decision、Review、Assessment 或真实 Memory writer，因�
 
 正式 seam 只有：
 
-- Hand/Agent 当前 Codec 与版本注册表公开接口。
+- Hand/Agent 当前 Codec 与 current reader 公开接口。
 - Foundation 所有的 Runtime 审计 Decoder 端口、泛型 `AgentRunAudit` 与 Repository 构造接口。
 - Hand Repository 公开写入与读取接口。
 - Foundation 审计 Repository 公开写入与聚合读取接口。
@@ -769,21 +770,21 @@ git diff --check
 - 不重新计算牌型、胜者、边池划分或派奖结果。
 - 不从事件或关系表重建完成手结果。
 - 不提供列表、分页、统计、公开审计投影或调试 API。
-- 不自动改写、修复或升级已存储的旧载荷。
+- 不自动改写或修复已存储载荷。
 - 不新增数据库迁移。
 
 ## 14. 完成定义
 
-- Hand 检查点与完成结果分别具有独立行版本、信封版本、严格当前 Codec 和不可变生产注册表。
+- Hand 检查点与完成结果分别具有独立行载荷身份、严格当前 Codec 和不可变 current reader。
 - 检查点同时保存开手命令前状态与 `StartedHandFacts`，可以表达同命令自动买入并支持 M3 中止回退。
 - 完成结果无损保存 M1.9 全部牌张、burn、底牌、公共牌、起止筹码和结算事实，且持久化层不重算扑克结果。
 - Hand Repository 只消费调用方事务，结构性闭合创建、完成、中止和精确回读。
-- AgentRun 初始 writer 只创建固定 queued 状态，Run Config、Budget 和 Attempt V1 均为严格白名单载荷。
+- AgentRun 初始 writer 只创建固定 queued 状态，Run Config、完整 Budget 和 Attempt 均为严格白名单 current 载荷。
 - Attempt 使用可持久化的 started/terminal 两阶段协议；Invocation 只写一次完整终态结构化事实。
 - Attempt/Invocation 分别在 PostgreSQL `integer` 范围内连续分配，父 Run 行锁与数据库约束保证并发正确性。
 - `HandAudit` 与 `AgentRunAudit` 返回完整父事实；Agent 判别只来自数据库 Runtime 行，合法缺省与损坏子记录严格区分。
 - Foundation 发布固定、不可变的 Player/Coach Runtime 审计 Decoder bundle 和泛型 `AgentRunAudit` 判别联合；当前空 bundle 保持未知版本拒绝，未来 Runtime 可在不修改 Foundation 源码或导出的前提下接入严格扩展回读。
-- 所有已存在非空载荷都必须经过注册表和严格 Decoder；未发布版本不得被忽略或原样返回。
+- 所有已存在非空载荷都必须经过 current reader 和严格 Decoder；非 current 行版本不得被忽略或原样返回。
 - 关闭原连接后，新连接可以通过公开 Repository API 完整回读所有 M2.7 已发布事实，但不会恢复或继续 Runtime。
 - 禁止字段在修改性 SQL 前被拒绝，合法写入后的全部 M2.7 可写列不包含秘密或隐藏推理哨兵。
 - 单元、Repository 替身和真实 PostgreSQL 测试覆盖版本、Owner scope、事务回滚、锁等待、未提交不可见、并发序号、聚合一致性和持久回读。

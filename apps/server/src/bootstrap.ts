@@ -25,7 +25,7 @@ import { productionSessionMutationRepository } from './persistence/session-mutat
 import { productionSessionRecoveryRepository } from './persistence/session-recovery-repository.js'
 import { insertInProgressHandAudit } from './persistence/hand-audit-repository.js'
 import { createPublicProjectionFactsRepository } from './persistence/public-projection-repository.js'
-import { currentSnapshotReader } from './sessions/authoritative-state/snapshot-codec-v1.js'
+import { currentSnapshotReader } from './sessions/authoritative-state/snapshot-codec.js'
 import { currentPrivateEventReader } from './sessions/authoritative-state/private-event-codec.js'
 import { SECURE_RANDOM_SOURCE } from './poker/random-source.js'
 import { createSessionCreationIdentityGraph } from './sessions/session-creation/session-creation-consistency.js'

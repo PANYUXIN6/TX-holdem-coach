@@ -20,7 +20,7 @@ import {
 } from '../../src/persistence/errors.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { encodeCurrentHandStartCheckpoint } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec.js'
-import { encodeCompletedHandResultV1 } from '../../src/sessions/hand-audit/completed-hand-result-codec-v1.js'
+import { encodeCompletedHandResult } from '../../src/sessions/hand-audit/completed-hand-result-codec.js'
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
 const sessionId = '22222222-2222-4222-8222-222222222222'
@@ -370,7 +370,7 @@ describe('hand audit repository', () => {
         ),
       },
     })
-    const completed = encodeCompletedHandResultV1(
+    const completed = encodeCompletedHandResult(
       createTestCompletedPokerResult().completedHand,
     )
     const transaction = createTransactionMock([

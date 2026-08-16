@@ -27,7 +27,7 @@ import {
 import type { SessionCreationRepository } from '../../persistence/session-creation-repository.js'
 import type { SessionMutationRepository } from '../../persistence/session-mutation-repository.js'
 import { getPrivateEventHandId } from '../authoritative-state/private-event.js'
-import { encodeSnapshotV1 } from '../authoritative-state/snapshot-codec-v1.js'
+import { encodeSnapshot } from '../authoritative-state/snapshot-codec.js'
 import {
   prepareCurrentCatalogRoster,
   prepareLatestEndedRosterPreflight,
@@ -417,7 +417,7 @@ export function createSessionCreationService(input: {
           agentRunState: 'idle' as const,
           activePlayerRunId: null,
           activeDecisionRequestId: null,
-          snapshot: encodeSnapshotV1(plan.finalState),
+          snapshot: encodeSnapshot(plan.finalState),
           events: Object.freeze(
             plan.privateEventDrafts.map((draft, index) => ({
               eventId: plan.identityGraph.eventIds[index] as string,

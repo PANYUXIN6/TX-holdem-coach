@@ -30,10 +30,10 @@ import {
 import { currentPrivateEventReader } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import {
   currentSnapshotReader,
-  decodeCurrentSnapshotV1,
-  encodeSnapshotV1,
-} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
-import { decodeCurrentCompletedHandResultV1 } from '../../src/sessions/hand-audit/completed-hand-result-codec-v1.js'
+  decodeCurrentSnapshot,
+  encodeSnapshot,
+} from '../../src/sessions/authoritative-state/snapshot-codec.js'
+import { decodeCurrentCompletedHandResult } from '../../src/sessions/hand-audit/completed-hand-result-codec.js'
 import { currentHandStartCheckpointReader } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec.js'
 import { createSessionCommandHandlerMap } from '../../src/sessions/command-execution/command-handler-map.js'
 import { createPlayerActionHandlerBinding } from '../../src/sessions/command-execution/player-action-handler.js'
@@ -111,7 +111,7 @@ export async function readPrivateState(
   if (row === undefined || rows.length !== 1) {
     throw new Error('M3.3 缺少唯一权威快照。')
   }
-  return decodeCurrentSnapshotV1(row).payload.state
+  return decodeCurrentSnapshot(row).payload.state
 }
 
 function choosePreparationAction(
@@ -240,7 +240,7 @@ export async function prepareTerminalUserTurn(
         agentRunState: 'idle',
         activePlayerRunId: null,
         activeDecisionRequestId: null,
-        snapshot: encodeSnapshotV1(preparedState),
+        snapshot: encodeSnapshot(preparedState),
         events: eventDrafts.map((event, index) => {
           const eventSeq = firstEventSeq + index
           const eventId = randomUUID()
@@ -447,7 +447,7 @@ async function readPersistenceMirror(
     row.completedResultPayloadVersion === null &&
     row.completedResultPayload === null
       ? null
-      : decodeCurrentCompletedHandResultV1({
+      : decodeCurrentCompletedHandResult({
           payloadVersion: row.completedResultPayloadVersion,
           payload: row.completedResultPayload,
         }).payload.result
@@ -470,7 +470,7 @@ async function readPersistenceMirror(
     completedResultPresent: completedResult !== null,
     completedResult,
     checkpoint: checkpoint.value,
-    snapshot: decodeCurrentSnapshotV1({
+    snapshot: decodeCurrentSnapshot({
       payloadVersion: row.snapshotPayloadVersion,
       payload: row.snapshotPayload,
     }).payload.state,

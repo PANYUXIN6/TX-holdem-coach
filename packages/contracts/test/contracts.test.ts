@@ -802,6 +802,18 @@ describe('共享外部协议', () => {
     expect(
       PersonaSnapshotFilterSchema.safeParse({ personaId: 'tag_pro' }).success,
     ).toBe(true)
+    expect(
+      AgentPersonaSummarySchema.safeParse({
+        ...agentPersonaSummary,
+        personaVersion: 2,
+      }).success,
+    ).toBe(false)
+    expect(
+      PersonaSnapshotFilterSchema.safeParse({
+        personaId: 'tag_pro',
+        personaVersion: 2,
+      }).success,
+    ).toBe(false)
   })
 
   it('只接受五到八个不同人物的创建选择', () => {

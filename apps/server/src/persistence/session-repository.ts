@@ -4,12 +4,9 @@ import {
   createConfigSnapshotKey,
   deepFreeze,
   PERSONA_CONFIG_PAYLOAD_VERSION,
-  PersonaConfigPayloadV1Schema,
+  PersonaConfigPayloadSchema,
 } from '../personas/config.js'
-import type {
-  DeepReadonly,
-  PersonaConfigPayloadV1,
-} from '../personas/config.js'
+import type { DeepReadonly, PersonaConfigPayload } from '../personas/config.js'
 import {
   DatabaseOperationError,
   PersistenceDataCorruptionError,
@@ -291,7 +288,7 @@ export interface SessionAgentSnapshot {
   readonly personaVersion: number
   readonly configSnapshotKey: string
   readonly configPayloadVersion: 1
-  readonly configPayload: DeepReadonly<PersonaConfigPayloadV1>
+  readonly configPayload: DeepReadonly<PersonaConfigPayload>
 }
 
 function parseSessionAgentSnapshot(
@@ -303,9 +300,7 @@ function parseSessionAgentSnapshot(
   if (row.configPayloadVersion !== PERSONA_CONFIG_PAYLOAD_VERSION) {
     throw new UnknownPayloadVersionError('personaConfig')
   }
-  const payloadResult = PersonaConfigPayloadV1Schema.safeParse(
-    row.configPayload,
-  )
+  const payloadResult = PersonaConfigPayloadSchema.safeParse(row.configPayload)
   if (!payloadResult.success) {
     throw new PersistenceDataCorruptionError('invalidPayload')
   }
@@ -316,7 +311,7 @@ function parseSessionAgentSnapshot(
       displayName: z.string().min(1),
       avatarColor: z.string().min(1),
       personaId: z.string().min(1),
-      personaVersion: z.number().int().positive(),
+      personaVersion: z.literal(1),
       configSnapshotKey: z.string().regex(/^[0-9a-f]{64}$/),
     })
     .safeParse({

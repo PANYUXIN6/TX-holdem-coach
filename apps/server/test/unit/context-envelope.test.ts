@@ -4,9 +4,9 @@ import {
   prepareContextEnvelope,
   type ContextEnvelope,
 } from '../../src/agents/foundation/context-envelope.js'
-import { playerRuntimeDefinitionV1 } from '../../src/agents/player/foundation-definition.js'
+import { playerRuntimeDefinition } from '../../src/agents/player/foundation-definition.js'
 
-const playerBudget = playerRuntimeDefinitionV1.budgetPolicy.createSnapshot({
+const playerBudget = playerRuntimeDefinition.budgetPolicy.createSnapshot({
   runtimeType: 'player',
   attemptTimeoutSeconds: 15,
   decisionDeadlineSeconds: 45,
@@ -28,7 +28,7 @@ function playerEnvelope(): ContextEnvelope<'player', 'decision'> {
     runtimeDefinitionVersion: 1,
     contextSchemaVersion: 1,
     contextKind: 'decision',
-    promptModules: playerRuntimeDefinitionV1.promptModules,
+    promptModules: playerRuntimeDefinition.promptModules,
     sourceVersions: [
       {
         source: { id: 'foundation.token-estimator', version: 1 },
@@ -61,7 +61,7 @@ function withFirstPayload(
 describe('M4.1 context envelope', () => {
   test('canonicalizes, hashes, authenticates and recursively freezes exact sections', () => {
     const first = prepareContextEnvelope({
-      definition: playerRuntimeDefinitionV1,
+      definition: playerRuntimeDefinition,
       envelope: playerEnvelope(),
       budget: playerBudget,
     })
@@ -70,7 +70,7 @@ describe('M4.1 context envelope', () => {
       b: 2,
     })
     const second = prepareContextEnvelope({
-      definition: playerRuntimeDefinitionV1,
+      definition: playerRuntimeDefinition,
       envelope: reorderedPayload,
       budget: playerBudget,
     })
@@ -101,7 +101,7 @@ describe('M4.1 context envelope', () => {
     ]) {
       expect(() =>
         prepareContextEnvelope({
-          definition: playerRuntimeDefinitionV1,
+          definition: playerRuntimeDefinition,
           envelope: envelope as ContextEnvelope<'player', 'decision'>,
           budget: playerBudget,
         }),
@@ -128,7 +128,7 @@ describe('M4.1 context envelope', () => {
     ]) {
       expect(() =>
         prepareContextEnvelope({
-          definition: playerRuntimeDefinitionV1,
+          definition: playerRuntimeDefinition,
           envelope: {
             ...base,
             sourceVersions,
@@ -153,7 +153,7 @@ describe('M4.1 context envelope', () => {
       const envelope = withFirstPayload(playerEnvelope(), payload)
       expect(() =>
         prepareContextEnvelope({
-          definition: playerRuntimeDefinitionV1,
+          definition: playerRuntimeDefinition,
           envelope,
           budget: playerBudget,
           forbiddenFieldNames: ['holeCards'],
@@ -164,7 +164,7 @@ describe('M4.1 context envelope', () => {
     const envelope = withFirstPayload(playerEnvelope(), 'x'.repeat(1_000))
     expect(() =>
       prepareContextEnvelope({
-        definition: playerRuntimeDefinitionV1,
+        definition: playerRuntimeDefinition,
         envelope,
         budget: { ...playerBudget, maxInputTokens: 10 },
       }),

@@ -4,8 +4,8 @@ import {
   evaluateExecutionBudget,
   type ExecutionUsage,
 } from '../../src/agents/foundation/execution-budget.js'
-import { coachRuntimeBudgetPolicyV1 } from '../../src/agents/coach/foundation-definition.js'
-import { playerRuntimeBudgetPolicyV1 } from '../../src/agents/player/foundation-definition.js'
+import { coachRuntimeBudgetPolicy } from '../../src/agents/coach/foundation-definition.js'
+import { playerRuntimeBudgetPolicy } from '../../src/agents/player/foundation-definition.js'
 
 const emptyUsage: ExecutionUsage = {
   attempts: 0,
@@ -38,12 +38,12 @@ function budgetCheck(
 
 describe('M4.1 execution budget', () => {
   test('maps strict Player timeouts and keeps Player and Coach snapshots isolated', () => {
-    const player = playerRuntimeBudgetPolicyV1.createSnapshot({
+    const player = playerRuntimeBudgetPolicy.createSnapshot({
       runtimeType: 'player',
       attemptTimeoutSeconds: 15,
       decisionDeadlineSeconds: 45,
     })
-    const coach = coachRuntimeBudgetPolicyV1.createSnapshot({
+    const coach = coachRuntimeBudgetPolicy.createSnapshot({
       runtimeType: 'coach',
     })
 
@@ -60,7 +60,7 @@ describe('M4.1 execution budget', () => {
   })
 
   test('rejects invalid or unbounded sentinel budgets', () => {
-    const valid = playerRuntimeBudgetPolicyV1.createSnapshot({
+    const valid = playerRuntimeBudgetPolicy.createSnapshot({
       runtimeType: 'player',
       attemptTimeoutSeconds: 15,
       decisionDeadlineSeconds: 45,
@@ -80,7 +80,7 @@ describe('M4.1 execution budget', () => {
   })
 
   test('classifies an operation that would exceed each hard limit and the minimum attempt window', () => {
-    const budget = playerRuntimeBudgetPolicyV1.createSnapshot({
+    const budget = playerRuntimeBudgetPolicy.createSnapshot({
       runtimeType: 'player',
       attemptTimeoutSeconds: 15,
       decisionDeadlineSeconds: 45,
@@ -136,7 +136,7 @@ describe('M4.1 execution budget', () => {
   })
 
   test('binds startAttempt to one protocol-owned Attempt increment', () => {
-    const budget = playerRuntimeBudgetPolicyV1.createSnapshot({
+    const budget = playerRuntimeBudgetPolicy.createSnapshot({
       runtimeType: 'player',
       attemptTimeoutSeconds: 15,
       decisionDeadlineSeconds: 45,
@@ -161,7 +161,7 @@ describe('M4.1 execution budget', () => {
   })
 
   test('rejects an Attempt increment disguised as continue', () => {
-    const budget = playerRuntimeBudgetPolicyV1.createSnapshot({
+    const budget = playerRuntimeBudgetPolicy.createSnapshot({
       runtimeType: 'player',
       attemptTimeoutSeconds: 15,
       decisionDeadlineSeconds: 45,
@@ -188,7 +188,7 @@ describe('M4.1 execution budget', () => {
 
   test('allows zero-consumption stages when capability invocations are disabled', () => {
     const budget = createExecutionBudget({
-      ...playerRuntimeBudgetPolicyV1.createSnapshot({
+      ...playerRuntimeBudgetPolicy.createSnapshot({
         runtimeType: 'player',
         attemptTimeoutSeconds: 15,
         decisionDeadlineSeconds: 45,
@@ -210,7 +210,7 @@ describe('M4.1 execution budget', () => {
 
   test('allows zero-cost stages when monetary spend is disabled', () => {
     const budget = createExecutionBudget({
-      ...playerRuntimeBudgetPolicyV1.createSnapshot({
+      ...playerRuntimeBudgetPolicy.createSnapshot({
         runtimeType: 'player',
         attemptTimeoutSeconds: 15,
         decisionDeadlineSeconds: 45,

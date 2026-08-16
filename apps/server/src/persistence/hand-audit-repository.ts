@@ -2,10 +2,10 @@ import type { TransactionSql } from 'postgres'
 import { z } from 'zod'
 import type { CompletedHandResult } from '../poker/hand-result.js'
 import {
-  encodeCompletedHandResultV1,
-  type StoredCompletedHandResultV1,
-} from '../sessions/hand-audit/completed-hand-result-codec-v1.js'
-import { currentCompletedHandResultReader } from '../sessions/hand-audit/completed-hand-result-codec-v1.js'
+  encodeCompletedHandResult,
+  type StoredCompletedHandResult,
+} from '../sessions/hand-audit/completed-hand-result-codec.js'
+import { currentCompletedHandResultReader } from '../sessions/hand-audit/completed-hand-result-codec.js'
 import { currentHandStartCheckpointReader } from '../sessions/hand-audit/hand-start-checkpoint-codec.js'
 import {
   HandAuditPayloadValidationError,
@@ -316,9 +316,9 @@ function decodeCheckpointForWrite(input: unknown): StoredHandStartCheckpoint {
 
 function decodeCompletedResultForWrite(
   input: unknown,
-): StoredCompletedHandResultV1 {
+): StoredCompletedHandResult {
   try {
-    return encodeCompletedHandResultV1(input)
+    return encodeCompletedHandResult(input)
   } catch (error) {
     if (
       error instanceof HandAuditPayloadValidationError ||

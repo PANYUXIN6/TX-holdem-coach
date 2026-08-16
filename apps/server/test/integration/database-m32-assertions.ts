@@ -25,7 +25,7 @@ import {
   type SessionMutationBatch,
   type SessionMutationRepository,
 } from '../../src/persistence/session-mutation-repository.js'
-import { decodeCurrentSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+import { decodeCurrentSnapshot } from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import type { PrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { prepareCurrentCatalogRoster } from '../../src/sessions/roster-preparation.js'
 import {
@@ -235,7 +235,7 @@ export function createM32Service(
           if (row === undefined || rows.length !== 1) {
             throw new Error('M3.2 active Session 缺少唯一权威快照。')
           }
-          const stored = decodeCurrentSnapshotV1({
+          const stored = decodeCurrentSnapshot({
             payloadVersion: row.payloadVersion,
             payload: row.payload,
           })
@@ -616,7 +616,7 @@ async function assertCommittedCreation(
   `
   const snapshotRow = snapshotRows[0]
   if (snapshotRow === undefined) throw new Error('M3.2 缺少最终快照。')
-  const snapshot = decodeCurrentSnapshotV1(snapshotRow).payload.state
+  const snapshot = decodeCurrentSnapshot(snapshotRow).payload.state
   expect(snapshot.stateVersion).toBe(1)
   expect(snapshot.poker.pokerPhase).toBe('inHand')
   expect(snapshot.poker.hand?.handId).toBe(identity.handId)

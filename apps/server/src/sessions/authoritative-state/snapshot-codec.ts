@@ -14,7 +14,7 @@ import {
 
 export const PRIVATE_TABLE_STATE_PAYLOAD_VERSION = 1 as const
 
-export interface StoredTableSnapshotV1 {
+export interface StoredTableSnapshot {
   readonly payloadVersion: typeof PRIVATE_TABLE_STATE_PAYLOAD_VERSION
   readonly payload: {
     readonly state: PrivateTableState
@@ -43,7 +43,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-export function decodeCurrentSnapshotV1(input: unknown): StoredTableSnapshotV1 {
+export function decodeCurrentSnapshot(input: unknown): StoredTableSnapshot {
   if (!isRecord(input)) {
     throw new CurrentPayloadValidationError()
   }
@@ -70,9 +70,9 @@ export function decodeCurrentSnapshotV1(input: unknown): StoredTableSnapshotV1 {
   }
 }
 
-export function encodeSnapshotV1(input: unknown): StoredTableSnapshotV1 {
+export function encodeSnapshot(input: unknown): StoredTableSnapshot {
   const state = createPrivateTableState(input)
-  return decodeCurrentSnapshotV1({
+  return decodeCurrentSnapshot({
     payloadVersion: PRIVATE_TABLE_STATE_PAYLOAD_VERSION,
     payload: { state },
   })
@@ -85,7 +85,7 @@ export const currentSnapshotReader: PersistedJsonReader<PrivateTableState> =
         rowPayloadVersion,
         payload,
         currentRowPayloadVersion: PRIVATE_TABLE_STATE_PAYLOAD_VERSION,
-        decode: (stored) => decodeCurrentSnapshotV1(stored).payload.state,
+        decode: (stored) => decodeCurrentSnapshot(stored).payload.state,
         isPayloadValidationError: (error) =>
           error instanceof CurrentPayloadValidationError,
       })

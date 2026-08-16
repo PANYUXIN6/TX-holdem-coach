@@ -1,21 +1,23 @@
 import {
-  coachRuntimeDefinitionV1,
-  type CoachRuntimeDefinitionV1,
+  coachRuntimeDefinition,
+  type CoachRuntimeDefinition,
 } from './coach/foundation-definition.js'
 import { createRuntimeRegistry } from './foundation/runtime-registry.js'
 import type { RuntimeDefinitionMap } from './foundation/runtime-definition.js'
 import {
-  playerRuntimeDefinitionV1,
-  type PlayerRuntimeDefinitionV1,
+  playerRuntimeDefinition,
+  type PlayerRuntimeDefinition,
 } from './player/foundation-definition.js'
 
 interface ProductionRuntimeDefinitionMap extends RuntimeDefinitionMap {
-  readonly player: PlayerRuntimeDefinitionV1
-  readonly coach: CoachRuntimeDefinitionV1
+  readonly player: PlayerRuntimeDefinition
+  readonly coach: CoachRuntimeDefinition
 }
 
 export const productionRuntimeRegistry =
   createRuntimeRegistry<ProductionRuntimeDefinitionMap>({
-    definitions: [playerRuntimeDefinitionV1, coachRuntimeDefinitionV1],
-    currentVersions: Object.freeze({ player: 1, coach: 1 }),
+    definitions: {
+      player: playerRuntimeDefinition,
+      coach: coachRuntimeDefinition,
+    },
   })

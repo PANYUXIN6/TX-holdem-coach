@@ -9,7 +9,7 @@
 - `docs/superpowers/specs/2026-08-02-m2-4-command-ledger-repository-design.md`：M2.4 命令账本事实源；固定公开命令与私有 `aiAction`、规范摘要、一次性 capability、冲突安全插入后读取、终态矩阵和错误分类。
 - `docs/superpowers/specs/2026-08-03-m2-5-authoritative-state-codecs-atomic-persistence-design.md`：M2.5 历史架构决策；其 Session 锁、批次不变量与事件/快照原子写入仍有效，V1 私有事件与双版本信封部分已由首发前版本收敛取代。
 - `docs/superpowers/specs/2026-08-03-m2-6-multiversion-recovery-design.md`：M2.6 历史设计；完整私有事件审计门、快照与 Hand 关系恢复、唯一可修复的 `currentHandId`、稳定未知版本/损坏分类及显式诊断重试仍有效。因实际数据库无历史载荷，快照/事件复合版本注册和 `legacyDiagnosticState` 已在首发前删除。
-- `docs/superpowers/specs/2026-08-04-m2-7-hand-agent-audit-persistence-design.md`：M2.7 历史设计；Hand/Agent 审计事实、事务边界和 Runtime Decoder 端口仍有效，current-only 注册表与重复 JSON 信封版本已删除；Execution Budget 因 M4.2 规划的 V2 例外保留注册表。
+- `docs/superpowers/specs/2026-08-04-m2-7-hand-agent-audit-persistence-design.md`：M2.7 历史设计；Hand/Agent 审计事实、事务边界和 Runtime Decoder 端口仍有效，所有无历史责任的注册表、迁移器与重复 JSON 信封版本均已删除；Execution Budget 直接使用完整 current 载荷。
 - `docs/superpowers/specs/2026-08-04-m2-8-session-data-deletion-design.md`：M2.8 正式事实源；冻结 ended 单场删除、Owner 级清空、Session 根级联、非终态 Run 失效、Player 三指针成组清理，以及删除/Commit Gate/当前目录创建/历史阵容复用的跨里程碑锁协议。实现不新增迁移，不删除 `owners` 或 `app_settings`，也不冒充 M3/M4/M8 生产编排。
 - `docs/superpowers/specs/2026-08-05-m3-1-session-command-executor-design.md`：M3.1 正式事实源；发布累积当前私有事件，并冻结既有 Session 的恢复前置、账本登记/ended 只读重放、两阶段强类型 Handler、唯一最终版本、关系写入前完整验证、提交后事件交付和每场 Promise 尾队列。M3.1 只有测试 Handler，不包含创建、HTTP/SSE 传输或后续领域规则。
 - `docs/superpowers/specs/2026-08-09-m3-2-session-creation-roster-snapshot-design.md`：M3.2 正式事实源；冻结严格创建协议、Provider 创建能力、一次性身份/首手计划、Owner 线性阶段 capability、当前目录认证准备、最近 ended 锁内精确复验，以及 roster、Hand、当前事件、最终快照的单事务提交。M3.2 自身只定义测试 projector/active reader；生产 binding 与路由已由 M3.6 补齐。
@@ -59,11 +59,11 @@
 - `apps/server/src/sessions/command-execution/`：M3.1 Session 命令编排与 M3.3/M3.4 生产 Handler 落点；包含不可变启用 Handler 映射、两阶段候选/capability、命令级 verifier、投影端口、每场尾队列和单事务执行器。`player-action-handler.ts` 组合 M2.7 完成手审计；`rebuy-handler.ts` 只改变用户资金；`start-next-hand-handler.ts` 组合 AI 自动买入、M1.9 与新 Hand；`end-session-handler.ts` 处理正常结束或暂停中止。`aiAction` 与 `retryAgent` 仍安全拒绝；该目录不含 HTTP/SSE 路由或内存业务状态缓存。
 - `apps/server/src/sessions/session-creation/`：M3.2 创建编排边界；一次生成身份图与首手领域计划，读取固定 Provider 创建能力，在外层事务中组合创建 Repository、M2.7 Hand writer、M2.5 mutation writer 和测试投影端口，并只在 COMMIT 后返回快照与两条 SSE 信封；latest-ended 的通用 Repository 失败在此转换为 `ROSTER_SOURCE_NOT_FOUND|ROSTER_SOURCE_CHANGED|ROSTER_MODEL_INACTIVE` 稳定服务错误。该目录不登记命令账本，也不安装 Hono 路由。
 - `apps/server/src/sessions/authoritative-state/poker-private-event.ts`、`private-event.ts`、`private-event-codec.ts`、`current-private-event-protocol.ts`：Poker 私有事件子集、当前累积私有事件、严格 Codec 和组合期协议对象；中性代码 API 覆盖四种 Poker 事件与五种 Session/Accounting 事件，只读取首发行载荷版本 1，不再保留旧 Private Event reader 或重复 JSON 信封版本。
-- `apps/server/src/sessions/hand-audit/`：M2.7/M4.5 纯 Hand 审计边界；当前 `HandStartCheckpoint` 绑定 `pokerRuleSetVersion` 并只读取首发行载荷版本 1，旧 reader 已删除；`CompletedHandResultV1` 同样保留行载荷版本 1。检查点仍允许同命令自动买入造成起始筹码差异。
-- `apps/server/src/agents/audit/`：M2.7 Foundation 审计纯模块；定义规范引用、Run Config、Execution Budget、Attempt 生命周期联合及固定 `player|coach` Runtime Decoder 端口。current-only 载荷使用统一 reader，只有即将由 M4.2 扩展的 Execution Budget 保留版本注册表。
+- `apps/server/src/sessions/hand-audit/`：M2.7/M4.5 纯 Hand 审计边界；当前 `HandStartCheckpoint` 绑定 `pokerRuleSetVersion` 并只读取首发行载荷版本 1，旧 reader 已删除；`CompletedHandResult` 同样保留行载荷版本 1。检查点仍允许同命令自动买入造成起始筹码差异。
+- `apps/server/src/agents/audit/`：M2.7 Foundation 审计纯模块；定义规范引用、Run Config、完整 Execution Budget、Attempt 生命周期联合及固定 `player|coach` Runtime Decoder 端口。全部持久化载荷使用 current-only reader，不提供 legacy 注册或迁移。
 - `apps/server/src/agents/foundation/`：M4.1 服务器私有纯协议边界；拥有 Runtime Definition/Registry、运行时预算、默认拒绝能力授权、严格 Context 信封、执行状态机、稳定错误和最小事件/Commit Authority 类型，不导入数据库 Schema、Hono、供应商 SDK 或扑克私有状态。
-- `apps/server/src/agents/player/` 与 `apps/server/src/agents/coach/`：M4.1 各自拥有静态 v1 Definition、能力定义、预算政策、状态图和专属 Result/Commit Gate 类型；当前没有模型执行、业务 Validator 或 Gate 实现，两个 Runtime 不共享业务 Context、结果或提交端口。
-- `apps/server/src/agents/production-runtime-registry.ts`：唯一生产组合点；以代码内固定数组一次注册 current Player/Coach v1，不读取环境、数据库或目录，也不暴露动态注册、替换或插件入口。
+- `apps/server/src/agents/player/` 与 `apps/server/src/agents/coach/`：M4.1 各自拥有唯一当前 Definition、能力定义、预算政策、状态图和专属 Result/Commit Gate 类型；当前没有模型执行、业务 Validator 或 Gate 实现，两个 Runtime 不共享业务 Context、结果或提交端口。
+- `apps/server/src/agents/production-runtime-registry.ts`：唯一生产组合点；以代码内固定对象一次组合 Player/Coach 的唯一当前 Definition，不维护多版本集合或 current 指针，不读取环境、数据库或目录，也不暴露动态注册、替换或插件入口。`resolveExact()` 只用于校验持久版本是否等于当前定义版本，为首发后显式设计版本演进保留协议边界。
 - `apps/server/src/sessions/authoritative-state/decision-identity.ts` 与 `agent-authority-ports.ts`：M4.1 权威 Agent 身份协议；前者严格构造 Player 决策身份并按固定 UUIDv5 规则派生 Coach `decisionId`，后者只定义 Owner-scoped Player 观察与 Coach 复盘读取端口，不提供投影实现。
 - `apps/server/src/persistence/command-ledger-repository.ts`：M2.4 命令账本 Repository；负责严格命令准备、UUID 规范化、SHA-256 语义摘要、一次性 prepared capability、绑定登记事务的 acquired capability、Owner-scoped 幂等登记和终态重放，不拥有事务或 Session 锁。
 - `apps/server/src/sessions/roster-preparation.ts`：M3.2 阵容事务前准备边界；当前目录分支返回模块认证的纯 Prepared roster，历史分支只返回来源 ID 与座位的最小 preflight，完整历史配置必须在 Owner/来源锁内重读；该模块不开始事务，也不授予写入资格。
@@ -80,7 +80,7 @@ M3.3 用户行动链固定为“恢复并锁定 Session → 登记命令 → `pl
 
 M2.4 命令链为“事务外 `prepareCommandRegistration` 与 `resolveOwnerScope` → M3.1 恢复并锁定 Session → `registerCommand` → `completeCommand` 或安全的 `failCommand`”。登记先由唯一约束和 `ON CONFLICT DO NOTHING` 决定是否实际插入，未插入时才以新语句读取既有状态；只有实际插入返回 acquired capability。Repository 不推进扑克状态、不分配事件序号、不发布 SSE。
 
-M2.5 数据链为 `PokerTableState / CompletedHandSummary → createPrivateTableState → snapshot-codec-v1` 与 `PokerDomainEventDraft → private-event-codec` 两条纯分支，再由 `lockSessionForMutation → persistSessionMutation` 在调用方事务中验证唯一最终版本、Session/指针/协调镜像、连续事件序号和相同最终公开状态，依次更新 Session、可选 UPSERT 快照、批量插入完整事件。每类 JSON 只在数据库行上保留一个载荷版本，内部对象不重复保存信封版本；M3 在同一外层事务中组合 Ledger、Hand 等关系事实，并只在提交成功后发布事件。
+M2.5 数据链为 `PokerTableState / CompletedHandSummary → createPrivateTableState → snapshot-codec` 与 `PokerDomainEventDraft → private-event-codec` 两条纯分支，再由 `lockSessionForMutation → persistSessionMutation` 在调用方事务中验证唯一最终版本、Session/指针/协调镜像、连续事件序号和相同最终公开状态，依次更新 Session、可选 UPSERT 快照、批量插入完整事件。每类 JSON 只在数据库行上保留一个载荷版本，内部对象不重复保存信封版本；M3 在同一外层事务中组合 Ledger、Hand 等关系事实，并只在提交成功后发布事件。
 
 M2.6 恢复链为 `lockSessionForMutation → 读取单行快照/全部私有事件/inProgress Hand 摘要 → current-only reader → decideSessionRecovery`。统一 reader 把不支持的正整数版本分类为未知版本，把版本格式或载荷校验失败分类为损坏；纯核心按固定首因顺序返回 `ready | repairCurrentHandPointer | readonlyDiagnostic`。适配器只修复 `currentHandId` 或写入稳定诊断码和首次时间；指针修复与诊断重试后必须在同一事务重新锁定，只有活动 `ready` 返回 M2.5 capability。事件不用于重建权威状态，公开 SSE JSON 不进入恢复读取。
 

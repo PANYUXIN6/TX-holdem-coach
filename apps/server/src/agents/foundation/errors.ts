@@ -1,10 +1,5 @@
 export type RuntimeRegistryConfigurationFailure =
-  | 'invalidDefinition'
-  | 'duplicateRuntimeVersion'
-  | 'missingCurrentRuntime'
-  | 'unknownCurrentVersion'
-  | 'crossRuntimeReference'
-  | 'invalidStateMachine'
+  'invalidDefinition' | 'crossRuntimeReference' | 'invalidStateMachine'
 
 export class RuntimeRegistryConfigurationError extends Error {
   public constructor(

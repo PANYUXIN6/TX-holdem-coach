@@ -2,15 +2,15 @@ import type { PersonaCatalog } from '../../src/personas/catalog.js'
 import type { Sql, TransactionSql } from 'postgres'
 import { z } from 'zod'
 import {
-  AgentMemoryPayloadV1Schema,
+  AgentMemoryPayloadSchema,
   canonicalJson,
   createConfigSnapshotKey,
   deepFreeze,
   MEMORY_PAYLOAD_VERSION,
   PERSONA_CONFIG_PAYLOAD_VERSION,
-  PersonaConfigPayloadV1Schema,
-  type AgentMemoryPayloadV1,
-  type PersonaConfigPayloadV1,
+  PersonaConfigPayloadSchema,
+  type AgentMemoryPayload,
+  type PersonaConfigPayload,
 } from '../../src/personas/config.js'
 import {
   ActiveSessionConflictError,
@@ -35,7 +35,7 @@ import {
   type CurrentCatalogRosterIdentityGraph,
   type StableIdentityGraph,
 } from '../../src/sessions/roster-preparation.js'
-import { ActiveModelConfigurationV1Schema } from '../../src/personas/config.js'
+import { ActiveModelConfigurationSchema } from '../../src/personas/config.js'
 
 const POSTGRES_TEXT_OID = 25
 const UuidSchema = z.string().uuid()
@@ -43,10 +43,10 @@ const UuidSchema = z.string().uuid()
 export interface InitialAgentMemoryInput {
   readonly currentRevision: number
   readonly currentPayloadVersion: number
-  readonly currentPayload: AgentMemoryPayloadV1
+  readonly currentPayload: AgentMemoryPayload
   readonly revision: number
   readonly revisionPayloadVersion: number
-  readonly revisionPayload: AgentMemoryPayloadV1
+  readonly revisionPayload: AgentMemoryPayload
 }
 
 export interface SessionRosterAgentInput {
@@ -58,7 +58,7 @@ export interface SessionRosterAgentInput {
   readonly personaVersion: number
   readonly configSnapshotKey: string
   readonly configPayloadVersion: number
-  readonly configPayload: PersonaConfigPayloadV1
+  readonly configPayload: PersonaConfigPayload
   readonly initialMemory: InitialAgentMemoryInput
 }
 
@@ -79,8 +79,8 @@ export const INITIAL_AGENT_MEMORY: InitialAgentMemoryInput = deepFreeze({
 })
 
 function validateInitialMemory(memory: InitialAgentMemoryInput): void {
-  const current = AgentMemoryPayloadV1Schema.safeParse(memory.currentPayload)
-  const revision = AgentMemoryPayloadV1Schema.safeParse(memory.revisionPayload)
+  const current = AgentMemoryPayloadSchema.safeParse(memory.currentPayload)
+  const revision = AgentMemoryPayloadSchema.safeParse(memory.revisionPayload)
   if (
     memory.currentRevision !== 0 ||
     memory.revision !== 0 ||
@@ -128,7 +128,7 @@ function validateRosterInput(input: InsertSessionRosterSnapshotInput): void {
     if (agent.configPayloadVersion !== PERSONA_CONFIG_PAYLOAD_VERSION) {
       throw new UnknownPayloadVersionError('personaConfig')
     }
-    const payload = PersonaConfigPayloadV1Schema.safeParse(agent.configPayload)
+    const payload = PersonaConfigPayloadSchema.safeParse(agent.configPayload)
     if (!payload.success) {
       throw new RepositoryInputValidationError()
     }
@@ -386,7 +386,7 @@ export async function prepareLatestEndedRosterSnapshotForReuse(
   }
   assertRosterSnapshotsUseActiveModels(
     snapshots,
-    ActiveModelConfigurationV1Schema,
+    ActiveModelConfigurationSchema,
   )
   const participantsBySeat = new Map(
     result.data.agentParticipants.map((participant) => [

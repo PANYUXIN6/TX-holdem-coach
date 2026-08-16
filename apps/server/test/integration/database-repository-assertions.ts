@@ -16,7 +16,7 @@ import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { createPokerTableState } from '../../src/poker/state.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import { PERSONA_CATALOG_DEFINITIONS } from '../../src/personas/catalog-definitions.js'
-import { createActiveModelConfigurationV1Schema } from '../../src/personas/config.js'
+import { createActiveModelConfigurationSchema } from '../../src/personas/config.js'
 import {
   ActiveModelConfigurationError,
   ActiveSessionConflictError,
@@ -85,8 +85,8 @@ import {
 } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   currentSnapshotReader,
-  encodeSnapshotV1,
-} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+  encodeSnapshot,
+} from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createSessionCommandHandlerMap } from '../../src/sessions/command-execution/command-handler-map.js'
 import { createSessionCommandExecutor } from '../../src/sessions/command-execution/session-command-executor.js'
 import type { PreparedMutationCapability } from '../../src/sessions/command-execution/command-handler.js'
@@ -185,7 +185,7 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
     expect(() =>
       assertRosterSnapshotsUseActiveModels(
         snapshots,
-        createActiveModelConfigurationV1Schema(new Set()),
+        createActiveModelConfigurationSchema(new Set()),
       ),
     ).toThrow(ActiveModelConfigurationError)
 
@@ -1291,7 +1291,7 @@ function createMutationBatch(
     agentRunState: 'idle',
     activePlayerRunId: null,
     activeDecisionRequestId: null,
-    snapshot: writeSnapshot ? encodeSnapshotV1(privateState) : null,
+    snapshot: writeSnapshot ? encodeSnapshot(privateState) : null,
     events: input.eventIds.map((eventId, index) => {
       const eventSeq = input.nextEventSeq + index
       const publicSnapshot = createMutationPublicSnapshot(
@@ -3479,12 +3479,17 @@ function createM27RunConfiguration(runtime: 'player' | 'coach') {
 
 function createM27ExecutionBudget() {
   return {
+    budgetSchemaVersion: 1 as const,
     maxAttempts: 4,
     maxInputTokens: 20_000,
     maxOutputTokens: 1_000,
     maxWallClockMs: 45_000,
     maxCapabilityInvocations: 4,
     maxCostMicrounits: 2_000,
+    maxOwnerConcurrentRuns: 2,
+    maxSystemConcurrentRuns: 4,
+    minimumAttemptStartRemainingMs: 5_000,
+    attemptTimeoutMs: 15_000,
   }
 }
 
@@ -3575,7 +3580,7 @@ function createM27ThinkingMutationBatch(input: {
     agentRunState: 'thinking',
     activePlayerRunId: input.agentRunId,
     activeDecisionRequestId: input.decisionRequestId,
-    snapshot: encodeSnapshotV1(privateState),
+    snapshot: encodeSnapshot(privateState),
     events: base.events.map((event) => ({
       ...event,
       publicEvent: {
@@ -5593,7 +5598,6 @@ async function insertM28HistoricalEndedSession(
       break
     }
     definition.name = `Historical M2.8 ${index + 1}`
-    definition.personaVersion = 800 + index
   }
   const historicalCatalog = loadAndValidatePersonaCatalog(changedDefinitions)
   const prepared = await sql.begin(async (transaction) => {

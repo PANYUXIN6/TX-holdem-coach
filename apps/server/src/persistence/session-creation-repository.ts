@@ -6,13 +6,13 @@ import {
   isPreparedCurrentCatalogRoster,
 } from '../sessions/roster-preparation.js'
 import {
-  ActiveModelConfigurationV1Schema,
-  AgentMemoryPayloadV1Schema,
+  ActiveModelConfigurationSchema,
+  AgentMemoryPayloadSchema,
   canonicalJson,
   createConfigSnapshotKey,
   MEMORY_PAYLOAD_VERSION,
   PERSONA_CONFIG_PAYLOAD_VERSION,
-  PersonaConfigPayloadV1Schema,
+  PersonaConfigPayloadSchema,
 } from '../personas/config.js'
 import {
   ActiveSessionConflictError,
@@ -129,8 +129,8 @@ interface InsertSessionRosterSnapshotInput {
 function validateInitialMemory(
   memory: SessionRosterAgentInput['initialMemory'],
 ): void {
-  const current = AgentMemoryPayloadV1Schema.safeParse(memory.currentPayload)
-  const revision = AgentMemoryPayloadV1Schema.safeParse(memory.revisionPayload)
+  const current = AgentMemoryPayloadSchema.safeParse(memory.currentPayload)
+  const revision = AgentMemoryPayloadSchema.safeParse(memory.revisionPayload)
   if (
     memory.currentRevision !== 0 ||
     memory.revision !== 0 ||
@@ -178,7 +178,7 @@ function validateRosterInput(input: InsertSessionRosterSnapshotInput): void {
     if (agent.configPayloadVersion !== PERSONA_CONFIG_PAYLOAD_VERSION) {
       throw new UnknownPayloadVersionError('personaConfig')
     }
-    const payload = PersonaConfigPayloadV1Schema.safeParse(agent.configPayload)
+    const payload = PersonaConfigPayloadSchema.safeParse(agent.configPayload)
     if (!payload.success) {
       throw new RepositoryInputValidationError()
     }
@@ -723,7 +723,7 @@ export function createSessionCreationRepository(): SessionCreationRepository {
       )
       assertRosterSnapshotsUseActiveModels(
         snapshots,
-        ActiveModelConfigurationV1Schema,
+        ActiveModelConfigurationSchema,
       )
       if (
         snapshots.length !== normalizedParticipants.length ||

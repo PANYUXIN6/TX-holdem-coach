@@ -29,7 +29,7 @@ import {
   createPrivateTableState,
   createPrivateTableStateContent,
 } from '../authoritative-state/private-table-state.js'
-import { encodeSnapshotV1 } from '../authoritative-state/snapshot-codec-v1.js'
+import { encodeSnapshot } from '../authoritative-state/snapshot-codec.js'
 import { getPrivateEventHandId } from '../authoritative-state/private-event.js'
 import { isCommandMutationConsistent } from './command-event-policy.js'
 import {
@@ -623,7 +623,7 @@ export function createSessionCommandExecutor(input: {
               ...candidate.playerCoordinationAfter,
               snapshot:
                 candidate.stateEffect.kind === 'stateChanged'
-                  ? encodeSnapshotV1(finalState)
+                  ? encodeSnapshot(finalState)
                   : null,
               events: mutationEvents,
               mutationAt: commandAt,

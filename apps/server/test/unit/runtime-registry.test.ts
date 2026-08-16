@@ -1,12 +1,9 @@
 import { describe, expect, test } from 'vitest'
-import { coachRuntimeDefinitionV1 } from '../../src/agents/coach/foundation-definition.js'
+import { coachRuntimeDefinition } from '../../src/agents/coach/foundation-definition.js'
 import { createRuntimeRegistry } from '../../src/agents/foundation/runtime-registry.js'
 import { createRuntimeBudgetPolicy } from '../../src/agents/foundation/execution-budget.js'
-import type {
-  AnyRuntimeDefinition,
-  RuntimeDefinitionMap,
-} from '../../src/agents/foundation/runtime-definition.js'
-import { playerRuntimeDefinitionV1 } from '../../src/agents/player/foundation-definition.js'
+import type { RuntimeDefinitionMap } from '../../src/agents/foundation/runtime-definition.js'
+import { playerRuntimeDefinition } from '../../src/agents/player/foundation-definition.js'
 import { productionRuntimeRegistry } from '../../src/agents/production-runtime-registry.js'
 
 describe('M4.1 static runtime registry', () => {
@@ -37,22 +34,19 @@ describe('M4.1 static runtime registry', () => {
   test('copies and freezes definitions instead of exposing mutable inputs', () => {
     const promptModules = [{ id: 'player.prompt.system', version: 1 }]
     const player = {
-      ...playerRuntimeDefinitionV1,
+      ...playerRuntimeDefinition,
       promptModules,
     }
-    const definitions: AnyRuntimeDefinition[] = [
-      player,
-      coachRuntimeDefinitionV1,
-    ]
-    const currentVersions = { player: 1, coach: 1 }
+    const definitions = { player, coach: coachRuntimeDefinition }
     const registry = createRuntimeRegistry<RuntimeDefinitionMap>({
       definitions,
-      currentVersions,
     })
 
     promptModules[0] = { id: 'player.prompt.changed', version: 1 }
-    definitions.length = 0
-    currentVersions.player = 2
+    definitions.player = {
+      ...player,
+      promptModules: [{ id: 'player.prompt.replaced', version: 1 }],
+    }
     expect(registry.resolveCurrent('player').promptModules).toEqual([
       { id: 'player.prompt.system', version: 1 },
     ])
@@ -62,30 +56,22 @@ describe('M4.1 static runtime registry', () => {
     ).toBe(true)
   })
 
-  test('rejects duplicate versions, missing current versions and cross-runtime grants', () => {
+  test('rejects invalid ownership and cross-runtime grants', () => {
     expect(() =>
       createRuntimeRegistry<RuntimeDefinitionMap>({
-        definitions: [
-          playerRuntimeDefinitionV1,
-          playerRuntimeDefinitionV1,
-          coachRuntimeDefinitionV1,
-        ],
-        currentVersions: { player: 1, coach: 1 },
+        definitions: {
+          player: coachRuntimeDefinition,
+          coach: playerRuntimeDefinition,
+        } as never,
       }),
     ).toThrow()
     expect(() =>
       createRuntimeRegistry<RuntimeDefinitionMap>({
-        definitions: [playerRuntimeDefinitionV1, coachRuntimeDefinitionV1],
-        currentVersions: { player: 2, coach: 1 },
-      }),
-    ).toThrow()
-    expect(() =>
-      createRuntimeRegistry<RuntimeDefinitionMap>({
-        definitions: [
-          {
-            ...playerRuntimeDefinitionV1,
+        definitions: {
+          player: {
+            ...playerRuntimeDefinition,
             capabilityManifest: {
-              ...playerRuntimeDefinitionV1.capabilityManifest,
+              ...playerRuntimeDefinition.capabilityManifest,
               grants: [
                 {
                   runtimeType: 'player',
@@ -98,9 +84,8 @@ describe('M4.1 static runtime registry', () => {
               ],
             },
           },
-          coachRuntimeDefinitionV1,
-        ],
-        currentVersions: { player: 1, coach: 1 },
+          coach: coachRuntimeDefinition,
+        },
       }),
     ).toThrow()
   })
@@ -108,18 +93,17 @@ describe('M4.1 static runtime registry', () => {
   test('rejects unauthenticated policies and invalid policy snapshots during configuration', () => {
     expect(() =>
       createRuntimeRegistry<RuntimeDefinitionMap>({
-        definitions: [
-          {
-            ...playerRuntimeDefinitionV1,
+        definitions: {
+          player: {
+            ...playerRuntimeDefinition,
             budgetPolicy: {
               runtimeType: 'player',
               policyVersion: 1,
               createSnapshot: () => ({}),
             } as never,
           },
-          coachRuntimeDefinitionV1,
-        ],
-        currentVersions: { player: 1, coach: 1 },
+          coach: coachRuntimeDefinition,
+        },
       }),
     ).toThrow()
 

@@ -25,7 +25,7 @@ const UniqueReferencesSchema = z
     }
   })
 
-const RunConfigurationAuditV1Schema = z.strictObject({
+const RunConfigurationAuditSchema = z.strictObject({
   runtime: z.enum(['player', 'coach']),
   runtimeDefinitionVersion: PositiveSafeIntegerSchema,
   contextSchemaVersion: PositiveSafeIntegerSchema,
@@ -40,21 +40,21 @@ const RunConfigurationAuditV1Schema = z.strictObject({
   dataDependencies: UniqueReferencesSchema,
 })
 
-export type RunConfigurationAuditV1 = Readonly<
-  z.infer<typeof RunConfigurationAuditV1Schema>
+export type RunConfigurationAudit = Readonly<
+  z.infer<typeof RunConfigurationAuditSchema>
 >
 
-export interface StoredRunConfigurationAuditV1 {
+export interface StoredRunConfigurationAudit {
   readonly payloadVersion: typeof RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION
   readonly payload: {
-    readonly configuration: RunConfigurationAuditV1
+    readonly configuration: RunConfigurationAudit
   }
 }
 
-const StoredRunConfigurationAuditV1Schema = z.strictObject({
+const StoredRunConfigurationAuditSchema = z.strictObject({
   payloadVersion: z.literal(RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION),
   payload: z.strictObject({
-    configuration: RunConfigurationAuditV1Schema,
+    configuration: RunConfigurationAuditSchema,
   }),
 })
 
@@ -70,9 +70,9 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
-export function decodeCurrentRunConfigurationAuditV1(
+export function decodeCurrentRunConfigurationAudit(
   input: unknown,
-): StoredRunConfigurationAuditV1 {
+): StoredRunConfigurationAudit {
   if (!isRecord(input)) throw new AgentAuditPayloadValidationError()
   const rowVersion = PositiveSafeIntegerSchema.safeParse(input.payloadVersion)
   if (!rowVersion.success) throw new AgentAuditPayloadValidationError()
@@ -81,17 +81,17 @@ export function decodeCurrentRunConfigurationAuditV1(
   }
   if (!isRecord(input.payload)) throw new AgentAuditPayloadValidationError()
 
-  const parsed = StoredRunConfigurationAuditV1Schema.safeParse(input)
+  const parsed = StoredRunConfigurationAuditSchema.safeParse(input)
   if (!parsed.success) throw new AgentAuditPayloadValidationError()
   return deepFreeze(parsed.data)
 }
 
-export function encodeRunConfigurationAuditV1(
+export function encodeRunConfigurationAudit(
   input: unknown,
-): StoredRunConfigurationAuditV1 {
-  const configuration = RunConfigurationAuditV1Schema.safeParse(input)
+): StoredRunConfigurationAudit {
+  const configuration = RunConfigurationAuditSchema.safeParse(input)
   if (!configuration.success) throw new AgentAuditPayloadValidationError()
-  return decodeCurrentRunConfigurationAuditV1({
+  return decodeCurrentRunConfigurationAudit({
     payloadVersion: RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION,
     payload: {
       configuration: configuration.data,
@@ -99,7 +99,7 @@ export function encodeRunConfigurationAuditV1(
   })
 }
 
-export const currentRunConfigurationAuditReader: PersistedJsonReader<RunConfigurationAuditV1> =
+export const currentRunConfigurationAuditReader: PersistedJsonReader<RunConfigurationAudit> =
   Object.freeze({
     read(rowPayloadVersion: unknown, payload: unknown) {
       return readCurrentPersistedJson({
@@ -107,7 +107,7 @@ export const currentRunConfigurationAuditReader: PersistedJsonReader<RunConfigur
         payload,
         currentRowPayloadVersion: RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION,
         decode: (stored) =>
-          decodeCurrentRunConfigurationAuditV1(stored).payload.configuration,
+          decodeCurrentRunConfigurationAudit(stored).payload.configuration,
         isPayloadValidationError: (error) =>
           error instanceof AgentAuditPayloadValidationError,
       })

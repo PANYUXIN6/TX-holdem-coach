@@ -13,8 +13,8 @@ import {
 } from '../../src/sessions/authoritative-state/recovery-decision.js'
 import {
   currentSnapshotReader,
-  encodeSnapshotV1,
-} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+  encodeSnapshot,
+} from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 import { createTestBettingPokerState } from '../poker/create-test-poker-state.js'
 
@@ -58,7 +58,7 @@ function handStartedEvent() {
 }
 
 function validFacts(): SessionRecoveryFacts {
-  const snapshot = encodeSnapshotV1(currentState())
+  const snapshot = encodeSnapshot(currentState())
   const event = encodeCurrentPrivateEvent(handStartedEvent())
   return {
     session: {
@@ -117,7 +117,7 @@ function decide(facts: SessionRecoveryFacts) {
 
 function inHandSnapshotRow() {
   const poker = createTestBettingPokerState()
-  const snapshot = encodeSnapshotV1(
+  const snapshot = encodeSnapshot(
     createPrivateTableState({
       stateVersion: 1,
       poker,
@@ -314,7 +314,7 @@ describe('session recovery decision', () => {
       kind: 'readonlyDiagnostic',
       code: 'snapshotPayloadInvalid',
     })
-    const versionTwo = encodeSnapshotV1(currentState(2))
+    const versionTwo = encodeSnapshot(currentState(2))
     expect(
       decide(
         factsWith({

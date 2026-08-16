@@ -6,7 +6,7 @@ import type { AgentPersonaSummary } from '@tx-holdem-coach/contracts'
 import { describe, expect, test } from 'vitest'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 
-const PERSONA_V1_PUBLIC_SUMMARIES = [
+const CURRENT_PERSONA_PUBLIC_SUMMARIES = [
   {
     personaId: 'nit_fish',
     personaVersion: 1,
@@ -133,7 +133,7 @@ const PERSONA_V1_PUBLIC_SUMMARIES = [
 describe('agent persona catalog', () => {
   const catalog = loadAndValidatePersonaCatalog()
 
-  test('contains exactly the eight version-one predefined personas', () => {
+  test('contains exactly the eight current predefined personas', () => {
     const summaries = catalog.listPublicSummaries()
 
     expect(summaries).toHaveLength(8)
@@ -145,8 +145,10 @@ describe('agent persona catalog', () => {
     )
   })
 
-  test('matches every public field in the version-one persona catalog', () => {
-    expect(catalog.listPublicSummaries()).toEqual(PERSONA_V1_PUBLIC_SUMMARIES)
+  test('matches every public field in the current persona catalog', () => {
+    expect(catalog.listPublicSummaries()).toEqual(
+      CURRENT_PERSONA_PUBLIC_SUMMARIES,
+    )
   })
 
   test('projects each private catalog entry through the public schema', () => {

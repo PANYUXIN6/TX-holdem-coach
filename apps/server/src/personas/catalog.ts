@@ -10,10 +10,10 @@ import { PERSONA_CATALOG_DEFINITIONS } from './catalog-definitions.js'
 import {
   ActivePersonaCatalogEntrySchema,
   deepFreeze,
-  PERSONA_MODEL_BUNDLE_V1_DEFAULTS,
-  PersonaConfigPayloadV1Schema,
+  PERSONA_MODEL_BUNDLE_DEFAULTS,
+  PersonaConfigPayloadSchema,
 } from './config.js'
-import type { DeepReadonly, PersonaConfigPayloadV1 } from './config.js'
+import type { DeepReadonly, PersonaConfigPayload } from './config.js'
 
 export class PersonaCatalogValidationError extends Error {
   public constructor() {
@@ -22,7 +22,7 @@ export class PersonaCatalogValidationError extends Error {
   }
 }
 
-export type PersonaCatalogEntry = DeepReadonly<PersonaConfigPayloadV1>
+export type PersonaCatalogEntry = DeepReadonly<PersonaConfigPayload>
 
 export interface PersonaCatalog {
   list(): readonly PersonaCatalogEntry[]
@@ -31,19 +31,19 @@ export interface PersonaCatalog {
   getPublicSummary(personaId: AgentPersonaId): AgentPersonaSummary | undefined
 }
 
-const PersonaCatalogSourceDefinitionSchema = PersonaConfigPayloadV1Schema.omit({
+const PersonaCatalogSourceDefinitionSchema = PersonaConfigPayloadSchema.omit({
   models: true,
 })
 
 function cloneDefaultModels() {
   return {
-    deepSeek: { ...PERSONA_MODEL_BUNDLE_V1_DEFAULTS.deepSeek },
-    kimi: { ...PERSONA_MODEL_BUNDLE_V1_DEFAULTS.kimi },
+    deepSeek: { ...PERSONA_MODEL_BUNDLE_DEFAULTS.deepSeek },
+    kimi: { ...PERSONA_MODEL_BUNDLE_DEFAULTS.kimi },
   }
 }
 
 function projectPublicSummary(
-  entry: PersonaConfigPayloadV1,
+  entry: PersonaConfigPayload,
 ): AgentPersonaSummary {
   return AgentPersonaSummarySchema.parse({
     personaId: entry.personaId,

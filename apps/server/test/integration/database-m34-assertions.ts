@@ -24,9 +24,9 @@ import { currentPrivateEventReader } from '../../src/sessions/authoritative-stat
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   currentSnapshotReader,
-  decodeCurrentSnapshotV1,
-  encodeSnapshotV1,
-} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+  decodeCurrentSnapshot,
+  encodeSnapshot,
+} from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import {
   defineSessionCommandHandlerBinding,
   type SessionCommandHandlerBinding,
@@ -294,7 +294,7 @@ async function writePrivateStateFixture(
   sessionId: string,
   state: ReturnType<typeof createPrivateTableState>,
 ): Promise<void> {
-  const encoded = encodeSnapshotV1(state)
+  const encoded = encodeSnapshot(state)
   const payload = sql.typed(
     serializeJsonbFixture(encoded.payload),
     POSTGRES_TEXT_OID,
@@ -715,7 +715,7 @@ async function readM34Mirror(sql: Sql, sessionId: string, handId: string) {
   if (session === undefined || sessionRows.length !== 1) {
     throw new Error('M3.4 持久化镜像缺失。')
   }
-  const snapshot = decodeCurrentSnapshotV1({
+  const snapshot = decodeCurrentSnapshot({
     payloadVersion: session.snapshotPayloadVersion,
     payload: session.snapshotPayload,
   }).payload.state
@@ -1533,7 +1533,7 @@ export async function assertM34RebuyNextHandSessionEnd(
     }
     expect(normalRow.sessionVersion).toBe(snapshotVersionBefore)
     expect(
-      decodeCurrentSnapshotV1({
+      decodeCurrentSnapshot({
         payloadVersion: normalRow.snapshotPayloadVersion,
         payload: normalRow.snapshotPayload,
       }).payload.state.stateVersion,

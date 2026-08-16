@@ -38,7 +38,7 @@ const coachCapabilityReferences = Object.freeze([
   { id: 'coach.get-opponent-evidence', version: 1 },
 ] as const satisfies readonly RuntimeComponentReference[])
 
-export const coachCapabilityDefinitionsV1: readonly CapabilityDefinition<'coach'>[] =
+export const coachCapabilityDefinitions: readonly CapabilityDefinition<'coach'>[] =
   Object.freeze(
     coachCapabilityReferences.map((capability) =>
       createCapabilityDefinition({
@@ -61,7 +61,7 @@ export const coachCapabilityDefinitionsV1: readonly CapabilityDefinition<'coach'
     ),
   )
 
-export const coachRuntimeBudgetPolicyV1: RuntimeBudgetPolicy<'coach'> =
+export const coachRuntimeBudgetPolicy: RuntimeBudgetPolicy<'coach'> =
   createRuntimeBudgetPolicy({
     runtimeType: 'coach',
     policyVersion: 1,
@@ -82,7 +82,7 @@ export const coachRuntimeBudgetPolicyV1: RuntimeBudgetPolicy<'coach'> =
       }),
   })
 
-const coachCapabilityManifestV1 = createCapabilityManifest({
+const coachCapabilityManifest = createCapabilityManifest({
   manifest: {
     runtimeType: 'coach',
     manifestVersion: 1,
@@ -106,7 +106,7 @@ const coachActiveStates = [
   'commitPending',
 ] as const
 
-export const coachRuntimeStateMachineV1 = createRuntimeStateMachineDefinition<
+export const coachRuntimeStateMachine = createRuntimeStateMachineDefinition<
   'coach',
   CoachRuntimeState
 >({
@@ -171,7 +171,7 @@ export const coachRuntimeStateMachineV1 = createRuntimeStateMachineDefinition<
   ],
 })
 
-export type CoachRuntimeDefinitionV1 = RuntimeDefinitionBase<
+export type CoachRuntimeDefinition = RuntimeDefinitionBase<
   'coach',
   'decisionAnalysis' | 'hindsight',
   CoachRuntimeState
@@ -185,7 +185,7 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
-export const coachRuntimeDefinitionV1: CoachRuntimeDefinitionV1 = deepFreeze({
+export const coachRuntimeDefinition: CoachRuntimeDefinition = deepFreeze({
   runtimeType: 'coach',
   runtimeDefinitionVersion: 1,
   contextSchemaVersion: 1,
@@ -195,13 +195,13 @@ export const coachRuntimeDefinitionV1: CoachRuntimeDefinitionV1 = deepFreeze({
     { id: 'coach.prompt.system', version: 1 },
     { id: 'coach.prompt.review', version: 1 },
   ]),
-  capabilityManifest: coachCapabilityManifestV1,
-  budgetPolicy: coachRuntimeBudgetPolicyV1,
+  capabilityManifest: coachCapabilityManifest,
+  budgetPolicy: coachRuntimeBudgetPolicy,
   routePolicy: { id: 'coach.route-policy', version: 1 },
   outputSchema: { id: 'coach.output.review', version: 1 },
   validator: { id: 'coach.validator.review', version: 1 },
   commitGate: coachCommitGate,
   recoveryPolicy: { id: 'coach.recovery.frozen-checkpoint', version: 1 },
-  stateMachine: coachRuntimeStateMachineV1,
+  stateMachine: coachRuntimeStateMachine,
   modelToolPolicy: 'none',
 })

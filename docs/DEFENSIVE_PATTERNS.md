@@ -1,16 +1,24 @@
 # 防御性模式
 
-本文件是 `simplify-codebase` 的仓库本地事实源。分析器只能生成候选；任何删除或合并都需要实际消费者、持久化契约与定向验证证据。不得读取 `apikey.txt` 或本地凭据，也不得因当前没有 writer 就删除 legacy decoder。
+本文件是 `simplify-codebase` 的仓库本地事实源。分析器只能生成候选；任何删除或合并都需要实际消费者、持久化契约与定向验证证据。不得读取 `apikey.txt` 或本地凭据，也不得因当前没有 writer 就删除 current reader。
 
 ## 版本与持久化
 
 ### Current-only 持久化版本
 
-- 当前机制：持久化 JSON 只保留数据库行上的 `*_payload_version`，JSON 对象内部不再重复保存信封版本。只有 Execution Budget 因 M4.2 已规划 V2 而保留多版本注册表；其余 current-only 载荷通过 `apps/server/src/persisted-json.ts` 统一区分未知正整数版本与损坏载荷。Private Event 与 Hand Start Checkpoint 的代码 API 使用中性 current 命名，首发行载荷版本统一从 1 起步；旧 reader/迁移器已随开发数据库重建删除。
-- 为什么看起来可能重复：各类当前 Codec 都独立保留版本常量、冻结与校验代码，但除 Execution Budget 外不再存在版本分派或迁移分支。
-- 删除后可能破坏什么：历史 Session、Hand 或 Agent 审计行的恢复；未知版本与损坏载荷的稳定诊断边界；未来迁移前的数据可读性。
-- 什么证据才能允许修改：已盘点所有持久化版本、生产/测试历史数据消费者和迁移路径；有兼容迁移或明确的数据退役决策；版本注册表与 decoder 的定向测试同时证明旧行处理不变或已安全替代。
-- 修改后必须运行的验证：相关 codec/current reader 单测（Execution Budget 仍含 registry 单测）、`pnpm run typecheck`、`pnpm run verify`；若涉及持久化数据库行为，按 AGENTS.md 选择对应 `db:test:milestone`。
+- 当前机制：持久化 JSON 只保留数据库行上的 `*_payload_version`，JSON 对象内部不再重复保存信封版本。所有首发载荷均为 current-only，通过 `apps/server/src/persisted-json.ts` 统一区分未知正整数版本与损坏载荷。Private Event、Snapshot、Hand 审计与 Agent 审计的代码 API 使用中性 current 命名，首发行载荷版本统一从 1 起步；旧 reader、注册表与迁移器已随开发数据库重建删除。
+- 为什么看起来可能重复：各类当前 Codec 都独立保留行载荷版本常量、冻结与校验代码，但不存在版本分派或迁移分支。
+- 删除后可能破坏什么：当前 Session、Hand 或 Agent 审计行的严格读取；未知版本与损坏载荷的稳定诊断边界；未来真实演进时的载荷身份。
+- 什么证据才能允许修改：已盘点全部 current reader、行版本、调用方和数据库制品；有明确的数据退役决策；Codec 与 Repository 定向测试同时证明当前行和非 current 行的分类保持正确。
+- 修改后必须运行的验证：相关 Codec/current reader 单测、`pnpm run typecheck`、`pnpm run verify`；若涉及持久化数据库行为，按 AGENTS.md 选择对应 `db:test:milestone`。
+
+### 首发前 Runtime 与 Persona 单定义
+
+- 当前机制：Persona 配置和 Player/Coach Runtime 的代码 API 使用中性 current 命名；版本字段仍作为持久化身份保留。生产 Runtime Registry 每种 Runtime 只保存一个当前 Definition，`resolveExact()` 只比较持久版本是否等于该定义，不维护版本 `Map`、current 指针或 legacy 分派。
+- 为什么看起来可能重复：`resolveCurrent()` 与 `resolveExact()` 当前会返回同一个冻结定义；配置、政策和组件引用中仍各自保留正整数版本。
+- 删除后可能破坏什么：已持久 Run 的定义身份校验，以及首发后明确引入历史定义、迁移或兼容读取时所需的协议边界。
+- 什么证据才能允许修改：上线前可直接覆盖唯一当前定义并重建开发数据；上线后必须先盘点真实持久数据、发布边界和恢复消费者，再单独设计历史定义保存与版本分派，不得把首发前的单定义 Registry 悄然扩成运行时插件系统。
+- 修改后必须运行的验证：Persona、Runtime Registry、Player/Coach Definition 定向单测、`pnpm run typecheck` 与 `pnpm run verify`；若改变数据库持久化语义，另按 AGENTS.md 执行对应数据库测试。
 
 ### Drizzle 与迁移制品
 

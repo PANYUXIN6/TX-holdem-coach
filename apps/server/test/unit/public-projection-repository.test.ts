@@ -2,7 +2,7 @@ import type { Sql } from 'postgres'
 import { describe, expect, test } from 'vitest'
 import { PersistenceDataCorruptionError } from '../../src/persistence/errors.js'
 import { createPublicProjectionFactsRepository } from '../../src/persistence/public-projection-repository.js'
-import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+import { encodeSnapshot } from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 import { createPublicSessionQueryService } from '../../src/sessions/public-projection/public-session-query-service.js'
@@ -24,7 +24,7 @@ describe('public projection repository', () => {
       })),
       lastCompletedHandSummary: null,
     })
-    const stored = encodeSnapshotV1(state)
+    const stored = encodeSnapshot(state)
     const calls: string[] = []
     const sql = ((template: TemplateStringsArray) => {
       calls.push(template.join('?'))

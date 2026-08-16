@@ -6,13 +6,13 @@ import {
   PersonaCatalogValidationError,
 } from '../../src/personas/catalog.js'
 import {
-  ActiveModelConfigurationV1Schema,
+  ActiveModelConfigurationSchema,
   canonicalJson,
-  createActiveModelConfigurationV1Schema,
+  createActiveModelConfigurationSchema,
   createConfigSnapshotKey,
-  PERSONA_CONFIG_V1_PERSONA_IDS,
+  PERSONA_CONFIG_PERSONA_IDS,
   PERSONA_CONFIG_PAYLOAD_VERSION,
-  PersonaConfigPayloadV1Schema,
+  PersonaConfigPayloadSchema,
 } from '../../src/personas/config.js'
 
 function cloneDefinitions(): Record<string, unknown>[] {
@@ -23,8 +23,8 @@ function cloneDefinitions(): Record<string, unknown>[] {
 }
 
 describe('private persona configuration', () => {
-  test('freezes the permanent V1 persona id vocabulary locally', () => {
-    expect(PERSONA_CONFIG_V1_PERSONA_IDS).toEqual([
+  test('freezes the current persona id vocabulary locally', () => {
+    expect(PERSONA_CONFIG_PERSONA_IDS).toEqual([
       'nit_fish',
       'lag_rec',
       'tag_pro',
@@ -34,7 +34,7 @@ describe('private persona configuration', () => {
       'small_ball_reg',
       'trap_specialist',
     ])
-    expect(Object.isFrozen(PERSONA_CONFIG_V1_PERSONA_IDS)).toBe(true)
+    expect(Object.isFrozen(PERSONA_CONFIG_PERSONA_IDS)).toBe(true)
   })
 
   test('loads complete, deeply frozen and independently expanded entries', () => {
@@ -44,7 +44,7 @@ describe('private persona configuration', () => {
     expect(entries.map((entry) => entry.personaId)).toEqual(AGENT_PERSONA_IDS)
     expect(entries).toHaveLength(8)
     for (const entry of entries) {
-      expect(PersonaConfigPayloadV1Schema.safeParse(entry).success).toBe(true)
+      expect(PersonaConfigPayloadSchema.safeParse(entry).success).toBe(true)
       expect(entry.models.deepSeek).toEqual({
         modelId: 'deepseek-v4-flash',
         temperature: 0.2,
@@ -80,9 +80,9 @@ describe('private persona configuration', () => {
       },
     ],
     [
-      'invalid version',
+      'non-current version',
       (items: Record<string, unknown>[]) => {
-        items[0] = { ...items[0], personaVersion: 0 }
+        items[0] = { ...items[0], personaVersion: 2 }
         return items
       },
     ],
@@ -142,7 +142,7 @@ describe('private persona configuration', () => {
   test('rejects provider-compatible but unpublished neighboring bundles', () => {
     const entry = loadAndValidatePersonaCatalog().list()[0]
     expect(
-      PersonaConfigPayloadV1Schema.safeParse({
+      PersonaConfigPayloadSchema.safeParse({
         ...entry,
         models: {
           ...entry?.models,
@@ -155,7 +155,7 @@ describe('private persona configuration', () => {
       }).success,
     ).toBe(false)
     expect(
-      PersonaConfigPayloadV1Schema.safeParse({
+      PersonaConfigPayloadSchema.safeParse({
         ...entry,
         models: {
           ...entry?.models,
@@ -171,17 +171,17 @@ describe('private persona configuration', () => {
 
   test('keeps permanent parsing valid when a local Active set retires the bundle', () => {
     const entry = loadAndValidatePersonaCatalog().list()[0]
-    expect(PersonaConfigPayloadV1Schema.safeParse(entry).success).toBe(true)
+    expect(PersonaConfigPayloadSchema.safeParse(entry).success).toBe(true)
     expect(
-      ActiveModelConfigurationV1Schema.safeParse(entry?.models).success,
+      ActiveModelConfigurationSchema.safeParse(entry?.models).success,
     ).toBe(true)
-    const retiredSchema = createActiveModelConfigurationV1Schema(new Set())
+    const retiredSchema = createActiveModelConfigurationSchema(new Set())
     expect(retiredSchema.safeParse(entry?.models).success).toBe(false)
   })
 
   test('canonicalizes object keys and hashes payload contents plus version', () => {
     expect(canonicalJson({ b: 2, a: 1 })).toBe(canonicalJson({ a: 1, b: 2 }))
-    const payload = PersonaConfigPayloadV1Schema.parse(
+    const payload = PersonaConfigPayloadSchema.parse(
       loadAndValidatePersonaCatalog().list()[0],
     )
     const key = createConfigSnapshotKey(PERSONA_CONFIG_PAYLOAD_VERSION, payload)

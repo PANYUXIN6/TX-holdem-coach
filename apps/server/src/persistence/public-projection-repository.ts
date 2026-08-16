@@ -8,7 +8,7 @@ import {
 } from './errors.js'
 import type { LockedSessionView } from './session-mutation-repository.js'
 import { currentPrivateEventReader } from '../sessions/authoritative-state/private-event-codec.js'
-import { currentSnapshotReader } from '../sessions/authoritative-state/snapshot-codec-v1.js'
+import { currentSnapshotReader } from '../sessions/authoritative-state/snapshot-codec.js'
 import type {
   CommittedPrivateEventFact,
   ProjectionRosterSeat,

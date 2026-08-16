@@ -37,7 +37,7 @@ M3.1 不负责：
 - 内存业务状态缓存；
 - 自动重试数据库事务。
 
-场次创建由 M3.2 的专用创建事务拥有。它可以复用 V2 事件协议、事件信封补全和账本终结等窄纯组件，但不进入既有 Session 执行器。
+场次创建由 M3.2 的专用创建事务拥有。它可以复用 current 事件协议、事件信封补全和账本终结等窄纯组件，但不进入既有 Session 执行器。
 
 ## 2. 方案选择
 
@@ -446,14 +446,14 @@ M3.1 构造 `ErrorResponse` 是因为 M2.4 必须保存并重放严格响应；H
 
 ### 6.1 当前事件协议
 
-执行器不永久绑定 V2，而依赖组合根一次性提供：
+执行器不硬编码事件载荷结构，而依赖组合根一次性提供 current 协议：
 
 ```ts
 interface CurrentPrivateEventProtocol<
   CurrentEventDraft,
   StoredCurrentEvent,
 > {
-  readonly identity: PrivateEventVersionIdentity
+  readonly rowPayloadVersion: number
 
   parseDraft(input: unknown): CurrentEventDraft
 
@@ -504,7 +504,7 @@ SessionMutationRepository 实例
          └── 注入 SessionRecoveryRepository
 ```
 
-M2.6 只能通过该实例取得锁 capability，执行器只能把 capability 交回同一实例持久化。不同实例产生的 capability 必须拒绝。M2.6 纯恢复决策与版本注册模块不受影响。
+M2.6 只能通过该实例取得锁 capability，执行器只能把 capability 交回同一实例持久化。不同实例产生的 capability 必须拒绝。M2.6 纯恢复决策与 current reader 不受影响。
 
 ### 6.3 当前版本身份同源
 
@@ -1043,19 +1043,19 @@ M3.1 不修改 Contracts、数据库 Schema/迁移、Hono 路由、`app.ts` 生�
 - 严格额外字段拒绝；
 - UUID、座位、排序、安全整数和 `bigint` 精确算术；
 - `handAborted` 资金守恒及买入回退双向条件；
-- V1 四种 variant 在 V2 下保持完全相同的严格语义；
-- V1 legacy 和 V2 current 读取；
-- 未知、重复和损坏复合版本；
+- 九种 current variant 保持各自严格语义；
+- 单一当前行版本读取；
+- 未知行版本与损坏载荷分类；
 - `getPrivateEventHandId()` 覆盖九种 variant。
 
 ### 12.2 Repository
 
 - `readExistingCommandResult()` 的四种结果、摘要冲突、非法终态、未知版本和一次性输入；
-- V2 写前防御性解码；
+- current 载荷写前防御性解码；
 - Session 事件使用 `hand_id = null`，Hand 事件使用规范等价 ID；
 - 不同 mutation Repository 实例拒绝 capability；
 - recovery 与 mutation 使用同一实例；
-- V1/V2 混合历史恢复；
+- current-only 快照与事件恢复；
 - 空事件历史继续进入 M2.6 诊断。
 
 ### 12.3 Handler、端口和执行器
@@ -1120,7 +1120,7 @@ pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m31
 - ended Session 通过只读账本重放；
 - 重放不增加 `eventSeq` 或重复写事件/快照；
 - `stateChanged` 和 `stateUnchanged` 两个结构分支；
-- V1 Poker 与 V2 Session 事件共同恢复；
+- Poker 与 Session/Accounting 的 current 累积事件共同恢复；
 - 关系事实、Session、快照、事件和账本原子提交与回滚；
 - 未提交写入对另一连接不可见；
 - 不同 Session 并行。
@@ -1132,15 +1132,15 @@ pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m31
 
 不同 Session 并行使用可控 Promise/数据库屏障证明双方均已进入，不使用耗时阈值推断。
 
-测试 Handler 与端口只存在于测试代码，只使用生产 V2 事件契约，只证明执行协议，不冒充 M3.3/M3.4 领域验收。
+测试 Handler 与端口只存在于测试代码，只使用生产 current 事件契约，只证明执行协议，不冒充 M3.3/M3.4 领域验收。
 
 ## 13. 垂直红绿实施顺序
 
 严格按以下切片推进：
 
 ```text
-V2 单事件
-→ V2 注册与 V1 legacy
+current 单事件
+→ current reader 与累积联合
 → mutation/recovery 工厂组合
 → ended 只读账本重放
 → 稳定拒绝
@@ -1169,12 +1169,12 @@ V2 单事件
 
 M3.1 只有同时满足以下条件才完成：
 
-- V2 五种生产事件契约发布，V1 兼容读取成立；
+- 九种生产事件已收敛为单一 current 累积契约，未知行版本与损坏载荷分类成立；
 - 既有 Session 执行器完成恢复、账本、两阶段 Handler、版本、事件和事务编排；
 - 稳定拒绝只能在任何领域关系写入前产生；
 - 进程内串行和多连接数据库竞争均有确定性证据；
 - 新提交、重放、登记前拒绝、账本稳定失败和内部回滚由类型与测试区分；
 - M3.3–M4.8 可以逐步接入真实 Handler，无需改写执行器事务状态机；
-- M3.2 只复用 V2 事件协议及窄纯组件，继续拥有独立创建事务；
+- M3.2 只复用 current 事件协议及窄纯组件，继续拥有独立创建事务；
 - 没有 HTTP/SSE 路由、生产占位 Handler、动态插件或提前实现的 M3.3/M3.4 业务规则；
 - `REPO_MAP.md`、`ARCHITECTURE.md` 和 `m31` 测试说明与实现同步。

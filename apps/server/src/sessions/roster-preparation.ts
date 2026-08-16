@@ -3,14 +3,14 @@ import type { Sql } from 'postgres'
 import { z } from 'zod'
 import type { PersonaCatalog } from '../personas/catalog.js'
 import {
-  ActiveModelConfigurationV1Schema,
+  ActiveModelConfigurationSchema,
   createConfigSnapshotKey,
   deepFreeze,
   MEMORY_PAYLOAD_VERSION,
   PERSONA_CONFIG_PAYLOAD_VERSION,
-  PersonaConfigPayloadV1Schema,
-  type AgentMemoryPayloadV1,
-  type PersonaConfigPayloadV1,
+  PersonaConfigPayloadSchema,
+  type AgentMemoryPayload,
+  type PersonaConfigPayload,
 } from '../personas/config.js'
 import {
   ActiveModelConfigurationError,
@@ -48,10 +48,10 @@ export type StableIdentityGraph = z.infer<typeof StableIdentityGraphSchema>
 export interface InitialAgentMemoryInput {
   readonly currentRevision: number
   readonly currentPayloadVersion: number
-  readonly currentPayload: AgentMemoryPayloadV1
+  readonly currentPayload: AgentMemoryPayload
   readonly revision: number
   readonly revisionPayloadVersion: number
-  readonly revisionPayload: AgentMemoryPayloadV1
+  readonly revisionPayload: AgentMemoryPayload
 }
 
 export interface SessionRosterAgentInput {
@@ -63,7 +63,7 @@ export interface SessionRosterAgentInput {
   readonly personaVersion: number
   readonly configSnapshotKey: string
   readonly configPayloadVersion: number
-  readonly configPayload: PersonaConfigPayloadV1
+  readonly configPayload: PersonaConfigPayload
   readonly initialMemory: InitialAgentMemoryInput
 }
 
@@ -141,7 +141,7 @@ function assertIdentityGraph(
 }
 
 type ActiveModelConfigurationSchema = Pick<
-  typeof ActiveModelConfigurationV1Schema,
+  typeof ActiveModelConfigurationSchema,
   'safeParse'
 >
 
@@ -184,13 +184,11 @@ export function prepareCurrentCatalogRoster(
     if (catalogEntry === undefined) {
       throw new RepositoryInputValidationError()
     }
-    const payload = PersonaConfigPayloadV1Schema.safeParse(catalogEntry)
+    const payload = PersonaConfigPayloadSchema.safeParse(catalogEntry)
     if (!payload.success) {
       throw new RepositoryInputValidationError()
     }
-    const active = ActiveModelConfigurationV1Schema.safeParse(
-      payload.data.models,
-    )
+    const active = ActiveModelConfigurationSchema.safeParse(payload.data.models)
     if (!active.success) {
       throw new ActiveModelConfigurationError(
         selection.seatNumber,
@@ -253,7 +251,7 @@ export async function prepareLatestEndedRosterPreflight(
   )
   assertRosterSnapshotsUseActiveModels(
     snapshots,
-    ActiveModelConfigurationV1Schema,
+    ActiveModelConfigurationSchema,
   )
   return deepFreeze({
     sourceSessionId: latestEndedSession.id,

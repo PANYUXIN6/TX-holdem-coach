@@ -121,57 +121,40 @@ function validateDefinition(definition: AnyRuntimeDefinition): void {
   }
 }
 
-function definitionKey(runtimeType: RuntimeType, version: number): string {
-  return `${runtimeType}:${String(version)}`
-}
-
 export function createRuntimeRegistry<
   TDefinitions extends RuntimeDefinitionMap,
 >(input: {
-  readonly definitions: readonly AnyRuntimeDefinition[]
-  readonly currentVersions: Readonly<Record<RuntimeType, number>>
+  readonly definitions: TDefinitions
 }): RuntimeRegistry<TDefinitions> {
   if (
-    !Array.isArray(input.definitions) ||
-    Object.keys(input.currentVersions).sort().join(',') !== 'coach,player'
+    input.definitions === null ||
+    typeof input.definitions !== 'object' ||
+    Array.isArray(input.definitions) ||
+    Object.keys(input.definitions).sort().join(',') !== 'coach,player'
   ) {
     throw new RuntimeRegistryConfigurationError('invalidDefinition')
   }
-  const currentPlayer = RuntimeDefinitionVersionSchema.safeParse(
-    input.currentVersions.player,
-  )
-  const currentCoach = RuntimeDefinitionVersionSchema.safeParse(
-    input.currentVersions.coach,
-  )
-  if (!currentPlayer.success || !currentCoach.success) {
-    throw new RuntimeRegistryConfigurationError('missingCurrentRuntime')
-  }
-  const currentVersions = Object.freeze({
-    player: currentPlayer.data,
-    coach: currentCoach.data,
-  })
 
-  const byKey = new Map<string, AnyRuntimeDefinition>()
-  for (const inputDefinition of input.definitions) {
-    validateDefinition(inputDefinition)
-    const definition = deepFreeze(cloneValue(inputDefinition))
-    const key = definitionKey(
-      definition.runtimeType,
-      definition.runtimeDefinitionVersion,
-    )
-    if (byKey.has(key)) {
-      throw new RuntimeRegistryConfigurationError('duplicateRuntimeVersion')
-    }
-    byKey.set(key, definition)
+  validateDefinition(input.definitions.player)
+  validateDefinition(input.definitions.coach)
+  if (
+    input.definitions.player.runtimeType !== 'player' ||
+    input.definitions.coach.runtimeType !== 'coach'
+  ) {
+    throw new RuntimeRegistryConfigurationError('invalidDefinition')
   }
+  const definitions = deepFreeze({
+    player: cloneValue(input.definitions.player),
+    coach: cloneValue(input.definitions.coach),
+  }) as TDefinitions
 
-  for (const [runtimeType, version] of [
-    ['player', currentPlayer.data],
-    ['coach', currentCoach.data],
-  ] as const) {
-    if (!byKey.has(definitionKey(runtimeType, version))) {
-      throw new RuntimeRegistryConfigurationError('unknownCurrentVersion')
+  function resolveCurrent<TRuntime extends RuntimeType>(
+    runtimeType: TRuntime,
+  ): TDefinitions[TRuntime] {
+    if (!RuntimeTypeSchema.safeParse(runtimeType).success) {
+      throw new RuntimeResolutionError('unsupportedRuntime')
     }
+    return definitions[runtimeType]
   }
 
   function resolveExact<TRuntime extends RuntimeType>(
@@ -187,22 +170,21 @@ export function createRuntimeRegistry<
     if (!version.success) {
       throw new RuntimeResolutionError('unknownRuntimeVersion')
     }
-    const definition = byKey.get(definitionKey(runtimeType, version.data))
-    if (definition === undefined) {
+    const definition = resolveCurrent(runtimeType)
+    if (definition.runtimeDefinitionVersion !== version.data) {
       throw new RuntimeResolutionError('unknownRuntimeVersion')
     }
-    return definition as TDefinitions[TRuntime]
+    return definition
   }
 
   const registry: RuntimeRegistry<TDefinitions> = {
-    resolveCurrent: <TRuntime extends RuntimeType>(runtimeType: TRuntime) =>
-      resolveExact(runtimeType, currentVersions[runtimeType]),
+    resolveCurrent,
     resolveExact,
     listCurrent: () =>
-      Object.freeze([
-        resolveExact('player', currentPlayer.data),
-        resolveExact('coach', currentCoach.data),
-      ]) as readonly [TDefinitions['player'], TDefinitions['coach']],
+      Object.freeze([definitions.player, definitions.coach]) as readonly [
+        TDefinitions['player'],
+        TDefinitions['coach'],
+      ],
   }
   return Object.freeze(registry)
 }

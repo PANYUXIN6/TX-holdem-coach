@@ -16,10 +16,3 @@ export class AgentAuditPayloadValidationError extends Error {
     this.name = 'AgentAuditPayloadValidationError'
   }
 }
-
-export class AgentAuditVersionRegistryConfigurationError extends Error {
-  public constructor() {
-    super('Agent 审计版本注册表配置无效。')
-    this.name = 'AgentAuditVersionRegistryConfigurationError'
-  }
-}

@@ -3,16 +3,16 @@ import {
   authorizeCapabilityInvocation,
   createCapabilityManifest,
 } from '../../src/agents/foundation/capability-protocol.js'
-import { coachCapabilityDefinitionsV1 } from '../../src/agents/coach/foundation-definition.js'
+import { coachCapabilityDefinitions } from '../../src/agents/coach/foundation-definition.js'
 import {
-  playerCapabilityDefinitionsV1,
-  playerRuntimeDefinitionV1,
+  playerCapabilityDefinitions,
+  playerRuntimeDefinition,
 } from '../../src/agents/player/foundation-definition.js'
 import { isRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
 
 describe('M4.1 capability protocol', () => {
   test('authorizes only the exact state-declared, manifested definition', () => {
-    const capability = playerCapabilityDefinitionsV1[0]
+    const capability = playerCapabilityDefinitions[0]
     expect(capability).toBeDefined()
     if (capability === undefined) return
 
@@ -22,9 +22,9 @@ describe('M4.1 capability protocol', () => {
           runtimeType: 'player',
           capability: capability.capability,
         },
-        manifest: playerRuntimeDefinitionV1.capabilityManifest,
-        definitions: playerCapabilityDefinitionsV1,
-        commitGate: playerRuntimeDefinitionV1.commitGate,
+        manifest: playerRuntimeDefinition.capabilityManifest,
+        definitions: playerCapabilityDefinitions,
+        commitGate: playerRuntimeDefinition.commitGate,
         stateDeclaredCapabilities: [capability.capability],
         invocationCount: 0,
       }),
@@ -36,9 +36,9 @@ describe('M4.1 capability protocol', () => {
           runtimeType: 'player',
           capability: capability.capability,
         },
-        manifest: playerRuntimeDefinitionV1.capabilityManifest,
-        definitions: playerCapabilityDefinitionsV1,
-        commitGate: playerRuntimeDefinitionV1.commitGate,
+        manifest: playerRuntimeDefinition.capabilityManifest,
+        definitions: playerCapabilityDefinitions,
+        commitGate: playerRuntimeDefinition.commitGate,
         stateDeclaredCapabilities: [],
         invocationCount: 0,
       }),
@@ -46,14 +46,14 @@ describe('M4.1 capability protocol', () => {
   })
 
   test('default-denies version mismatches, cross-runtime calls and exhausted grants', () => {
-    const capability = playerCapabilityDefinitionsV1[0]
+    const capability = playerCapabilityDefinitions[0]
     expect(capability).toBeDefined()
     if (capability === undefined) return
 
     const common = {
-      manifest: playerRuntimeDefinitionV1.capabilityManifest,
-      definitions: playerCapabilityDefinitionsV1,
-      commitGate: playerRuntimeDefinitionV1.commitGate,
+      manifest: playerRuntimeDefinition.capabilityManifest,
+      definitions: playerCapabilityDefinitions,
+      commitGate: playerRuntimeDefinition.commitGate,
       stateDeclaredCapabilities: [capability.capability],
     }
     expect(() =>
@@ -76,7 +76,7 @@ describe('M4.1 capability protocol', () => {
         invocationCount: 1,
       }),
     ).toThrow()
-    expect(coachCapabilityDefinitionsV1[0]?.runtimeType).toBe('coach')
+    expect(coachCapabilityDefinitions[0]?.runtimeType).toBe('coach')
   })
 
   test('never admits a Commit Gate into the ordinary capability manifest', () => {
@@ -88,12 +88,12 @@ describe('M4.1 capability protocol', () => {
           grants: [
             {
               runtimeType: 'player',
-              capability: playerRuntimeDefinitionV1.commitGate,
+              capability: playerRuntimeDefinition.commitGate,
               maxInvocations: 1,
             },
           ],
         },
-        commitGate: playerRuntimeDefinitionV1.commitGate,
+        commitGate: playerRuntimeDefinition.commitGate,
         maxCapabilityInvocations: 1,
       }),
     ).toThrow()

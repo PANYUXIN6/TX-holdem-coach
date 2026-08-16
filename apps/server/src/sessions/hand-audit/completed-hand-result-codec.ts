@@ -14,7 +14,7 @@ import {
 
 export const COMPLETED_HAND_RESULT_PAYLOAD_VERSION = 1 as const
 
-export interface StoredCompletedHandResultV1 {
+export interface StoredCompletedHandResult {
   readonly payloadVersion: typeof COMPLETED_HAND_RESULT_PAYLOAD_VERSION
   readonly payload: {
     readonly result: CompletedHandResult
@@ -41,9 +41,9 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
-export function decodeCurrentCompletedHandResultV1(
+export function decodeCurrentCompletedHandResult(
   input: unknown,
-): StoredCompletedHandResultV1 {
+): StoredCompletedHandResult {
   if (!isRecord(input)) throw new HandAuditPayloadValidationError()
   const rowVersion = PositiveIntegerSchema.safeParse(input.payloadVersion)
   if (!rowVersion.success) throw new HandAuditPayloadValidationError()
@@ -60,16 +60,16 @@ export function decodeCurrentCompletedHandResultV1(
   }
 }
 
-export function encodeCompletedHandResultV1(
+export function encodeCompletedHandResult(
   input: unknown,
-): StoredCompletedHandResultV1 {
+): StoredCompletedHandResult {
   let result: CompletedHandResult
   try {
     result = CompletedHandResultSchema.parse(input)
   } catch {
     throw new HandAuditPayloadValidationError()
   }
-  return decodeCurrentCompletedHandResultV1({
+  return decodeCurrentCompletedHandResult({
     payloadVersion: COMPLETED_HAND_RESULT_PAYLOAD_VERSION,
     payload: { result },
   })
@@ -83,7 +83,7 @@ export const currentCompletedHandResultReader: PersistedJsonReader<CompletedHand
         payload,
         currentRowPayloadVersion: COMPLETED_HAND_RESULT_PAYLOAD_VERSION,
         decode: (stored) =>
-          decodeCurrentCompletedHandResultV1(stored).payload.result,
+          decodeCurrentCompletedHandResult(stored).payload.result,
         isPayloadValidationError: (error) =>
           error instanceof HandAuditPayloadValidationError,
       })

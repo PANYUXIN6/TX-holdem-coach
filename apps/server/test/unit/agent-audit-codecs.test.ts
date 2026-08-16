@@ -7,25 +7,22 @@ import {
 } from '../../src/agents/audit/audit-primitives.js'
 import {
   currentRunConfigurationAuditReader,
-  decodeCurrentRunConfigurationAuditV1,
-  encodeRunConfigurationAuditV1,
+  decodeCurrentRunConfigurationAudit,
+  encodeRunConfigurationAudit,
   RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION,
-} from '../../src/agents/audit/run-configuration-audit-codec-v1.js'
+} from '../../src/agents/audit/run-configuration-audit-codec.js'
 import {
-  decodeCurrentExecutionBudgetAuditV1,
-  encodeExecutionBudgetAuditV1,
+  currentExecutionBudgetAuditReader,
+  decodeCurrentExecutionBudgetAudit,
+  encodeExecutionBudgetAudit,
   EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION,
-} from '../../src/agents/audit/execution-budget-audit-codec-v1.js'
-import {
-  createExecutionBudgetAuditVersionRegistry,
-  productionExecutionBudgetAuditVersionRegistry,
-} from '../../src/agents/audit/execution-budget-audit-version-registry.js'
+} from '../../src/agents/audit/execution-budget-audit-codec.js'
 import {
   ATTEMPT_AUDIT_PAYLOAD_VERSION,
-  decodeCurrentAttemptAuditV1,
-  encodeAttemptAuditV1,
+  decodeCurrentAttemptAudit,
+  encodeAttemptAudit,
   readCurrentAttemptAudit,
-} from '../../src/agents/audit/attempt-audit-codec-v1.js'
+} from '../../src/agents/audit/attempt-audit-codec.js'
 import {
   EMPTY_COACH_RUNTIME_AUDIT,
   EMPTY_PLAYER_RUNTIME_AUDIT,
@@ -116,11 +113,11 @@ function runConfigurationInput() {
   }
 }
 
-describe('run configuration audit V1', () => {
+describe('current run configuration audit', () => {
   test('round-trips only frozen, ordered and uniquely identified configuration references', () => {
     const configuration = runConfigurationInput()
 
-    const encoded = encodeRunConfigurationAuditV1(configuration)
+    const encoded = encodeRunConfigurationAudit(configuration)
 
     expect(RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION).toBe(1)
     expect(encoded).toEqual({
@@ -130,7 +127,7 @@ describe('run configuration audit V1', () => {
       },
     })
     expect(
-      decodeCurrentRunConfigurationAuditV1(structuredClone(encoded)),
+      decodeCurrentRunConfigurationAudit(structuredClone(encoded)),
     ).toEqual(encoded)
     expect(Object.isFrozen(encoded.payload.configuration.promptModules)).toBe(
       true,
@@ -140,7 +137,7 @@ describe('run configuration audit V1', () => {
     ).toEqual(['prompt/player@system', 'prompt/player@persona'])
 
     expect(() =>
-      encodeRunConfigurationAuditV1({
+      encodeRunConfigurationAudit({
         ...configuration,
         promptModules: [
           configuration.promptModules[0],
@@ -149,7 +146,7 @@ describe('run configuration audit V1', () => {
       }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
-      encodeRunConfigurationAuditV1({
+      encodeRunConfigurationAudit({
         ...configuration,
         apiKey: 'secret',
       }),
@@ -157,7 +154,7 @@ describe('run configuration audit V1', () => {
   })
 
   test('reads the current configuration and classifies unknown or damaged rows', () => {
-    const current = encodeRunConfigurationAuditV1(runConfigurationInput())
+    const current = encodeRunConfigurationAudit(runConfigurationInput())
 
     expect(
       currentRunConfigurationAuditReader.read(
@@ -178,18 +175,27 @@ describe('run configuration audit V1', () => {
   })
 })
 
-describe('execution budget audit V1', () => {
-  test('round-trips only the frozen bounded execution limits with independent versions', () => {
-    const budget = {
-      maxAttempts: 3,
-      maxInputTokens: 20_000,
-      maxOutputTokens: 1_000,
-      maxWallClockMs: 45_000,
-      maxCapabilityInvocations: 0,
-      maxCostMicrounits: 0,
-    }
+function executionBudgetInput() {
+  return {
+    budgetSchemaVersion: 1 as const,
+    maxAttempts: 3,
+    maxInputTokens: 20_000,
+    maxOutputTokens: 1_000,
+    maxWallClockMs: 45_000,
+    maxCapabilityInvocations: 4,
+    maxCostMicrounits: 25_000,
+    maxOwnerConcurrentRuns: 2,
+    maxSystemConcurrentRuns: 4,
+    minimumAttemptStartRemainingMs: 5_000,
+    attemptTimeoutMs: 15_000,
+  }
+}
 
-    const encoded = encodeExecutionBudgetAuditV1(budget)
+describe('current execution budget audit', () => {
+  test('round-trips the complete frozen execution budget', () => {
+    const budget = executionBudgetInput()
+
+    const encoded = encodeExecutionBudgetAudit(budget)
 
     expect(EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION).toBe(1)
     expect(encoded).toEqual({
@@ -198,58 +204,36 @@ describe('execution budget audit V1', () => {
         budget,
       },
     })
-    expect(
-      decodeCurrentExecutionBudgetAuditV1(structuredClone(encoded)),
-    ).toEqual(encoded)
+    expect(decodeCurrentExecutionBudgetAudit(structuredClone(encoded))).toEqual(
+      encoded,
+    )
     expect(Object.isFrozen(encoded.payload.budget)).toBe(true)
 
     expect(() =>
-      encodeExecutionBudgetAuditV1({ ...budget, maxAttempts: 0 }),
+      encodeExecutionBudgetAudit({ ...budget, maxAttempts: 0 }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
-      encodeExecutionBudgetAuditV1({ ...budget, providerApiKey: 'secret' }),
+      encodeExecutionBudgetAudit({ ...budget, providerApiKey: 'secret' }),
     ).toThrow('Agent 审计载荷无效。')
   })
 
-  test('retains its row-version registry and explicit legacy migration', () => {
-    const budget = {
-      maxAttempts: 2,
-      maxInputTokens: 10_000,
-      maxOutputTokens: 500,
-      maxWallClockMs: 30_000,
-      maxCapabilityInvocations: 4,
-      maxCostMicrounits: 25_000,
-    }
-    const current = encodeExecutionBudgetAuditV1(budget)
+  test('reads only the current row version and classifies invalid payloads', () => {
+    const budget = executionBudgetInput()
+    const current = encodeExecutionBudgetAudit(budget)
 
     expect(
-      productionExecutionBudgetAuditVersionRegistry.read(
+      currentExecutionBudgetAuditReader.read(
         current.payloadVersion,
         current.payload,
       ),
     ).toEqual({ kind: 'decoded', value: budget })
-    expect(
-      productionExecutionBudgetAuditVersionRegistry.read(2, { budget: {} }),
-    ).toEqual({ kind: 'unknownVersion' })
-    expect(
-      productionExecutionBudgetAuditVersionRegistry.read(1, { budget: {} }),
-    ).toEqual({ kind: 'invalidPayload' })
-
-    const legacyRegistry = createExecutionBudgetAuditVersionRegistry([
-      {
-        kind: 'legacy',
-        identity: { rowPayloadVersion: 9 },
-        decode: () => ({ legacy: true }),
-        migrate: () => budget,
-      },
-    ])
-    expect(legacyRegistry.read(9, { legacy: true })).toEqual({
-      kind: 'decoded',
-      value: budget,
+    expect(currentExecutionBudgetAuditReader.read(2, current.payload)).toEqual({
+      kind: 'unknownVersion',
     })
-    expect(Object.isFrozen(productionExecutionBudgetAuditVersionRegistry)).toBe(
-      true,
-    )
+    expect(currentExecutionBudgetAuditReader.read(1, { budget: {} })).toEqual({
+      kind: 'invalidPayload',
+    })
+    expect(Object.isFrozen(currentExecutionBudgetAuditReader)).toBe(true)
   })
 })
 
@@ -261,7 +245,7 @@ const attemptStartFacts = {
   requestProjectionHash,
 }
 
-describe('attempt audit V1', () => {
+describe('current attempt audit', () => {
   test('strictly discriminates started and terminal payloads by the row lifecycle', () => {
     const attempts = [
       { lifecycle: 'started' as const, ...attemptStartFacts },
@@ -293,22 +277,22 @@ describe('attempt audit V1', () => {
 
     expect(ATTEMPT_AUDIT_PAYLOAD_VERSION).toBe(1)
     for (const attempt of attempts) {
-      const encoded = encodeAttemptAuditV1(attempt)
-      expect(decodeCurrentAttemptAuditV1(structuredClone(encoded))).toEqual(
+      const encoded = encodeAttemptAudit(attempt)
+      expect(decodeCurrentAttemptAudit(structuredClone(encoded))).toEqual(
         encoded,
       )
       expect(Object.isFrozen(encoded.payload)).toBe(true)
     }
 
     expect(() =>
-      encodeAttemptAuditV1({
+      encodeAttemptAudit({
         lifecycle: 'started',
         ...attemptStartFacts,
         responseProjectionHash,
       }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
-      encodeAttemptAuditV1({
+      encodeAttemptAudit({
         lifecycle: 'completed',
         ...attemptStartFacts,
         responseProjectionHash: null,
@@ -316,7 +300,7 @@ describe('attempt audit V1', () => {
       }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
-      encodeAttemptAuditV1({
+      encodeAttemptAudit({
         lifecycle: 'failed',
         ...attemptStartFacts,
         responseProjectionHash: null,
@@ -324,7 +308,7 @@ describe('attempt audit V1', () => {
       }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
-      encodeAttemptAuditV1({
+      encodeAttemptAudit({
         lifecycle: 'cancelled',
         ...attemptStartFacts,
         responseProjectionHash,
@@ -332,7 +316,7 @@ describe('attempt audit V1', () => {
       }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
-      encodeAttemptAuditV1({
+      encodeAttemptAudit({
         lifecycle: 'stale',
         ...attemptStartFacts,
         responseProjectionHash,
@@ -349,7 +333,7 @@ describe('attempt audit V1', () => {
       responseProjectionHash: null,
       validationStatus: 'notRun' as const,
     }
-    const current = encodeAttemptAuditV1(attempt)
+    const current = encodeAttemptAudit(attempt)
 
     expect(
       readCurrentAttemptAudit(

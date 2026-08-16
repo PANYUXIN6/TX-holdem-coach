@@ -4,7 +4,7 @@ import {
   type StartedHandFacts,
 } from '../../poker/hand-result.js'
 import {
-  POKER_RULE_SET_VERSION_V1,
+  POKER_RULE_SET_VERSION,
   type PokerRuleSetVersion,
 } from '../../poker/poker-rule-set.js'
 import {
@@ -55,7 +55,7 @@ const StartedHandFactsSchema = z.strictObject({
   ),
 })
 const HandStartCheckpointInputSchema = z.strictObject({
-  pokerRuleSetVersion: z.literal(POKER_RULE_SET_VERSION_V1),
+  pokerRuleSetVersion: z.literal(POKER_RULE_SET_VERSION),
   stateBeforeStartCommand: z.unknown(),
   startedHand: StartedHandFactsSchema,
 })
@@ -112,7 +112,7 @@ export function createHandStartCheckpoint(input: unknown): HandStartCheckpoint {
       throw new Error('Hand-start checkpoint mirrors do not match.')
     }
     return deepFreeze({
-      pokerRuleSetVersion: POKER_RULE_SET_VERSION_V1,
+      pokerRuleSetVersion: POKER_RULE_SET_VERSION,
       stateBeforeStartCommand,
       startedHand,
     })

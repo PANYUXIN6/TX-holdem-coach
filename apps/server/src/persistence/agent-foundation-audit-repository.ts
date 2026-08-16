@@ -6,24 +6,24 @@ import {
   StableAuditCodeSchema,
 } from '../agents/audit/audit-primitives.js'
 import {
-  encodeAttemptAuditV1,
+  encodeAttemptAudit,
   readCurrentAttemptAudit,
-  type AttemptAuditV1,
-} from '../agents/audit/attempt-audit-codec-v1.js'
+  type AttemptAudit,
+} from '../agents/audit/attempt-audit-codec.js'
 import {
   AgentAuditPayloadValidationError,
   AgentAuditPayloadVersionError,
 } from '../agents/audit/errors.js'
 import {
-  encodeExecutionBudgetAuditV1,
-  type ExecutionBudgetAuditV1,
-} from '../agents/audit/execution-budget-audit-codec-v1.js'
-import { productionExecutionBudgetAuditVersionRegistry } from '../agents/audit/execution-budget-audit-version-registry.js'
+  currentExecutionBudgetAuditReader,
+  encodeExecutionBudgetAudit,
+  type ExecutionBudgetAudit,
+} from '../agents/audit/execution-budget-audit-codec.js'
 import {
   currentRunConfigurationAuditReader,
-  encodeRunConfigurationAuditV1,
-  type RunConfigurationAuditV1,
-} from '../agents/audit/run-configuration-audit-codec-v1.js'
+  encodeRunConfigurationAudit,
+  type RunConfigurationAudit,
+} from '../agents/audit/run-configuration-audit-codec.js'
 import type {
   AgentAuditDecoderBundle,
   CoachRuntimeAuditDecodeInput,
@@ -372,8 +372,8 @@ interface InsertAgentRunAuditBaseInput {
   readonly parentRunId: string | null
   readonly deadlineAt: string
   readonly runtimeDefinitionVersion: number
-  readonly runConfiguration: RunConfigurationAuditV1
-  readonly budget: ExecutionBudgetAuditV1
+  readonly runConfiguration: RunConfigurationAudit
+  readonly budget: ExecutionBudgetAudit
   readonly createdAt: string
 }
 
@@ -513,8 +513,8 @@ interface AgentRunAuditBase {
   readonly deadlineAt: string
   readonly runtimeDefinitionVersion: number
   readonly terminationCode: string | null
-  readonly runConfiguration: RunConfigurationAuditV1
-  readonly budget: ExecutionBudgetAuditV1
+  readonly runConfiguration: RunConfigurationAudit
+  readonly budget: ExecutionBudgetAudit
   readonly createdAt: string
   readonly startedAt: string | null
   readonly completedAt: string | null
@@ -554,7 +554,7 @@ function deepFreeze<Value>(value: Value): Value {
 
 function decodeRunConfigurationForWrite(input: unknown) {
   try {
-    return encodeRunConfigurationAuditV1(input)
+    return encodeRunConfigurationAudit(input)
   } catch (error) {
     if (
       error instanceof AgentAuditPayloadValidationError ||
@@ -568,7 +568,7 @@ function decodeRunConfigurationForWrite(input: unknown) {
 
 function decodeExecutionBudgetForWrite(input: unknown) {
   try {
-    return encodeExecutionBudgetAuditV1(input)
+    return encodeExecutionBudgetAudit(input)
   } catch (error) {
     if (
       error instanceof AgentAuditPayloadValidationError ||
@@ -1203,12 +1203,12 @@ export function createAgentFoundationAuditRepository<
       }
       let storedAttempt
       try {
-        storedAttempt = encodeAttemptAuditV1({
+        storedAttempt = encodeAttemptAudit({
           lifecycle: 'started',
           actualTimeoutMs: parsed.data.actualTimeoutMs,
           remainingDeadlineMsAtStart: parsed.data.remainingDeadlineMsAtStart,
           requestProjectionHash: parsed.data.requestProjectionHash,
-        } satisfies AttemptAuditV1)
+        } satisfies AttemptAudit)
       } catch (error) {
         if (
           error instanceof AgentAuditPayloadValidationError ||
@@ -1404,7 +1404,7 @@ export function createAgentFoundationAuditRepository<
 
       let terminalAttempt
       try {
-        terminalAttempt = encodeAttemptAuditV1({
+        terminalAttempt = encodeAttemptAudit({
           lifecycle: parsed.data.lifecycle,
           actualTimeoutMs: startedRead.value.actualTimeoutMs,
           remainingDeadlineMsAtStart:
@@ -1780,7 +1780,7 @@ export function createAgentFoundationAuditRepository<
       if (configurationRead.kind === 'invalidPayload') {
         throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
       }
-      const budgetRead = productionExecutionBudgetAuditVersionRegistry.read(
+      const budgetRead = currentExecutionBudgetAuditReader.read(
         row.budgetPayloadVersion,
         row.budgetPayload,
       )

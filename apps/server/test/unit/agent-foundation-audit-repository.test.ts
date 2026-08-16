@@ -1,8 +1,8 @@
 import type { Sql, TransactionSql } from 'postgres'
 import { describe, expect, test } from 'vitest'
-import { encodeAttemptAuditV1 } from '../../src/agents/audit/attempt-audit-codec-v1.js'
-import { encodeExecutionBudgetAuditV1 } from '../../src/agents/audit/execution-budget-audit-codec-v1.js'
-import { encodeRunConfigurationAuditV1 } from '../../src/agents/audit/run-configuration-audit-codec-v1.js'
+import { encodeAttemptAudit } from '../../src/agents/audit/attempt-audit-codec.js'
+import { encodeExecutionBudgetAudit } from '../../src/agents/audit/execution-budget-audit-codec.js'
+import { encodeRunConfigurationAudit } from '../../src/agents/audit/run-configuration-audit-codec.js'
 import { createAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { UnknownPayloadVersionError } from '../../src/persistence/errors.js'
@@ -63,18 +63,23 @@ function runConfiguration() {
 
 function executionBudget() {
   return {
+    budgetSchemaVersion: 1 as const,
     maxAttempts: 3,
     maxInputTokens: 20_000,
     maxOutputTokens: 1_000,
     maxWallClockMs: 45_000,
     maxCapabilityInvocations: 2,
     maxCostMicrounits: 1_000,
+    maxOwnerConcurrentRuns: 2,
+    maxSystemConcurrentRuns: 4,
+    minimumAttemptStartRemainingMs: 5_000,
+    attemptTimeoutMs: 15_000,
   }
 }
 
 function queuedPlayerRunRow() {
-  const configuration = encodeRunConfigurationAuditV1(runConfiguration())
-  const budget = encodeExecutionBudgetAuditV1(executionBudget())
+  const configuration = encodeRunConfigurationAudit(runConfiguration())
+  const budget = encodeExecutionBudgetAudit(executionBudget())
   return {
     agentRunId,
     databaseOwnerId,
@@ -114,7 +119,7 @@ function queuedPlayerRunRow() {
 }
 
 function queuedCoachRunRow() {
-  const configuration = encodeRunConfigurationAuditV1({
+  const configuration = encodeRunConfigurationAudit({
     ...runConfiguration(),
     runtime: 'coach',
   })
@@ -133,7 +138,7 @@ function queuedCoachRunRow() {
 
 function attemptRow(attemptNumber: number, lifecycle: 'started' | 'completed') {
   const attemptId = `77777777-7777-4777-8777-77777777777${attemptNumber}`
-  const payload = encodeAttemptAuditV1(
+  const payload = encodeAttemptAudit(
     lifecycle === 'started'
       ? {
           lifecycle,
@@ -433,7 +438,7 @@ describe('agent foundation audit repository', () => {
       runtimeAuditDecoders: {},
     })
     const attemptId = '77777777-7777-4777-8777-777777777777'
-    const started = encodeAttemptAuditV1({
+    const started = encodeAttemptAudit({
       lifecycle: 'started',
       actualTimeoutMs: 15_000,
       remainingDeadlineMsAtStart: 45_000,
@@ -552,7 +557,7 @@ describe('agent foundation audit repository', () => {
       runtimeAuditDecoders: {},
     })
     const attemptId = '77777777-7777-4777-8777-777777777777'
-    const started = encodeAttemptAuditV1({
+    const started = encodeAttemptAudit({
       lifecycle: 'started',
       actualTimeoutMs: 15_000,
       remainingDeadlineMsAtStart: 45_000,

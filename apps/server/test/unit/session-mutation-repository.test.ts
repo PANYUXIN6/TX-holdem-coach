@@ -18,7 +18,7 @@ import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { encodeCurrentPrivateEvent } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-state/current-private-event-protocol.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
-import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+import { encodeSnapshot } from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
 const sessionId = '22222222-2222-4222-8222-222222222222'
@@ -188,7 +188,7 @@ function validBatch() {
     agentRunState: 'idle' as const,
     activePlayerRunId: null,
     activeDecisionRequestId: null,
-    snapshot: encodeSnapshotV1(privateState),
+    snapshot: encodeSnapshot(privateState),
     events: [
       {
         eventId,
@@ -792,7 +792,7 @@ describe('session mutation repository', () => {
   test('rejects state-version and event-sequence overflow before writing', async () => {
     const maximum = Number.MAX_SAFE_INTEGER
     const base = validBatch()
-    const maximumStateSnapshot = encodeSnapshotV1({
+    const maximumStateSnapshot = encodeSnapshot({
       ...base.snapshot.payload.state,
       stateVersion: maximum,
     })

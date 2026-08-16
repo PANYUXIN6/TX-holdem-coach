@@ -121,7 +121,6 @@ export const sessions = appPrivateSchema.table(
     check(
       'sessions_diagnostic_code_check',
       sql`${table.diagnosticCode} IS NULL OR ${table.diagnosticCode} IN (
-        'legacyDiagnosticState',
         'eventSequenceInvalid',
         'eventVersionUnknown',
         'eventPayloadInvalid',
@@ -540,7 +539,6 @@ export const sessionEvents = appPrivateSchema.table(
       'private_event_payload_version',
     ).notNull(),
     privateEventPayload: objectPayload('private_event_payload').notNull(),
-    protocolVersion: integer('protocol_version').notNull(),
     publicEventPayload: objectPayload('public_event_payload').notNull(),
     createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
   },
@@ -586,8 +584,7 @@ export const sessionEvents = appPrivateSchema.table(
     ),
     check(
       'session_events_public_payload_check',
-      sql`${table.protocolVersion} > 0
-        AND jsonb_typeof(${table.publicEventPayload}) = 'object'`,
+      sql`jsonb_typeof(${table.publicEventPayload}) = 'object'`,
     ),
   ],
 )
@@ -701,13 +698,6 @@ export const agentRuns = appPrivateSchema.table(
       table.participantId,
       table.sourceStateVersion,
       table.decisionRequestId,
-      table.runtime,
-    ),
-    unique('agent_runs_coach_review_identity_unique').on(
-      table.id,
-      table.ownerId,
-      table.sessionId,
-      table.handId,
       table.runtime,
     ),
     unique('agent_runs_id_owner_session_unique').on(
@@ -1096,393 +1086,6 @@ export const playerDecisions = appPrivateSchema.table(
   ],
 )
 
-export const coachReviews = appPrivateSchema.table(
-  'coach_reviews',
-  {
-    id: uuid('id').primaryKey(),
-    agentRunId: uuid('agent_run_id').notNull(),
-    ownerId: uuid('owner_id').notNull(),
-    sessionId: uuid('session_id').notNull(),
-    handId: uuid('hand_id').notNull(),
-    runtime: text('runtime').notNull().default('coach'),
-    requestId: uuid('request_id').notNull(),
-    status: text('status').notNull(),
-    frozenContextPayloadVersion: integer(
-      'frozen_context_payload_version',
-    ).notNull(),
-    frozenContextPayload: objectPayload('frozen_context_payload').notNull(),
-    analysisPayloadVersion: integer('analysis_payload_version'),
-    analysisPayload: objectPayload('analysis_payload'),
-    hindsightPayloadVersion: integer('hindsight_payload_version'),
-    hindsightPayload: objectPayload('hindsight_payload'),
-    finalReportPayloadVersion: integer('final_report_payload_version'),
-    finalReportPayload: objectPayload('final_report_payload'),
-    requestedAt: zonedTimestamp('requested_at').notNull(),
-    completedAt: zonedTimestamp('completed_at'),
-    updatedAt: zonedTimestamp('updated_at').notNull().defaultNow(),
-  },
-  (table) => [
-    foreignKey({
-      name: 'coach_reviews_run_identity_fk',
-      columns: [
-        table.agentRunId,
-        table.ownerId,
-        table.sessionId,
-        table.handId,
-        table.runtime,
-      ],
-      foreignColumns: [
-        agentRuns.id,
-        agentRuns.ownerId,
-        agentRuns.sessionId,
-        agentRuns.handId,
-        agentRuns.runtime,
-      ],
-    }).onDelete('cascade'),
-    unique('coach_reviews_agent_run_unique').on(table.agentRunId),
-    unique('coach_reviews_session_request_unique').on(
-      table.sessionId,
-      table.requestId,
-    ),
-    unique('coach_reviews_id_scope_hand_unique').on(
-      table.id,
-      table.ownerId,
-      table.sessionId,
-      table.handId,
-    ),
-    index('coach_reviews_hand_status_idx').on(table.handId, table.status),
-    check('coach_reviews_runtime_check', sql`${table.runtime} = 'coach'`),
-    check(
-      'coach_reviews_status_check',
-      sql`${table.status} IN ('pending', 'running', 'completed', 'failed')`,
-    ),
-    check(
-      'coach_reviews_context_payload_check',
-      sql`${table.frozenContextPayloadVersion} > 0
-        AND jsonb_typeof(${table.frozenContextPayload}) = 'object'`,
-    ),
-    check(
-      'coach_reviews_analysis_payload_check',
-      sql`(
-        ${table.analysisPayloadVersion} IS NULL
-        AND ${table.analysisPayload} IS NULL
-      ) OR (
-        ${table.analysisPayloadVersion} IS NOT NULL
-        AND ${table.analysisPayload} IS NOT NULL
-        AND ${table.analysisPayloadVersion} > 0
-        AND jsonb_typeof(${table.analysisPayload}) = 'object'
-      )`,
-    ),
-    check(
-      'coach_reviews_hindsight_payload_check',
-      sql`(
-        ${table.hindsightPayloadVersion} IS NULL
-        AND ${table.hindsightPayload} IS NULL
-      ) OR (
-        ${table.hindsightPayloadVersion} IS NOT NULL
-        AND ${table.hindsightPayload} IS NOT NULL
-        AND ${table.hindsightPayloadVersion} > 0
-        AND jsonb_typeof(${table.hindsightPayload}) = 'object'
-      )`,
-    ),
-    check(
-      'coach_reviews_final_report_payload_check',
-      sql`(
-        ${table.finalReportPayloadVersion} IS NULL
-        AND ${table.finalReportPayload} IS NULL
-      ) OR (
-        ${table.finalReportPayloadVersion} IS NOT NULL
-        AND ${table.finalReportPayload} IS NOT NULL
-        AND ${table.finalReportPayloadVersion} > 0
-        AND jsonb_typeof(${table.finalReportPayload}) = 'object'
-      )`,
-    ),
-  ],
-)
-
-export const coachDecisionAssessments = appPrivateSchema.table(
-  'coach_decision_assessments',
-  {
-    id: uuid('id').primaryKey(),
-    coachReviewId: uuid('coach_review_id').notNull(),
-    ownerId: uuid('owner_id').notNull(),
-    sessionId: uuid('session_id').notNull(),
-    handId: uuid('hand_id').notNull(),
-    decisionId: uuid('decision_id').notNull(),
-    street: text('street').notNull(),
-    ordinalOnStreet: integer('ordinal_on_street').notNull(),
-    assessmentPayloadVersion: integer('assessment_payload_version').notNull(),
-    assessmentPayload: objectPayload('assessment_payload').notNull(),
-    createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
-  },
-  (table) => [
-    foreignKey({
-      name: 'coach_decision_assessments_review_scope_fk',
-      columns: [
-        table.coachReviewId,
-        table.ownerId,
-        table.sessionId,
-        table.handId,
-      ],
-      foreignColumns: [
-        coachReviews.id,
-        coachReviews.ownerId,
-        coachReviews.sessionId,
-        coachReviews.handId,
-      ],
-    }).onDelete('cascade'),
-    unique('coach_decision_assessments_review_decision_unique').on(
-      table.coachReviewId,
-      table.decisionId,
-    ),
-    index('coach_decision_assessments_review_street_idx').on(
-      table.coachReviewId,
-      table.street,
-      table.ordinalOnStreet,
-    ),
-    index('coach_decision_assessments_decision_idx').on(table.decisionId),
-    check(
-      'coach_decision_assessments_street_check',
-      sql`${table.street} IN ('preflop', 'flop', 'turn', 'river')`,
-    ),
-    check(
-      'coach_decision_assessments_ordinal_check',
-      sql`${table.ordinalOnStreet} >= 0`,
-    ),
-    check(
-      'coach_decision_assessments_payload_check',
-      sql`${table.assessmentPayloadVersion} > 0
-        AND jsonb_typeof(${table.assessmentPayload}) = 'object'`,
-    ),
-  ],
-)
-
-export const handStatisticsShards = appPrivateSchema.table(
-  'hand_statistics_shards',
-  {
-    id: uuid('id').primaryKey(),
-    ownerId: uuid('owner_id').notNull(),
-    sessionId: uuid('session_id').notNull(),
-    handId: uuid('hand_id').notNull(),
-    participantId: uuid('participant_id').notNull(),
-    participantType: text('participant_type').notNull(),
-    completedAt: zonedTimestamp('completed_at').notNull(),
-    logicalPosition: text('logical_position').notNull(),
-    calculationVersion: integer('calculation_version').notNull(),
-    calculatedAt: zonedTimestamp('calculated_at').notNull(),
-    sourceThroughEventSeq: safeBigint('source_through_event_seq').notNull(),
-    completedResultPayloadVersion: integer(
-      'completed_result_payload_version',
-    ).notNull(),
-    personaId: text('persona_id'),
-    personaVersion: integer('persona_version'),
-    configSnapshotKey: text('config_snapshot_key'),
-    metricsPayloadVersion: integer('metrics_payload_version').notNull(),
-    metricsPayload: objectPayload('metrics_payload').notNull(),
-  },
-  (table) => [
-    foreignKey({
-      name: 'hand_statistics_shards_hand_scope_fk',
-      columns: [table.handId, table.ownerId, table.sessionId],
-      foreignColumns: [hands.id, hands.ownerId, hands.sessionId],
-    }).onDelete('cascade'),
-    foreignKey({
-      name: 'hand_statistics_shards_participant_scope_fk',
-      columns: [
-        table.participantId,
-        table.sessionId,
-        table.ownerId,
-        table.participantType,
-      ],
-      foreignColumns: [
-        sessionParticipants.id,
-        sessionParticipants.sessionId,
-        sessionParticipants.ownerId,
-        sessionParticipants.participantType,
-      ],
-    }).onDelete('cascade'),
-    foreignKey({
-      name: 'hand_statistics_shards_agent_config_fk',
-      columns: [
-        table.participantId,
-        table.sessionId,
-        table.ownerId,
-        table.personaId,
-        table.personaVersion,
-        table.configSnapshotKey,
-      ],
-      foreignColumns: [
-        sessionAgents.participantId,
-        sessionAgents.sessionId,
-        sessionAgents.ownerId,
-        sessionAgents.personaId,
-        sessionAgents.personaVersion,
-        sessionAgents.configSnapshotKey,
-      ],
-    }).onDelete('cascade'),
-    unique('hand_statistics_shards_hand_participant_unique').on(
-      table.handId,
-      table.participantId,
-    ),
-    index('hand_statistics_shards_owner_completed_idx').on(
-      table.ownerId,
-      table.completedAt,
-    ),
-    index('hand_statistics_shards_session_position_idx').on(
-      table.sessionId,
-      table.logicalPosition,
-    ),
-    index('hand_statistics_shards_agent_config_idx').on(
-      table.personaId,
-      table.personaVersion,
-      table.configSnapshotKey,
-    ),
-    check(
-      'hand_statistics_shards_participant_type_check',
-      sql`${table.participantType} IN ('user', 'agent')`,
-    ),
-    check(
-      'hand_statistics_shards_agent_config_check',
-      sql`(
-        ${table.participantType} = 'user'
-        AND ${table.personaId} IS NULL
-        AND ${table.personaVersion} IS NULL
-        AND ${table.configSnapshotKey} IS NULL
-      ) OR (
-        ${table.participantType} = 'agent'
-        AND ${table.personaId} IS NOT NULL
-        AND ${table.personaVersion} IS NOT NULL
-        AND ${table.configSnapshotKey} IS NOT NULL
-        AND length(btrim(${table.personaId})) > 0
-        AND ${table.personaVersion} > 0
-        AND ${table.configSnapshotKey} ~ '^[0-9a-f]{64}$'
-      )`,
-    ),
-    check(
-      'hand_statistics_shards_versions_check',
-      sql`${table.calculationVersion} > 0
-        AND ${table.completedResultPayloadVersion} > 0
-        AND ${table.metricsPayloadVersion} > 0`,
-    ),
-    check(
-      'hand_statistics_shards_source_event_seq_safe',
-      sql`${table.sourceThroughEventSeq} BETWEEN 0 AND 9007199254740991`,
-    ),
-    check(
-      'hand_statistics_shards_metrics_payload_check',
-      sql`jsonb_typeof(${table.metricsPayload}) = 'object'`,
-    ),
-  ],
-)
-
-export const sessionSettlementStatisticsShards = appPrivateSchema.table(
-  'session_settlement_statistics_shards',
-  {
-    id: uuid('id').primaryKey(),
-    ownerId: uuid('owner_id').notNull(),
-    sessionId: uuid('session_id').notNull(),
-    participantId: uuid('participant_id').notNull(),
-    participantType: text('participant_type').notNull(),
-    personaId: text('persona_id'),
-    personaVersion: integer('persona_version'),
-    configSnapshotKey: text('config_snapshot_key'),
-    calculationVersion: integer('calculation_version').notNull(),
-    calculatedAt: zonedTimestamp('calculated_at').notNull(),
-    sourceStateVersion: safeBigint('source_state_version').notNull(),
-    sourceSnapshotPayloadVersion: integer(
-      'source_snapshot_payload_version',
-    ).notNull(),
-    metricsPayloadVersion: integer('metrics_payload_version').notNull(),
-    metricsPayload: objectPayload('metrics_payload').notNull(),
-  },
-  (table) => [
-    foreignKey({
-      name: 'session_settlement_shards_session_owner_fk',
-      columns: [table.sessionId, table.ownerId],
-      foreignColumns: [sessions.id, sessions.ownerId],
-    }).onDelete('cascade'),
-    foreignKey({
-      name: 'session_settlement_shards_participant_scope_fk',
-      columns: [
-        table.participantId,
-        table.sessionId,
-        table.ownerId,
-        table.participantType,
-      ],
-      foreignColumns: [
-        sessionParticipants.id,
-        sessionParticipants.sessionId,
-        sessionParticipants.ownerId,
-        sessionParticipants.participantType,
-      ],
-    }).onDelete('cascade'),
-    foreignKey({
-      name: 'session_settlement_shards_agent_config_fk',
-      columns: [
-        table.participantId,
-        table.sessionId,
-        table.ownerId,
-        table.personaId,
-        table.personaVersion,
-        table.configSnapshotKey,
-      ],
-      foreignColumns: [
-        sessionAgents.participantId,
-        sessionAgents.sessionId,
-        sessionAgents.ownerId,
-        sessionAgents.personaId,
-        sessionAgents.personaVersion,
-        sessionAgents.configSnapshotKey,
-      ],
-    }).onDelete('cascade'),
-    unique('session_settlement_shards_session_participant_unique').on(
-      table.sessionId,
-      table.participantId,
-    ),
-    index('session_settlement_shards_owner_idx').on(table.ownerId),
-    index('session_settlement_shards_agent_config_idx').on(
-      table.personaId,
-      table.personaVersion,
-      table.configSnapshotKey,
-    ),
-    check(
-      'session_settlement_shards_participant_type_check',
-      sql`${table.participantType} IN ('user', 'agent')`,
-    ),
-    check(
-      'session_settlement_shards_agent_config_check',
-      sql`(
-        ${table.participantType} = 'user'
-        AND ${table.personaId} IS NULL
-        AND ${table.personaVersion} IS NULL
-        AND ${table.configSnapshotKey} IS NULL
-      ) OR (
-        ${table.participantType} = 'agent'
-        AND ${table.personaId} IS NOT NULL
-        AND ${table.personaVersion} IS NOT NULL
-        AND ${table.configSnapshotKey} IS NOT NULL
-        AND length(btrim(${table.personaId})) > 0
-        AND ${table.personaVersion} > 0
-        AND ${table.configSnapshotKey} ~ '^[0-9a-f]{64}$'
-      )`,
-    ),
-    check(
-      'session_settlement_shards_versions_check',
-      sql`${table.calculationVersion} > 0
-        AND ${table.sourceSnapshotPayloadVersion} > 0
-        AND ${table.metricsPayloadVersion} > 0`,
-    ),
-    check(
-      'session_settlement_shards_source_state_safe',
-      sql`${table.sourceStateVersion} BETWEEN 0 AND 9007199254740991`,
-    ),
-    check(
-      'session_settlement_shards_metrics_payload_check',
-      sql`jsonb_typeof(${table.metricsPayload}) = 'object'`,
-    ),
-  ],
-)
-
 export const appSettings = appPrivateSchema.table(
   'app_settings',
   {
@@ -1491,7 +1094,6 @@ export const appSettings = appPrivateSchema.table(
       .notNull()
       .references(() => owners.id, { onDelete: 'cascade' }),
     settingKey: text('setting_key').notNull(),
-    settingPayloadVersion: integer('setting_payload_version').notNull(),
     settingPayload: objectPayload('setting_payload').notNull(),
     updatedAt: zonedTimestamp('updated_at').notNull().defaultNow(),
   },
@@ -1503,8 +1105,7 @@ export const appSettings = appPrivateSchema.table(
     ),
     check(
       'app_settings_payload_check',
-      sql`${table.settingPayloadVersion} > 0
-        AND jsonb_typeof(${table.settingPayload}) = 'object'`,
+      sql`jsonb_typeof(${table.settingPayload}) = 'object'`,
     ),
   ],
 )

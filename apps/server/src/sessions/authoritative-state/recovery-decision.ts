@@ -1,10 +1,8 @@
-import { getPrivateEventHandId } from './private-event-v2.js'
-import type { PrivateEventVersionRegistry } from './private-event-version-registry.js'
+import { getPrivateEventHandId, type PrivateEvent } from './private-event.js'
+import type { PersistedJsonReader } from '../../persisted-json.js'
 import type { PrivateTableState } from './private-table-state.js'
-import type { SnapshotVersionRegistry } from './snapshot-version-registry.js'
 
 export const SESSION_DIAGNOSTIC_CODES = [
-  'legacyDiagnosticState',
   'eventSequenceInvalid',
   'eventVersionUnknown',
   'eventPayloadInvalid',
@@ -48,8 +46,8 @@ export interface SessionRecoveryFacts {
 }
 
 export interface RecoveryRegistries {
-  readonly snapshot: SnapshotVersionRegistry
-  readonly privateEvent: PrivateEventVersionRegistry
+  readonly snapshot: PersistedJsonReader<PrivateTableState>
+  readonly privateEvent: PersistedJsonReader<PrivateEvent>
 }
 
 export type RecoveryDecision =
@@ -66,7 +64,6 @@ export type RecoveryDecision =
 
 const DIAGNOSTIC_SUMMARIES: Readonly<Record<SessionDiagnosticCode, string>> =
   Object.freeze({
-    legacyDiagnosticState: '场次需要重新执行诊断恢复。',
     eventSequenceInvalid: '场次事件序列不完整。',
     eventVersionUnknown: '场次事件版本暂不受支持。',
     eventPayloadInvalid: '场次事件数据无法读取。',

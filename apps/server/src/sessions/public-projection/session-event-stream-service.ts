@@ -78,7 +78,6 @@ export function createSnapshotCalibrationEvent(input: {
   readonly eventId?: string
 }): SseEvent {
   return SseEventSchema.parse({
-    protocolVersion: input.snapshot.protocolVersion,
     eventId: input.eventId ?? randomUUID(),
     sessionId: input.snapshot.sessionId,
     eventSeq: input.snapshot.eventSeq,

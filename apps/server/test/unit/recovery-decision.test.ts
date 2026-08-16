@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest'
 import { createHandStartedEventDraft } from '../../src/poker/hand-result.js'
-import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
-import { encodePrivateEventV2 } from '../../src/sessions/authoritative-state/private-event-codec-v2.js'
-import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
+import {
+  currentPrivateEventReader,
+  encodeCurrentPrivateEvent,
+} from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   decideSessionRecovery,
@@ -10,8 +11,10 @@ import {
   SESSION_DIAGNOSTIC_CODES,
   type SessionRecoveryFacts,
 } from '../../src/sessions/authoritative-state/recovery-decision.js'
-import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
-import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
+import {
+  currentSnapshotReader,
+  encodeSnapshotV1,
+} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 import { createTestBettingPokerState } from '../poker/create-test-poker-state.js'
 
@@ -56,7 +59,7 @@ function handStartedEvent() {
 
 function validFacts(): SessionRecoveryFacts {
   const snapshot = encodeSnapshotV1(currentState())
-  const event = encodePrivateEventV1(handStartedEvent())
+  const event = encodeCurrentPrivateEvent(handStartedEvent())
   return {
     session: {
       lifecycleStatus: 'active',
@@ -107,8 +110,8 @@ function factsWith(
 
 function decide(facts: SessionRecoveryFacts) {
   return decideSessionRecovery(facts, {
-    snapshot: productionSnapshotVersionRegistry,
-    privateEvent: productionPrivateEventVersionRegistry,
+    snapshot: currentSnapshotReader,
+    privateEvent: currentPrivateEventReader,
   })
 }
 
@@ -142,9 +145,9 @@ describe('session recovery decision', () => {
     })
   })
 
-  test('recovers mixed V1/V2 history with nullable Session-event hand ids', () => {
+  test('recovers current history with nullable Session-event hand ids', () => {
     const facts = validFacts()
-    const sessionEvent = encodePrivateEventV2({
+    const sessionEvent = encodeCurrentPrivateEvent({
       type: 'sessionEnded',
       reason: 'userRequested',
     })
@@ -199,7 +202,7 @@ describe('session recovery decision', () => {
   test('classifies event versions, payloads and private hand mirrors deterministically', () => {
     const row = validFacts().eventRows[0]!
     expect(
-      decide(factsWith({ eventRows: [{ ...row, rowPayloadVersion: 2 }] })),
+      decide(factsWith({ eventRows: [{ ...row, rowPayloadVersion: 3 }] })),
     ).toEqual({
       kind: 'readonlyDiagnostic',
       code: 'eventVersionUnknown',
@@ -210,7 +213,7 @@ describe('session recovery decision', () => {
           eventRows: [
             {
               ...row,
-              payload: { eventSchemaVersion: 1, event: {} },
+              payload: { event: {} },
             },
           ],
         }),
@@ -303,7 +306,7 @@ describe('session recovery decision', () => {
         factsWith({
           snapshotRow: {
             ...snapshotRow,
-            payload: { snapshotSchemaVersion: 1, state: {} },
+            payload: { state: {} },
           },
         }),
       ),

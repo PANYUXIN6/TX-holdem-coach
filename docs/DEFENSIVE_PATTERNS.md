@@ -4,13 +4,13 @@
 
 ## 版本与持久化
 
-### V2 写入与 V1 读取
+### Current-only 持久化版本
 
-- 当前机制：`apps/server/src/sessions/authoritative-state/private-event-codec-v2.ts` 与 `current-private-event-protocol.ts` 是当前 V2 写入协议；`private-event-version-registry.ts` 将 V1 作为 legacy 读取、迁移到 V2。所有 `*-version-registry.ts`、`*-codec-v1.ts`、`*-codec-v2.ts`（包括 Hand 与 Agent audit）都以独立版本身份和严格 decoder 维护兼容性。
-- 为什么看起来可能重复：V1/V2 结构、常量、冻结与校验代码相似，且当前写入路径通常只调用 V2。
+- 当前机制：持久化 JSON 只保留数据库行上的 `*_payload_version`，JSON 对象内部不再重复保存信封版本。只有 Execution Budget 因 M4.2 已规划 V2 而保留多版本注册表；其余 current-only 载荷通过 `apps/server/src/persisted-json.ts` 统一区分未知正整数版本与损坏载荷。Private Event 与 Hand Start Checkpoint 的代码 API 使用中性 current 命名，首发行载荷版本统一从 1 起步；旧 reader/迁移器已随开发数据库重建删除。
+- 为什么看起来可能重复：各类当前 Codec 都独立保留版本常量、冻结与校验代码，但除 Execution Budget 外不再存在版本分派或迁移分支。
 - 删除后可能破坏什么：历史 Session、Hand 或 Agent 审计行的恢复；未知版本与损坏载荷的稳定诊断边界；未来迁移前的数据可读性。
 - 什么证据才能允许修改：已盘点所有持久化版本、生产/测试历史数据消费者和迁移路径；有兼容迁移或明确的数据退役决策；版本注册表与 decoder 的定向测试同时证明旧行处理不变或已安全替代。
-- 修改后必须运行的验证：相关 codec/version-registry 单测、`pnpm run typecheck`、`pnpm run verify`；若涉及持久化数据库行为，按 AGENTS.md 选择对应 `db:test:milestone`。
+- 修改后必须运行的验证：相关 codec/current reader 单测（Execution Budget 仍含 registry 单测）、`pnpm run typecheck`、`pnpm run verify`；若涉及持久化数据库行为，按 AGENTS.md 选择对应 `db:test:milestone`。
 
 ### Drizzle 与迁移制品
 

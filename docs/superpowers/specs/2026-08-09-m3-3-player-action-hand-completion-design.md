@@ -55,8 +55,8 @@ M3.3 设计可以先确认，但实现开始前必须满足：
 
 1. M3.2 设计已确认；
 2. M3.2 已能原子创建最终 `stateVersion = 1` 的 `inHand` 场次；
-3. 当前 Hand 已包含可由 M2.7 回读的合法 `HandStartCheckpointV1`；
-4. M3.1 执行器、当前私有事件 V2、mutation/recovery Repository 和命令账本基线保持通过。
+3. 当前 Hand 已包含可由 M2.7 回读的合法 `HandStartCheckpoint`；
+4. M3.1 执行器、当前私有事件、mutation/recovery Repository 和命令账本基线保持通过。
 
 若 M3.2 最终修改首手身份、检查点或创建后版本语义，必须先同步本设计的入口不变量，不能在 M3.3 实现中用兼容分支同时支持两种创建事实。
 
@@ -67,7 +67,7 @@ M3.3 设计可以先确认，但实现开始前必须满足：
 | Contracts `playerAction` | 直接复用 `{ action }` 公开命令，不增加 actor 或 Hand ID |
 | M1.9 `applyPokerAction()` | 唯一行动、推进、终止、结算和完成结果入口 |
 | `PrivateTableState` | 保存当前 Poker、完成手数、累计买入和最近完成手摘要 |
-| 私有事件 V2 | 直接接收 M1.9 四种 Poker 事件草稿 |
+| 当前私有事件 | 直接接收 M1.9 四种 Poker 事件草稿 |
 | M2.7 `completeHandAudit()` | 锁定并完成 Hand，执行 Started/Completed 镜像校验 |
 | M3.1 `SessionCommandExecutor` | 恢复、账本、版本、投影、关系写、mutation 和提交后交付 |
 | M3.1 Handler capability | 保证关系计划只能在同事务、同命令、同 Handler 中消费一次 |
@@ -477,7 +477,7 @@ writes.completeHand({
 M2.7 在 Session 已锁定的同一事务内：
 
 1. 以 Owner + Session + Hand 精确锁定 `hands.inProgress`；
-2. 解码当前 `HandStartCheckpointV1`；
+2. 解码当前 `HandStartCheckpoint`；
 3. 解码当前 `CompletedHandResult`；
 4. 验证 Hand ID、按钮、大小盲、参与座位、位置、开始筹码和玩家身份镜像；
 5. 单行更新为 `completed` 并写入完整结果和完成时间；

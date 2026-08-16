@@ -19,17 +19,13 @@ const BUSINESS_TABLES = [
   'agent_memory_revisions',
   'agent_runs',
   'app_settings',
-  'coach_decision_assessments',
-  'coach_reviews',
   'command_ledger',
-  'hand_statistics_shards',
   'hands',
   'owners',
   'player_decisions',
   'session_agents',
   'session_events',
   'session_participants',
-  'session_settlement_statistics_shards',
   'session_snapshots',
   'sessions',
 ] as const
@@ -426,7 +422,11 @@ async function assertSchemaStructure(sql: Sql): Promise<void> {
         'streets',
         'betting_rounds',
         'showdowns',
-        'hand_actions'
+        'hand_actions',
+        'coach_decision_assessments',
+        'coach_reviews',
+        'hand_statistics_shards',
+        'session_settlement_statistics_shards'
       )
   `
   expect(bannedTables[0]?.count).toBe('0')
@@ -1184,14 +1184,11 @@ async function assertPlayerCoordination(
   await sql`DELETE FROM app_private.sessions WHERE id = ${graph.sessionId}`
 }
 
-async function assertCoachAuditAndStatistics(sql: Sql): Promise<void> {
+async function assertAgentAuditAndCommandConstraints(sql: Sql): Promise<void> {
   const graph = await sql.begin((tx) => insertSessionGraph(tx, 5_000))
   const handId = fixtureId(5_100)
   const invalidCoachRunId = fixtureId(5_200)
   const coachRunId = fixtureId(5_201)
-  const coachReviewId = fixtureId(5_300)
-  const userParticipantId = graph.userParticipantId
-  const agentParticipantId = graph.agentParticipantIds[0]!
 
   await sql.begin((tx) =>
     insertHand(tx, {
@@ -1232,60 +1229,6 @@ async function assertCoachAuditAndStatistics(sql: Sql): Promise<void> {
       idempotencyKey: 'coach-valid',
     }),
   )
-
-  await sql`
-    INSERT INTO app_private.coach_reviews (
-      id,
-      agent_run_id,
-      owner_id,
-      session_id,
-      hand_id,
-      request_id,
-      status,
-      frozen_context_payload_version,
-      frozen_context_payload,
-      requested_at
-    )
-    VALUES (
-      ${coachReviewId},
-      ${coachRunId},
-      ${fixtureOwnerId()},
-      ${graph.sessionId},
-      ${handId},
-      ${fixtureId(5_301)},
-      'running',
-      1,
-      '{}'::jsonb,
-      now()
-    )
-  `
-
-  await sql`
-    INSERT INTO app_private.coach_decision_assessments (
-      id,
-      coach_review_id,
-      owner_id,
-      session_id,
-      hand_id,
-      decision_id,
-      street,
-      ordinal_on_street,
-      assessment_payload_version,
-      assessment_payload
-    )
-    VALUES (
-      ${fixtureId(5_302)},
-      ${coachReviewId},
-      ${fixtureOwnerId()},
-      ${graph.sessionId},
-      ${handId},
-      ${fixtureId(5_303)},
-      'flop',
-      0,
-      1,
-      '{}'::jsonb
-    )
-  `
 
   await expect(
     sql`
@@ -1366,7 +1309,6 @@ async function assertCoachAuditAndStatistics(sql: Sql): Promise<void> {
       state_version_after,
       private_event_payload_version,
       private_event_payload,
-      protocol_version,
       public_event_payload
     )
     VALUES (
@@ -1380,7 +1322,6 @@ async function assertCoachAuditAndStatistics(sql: Sql): Promise<void> {
       1,
       1,
       '{}'::jsonb,
-      1,
       '{}'::jsonb
     )
   `
@@ -1395,7 +1336,6 @@ async function assertCoachAuditAndStatistics(sql: Sql): Promise<void> {
         state_version_after,
         private_event_payload_version,
         private_event_payload,
-        protocol_version,
         public_event_payload
       )
       VALUES (
@@ -1407,7 +1347,6 @@ async function assertCoachAuditAndStatistics(sql: Sql): Promise<void> {
         2,
         1,
         '{}'::jsonb,
-        1,
         '{}'::jsonb
       )
     `,
@@ -1499,165 +1438,16 @@ async function assertCoachAuditAndStatistics(sql: Sql): Promise<void> {
   `
 
   await sql`
-    INSERT INTO app_private.hand_statistics_shards (
-      id,
-      owner_id,
-      session_id,
-      hand_id,
-      participant_id,
-      participant_type,
-      completed_at,
-      logical_position,
-      calculation_version,
-      calculated_at,
-      source_through_event_seq,
-      completed_result_payload_version,
-      metrics_payload_version,
-      metrics_payload
-    )
-    VALUES (
-      ${fixtureId(5_600)},
-      ${fixtureOwnerId()},
-      ${graph.sessionId},
-      ${handId},
-      ${userParticipantId},
-      'user',
-      now(),
-      'BTN',
-      1,
-      now(),
-      0,
-      1,
-      1,
-      '{}'::jsonb
-    )
-  `
-  await sql`
-    INSERT INTO app_private.hand_statistics_shards (
-      id,
-      owner_id,
-      session_id,
-      hand_id,
-      participant_id,
-      participant_type,
-      completed_at,
-      logical_position,
-      calculation_version,
-      calculated_at,
-      source_through_event_seq,
-      completed_result_payload_version,
-      persona_id,
-      persona_version,
-      config_snapshot_key,
-      metrics_payload_version,
-      metrics_payload
-    )
-    VALUES (
-      ${fixtureId(5_601)},
-      ${fixtureOwnerId()},
-      ${graph.sessionId},
-      ${handId},
-      ${agentParticipantId},
-      'agent',
-      now(),
-      'SB',
-      1,
-      now(),
-      0,
-      1,
-      'persona-1',
-      1,
-      ${CONFIG_SNAPSHOT_KEY},
-      1,
-      '{}'::jsonb
-    )
-  `
-
-  await expect(
-    sql`
-      INSERT INTO app_private.session_settlement_statistics_shards (
-        id,
-        owner_id,
-        session_id,
-        participant_id,
-        participant_type,
-        persona_id,
-        persona_version,
-        config_snapshot_key,
-        calculation_version,
-        calculated_at,
-        source_state_version,
-        source_snapshot_payload_version,
-        metrics_payload_version,
-        metrics_payload
-      )
-      VALUES (
-        ${fixtureId(5_602)},
-        ${fixtureOwnerId()},
-        ${graph.sessionId},
-        ${agentParticipantId},
-        'agent',
-        'persona-1',
-        1,
-        ${'c'.repeat(64)},
-        1,
-        now(),
-        1,
-        1,
-        1,
-        '{}'::jsonb
-      )
-    `,
-  ).rejects.toThrow()
-
-  await sql`
-    INSERT INTO app_private.session_settlement_statistics_shards (
-      id,
-      owner_id,
-      session_id,
-      participant_id,
-      participant_type,
-      persona_id,
-      persona_version,
-      config_snapshot_key,
-      calculation_version,
-      calculated_at,
-      source_state_version,
-      source_snapshot_payload_version,
-      metrics_payload_version,
-      metrics_payload
-    )
-    VALUES (
-      ${fixtureId(5_603)},
-      ${fixtureOwnerId()},
-      ${graph.sessionId},
-      ${agentParticipantId},
-      'agent',
-      'persona-1',
-      1,
-      ${CONFIG_SNAPSHOT_KEY},
-      1,
-      now(),
-      1,
-      1,
-      1,
-      '{}'::jsonb
-    )
-  `
-
-  await sql`
     INSERT INTO app_private.app_settings (
       id,
       owner_id,
       setting_key,
-      setting_payload_version,
       setting_payload
     )
     VALUES (
       ${fixtureId(5_700)},
       ${fixtureOwnerId()},
       'player-timeouts',
-      1,
       '{}'::jsonb
     )
   `
@@ -1667,27 +1457,14 @@ async function assertCoachAuditAndStatistics(sql: Sql): Promise<void> {
   const cascadeCounts = await sql<
     {
       readonly attempts: string
-      readonly reviews: string
-      readonly handShards: string
-      readonly settlementShards: string
     }[]
   >`
     SELECT
       (SELECT count(*)::text FROM app_private.agent_attempts
-        WHERE session_id = ${graph.sessionId}) AS attempts,
-      (SELECT count(*)::text FROM app_private.coach_reviews
-        WHERE session_id = ${graph.sessionId}) AS reviews,
-      (SELECT count(*)::text FROM app_private.hand_statistics_shards
-        WHERE session_id = ${graph.sessionId}) AS "handShards",
-      (SELECT count(*)::text
-        FROM app_private.session_settlement_statistics_shards
-        WHERE session_id = ${graph.sessionId}) AS "settlementShards"
+        WHERE session_id = ${graph.sessionId}) AS attempts
   `
   expect(cascadeCounts[0]).toEqual({
     attempts: '0',
-    reviews: '0',
-    handShards: '0',
-    settlementShards: '0',
   })
 
   await sql`
@@ -1722,7 +1499,7 @@ export async function assertM22DatabaseSchema(
     await assertHandParticipantSeats(sql)
     await assertActiveSessionConcurrency(sql, testDatabaseUrl)
     await assertPlayerCoordination(sql, testDatabaseUrl)
-    await assertCoachAuditAndStatistics(sql)
+    await assertAgentAuditAndCommandConstraints(sql)
   } catch (error) {
     assertionError = error
   }

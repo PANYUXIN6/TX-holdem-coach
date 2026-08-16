@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { readCurrentPersistedJson } from '../../persisted-json.js'
+import type { PersistedJsonReadResult } from '../../persisted-json.js'
 import {
   NonnegativeSafeIntegerSchema,
   PositiveSafeIntegerSchema,
@@ -10,7 +12,6 @@ import {
 } from './errors.js'
 
 export const ATTEMPT_AUDIT_PAYLOAD_VERSION = 1 as const
-export const ATTEMPT_AUDIT_SCHEMA_VERSION = 1 as const
 
 export const AttemptAuditLifecycleSchema = z.enum([
   'started',
@@ -70,9 +71,7 @@ const AttemptAuditV1Schema = z.discriminatedUnion('lifecycle', [
 
 export type AttemptAuditV1 = Readonly<z.infer<typeof AttemptAuditV1Schema>>
 
-const StartedAttemptPayloadV1Schema = AttemptStartFactsSchema.extend({
-  attemptAuditSchemaVersion: z.literal(ATTEMPT_AUDIT_SCHEMA_VERSION),
-})
+const StartedAttemptPayloadV1Schema = AttemptStartFactsSchema
 const CompletedAttemptPayloadV1Schema = StartedAttemptPayloadV1Schema.extend({
   responseProjectionHash: Sha256DigestSchema,
   validationStatus: z.enum(['valid', 'invalid']),
@@ -135,8 +134,10 @@ function deepFreeze<Value>(value: Value): Value {
 }
 
 function decodedAttempt(stored: StoredAttemptAuditV1): AttemptAuditV1 {
-  const { attemptAuditSchemaVersion: _schemaVersion, ...facts } = stored.payload
-  return deepFreeze({ lifecycle: stored.lifecycle, ...facts }) as AttemptAuditV1
+  return deepFreeze({
+    lifecycle: stored.lifecycle,
+    ...stored.payload,
+  }) as AttemptAuditV1
 }
 
 export function decodeCurrentAttemptAuditV1(
@@ -149,13 +150,6 @@ export function decodeCurrentAttemptAuditV1(
     throw new AgentAuditPayloadVersionError('attemptAuditRowVersion')
   }
   if (!isRecord(input.payload)) throw new AgentAuditPayloadValidationError()
-  const envelopeVersion = PositiveSafeIntegerSchema.safeParse(
-    input.payload.attemptAuditSchemaVersion,
-  )
-  if (!envelopeVersion.success) throw new AgentAuditPayloadValidationError()
-  if (envelopeVersion.data !== ATTEMPT_AUDIT_SCHEMA_VERSION) {
-    throw new AgentAuditPayloadVersionError('attemptAuditEnvelopeVersion')
-  }
 
   const parsed = StoredAttemptAuditV1Schema.safeParse(input)
   if (!parsed.success) throw new AgentAuditPayloadValidationError()
@@ -170,7 +164,6 @@ export function encodeAttemptAuditV1(input: unknown): StoredAttemptAuditV1 {
     lifecycle,
     payloadVersion: ATTEMPT_AUDIT_PAYLOAD_VERSION,
     payload: {
-      attemptAuditSchemaVersion: ATTEMPT_AUDIT_SCHEMA_VERSION,
       ...facts,
     },
   })
@@ -178,4 +171,22 @@ export function encodeAttemptAuditV1(input: unknown): StoredAttemptAuditV1 {
 
 export function readAttemptAuditV1(stored: unknown): AttemptAuditV1 {
   return decodedAttempt(decodeCurrentAttemptAuditV1(stored))
+}
+
+export function readCurrentAttemptAudit(
+  lifecycle: unknown,
+  rowPayloadVersion: unknown,
+  payload: unknown,
+): PersistedJsonReadResult<AttemptAuditV1> {
+  const parsedLifecycle = AttemptAuditLifecycleSchema.safeParse(lifecycle)
+  if (!parsedLifecycle.success) return { kind: 'invalidPayload' }
+  return readCurrentPersistedJson({
+    rowPayloadVersion,
+    payload,
+    currentRowPayloadVersion: ATTEMPT_AUDIT_PAYLOAD_VERSION,
+    decode: (stored) =>
+      readAttemptAuditV1({ lifecycle: parsedLifecycle.data, ...stored }),
+    isPayloadValidationError: (error) =>
+      error instanceof AgentAuditPayloadValidationError,
+  })
 }

@@ -6,7 +6,7 @@ import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { createPokerTableState } from '../../src/poker/state.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { createEndSessionHandlerBinding } from '../../src/sessions/command-execution/end-session-handler.js'
-import { createHandStartCheckpointV2 } from '../../src/sessions/hand-audit/hand-start-checkpoint.js'
+import { createHandStartCheckpoint } from '../../src/sessions/hand-audit/hand-start-checkpoint.js'
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
@@ -74,7 +74,7 @@ function pausedFixture() {
     seatAccounting: restored.seatAccounting,
     lastCompletedHandSummary: restored.lastCompletedHandSummary,
   })
-  const checkpoint = createHandStartCheckpointV2({
+  const checkpoint = createHandStartCheckpoint({
     pokerRuleSetVersion: POKER_RULE_SET_VERSION,
     stateBeforeStartCommand: restored,
     startedHand: started.startedHand,
@@ -203,7 +203,7 @@ describe('end session handler', () => {
     const fixture = pausedFixture()
     const restored = withReversedPokerSeats(fixture.restored)
     const current = withReversedPokerSeats(fixture.current)
-    const checkpoint = createHandStartCheckpointV2({
+    const checkpoint = createHandStartCheckpoint({
       pokerRuleSetVersion: POKER_RULE_SET_VERSION,
       stateBeforeStartCommand: restored,
       startedHand: fixture.checkpoint.startedHand,

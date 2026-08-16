@@ -34,7 +34,6 @@ function agentParticipantId(index: number): string {
 
 function currentCatalogRequest() {
   return {
-    protocolVersion: 1 as const,
     rosterSource: {
       type: 'currentCatalog' as const,
       selections: loadAndValidatePersonaCatalog()
@@ -113,7 +112,6 @@ function projectSnapshot(input: {
   readonly eventSeq: number
 }) {
   return {
-    protocolVersion: 1 as const,
     sessionId: input.session.sessionId,
     stateVersion: input.state.stateVersion,
     eventSeq: input.eventSeq,
@@ -546,7 +544,6 @@ describe('session creation service', () => {
 
     await expect(
       service.create({
-        protocolVersion: 1,
         rosterSource: { type: 'latestEnded' },
       }),
     ).resolves.toMatchObject({ kind: 'created' })
@@ -594,7 +591,6 @@ describe('session creation service', () => {
 
     await expect(
       service.create({
-        protocolVersion: 1,
         rosterSource: { type: 'latestEnded' },
       }),
     ).rejects.toMatchObject({
@@ -694,7 +690,6 @@ describe('session creation service', () => {
 
       await expect(
         service.create({
-          protocolVersion: 1,
           rosterSource: { type: 'latestEnded' },
         }),
       ).rejects.toMatchObject(expected)
@@ -709,7 +704,6 @@ describe('session creation service', () => {
   test('returns the locked active snapshot without creating another roster or hand', async () => {
     const dependencies = createDependencies({ active: true })
     const latestSnapshot = {
-      protocolVersion: 1 as const,
       sessionId,
       stateVersion: 5,
       eventSeq: 9,
@@ -774,7 +768,6 @@ describe('session creation service', () => {
     await expect(service.create(currentCatalogRequest())).resolves.toEqual({
       kind: 'activeSessionExists',
       response: {
-        protocolVersion: 1,
         code: 'ACTIVE_SESSION_EXISTS',
         message: '当前已有进行中的训练场次，请继续该场次。',
         latestSnapshot,

@@ -13,7 +13,6 @@ const StoredPublicEventRowSchema = z.strictObject({
   sessionId: z.uuid(),
   eventSeq: SafeIntegerSchema,
   stateVersionAfter: SafeIntegerSchema,
-  protocolVersion: z.number().int().positive(),
   publicEventPayload: z.unknown(),
 })
 
@@ -22,12 +21,10 @@ export interface StoredPublicEventRow {
   readonly sessionId: unknown
   readonly eventSeq: unknown
   readonly stateVersionAfter: unknown
-  readonly protocolVersion: unknown
   readonly publicEventPayload: unknown
 }
 
-export type StoredPublicEventDecodeFailureReason =
-  'unsupportedProtocol' | 'storedPayloadInvalid'
+export type StoredPublicEventDecodeFailureReason = 'storedPayloadInvalid'
 
 export type DecodedStoredPublicEvent =
   | { readonly kind: 'decoded'; readonly event: SseEvent }
@@ -43,9 +40,6 @@ export function decodeStoredPublicEvent(
   if (!row.success) {
     return { kind: 'invalid', reason: 'storedPayloadInvalid' }
   }
-  if (row.data.protocolVersion !== 1) {
-    return { kind: 'invalid', reason: 'unsupportedProtocol' }
-  }
   const event = SseEventSchema.safeParse(row.data.publicEventPayload)
   if (
     !event.success ||
@@ -53,8 +47,7 @@ export function decodeStoredPublicEvent(
     event.data.eventId.toLowerCase() !== row.data.eventId.toLowerCase() ||
     event.data.sessionId.toLowerCase() !== row.data.sessionId.toLowerCase() ||
     event.data.eventSeq !== row.data.eventSeq ||
-    event.data.stateVersion !== row.data.stateVersionAfter ||
-    event.data.protocolVersion !== row.data.protocolVersion
+    event.data.stateVersion !== row.data.stateVersionAfter
   ) {
     return { kind: 'invalid', reason: 'storedPayloadInvalid' }
   }

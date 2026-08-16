@@ -19,12 +19,16 @@ import {
   SessionMutationTransitionError,
 } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
-import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
-import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
+import {
+  currentPrivateEventReader,
+  encodeCurrentPrivateEvent,
+} from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-state/current-private-event-protocol.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
-import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
-import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
+import {
+  currentSnapshotReader,
+  encodeSnapshotV1,
+} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
 const sessionId = '22222222-2222-4222-8222-222222222222'
@@ -32,8 +36,8 @@ const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
 const handId = '44444444-4444-4444-8444-444444444444'
 const recoveryAt = '2026-08-04T09:00:00.000Z'
 const registries = {
-  snapshot: productionSnapshotVersionRegistry,
-  privateEvent: productionPrivateEventVersionRegistry,
+  snapshot: currentSnapshotReader,
+  privateEvent: currentPrivateEventReader,
 }
 
 function createTransactionMock(responses: readonly unknown[]) {
@@ -92,7 +96,7 @@ function storedRows() {
       lastCompletedHandSummary: null,
     }),
   )
-  const event = encodePrivateEventV1(
+  const event = encodeCurrentPrivateEvent(
     createHandStartedEventDraft({
       handId,
       handNumber: 1,
@@ -374,39 +378,6 @@ describe('session recovery repository', () => {
       ),
     ).rejects.toBeInstanceOf(DatabaseOperationError)
     expect(tracked.getSqlCallCount()).toBe(2)
-  })
-
-  test('replaces only a legacy diagnostic code on failed explicit retry', async () => {
-    const stored = storedRows()
-    const diagnosedAt = '2026-08-02T08:00:00.000000Z'
-    const tracked = createTransactionMock([
-      [
-        lockedRow({
-          lifecycleStatus: 'readonlyDiagnostic',
-          diagnosticCode: 'legacyDiagnosticState',
-          diagnosedAt,
-        }),
-      ],
-      [],
-      stored.hands,
-      stored.events,
-      [{ sessionId }],
-    ])
-
-    await expect(
-      retryReadonlySessionRecovery(
-        tracked.transaction,
-        await resolvedOwner(),
-        sessionId,
-        recoveryAt,
-        registries,
-      ),
-    ).resolves.toEqual({
-      kind: 'readonlyDiagnostic',
-      code: 'snapshotMissing',
-      diagnosedAt,
-    })
-    expect(tracked.getSqlCallCount()).toBe(5)
   })
 
   test('preserves a concrete diagnostic code and first time on failed retry', async () => {

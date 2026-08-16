@@ -1,7 +1,4 @@
-import {
-  PROTOCOL_VERSION,
-  ProviderSettingsResponseSchema,
-} from '@tx-holdem-coach/contracts'
+import { ProviderSettingsResponseSchema } from '@tx-holdem-coach/contracts'
 import type { ProviderSettingsResponse } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
 import { parseSupabaseDatabaseUrl } from './db/database-url-policy.js'
@@ -168,7 +165,6 @@ export function getProviderSettingsResponse(
   const kimiConfigured = config.hasKimiApiKey()
 
   return ProviderSettingsResponseSchema.parse({
-    protocolVersion: PROTOCOL_VERSION,
     deepSeek: {
       ...createInitialProviderHealthSummary(deepSeekConfigured),
       canCreateSession: deepSeekConfigured,

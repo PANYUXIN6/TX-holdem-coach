@@ -110,7 +110,6 @@ function queuedPlayerRunRow() {
     attempts: [],
     invocations: [],
     playerDecision: null,
-    coachReview: null,
   }
 }
 
@@ -227,59 +226,6 @@ function playerDecisionRow() {
     validatorResultPayload: { schemaVersion: 1, valid: true },
     createdAt: '2026-08-04T12:00:02.000000Z',
     submittedAt: null,
-  }
-}
-
-function coachReviewRow() {
-  const reviewId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-  return {
-    reviewId,
-    agentRunId,
-    databaseOwnerId,
-    sessionId,
-    handId,
-    runtime: 'coach' as const,
-    requestId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-    status: 'completed' as const,
-    frozenContextPayloadVersion: 1,
-    frozenContextPayload: { schemaVersion: 1 },
-    analysisPayloadVersion: 2,
-    analysisPayload: { schemaVersion: 2 },
-    hindsightPayloadVersion: 3,
-    hindsightPayload: { schemaVersion: 3 },
-    finalReportPayloadVersion: 4,
-    finalReportPayload: { schemaVersion: 4 },
-    assessments: [
-      {
-        assessmentId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-        coachReviewId: reviewId,
-        databaseOwnerId,
-        sessionId,
-        handId,
-        decisionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-        street: 'turn' as const,
-        ordinalOnStreet: 0,
-        assessmentPayloadVersion: 1,
-        assessmentPayload: { schemaVersion: 1, grade: 'good' },
-        createdAt: '2026-08-04T12:00:04.000000Z',
-      },
-      {
-        assessmentId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
-        coachReviewId: reviewId,
-        databaseOwnerId,
-        sessionId,
-        handId,
-        decisionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-        street: 'flop' as const,
-        ordinalOnStreet: 0,
-        assessmentPayloadVersion: 1,
-        assessmentPayload: { schemaVersion: 1, grade: 'mistake' },
-        createdAt: '2026-08-04T12:00:03.000000Z',
-      },
-    ],
-    requestedAt: '2026-08-04T12:00:02.000000Z',
-    completedAt: '2026-08-04T12:00:05.000000Z',
-    updatedAt: '2026-08-04T12:00:05.000000Z',
   }
 }
 
@@ -1350,7 +1296,7 @@ describe('agent foundation audit repository', () => {
     })
   })
 
-  test('passes one Coach review with street-ordered assessments through its decoder', async () => {
+  test('passes Coach checkpoint and result slots through its decoder', async () => {
     let received: unknown
     const repository = createAgentFoundationAuditRepository({
       runtimeAuditDecoders: {
@@ -1359,16 +1305,21 @@ describe('agent foundation audit repository', () => {
           decode(input) {
             received = input
             return {
-              checkpoint: null,
+              checkpoint: { decoded: true },
               result: null,
-              review: { decoded: true },
             }
           },
         },
       },
     })
     const transaction = createTransactionMock([
-      [{ ...queuedCoachRunRow(), coachReview: coachReviewRow() }],
+      [
+        {
+          ...queuedCoachRunRow(),
+          checkpointPayloadVersion: 1,
+          checkpointPayload: { schemaVersion: 1 },
+        },
+      ],
     ])
 
     const audit = await repository.readAgentRunAudit(
@@ -1380,60 +1331,17 @@ describe('agent foundation audit repository', () => {
 
     expect(received).toMatchObject({
       runtime: 'coach',
-      review: {
-        ownerId: databaseOwnerId,
-        frozenContext: { rowPayloadVersion: 1 },
-        analysis: { rowPayloadVersion: 2 },
-        hindsight: { rowPayloadVersion: 3 },
-        finalReport: { rowPayloadVersion: 4 },
-      },
+      checkpoint: { rowPayloadVersion: 1 },
+      result: null,
     })
-    expect(
-      (
-        received as { review: { assessments: { street: string }[] } }
-      ).review.assessments.map(({ street }) => street),
-    ).toEqual(['flop', 'turn'])
     expect(audit.runtime).toBe('coach')
     if (audit.runtime !== 'coach') throw new Error('Expected Coach audit.')
-    expect(audit.runtimeAudit.review).toEqual({ decoded: true })
-    expect(Object.isFrozen(audit.runtimeAudit.review)).toBe(true)
+    expect(audit.runtimeAudit).toEqual({
+      checkpoint: { decoded: true },
+      result: null,
+    })
+    expect(Object.isFrozen(audit.runtimeAudit)).toBe(true)
   })
-
-  test.each([
-    'coachAnalysis',
-    'coachHindsight',
-    'coachFinalReport',
-    'coachDecisionAssessment',
-  ] as const)(
-    'preserves an injected Coach decoder unknown-version error for %s',
-    async (payloadKind) => {
-      const repository = createAgentFoundationAuditRepository({
-        runtimeAuditDecoders: {
-          coach: {
-            runtime: 'coach',
-            decode() {
-              throw new UnknownPayloadVersionError(payloadKind)
-            },
-          },
-        },
-      })
-      const transaction = createTransactionMock([
-        [{ ...queuedCoachRunRow(), coachReview: coachReviewRow() }],
-      ])
-
-      await expect(
-        repository.readAgentRunAudit(
-          transaction,
-          await resolvedOwner(),
-          sessionId,
-          agentRunId,
-        ),
-      ).rejects.toMatchObject({
-        name: 'UnknownPayloadVersionError',
-        payloadKind,
-      })
-    },
-  )
 
   test.each(['playerCandidateSet', 'playerValidatorResult'] as const)(
     'preserves an injected Player decoder unknown-version error for %s',

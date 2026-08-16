@@ -43,7 +43,6 @@ describe('server configuration', () => {
       ],
     })
     expect(getProviderSettingsResponse(config)).toStrictEqual({
-      protocolVersion: 1,
       deepSeek: {
         configured: false,
         checkStatus: 'notConfigured',
@@ -95,7 +94,6 @@ describe('server configuration', () => {
       warnings: ['DeepSeek API Key 未配置，无法创建场次。'],
     })
     expect(getProviderSettingsResponse(config)).toStrictEqual({
-      protocolVersion: 1,
       deepSeek: {
         configured: false,
         checkStatus: 'notConfigured',
@@ -126,7 +124,6 @@ describe('server configuration', () => {
       warnings: ['Kimi API Key 未配置，自动降级不可用。'],
     })
     expect(getProviderSettingsResponse(config)).toStrictEqual({
-      protocolVersion: 1,
       deepSeek: {
         configured: true,
         checkStatus: 'notChecked',
@@ -166,7 +163,6 @@ describe('server configuration', () => {
       warnings: [],
     })
     expect(getProviderSettingsResponse(config)).toStrictEqual({
-      protocolVersion: 1,
       deepSeek: {
         configured: true,
         checkStatus: 'notChecked',

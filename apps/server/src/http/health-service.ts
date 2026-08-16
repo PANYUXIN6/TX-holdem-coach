@@ -1,6 +1,5 @@
 import {
   HealthResponseSchema,
-  PROTOCOL_VERSION,
   type HealthResponse,
 } from '@tx-holdem-coach/contracts'
 import type { Sql } from 'postgres'
@@ -41,7 +40,6 @@ export function createHealthService(
         if (timeout !== undefined) clearTimeout(timeout)
       }
       return HealthResponseSchema.parse({
-        protocolVersion: PROTOCOL_VERSION,
         status: 'ok',
         database: 'available',
       })

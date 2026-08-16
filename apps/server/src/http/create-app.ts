@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import {
-  ErrorResponseSchema,
-  PROTOCOL_VERSION,
-} from '@tx-holdem-coach/contracts'
+import { ErrorResponseSchema } from '@tx-holdem-coach/contracts'
 import { Hono, type Context } from 'hono'
 import type { PersonaCatalog } from '../personas/catalog.js'
 import type { ProviderHealthService } from '../providers/provider-health-service.js'
@@ -313,7 +310,6 @@ export function createApp(
   app.notFound((context) =>
     context.json(
       ErrorResponseSchema.parse({
-        protocolVersion: PROTOCOL_VERSION,
         code: 'ROUTE_NOT_FOUND',
         message: '接口不存在。',
       }),

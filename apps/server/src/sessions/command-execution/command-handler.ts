@@ -5,11 +5,11 @@ import type {
   PrivateTableState,
   PrivateTableStateContent,
 } from '../authoritative-state/private-table-state.js'
-import type { PrivateEventV2 } from '../authoritative-state/private-event-v2.js'
+import type { PrivateEvent } from '../authoritative-state/private-event.js'
 import type { StableCommandRejection } from './command-rejection.js'
 
 type PokerPrivateEvent = Extract<
-  PrivateEventV2,
+  PrivateEvent,
   {
     type:
       | 'handStarted'
@@ -23,11 +23,11 @@ export type EventDraftForCommand<Type extends LedgerCommand['type']> =
   Type extends 'playerAction' | 'aiAction'
     ? PokerPrivateEvent
     : Type extends 'startNextHand'
-      ? Extract<PrivateEventV2, { type: 'aiAutoRebuy' | 'handStarted' }>
+      ? Extract<PrivateEvent, { type: 'aiAutoRebuy' | 'handStarted' }>
       : Type extends 'rebuy'
-        ? Extract<PrivateEventV2, { type: 'userRebuy' }>
+        ? Extract<PrivateEvent, { type: 'userRebuy' }>
         : Type extends 'endSession'
-          ? Extract<PrivateEventV2, { type: 'handAborted' | 'sessionEnded' }>
+          ? Extract<PrivateEvent, { type: 'handAborted' | 'sessionEnded' }>
           : never
 
 export interface PlayerCoordinationState {
@@ -45,7 +45,7 @@ export type PreparedStateEffect =
 
 export interface PreparedDomainMutationCandidate<
   RelationPlan = unknown,
-  EventDraft = PrivateEventV2,
+  EventDraft = PrivateEvent,
 > {
   readonly stateEffect: PreparedStateEffect
   readonly lifecycleAfter: 'active' | 'ended'
@@ -57,7 +57,7 @@ export interface PreparedDomainMutationCandidate<
 
 export type PrepareCommandResult<
   RelationPlan = unknown,
-  EventDraft = PrivateEventV2,
+  EventDraft = PrivateEvent,
   Rejection = StableCommandRejection,
 > =
   | {

@@ -20,7 +20,7 @@ M3.4 负责：
 - 用户筹码为 `0` 时只接受一次补入 2,000，或直接结束场次；
 - `startNextHand` 在任何随机性、Hand ID 或 AI 自动买入发生前拒绝零筹码用户；
 - 仅在合法 `startNextHand` 内为每个筹码为 `0` 的 AI 自动买入 2,000，并按座位升序生成一条一座位事件；
-- 使用命令前原始 `betweenHands` 状态创建 `HandStartCheckpointV1`，使同命令自动买入可被中止完整回退；
+- 使用命令前原始 `betweenHands` 状态创建 `HandStartCheckpoint`，使同命令自动买入可被中止完整回退；
 - 只调用一次 M1.9 `startPokerHand()`，由权威 `completedHandCount` 决定按钮轮转、下盲、发牌和首个行动位；
 - 在同一事务中插入 `hands.inProgress`，写入连续事件、最终快照和命令账本；
 - 两手之间正常结束只更新 Session 生命周期与事件游标，不改快照和 `stateVersion`；
@@ -48,7 +48,7 @@ M3.4 只完整测试生产 Handler 与事务组合。在 M3.5/M3.6 建立 HTTP/S
 
 M3.4 设计可以先确认，但实现开始前必须满足：
 
-1. M3.2 已能原子创建版本 `1` 的第一手及其 `HandStartCheckpointV1`；
+1. M3.2 已能原子创建版本 `1` 的第一手及其 `HandStartCheckpoint`；
 2. M3.3 已能把终止行动原子完成为 `active + betweenHands + currentHandId null`；
 3. M3.3 已把唯一 `commandAt` 传入 `ApplyRelationsContext`；
 4. M3.3 已发布其稳定行动拒绝和 `playerAction` verifier，且 M3.1 执行器基线保持通过；
@@ -65,9 +65,9 @@ M3.4 设计可以先确认，但实现开始前必须满足：
 | Contracts `endSession` | 同一空 payload 按权威阶段与协调状态选择正常结束或暂停中止 |
 | `PrivateTableState` | 继续拥有筹码、累计买入、已完成手数、按钮和最近摘要 |
 | M1.9 `startPokerHand()` | 唯一按钮轮转、下盲、发牌、开手事实与事件入口 |
-| `createHandStartCheckpointV1()` | 固化开手命令前状态和 M1.9 `StartedHandFacts` |
+| `createHandStartCheckpoint()` | 固化开手命令前状态、M1.9 `StartedHandFacts` 和规则集身份 |
 | M2.7 Hand Repository | 插入 `inProgress` Hand 或将当前 Hand 转为 `aborted` |
-| 私有事件 V2 | 直接使用 `userRebuy`、`aiAutoRebuy`、`handAborted`、`sessionEnded` 与 `handStarted` |
+| 当前私有事件 | 直接使用 `userRebuy`、`aiAutoRebuy`、`handAborted`、`sessionEnded` 与 `handStarted` |
 | M3.1/M3.3 执行器 | 恢复、账本、版本、事件、统一时间、投影、关系写入与提交后交付 |
 
 ### 2.3 当前明确缺口
@@ -323,7 +323,8 @@ const startResult = startPokerHand(pokerAfterAutoRebuys, {
   randomSource,
 })
 
-const checkpoint = createHandStartCheckpointV1({
+const checkpoint = createHandStartCheckpoint({
+  pokerRuleSetVersion: POKER_RULE_SET_VERSION,
   stateBeforeStartCommand,
   startedHand: startResult.startedHand,
 })
@@ -357,7 +358,7 @@ interface StartNextHandRelationPlan {
   readonly kind: 'startNextHand'
   readonly sessionId: string
   readonly handId: string
-  readonly checkpoint: HandStartCheckpointV1
+  readonly checkpoint: HandStartCheckpoint
 }
 ```
 
@@ -473,7 +474,7 @@ active
 ```ts
 interface PausedAbortContext {
   readonly handId: string
-  readonly checkpoint: HandStartCheckpointV1
+  readonly checkpoint: HandStartCheckpoint
   readonly failedPlayerRunId: string
   readonly failureReasonCode: string
 }
@@ -536,7 +537,7 @@ interface AbortHandRelationPlan {
   readonly handId: string
   readonly failedPlayerRunId: string
   readonly failureReasonCode: string
-  readonly checkpoint: HandStartCheckpointV1
+  readonly checkpoint: HandStartCheckpoint
 }
 ```
 

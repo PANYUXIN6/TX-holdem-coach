@@ -4,7 +4,6 @@ import {
   CreateSessionRequestSchema,
   CreateSessionResponseSchema,
   ErrorResponseSchema,
-  PROTOCOL_VERSION,
   SessionPathParamsSchema,
   SessionSnapshotResponseSchema,
   type PublicSessionSnapshot,
@@ -57,7 +56,6 @@ export function registerSessionRoutes(
     const snapshot = await ports.query.findActive()
     if (snapshot === null) throw sessionNotFound()
     return jsonResponse(context, SessionSnapshotResponseSchema, {
-      protocolVersion: PROTOCOL_VERSION,
       snapshot,
     })
   })
@@ -70,7 +68,6 @@ export function registerSessionRoutes(
     const snapshot = await ports.query.getById(sessionId)
     if (snapshot === null) throw sessionNotFound()
     return jsonResponse(context, SessionSnapshotResponseSchema, {
-      protocolVersion: PROTOCOL_VERSION,
       snapshot,
     })
   })
@@ -99,7 +96,6 @@ export function registerSessionRoutes(
         context,
         ErrorResponseSchema,
         {
-          protocolVersion: PROTOCOL_VERSION,
           code: 'COMMAND_NOT_ALLOWED_IN_PHASE',
           message: '当前服务尚不支持该命令类型。',
         },
@@ -123,7 +119,6 @@ export function registerSessionRoutes(
       context,
       ErrorResponseSchema,
       {
-        protocolVersion: PROTOCOL_VERSION,
         code: 'COMMAND_PROCESSING',
         message: '命令正在处理中，请稍后重试。',
       },

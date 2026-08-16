@@ -1,3 +1,5 @@
+CREATE SCHEMA IF NOT EXISTS "app_private";
+--> statement-breakpoint
 CREATE TABLE "app_private"."agent_attempts" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"agent_run_id" uuid NOT NULL,
@@ -148,7 +150,6 @@ CREATE TABLE "app_private"."agent_runs" (
 	CONSTRAINT "agent_runs_session_request_unique" UNIQUE("session_id","decision_request_id"),
 	CONSTRAINT "agent_runs_id_session_owner_request_unique" UNIQUE("id","session_id","owner_id","decision_request_id"),
 	CONSTRAINT "agent_runs_player_decision_identity_unique" UNIQUE("id","owner_id","session_id","hand_id","participant_id","source_state_version","decision_request_id","runtime"),
-	CONSTRAINT "agent_runs_coach_review_identity_unique" UNIQUE("id","owner_id","session_id","hand_id","runtime"),
 	CONSTRAINT "agent_runs_id_owner_session_unique" UNIQUE("id","owner_id","session_id"),
 	CONSTRAINT "agent_runs_runtime_check" CHECK ("app_private"."agent_runs"."runtime" IN ('player', 'coach')),
 	CONSTRAINT "agent_runs_lifecycle_check" CHECK ("app_private"."agent_runs"."lifecycle" IN (
@@ -176,7 +177,8 @@ CREATE TABLE "app_private"."agent_runs" (
         OR (
           "app_private"."agent_runs"."lease_owner" IS NOT NULL
           AND "app_private"."agent_runs"."lease_expires_at" IS NOT NULL
-          AND length(btrim("app_private"."agent_runs"."lease_owner")) > 0
+          AND
+          length(btrim("app_private"."agent_runs"."lease_owner")) > 0
         )),
 	CONSTRAINT "agent_runs_required_payloads_check" CHECK ("app_private"."agent_runs"."run_config_payload_version" > 0
         AND jsonb_typeof("app_private"."agent_runs"."run_config_payload") = 'object'
@@ -206,88 +208,11 @@ CREATE TABLE "app_private"."app_settings" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"owner_id" uuid NOT NULL,
 	"setting_key" text NOT NULL,
-	"setting_payload_version" integer NOT NULL,
 	"setting_payload" jsonb NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "app_settings_owner_key_unique" UNIQUE("owner_id","setting_key"),
 	CONSTRAINT "app_settings_key_not_blank" CHECK (length(btrim("app_private"."app_settings"."setting_key")) > 0),
-	CONSTRAINT "app_settings_payload_check" CHECK ("app_private"."app_settings"."setting_payload_version" > 0
-        AND jsonb_typeof("app_private"."app_settings"."setting_payload") = 'object')
-);
---> statement-breakpoint
-CREATE TABLE "app_private"."coach_decision_assessments" (
-	"id" uuid PRIMARY KEY NOT NULL,
-	"coach_review_id" uuid NOT NULL,
-	"owner_id" uuid NOT NULL,
-	"session_id" uuid NOT NULL,
-	"hand_id" uuid NOT NULL,
-	"decision_id" uuid NOT NULL,
-	"street" text NOT NULL,
-	"ordinal_on_street" integer NOT NULL,
-	"assessment_payload_version" integer NOT NULL,
-	"assessment_payload" jsonb NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "coach_decision_assessments_review_decision_unique" UNIQUE("coach_review_id","decision_id"),
-	CONSTRAINT "coach_decision_assessments_street_check" CHECK ("app_private"."coach_decision_assessments"."street" IN ('preflop', 'flop', 'turn', 'river')),
-	CONSTRAINT "coach_decision_assessments_ordinal_check" CHECK ("app_private"."coach_decision_assessments"."ordinal_on_street" >= 0),
-	CONSTRAINT "coach_decision_assessments_payload_check" CHECK ("app_private"."coach_decision_assessments"."assessment_payload_version" > 0
-        AND jsonb_typeof("app_private"."coach_decision_assessments"."assessment_payload") = 'object')
-);
---> statement-breakpoint
-CREATE TABLE "app_private"."coach_reviews" (
-	"id" uuid PRIMARY KEY NOT NULL,
-	"agent_run_id" uuid NOT NULL,
-	"owner_id" uuid NOT NULL,
-	"session_id" uuid NOT NULL,
-	"hand_id" uuid NOT NULL,
-	"runtime" text DEFAULT 'coach' NOT NULL,
-	"request_id" uuid NOT NULL,
-	"status" text NOT NULL,
-	"frozen_context_payload_version" integer NOT NULL,
-	"frozen_context_payload" jsonb NOT NULL,
-	"analysis_payload_version" integer,
-	"analysis_payload" jsonb,
-	"hindsight_payload_version" integer,
-	"hindsight_payload" jsonb,
-	"final_report_payload_version" integer,
-	"final_report_payload" jsonb,
-	"requested_at" timestamp with time zone NOT NULL,
-	"completed_at" timestamp with time zone,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "coach_reviews_agent_run_unique" UNIQUE("agent_run_id"),
-	CONSTRAINT "coach_reviews_session_request_unique" UNIQUE("session_id","request_id"),
-	CONSTRAINT "coach_reviews_id_scope_hand_unique" UNIQUE("id","owner_id","session_id","hand_id"),
-	CONSTRAINT "coach_reviews_runtime_check" CHECK ("app_private"."coach_reviews"."runtime" = 'coach'),
-	CONSTRAINT "coach_reviews_status_check" CHECK ("app_private"."coach_reviews"."status" IN ('pending', 'running', 'completed', 'failed')),
-	CONSTRAINT "coach_reviews_context_payload_check" CHECK ("app_private"."coach_reviews"."frozen_context_payload_version" > 0
-        AND jsonb_typeof("app_private"."coach_reviews"."frozen_context_payload") = 'object'),
-	CONSTRAINT "coach_reviews_analysis_payload_check" CHECK ((
-        "app_private"."coach_reviews"."analysis_payload_version" IS NULL
-        AND "app_private"."coach_reviews"."analysis_payload" IS NULL
-      ) OR (
-        "app_private"."coach_reviews"."analysis_payload_version" IS NOT NULL
-        AND "app_private"."coach_reviews"."analysis_payload" IS NOT NULL
-        AND "app_private"."coach_reviews"."analysis_payload_version" > 0
-        AND jsonb_typeof("app_private"."coach_reviews"."analysis_payload") = 'object'
-      )),
-	CONSTRAINT "coach_reviews_hindsight_payload_check" CHECK ((
-        "app_private"."coach_reviews"."hindsight_payload_version" IS NULL
-        AND "app_private"."coach_reviews"."hindsight_payload" IS NULL
-      ) OR (
-        "app_private"."coach_reviews"."hindsight_payload_version" IS NOT NULL
-        AND "app_private"."coach_reviews"."hindsight_payload" IS NOT NULL
-        AND "app_private"."coach_reviews"."hindsight_payload_version" > 0
-        AND jsonb_typeof("app_private"."coach_reviews"."hindsight_payload") = 'object'
-      )),
-	CONSTRAINT "coach_reviews_final_report_payload_check" CHECK ((
-        "app_private"."coach_reviews"."final_report_payload_version" IS NULL
-        AND "app_private"."coach_reviews"."final_report_payload" IS NULL
-      ) OR (
-        "app_private"."coach_reviews"."final_report_payload_version" IS NOT NULL
-        AND "app_private"."coach_reviews"."final_report_payload" IS NOT NULL
-        AND "app_private"."coach_reviews"."final_report_payload_version" > 0
-        AND jsonb_typeof("app_private"."coach_reviews"."final_report_payload") = 'object'
-      ))
+	CONSTRAINT "app_settings_payload_check" CHECK (jsonb_typeof("app_private"."app_settings"."setting_payload") = 'object')
 );
 --> statement-breakpoint
 CREATE TABLE "app_private"."command_ledger" (
@@ -329,47 +254,6 @@ CREATE TABLE "app_private"."command_ledger" (
       ))
 );
 --> statement-breakpoint
-CREATE TABLE "app_private"."hand_statistics_shards" (
-	"id" uuid PRIMARY KEY NOT NULL,
-	"owner_id" uuid NOT NULL,
-	"session_id" uuid NOT NULL,
-	"hand_id" uuid NOT NULL,
-	"participant_id" uuid NOT NULL,
-	"participant_type" text NOT NULL,
-	"completed_at" timestamp with time zone NOT NULL,
-	"logical_position" text NOT NULL,
-	"calculation_version" integer NOT NULL,
-	"calculated_at" timestamp with time zone NOT NULL,
-	"source_through_event_seq" bigint NOT NULL,
-	"completed_result_payload_version" integer NOT NULL,
-	"persona_id" text,
-	"persona_version" integer,
-	"config_snapshot_key" text,
-	"metrics_payload_version" integer NOT NULL,
-	"metrics_payload" jsonb NOT NULL,
-	CONSTRAINT "hand_statistics_shards_hand_participant_unique" UNIQUE("hand_id","participant_id"),
-	CONSTRAINT "hand_statistics_shards_participant_type_check" CHECK ("app_private"."hand_statistics_shards"."participant_type" IN ('user', 'agent')),
-	CONSTRAINT "hand_statistics_shards_agent_config_check" CHECK ((
-        "app_private"."hand_statistics_shards"."participant_type" = 'user'
-        AND "app_private"."hand_statistics_shards"."persona_id" IS NULL
-        AND "app_private"."hand_statistics_shards"."persona_version" IS NULL
-        AND "app_private"."hand_statistics_shards"."config_snapshot_key" IS NULL
-      ) OR (
-        "app_private"."hand_statistics_shards"."participant_type" = 'agent'
-        AND "app_private"."hand_statistics_shards"."persona_id" IS NOT NULL
-        AND "app_private"."hand_statistics_shards"."persona_version" IS NOT NULL
-        AND "app_private"."hand_statistics_shards"."config_snapshot_key" IS NOT NULL
-        AND length(btrim("app_private"."hand_statistics_shards"."persona_id")) > 0
-        AND "app_private"."hand_statistics_shards"."persona_version" > 0
-        AND "app_private"."hand_statistics_shards"."config_snapshot_key" ~ '^[0-9a-f]{64}$'
-      )),
-	CONSTRAINT "hand_statistics_shards_versions_check" CHECK ("app_private"."hand_statistics_shards"."calculation_version" > 0
-        AND "app_private"."hand_statistics_shards"."completed_result_payload_version" > 0
-        AND "app_private"."hand_statistics_shards"."metrics_payload_version" > 0),
-	CONSTRAINT "hand_statistics_shards_source_event_seq_safe" CHECK ("app_private"."hand_statistics_shards"."source_through_event_seq" BETWEEN 0 AND 9007199254740991),
-	CONSTRAINT "hand_statistics_shards_metrics_payload_check" CHECK (jsonb_typeof("app_private"."hand_statistics_shards"."metrics_payload") = 'object')
-);
---> statement-breakpoint
 CREATE TABLE "app_private"."hands" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"session_id" uuid NOT NULL,
@@ -399,6 +283,17 @@ CREATE TABLE "app_private"."hands" (
 	CONSTRAINT "hands_participant_seats_check" CHECK (cardinality("app_private"."hands"."participant_seats") BETWEEN 6 AND 9
         AND "app_private"."hands"."participant_seats" <@ ARRAY[0,1,2,3,4,5,6,7,8]::integer[]
         AND "app_private"."hands"."participant_seats" @> ARRAY[0]::integer[]),
+	CONSTRAINT "hands_participant_seats_unique_check" CHECK (cardinality("app_private"."hands"."participant_seats") = (
+        ("app_private"."hands"."participant_seats" @> ARRAY[0]::integer[])::integer
+        + ("app_private"."hands"."participant_seats" @> ARRAY[1]::integer[])::integer
+        + ("app_private"."hands"."participant_seats" @> ARRAY[2]::integer[])::integer
+        + ("app_private"."hands"."participant_seats" @> ARRAY[3]::integer[])::integer
+        + ("app_private"."hands"."participant_seats" @> ARRAY[4]::integer[])::integer
+        + ("app_private"."hands"."participant_seats" @> ARRAY[5]::integer[])::integer
+        + ("app_private"."hands"."participant_seats" @> ARRAY[6]::integer[])::integer
+        + ("app_private"."hands"."participant_seats" @> ARRAY[7]::integer[])::integer
+        + ("app_private"."hands"."participant_seats" @> ARRAY[8]::integer[])::integer
+      )),
 	CONSTRAINT "hands_status_payload_check" CHECK ((
         "app_private"."hands"."status" = 'inProgress'
         AND "app_private"."hands"."completed_result_payload_version" IS NULL
@@ -511,7 +406,6 @@ CREATE TABLE "app_private"."session_events" (
 	"state_version_after" bigint NOT NULL,
 	"private_event_payload_version" integer NOT NULL,
 	"private_event_payload" jsonb NOT NULL,
-	"protocol_version" integer NOT NULL,
 	"public_event_payload" jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "session_events_session_event_seq_unique" UNIQUE("session_id","event_seq"),
@@ -520,8 +414,7 @@ CREATE TABLE "app_private"."session_events" (
         AND "app_private"."session_events"."state_version_after" BETWEEN 0 AND 9007199254740991),
 	CONSTRAINT "session_events_private_payload_check" CHECK ("app_private"."session_events"."private_event_payload_version" > 0
         AND jsonb_typeof("app_private"."session_events"."private_event_payload") = 'object'),
-	CONSTRAINT "session_events_public_payload_check" CHECK ("app_private"."session_events"."protocol_version" > 0
-        AND jsonb_typeof("app_private"."session_events"."public_event_payload") = 'object')
+	CONSTRAINT "session_events_public_payload_check" CHECK (jsonb_typeof("app_private"."session_events"."public_event_payload") = 'object')
 );
 --> statement-breakpoint
 CREATE TABLE "app_private"."session_participants" (
@@ -539,44 +432,6 @@ CREATE TABLE "app_private"."session_participants" (
 	CONSTRAINT "session_participants_seat_check" CHECK ("app_private"."session_participants"."seat_number" BETWEEN 0 AND 8),
 	CONSTRAINT "session_participants_type_seat_check" CHECK (("app_private"."session_participants"."participant_type" = 'user' AND "app_private"."session_participants"."seat_number" = 0)
         OR ("app_private"."session_participants"."participant_type" = 'agent' AND "app_private"."session_participants"."seat_number" BETWEEN 1 AND 8))
-);
---> statement-breakpoint
-CREATE TABLE "app_private"."session_settlement_statistics_shards" (
-	"id" uuid PRIMARY KEY NOT NULL,
-	"owner_id" uuid NOT NULL,
-	"session_id" uuid NOT NULL,
-	"participant_id" uuid NOT NULL,
-	"participant_type" text NOT NULL,
-	"persona_id" text,
-	"persona_version" integer,
-	"config_snapshot_key" text,
-	"calculation_version" integer NOT NULL,
-	"calculated_at" timestamp with time zone NOT NULL,
-	"source_state_version" bigint NOT NULL,
-	"source_snapshot_payload_version" integer NOT NULL,
-	"metrics_payload_version" integer NOT NULL,
-	"metrics_payload" jsonb NOT NULL,
-	CONSTRAINT "session_settlement_shards_session_participant_unique" UNIQUE("session_id","participant_id"),
-	CONSTRAINT "session_settlement_shards_participant_type_check" CHECK ("app_private"."session_settlement_statistics_shards"."participant_type" IN ('user', 'agent')),
-	CONSTRAINT "session_settlement_shards_agent_config_check" CHECK ((
-        "app_private"."session_settlement_statistics_shards"."participant_type" = 'user'
-        AND "app_private"."session_settlement_statistics_shards"."persona_id" IS NULL
-        AND "app_private"."session_settlement_statistics_shards"."persona_version" IS NULL
-        AND "app_private"."session_settlement_statistics_shards"."config_snapshot_key" IS NULL
-      ) OR (
-        "app_private"."session_settlement_statistics_shards"."participant_type" = 'agent'
-        AND "app_private"."session_settlement_statistics_shards"."persona_id" IS NOT NULL
-        AND "app_private"."session_settlement_statistics_shards"."persona_version" IS NOT NULL
-        AND "app_private"."session_settlement_statistics_shards"."config_snapshot_key" IS NOT NULL
-        AND length(btrim("app_private"."session_settlement_statistics_shards"."persona_id")) > 0
-        AND "app_private"."session_settlement_statistics_shards"."persona_version" > 0
-        AND "app_private"."session_settlement_statistics_shards"."config_snapshot_key" ~ '^[0-9a-f]{64}$'
-      )),
-	CONSTRAINT "session_settlement_shards_versions_check" CHECK ("app_private"."session_settlement_statistics_shards"."calculation_version" > 0
-        AND "app_private"."session_settlement_statistics_shards"."source_snapshot_payload_version" > 0
-        AND "app_private"."session_settlement_statistics_shards"."metrics_payload_version" > 0),
-	CONSTRAINT "session_settlement_shards_source_state_safe" CHECK ("app_private"."session_settlement_statistics_shards"."source_state_version" BETWEEN 0 AND 9007199254740991),
-	CONSTRAINT "session_settlement_shards_metrics_payload_check" CHECK (jsonb_typeof("app_private"."session_settlement_statistics_shards"."metrics_payload") = 'object')
 );
 --> statement-breakpoint
 CREATE TABLE "app_private"."session_snapshots" (
@@ -601,6 +456,8 @@ CREATE TABLE "app_private"."sessions" (
 	"active_decision_request_id" uuid,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"ended_at" timestamp with time zone,
+	"diagnostic_code" text,
+	"diagnosed_at" timestamp with time zone,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "sessions_id_owner_unique" UNIQUE("id","owner_id"),
 	CONSTRAINT "sessions_lifecycle_status_check" CHECK ("app_private"."sessions"."lifecycle_status" IN ('active', 'ended', 'readonlyDiagnostic')),
@@ -616,8 +473,29 @@ CREATE TABLE "app_private"."sessions" (
         AND "app_private"."sessions"."active_player_run_id" IS NULL
         AND "app_private"."sessions"."active_decision_request_id" IS NULL
       )),
-	CONSTRAINT "sessions_ended_at_check" CHECK (("app_private"."sessions"."lifecycle_status" = 'ended' AND "app_private"."sessions"."ended_at" IS NOT NULL)
-        OR ("app_private"."sessions"."lifecycle_status" <> 'ended'))
+	CONSTRAINT "sessions_ended_at_check" CHECK (("app_private"."sessions"."lifecycle_status" = 'active' AND "app_private"."sessions"."ended_at" IS NULL)
+        OR ("app_private"."sessions"."lifecycle_status" = 'ended' AND "app_private"."sessions"."ended_at" IS NOT NULL)
+        OR ("app_private"."sessions"."lifecycle_status" = 'readonlyDiagnostic')),
+	CONSTRAINT "sessions_diagnostic_fields_check" CHECK ((
+        "app_private"."sessions"."lifecycle_status" = 'readonlyDiagnostic'
+        AND "app_private"."sessions"."diagnostic_code" IS NOT NULL
+        AND "app_private"."sessions"."diagnosed_at" IS NOT NULL
+      ) OR (
+        "app_private"."sessions"."lifecycle_status" <> 'readonlyDiagnostic'
+        AND "app_private"."sessions"."diagnostic_code" IS NULL
+        AND "app_private"."sessions"."diagnosed_at" IS NULL
+      )),
+	CONSTRAINT "sessions_diagnostic_code_check" CHECK ("app_private"."sessions"."diagnostic_code" IS NULL OR "app_private"."sessions"."diagnostic_code" IN (
+        'eventSequenceInvalid',
+        'eventVersionUnknown',
+        'eventPayloadInvalid',
+        'eventRowMismatch',
+        'snapshotMissing',
+        'snapshotVersionUnknown',
+        'snapshotPayloadInvalid',
+        'stateVersionMismatch',
+        'handRelationshipInvalid'
+      ))
 );
 --> statement-breakpoint
 ALTER TABLE "app_private"."agent_attempts" ADD CONSTRAINT "agent_attempts_run_scope_fk" FOREIGN KEY ("agent_run_id","owner_id","session_id") REFERENCES "app_private"."agent_runs"("id","owner_id","session_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -628,13 +506,8 @@ ALTER TABLE "app_private"."agent_runs" ADD CONSTRAINT "agent_runs_session_owner_
 ALTER TABLE "app_private"."agent_runs" ADD CONSTRAINT "agent_runs_hand_scope_fk" FOREIGN KEY ("hand_id","owner_id","session_id") REFERENCES "app_private"."hands"("id","owner_id","session_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."agent_runs" ADD CONSTRAINT "agent_runs_participant_scope_fk" FOREIGN KEY ("participant_id","session_id","owner_id") REFERENCES "app_private"."session_agents"("participant_id","session_id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."app_settings" ADD CONSTRAINT "app_settings_owner_id_owners_id_fk" FOREIGN KEY ("owner_id") REFERENCES "app_private"."owners"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app_private"."coach_decision_assessments" ADD CONSTRAINT "coach_decision_assessments_review_scope_fk" FOREIGN KEY ("coach_review_id","owner_id","session_id","hand_id") REFERENCES "app_private"."coach_reviews"("id","owner_id","session_id","hand_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app_private"."coach_reviews" ADD CONSTRAINT "coach_reviews_run_identity_fk" FOREIGN KEY ("agent_run_id","owner_id","session_id","hand_id","runtime") REFERENCES "app_private"."agent_runs"("id","owner_id","session_id","hand_id","runtime") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."command_ledger" ADD CONSTRAINT "command_ledger_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "app_private"."sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."command_ledger" ADD CONSTRAINT "command_ledger_session_owner_fk" FOREIGN KEY ("session_id","owner_id") REFERENCES "app_private"."sessions"("id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app_private"."hand_statistics_shards" ADD CONSTRAINT "hand_statistics_shards_hand_scope_fk" FOREIGN KEY ("hand_id","owner_id","session_id") REFERENCES "app_private"."hands"("id","owner_id","session_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app_private"."hand_statistics_shards" ADD CONSTRAINT "hand_statistics_shards_participant_scope_fk" FOREIGN KEY ("participant_id","session_id","owner_id","participant_type") REFERENCES "app_private"."session_participants"("id","session_id","owner_id","participant_type") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app_private"."hand_statistics_shards" ADD CONSTRAINT "hand_statistics_shards_agent_config_fk" FOREIGN KEY ("participant_id","session_id","owner_id","persona_id","persona_version","config_snapshot_key") REFERENCES "app_private"."session_agents"("participant_id","session_id","owner_id","persona_id","persona_version","config_snapshot_key") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."hands" ADD CONSTRAINT "hands_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "app_private"."sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."hands" ADD CONSTRAINT "hands_session_owner_fk" FOREIGN KEY ("session_id","owner_id") REFERENCES "app_private"."sessions"("id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."player_decisions" ADD CONSTRAINT "player_decisions_run_identity_fk" FOREIGN KEY ("agent_run_id","owner_id","session_id","hand_id","participant_id","source_state_version","decision_request_id","runtime") REFERENCES "app_private"."agent_runs"("id","owner_id","session_id","hand_id","participant_id","source_state_version","decision_request_id","runtime") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -649,9 +522,6 @@ ALTER TABLE "app_private"."session_events" ADD CONSTRAINT "session_events_hand_s
 ALTER TABLE "app_private"."session_events" ADD CONSTRAINT "session_events_command_scope_fk" FOREIGN KEY ("command_ledger_id","session_id","owner_id") REFERENCES "app_private"."command_ledger"("id","session_id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."session_participants" ADD CONSTRAINT "session_participants_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "app_private"."sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."session_participants" ADD CONSTRAINT "session_participants_session_owner_fk" FOREIGN KEY ("session_id","owner_id") REFERENCES "app_private"."sessions"("id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app_private"."session_settlement_statistics_shards" ADD CONSTRAINT "session_settlement_shards_session_owner_fk" FOREIGN KEY ("session_id","owner_id") REFERENCES "app_private"."sessions"("id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app_private"."session_settlement_statistics_shards" ADD CONSTRAINT "session_settlement_shards_participant_scope_fk" FOREIGN KEY ("participant_id","session_id","owner_id","participant_type") REFERENCES "app_private"."session_participants"("id","session_id","owner_id","participant_type") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app_private"."session_settlement_statistics_shards" ADD CONSTRAINT "session_settlement_shards_agent_config_fk" FOREIGN KEY ("participant_id","session_id","owner_id","persona_id","persona_version","config_snapshot_key") REFERENCES "app_private"."session_agents"("participant_id","session_id","owner_id","persona_id","persona_version","config_snapshot_key") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."session_snapshots" ADD CONSTRAINT "session_snapshots_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "app_private"."sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."session_snapshots" ADD CONSTRAINT "session_snapshots_session_owner_fk" FOREIGN KEY ("session_id","owner_id") REFERENCES "app_private"."sessions"("id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."sessions" ADD CONSTRAINT "sessions_owner_id_owners_id_fk" FOREIGN KEY ("owner_id") REFERENCES "app_private"."owners"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
@@ -664,13 +534,7 @@ CREATE INDEX "agent_runs_worker_claim_idx" ON "app_private"."agent_runs" USING b
 CREATE INDEX "agent_runs_session_created_idx" ON "app_private"."agent_runs" USING btree ("session_id","created_at");--> statement-breakpoint
 CREATE INDEX "agent_runs_hand_runtime_idx" ON "app_private"."agent_runs" USING btree ("hand_id","runtime");--> statement-breakpoint
 CREATE INDEX "agent_runs_participant_created_idx" ON "app_private"."agent_runs" USING btree ("participant_id","created_at");--> statement-breakpoint
-CREATE INDEX "coach_decision_assessments_review_street_idx" ON "app_private"."coach_decision_assessments" USING btree ("coach_review_id","street","ordinal_on_street");--> statement-breakpoint
-CREATE INDEX "coach_decision_assessments_decision_idx" ON "app_private"."coach_decision_assessments" USING btree ("decision_id");--> statement-breakpoint
-CREATE INDEX "coach_reviews_hand_status_idx" ON "app_private"."coach_reviews" USING btree ("hand_id","status");--> statement-breakpoint
 CREATE INDEX "command_ledger_session_status_idx" ON "app_private"."command_ledger" USING btree ("session_id","processing_status","created_at");--> statement-breakpoint
-CREATE INDEX "hand_statistics_shards_owner_completed_idx" ON "app_private"."hand_statistics_shards" USING btree ("owner_id","completed_at");--> statement-breakpoint
-CREATE INDEX "hand_statistics_shards_session_position_idx" ON "app_private"."hand_statistics_shards" USING btree ("session_id","logical_position");--> statement-breakpoint
-CREATE INDEX "hand_statistics_shards_agent_config_idx" ON "app_private"."hand_statistics_shards" USING btree ("persona_id","persona_version","config_snapshot_key");--> statement-breakpoint
 CREATE UNIQUE INDEX "hands_one_in_progress_per_session" ON "app_private"."hands" USING btree ("session_id") WHERE "app_private"."hands"."status" = 'inProgress';--> statement-breakpoint
 CREATE INDEX "hands_session_status_started_idx" ON "app_private"."hands" USING btree ("session_id","status","started_at");--> statement-breakpoint
 CREATE INDEX "player_decisions_hand_participant_version_idx" ON "app_private"."player_decisions" USING btree ("hand_id","participant_id","source_state_version");--> statement-breakpoint
@@ -679,8 +543,6 @@ CREATE INDEX "session_agents_persona_config_idx" ON "app_private"."session_agent
 CREATE INDEX "session_events_session_created_idx" ON "app_private"."session_events" USING btree ("session_id","created_at");--> statement-breakpoint
 CREATE INDEX "session_events_hand_event_seq_idx" ON "app_private"."session_events" USING btree ("hand_id","event_seq");--> statement-breakpoint
 CREATE INDEX "session_participants_session_type_idx" ON "app_private"."session_participants" USING btree ("session_id","participant_type");--> statement-breakpoint
-CREATE INDEX "session_settlement_shards_owner_idx" ON "app_private"."session_settlement_statistics_shards" USING btree ("owner_id");--> statement-breakpoint
-CREATE INDEX "session_settlement_shards_agent_config_idx" ON "app_private"."session_settlement_statistics_shards" USING btree ("persona_id","persona_version","config_snapshot_key");--> statement-breakpoint
 CREATE UNIQUE INDEX "sessions_one_active_per_owner" ON "app_private"."sessions" USING btree ("owner_id") WHERE "app_private"."sessions"."lifecycle_status" = 'active';--> statement-breakpoint
 CREATE INDEX "sessions_owner_status_updated_idx" ON "app_private"."sessions" USING btree ("owner_id","lifecycle_status","updated_at");
 --> statement-breakpoint
@@ -688,56 +550,6 @@ ALTER TABLE "app_private"."sessions"
 ADD CONSTRAINT "sessions_current_hand_scope_fk"
 FOREIGN KEY ("current_hand_id", "id", "owner_id")
 REFERENCES "app_private"."hands" ("id", "session_id", "owner_id")
-DEFERRABLE INITIALLY DEFERRED;
---> statement-breakpoint
-ALTER TABLE "app_private"."sessions"
-ADD CONSTRAINT "sessions_active_player_run_fk"
-FOREIGN KEY (
-  "active_player_run_id",
-  "id",
-  "owner_id",
-  "active_decision_request_id"
-)
-REFERENCES "app_private"."agent_runs" (
-  "id",
-  "session_id",
-  "owner_id",
-  "decision_request_id"
-)
-DEFERRABLE INITIALLY DEFERRED;
---> statement-breakpoint
-ALTER TABLE "app_private"."session_agents"
-ADD CONSTRAINT "session_agents_current_memory_revision_fk"
-FOREIGN KEY (
-  "participant_id",
-  "session_id",
-  "owner_id",
-  "current_memory_revision"
-)
-REFERENCES "app_private"."agent_memory_revisions" (
-  "participant_id",
-  "session_id",
-  "owner_id",
-  "revision"
-)
-DEFERRABLE INITIALLY DEFERRED;
---> statement-breakpoint
-ALTER TABLE "app_private"."hands"
-ADD CONSTRAINT "hands_aborted_by_agent_run_fk"
-FOREIGN KEY ("aborted_by_agent_run_id", "owner_id", "session_id")
-REFERENCES "app_private"."agent_runs" ("id", "owner_id", "session_id")
-DEFERRABLE INITIALLY DEFERRED;
---> statement-breakpoint
-ALTER TABLE "app_private"."agent_runs"
-ADD CONSTRAINT "agent_runs_parent_scope_fk"
-FOREIGN KEY ("parent_run_id", "owner_id", "session_id")
-REFERENCES "app_private"."agent_runs" ("id", "owner_id", "session_id")
-DEFERRABLE INITIALLY DEFERRED;
---> statement-breakpoint
-ALTER TABLE "app_private"."agent_runs"
-ADD CONSTRAINT "agent_runs_replacement_scope_fk"
-FOREIGN KEY ("replacement_run_id", "owner_id", "session_id")
-REFERENCES "app_private"."agent_runs" ("id", "owner_id", "session_id")
 DEFERRABLE INITIALLY DEFERRED;
 --> statement-breakpoint
 CREATE FUNCTION "app_private"."enforce_session_roster"()
@@ -842,6 +654,56 @@ AFTER INSERT OR UPDATE OR DELETE ON "app_private"."session_agents"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION "app_private"."enforce_session_roster"();
+--> statement-breakpoint
+ALTER TABLE "app_private"."sessions"
+ADD CONSTRAINT "sessions_active_player_run_fk"
+FOREIGN KEY (
+  "active_player_run_id",
+  "id",
+  "owner_id",
+  "active_decision_request_id"
+)
+REFERENCES "app_private"."agent_runs" (
+  "id",
+  "session_id",
+  "owner_id",
+  "decision_request_id"
+)
+DEFERRABLE INITIALLY DEFERRED;
+--> statement-breakpoint
+ALTER TABLE "app_private"."session_agents"
+ADD CONSTRAINT "session_agents_current_memory_revision_fk"
+FOREIGN KEY (
+  "participant_id",
+  "session_id",
+  "owner_id",
+  "current_memory_revision"
+)
+REFERENCES "app_private"."agent_memory_revisions" (
+  "participant_id",
+  "session_id",
+  "owner_id",
+  "revision"
+)
+DEFERRABLE INITIALLY DEFERRED;
+--> statement-breakpoint
+ALTER TABLE "app_private"."hands"
+ADD CONSTRAINT "hands_aborted_by_agent_run_fk"
+FOREIGN KEY ("aborted_by_agent_run_id", "owner_id", "session_id")
+REFERENCES "app_private"."agent_runs" ("id", "owner_id", "session_id")
+DEFERRABLE INITIALLY DEFERRED;
+--> statement-breakpoint
+ALTER TABLE "app_private"."agent_runs"
+ADD CONSTRAINT "agent_runs_parent_scope_fk"
+FOREIGN KEY ("parent_run_id", "owner_id", "session_id")
+REFERENCES "app_private"."agent_runs" ("id", "owner_id", "session_id")
+DEFERRABLE INITIALLY DEFERRED;
+--> statement-breakpoint
+ALTER TABLE "app_private"."agent_runs"
+ADD CONSTRAINT "agent_runs_replacement_scope_fk"
+FOREIGN KEY ("replacement_run_id", "owner_id", "session_id")
+REFERENCES "app_private"."agent_runs" ("id", "owner_id", "session_id")
+DEFERRABLE INITIALLY DEFERRED;
 --> statement-breakpoint
 CREATE FUNCTION "app_private"."enforce_player_run_coordination"()
 RETURNS trigger
@@ -971,20 +833,12 @@ BEGIN
   END IF;
 
   IF hand_status <> 'completed'
-    AND (
-      EXISTS (
-        SELECT 1
-        FROM app_private.agent_runs AS run
-        WHERE run.session_id = affected_session_id
-          AND run.hand_id = affected_hand_id
-          AND run.runtime = 'coach'
-      )
-      OR EXISTS (
-        SELECT 1
-        FROM app_private.coach_reviews AS review
-        WHERE review.session_id = affected_session_id
-          AND review.hand_id = affected_hand_id
-      )
+    AND EXISTS (
+      SELECT 1
+      FROM app_private.agent_runs AS run
+      WHERE run.session_id = affected_session_id
+        AND run.hand_id = affected_hand_id
+        AND run.runtime = 'coach'
     )
   THEN
     RAISE EXCEPTION
@@ -999,12 +853,6 @@ $$;
 --> statement-breakpoint
 CREATE CONSTRAINT TRIGGER "agent_runs_coach_completed_hand"
 AFTER INSERT OR UPDATE ON "app_private"."agent_runs"
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW
-EXECUTE FUNCTION "app_private"."enforce_coach_completed_hand"();
---> statement-breakpoint
-CREATE CONSTRAINT TRIGGER "coach_reviews_completed_hand"
-AFTER INSERT OR UPDATE ON "app_private"."coach_reviews"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION "app_private"."enforce_coach_completed_hand"();

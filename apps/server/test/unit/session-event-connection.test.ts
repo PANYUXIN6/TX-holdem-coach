@@ -8,7 +8,6 @@ const sessionId = '22222222-2222-4222-8222-222222222222'
 
 function snapshot(eventSeq: number, stateVersion = 1) {
   return {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion,
     eventSeq,
@@ -46,7 +45,6 @@ function row(value: ReturnType<typeof event>) {
     sessionId: value.sessionId,
     eventSeq: value.eventSeq,
     stateVersionAfter: value.stateVersion,
-    protocolVersion: value.protocolVersion,
     publicEventPayload: value,
   }
 }

@@ -4,7 +4,6 @@ import {
   DatabaseOperationError,
   OwnerScopeResolutionError,
   PersistenceDataCorruptionError,
-  UnknownPayloadVersionError,
 } from '../../src/persistence/errors.js'
 import {
   DEFAULT_PLAYER_TIMEOUT_SETTINGS,
@@ -100,7 +99,6 @@ describe('player timeout settings repository', () => {
       [{ databaseOwnerId }],
       [
         {
-          settingPayloadVersion: 1,
           settingPayload: {
             attemptTimeoutSeconds: 20,
             decisionDeadlineSeconds: 60,
@@ -115,20 +113,11 @@ describe('player timeout settings repository', () => {
     })
   })
 
-  test('does not hide unknown or corrupt persisted payloads behind defaults', async () => {
-    const unknownVersion = createSqlMock([
-      [{ databaseOwnerId }],
-      [{ settingPayloadVersion: 2, settingPayload: {} }],
-    ])
-    await expect(
-      readPlayerTimeoutSettings(unknownVersion.sql, ownerScope),
-    ).rejects.toBeInstanceOf(UnknownPayloadVersionError)
-
+  test('does not hide corrupt persisted payloads behind defaults', async () => {
     const corrupt = createSqlMock([
       [{ databaseOwnerId }],
       [
         {
-          settingPayloadVersion: 1,
           settingPayload: {
             attemptTimeoutSeconds: 30,
             decisionDeadlineSeconds: 15,
@@ -146,7 +135,6 @@ describe('player timeout settings repository', () => {
       [{ databaseOwnerId }],
       [
         {
-          settingPayloadVersion: 1,
           settingPayload: {
             attemptTimeoutSeconds: 30,
             decisionDeadlineSeconds: 15,
@@ -197,7 +185,6 @@ describe('player timeout settings repository', () => {
       [],
       [
         {
-          settingPayloadVersion: 1,
           settingPayload: {
             attemptTimeoutSeconds: 20,
             decisionDeadlineSeconds: 60,
@@ -206,7 +193,6 @@ describe('player timeout settings repository', () => {
       ],
       [
         {
-          settingPayloadVersion: 1,
           settingPayload: {
             attemptTimeoutSeconds: 20,
             decisionDeadlineSeconds: 90,
@@ -241,7 +227,6 @@ describe('player timeout settings repository', () => {
       [],
       [
         {
-          settingPayloadVersion: 1,
           settingPayload: {
             attemptTimeoutSeconds: 10,
             decisionDeadlineSeconds: 60,

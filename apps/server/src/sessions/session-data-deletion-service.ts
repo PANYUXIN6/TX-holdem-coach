@@ -3,7 +3,6 @@ import {
   ClearDataResponseSchema,
   DeleteSessionRequestSchema,
   DeleteSessionResponseSchema,
-  PROTOCOL_VERSION,
   SessionIdSchema,
   type ClearDataResponse,
   type DeleteSessionResponse,
@@ -82,7 +81,6 @@ export function createSessionDataDeletionService(input: {
       }
       await interruptCommittedRuns(result.invalidatedRuns)
       return DeleteSessionResponseSchema.parse({
-        protocolVersion: PROTOCOL_VERSION,
         deletedSessionId: result.sessionId,
         invalidatedRunCount: result.invalidatedRuns.length,
       })
@@ -100,7 +98,6 @@ export function createSessionDataDeletionService(input: {
       }
       await interruptCommittedRuns(result.invalidatedRuns)
       return ClearDataResponseSchema.parse({
-        protocolVersion: PROTOCOL_VERSION,
         deletedSessionCount: result.deletedSessionCount,
         invalidatedRunCount: result.invalidatedRuns.length,
       })

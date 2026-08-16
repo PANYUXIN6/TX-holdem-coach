@@ -25,16 +25,16 @@ import {
 } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   getPrivateEventHandId,
-  type PrivateEventV2,
-} from '../../src/sessions/authoritative-state/private-event-v2.js'
-import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
+  type PrivateEvent,
+} from '../../src/sessions/authoritative-state/private-event.js'
+import { currentPrivateEventReader } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import {
+  currentSnapshotReader,
   decodeCurrentSnapshotV1,
   encodeSnapshotV1,
 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
-import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
 import { decodeCurrentCompletedHandResultV1 } from '../../src/sessions/hand-audit/completed-hand-result-codec-v1.js'
-import { productionHandStartCheckpointVersionRegistry } from '../../src/sessions/hand-audit/hand-start-checkpoint-version-registry.js'
+import { currentHandStartCheckpointReader } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec.js'
 import { createSessionCommandHandlerMap } from '../../src/sessions/command-execution/command-handler-map.js'
 import { createPlayerActionHandlerBinding } from '../../src/sessions/command-execution/player-action-handler.js'
 import { createSessionCommandExecutor } from '../../src/sessions/command-execution/session-command-executor.js'
@@ -139,7 +139,7 @@ export async function prepareTerminalUserTurn(
   identity: SessionCreationIdentityGraph,
 ): Promise<{
   readonly state: PrivateTableState
-  readonly eventDrafts: readonly PrivateEventV2[]
+  readonly eventDrafts: readonly PrivateEvent[]
   readonly firstEventSeq: number
   readonly lastEventSeq: number
 }> {
@@ -156,7 +156,7 @@ export async function prepareTerminalUserTurn(
     }
 
     let state = initialState
-    const eventDrafts: PrivateEventV2[] = []
+    const eventDrafts: PrivateEvent[] = []
     for (let actionCount = 0; actionCount < 64; actionCount += 1) {
       const hand = state.poker.hand
       if (hand === null) {
@@ -245,7 +245,6 @@ export async function prepareTerminalUserTurn(
           const eventSeq = firstEventSeq + index
           const eventId = randomUUID()
           const publicEvent = SseEventSchema.parse({
-            protocolVersion: 1,
             eventId,
             sessionId: identity.sessionId,
             eventSeq,
@@ -300,8 +299,8 @@ export function createM33Executor(input: {
     mutationRepository,
     recoveryRepository,
     recoveryRegistries: {
-      snapshot: productionSnapshotVersionRegistry,
-      privateEvent: productionPrivateEventVersionRegistry,
+      snapshot: currentSnapshotReader,
+      privateEvent: currentPrivateEventReader,
     },
     snapshotProjectorBinding: {
       bindReadPort: () => Object.freeze({}),
@@ -406,7 +405,7 @@ async function readPersistenceMirror(
     ORDER BY event.event_seq
   `
   const events = eventRows.map((eventRow) => {
-    const privateEvent = productionPrivateEventVersionRegistry.read(
+    const privateEvent = currentPrivateEventReader.read(
       eventRow.privateEventPayloadVersion,
       eventRow.privateEventPayload,
     )
@@ -458,7 +457,7 @@ async function readPersistenceMirror(
       : ledgerRow.ledgerStatus === 'completed'
         ? CommandResponseSchema.parse(ledgerRow.responsePayload)
         : ErrorResponseSchema.parse(ledgerRow.responsePayload)
-  const checkpoint = productionHandStartCheckpointVersionRegistry.read(
+  const checkpoint = currentHandStartCheckpointReader.read(
     row.checkpointPayloadVersion,
     row.checkpointPayload,
   )

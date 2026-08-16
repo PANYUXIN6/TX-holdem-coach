@@ -1,10 +1,10 @@
 # M2.2 私有 Schema 数据字典
 
-- 适用版本：M2.2 完整 Schema
+- 适用版本：首发前唯一开发 baseline
 - 数据库：Supabase Postgres
 - Schema：`app_private`
-- 表数量：18
-- 事实来源：`apps/server/src/db/schema.ts`、`apps/server/src/db/migrations/0001_cheerful_johnny_blaze.sql`、`apps/server/src/db/migrations/0002_unusual_rocket_racer.sql`
+- 表数量：14
+- 事实来源：`apps/server/src/db/schema.ts`、`apps/server/src/db/migrations/0000_baseline.sql`
 
 ## 1. 这套 Schema 解决什么问题
 
@@ -12,8 +12,7 @@ M2.2 建立的是服务端私有持久化边界，负责保存：
 
 - 场次归属、场次状态和参赛阵容；
 - 手牌结果、命令幂等账本、事件流和权威快照；
-- Player/Coach Agent 的运行、尝试、能力调用、决策和复盘审计；
-- 可删除、可重算的单手及场次结算统计分片；
+- Player/Coach Agent 的运行、尝试、能力调用和 Player 决策审计；
 - 不包含秘密的用户设置。
 
 所有表都位于非公开的 `app_private` Schema。浏览器、Supabase Data API、`anon`、`authenticated`、Contracts 和 Agent 领域对象都不能直接访问这些表，只能由后端 Repository 和服务层访问。
@@ -34,13 +33,14 @@ M2.2 建立的是服务端私有持久化边界，负责保存：
 | `bigint` | 可增长的序号、版本或计量值；本项目限制在 `0..9007199254740991`，以便安全映射为 JavaScript `number` |
 | `jsonb` | 可演进的服务端私有对象载荷 |
 
-所有 `<name>_payload_version` 与 `<name>_payload` 都是一对：
+所有保留的 `<name>_payload_version` 与 `<name>_payload` 都是一对：
 
 - 版本号描述该 JSON 对象采用的结构契约版本，不是数据库迁移版本；
 - 必填载荷的版本号和载荷都非空；
 - 可选载荷必须同时为空或同时存在；
 - 存在的版本号必须大于 0，载荷必须是 JSON 对象；
 - 同一结构版本下只更新业务内容时，不提升版本号；
+- 每类持久化 JSON 最多只在数据库行保留这一处载荷版本，JSON 内部不再重复保存信封版本；
 - JSONB 不得保存 API Key、数据库连接串、供应商密钥等秘密。
 
 文档中的“默认当前时间”只表示插入时执行 `now()`。`updated_at` 不会由 PostgreSQL 自动随每次更新变化，更新方必须显式维护它。
@@ -63,10 +63,6 @@ erDiagram
   agent_runs ||--o{ agent_attempts : retries
   agent_runs ||--o{ agent_capability_invocations : invokes
   agent_runs ||--o| player_decisions : yields
-  agent_runs ||--o| coach_reviews : yields
-  coach_reviews ||--o{ coach_decision_assessments : contains
-  hands ||--o{ hand_statistics_shards : derives
-  sessions ||--o{ session_settlement_statistics_shards : derives
 ```
 
 ## 3. 归属、场次和阵容
@@ -268,7 +264,6 @@ erDiagram
 | `state_version_after` | `bigint`，非空 | 应用该事件后的权威状态版本。一个命令可产生多条共享同一前后版本边界的事件。 |
 | `private_event_payload_version` | `integer`，非空，正整数 | 私有事件载荷结构版本。 |
 | `private_event_payload` | `jsonb` 对象，非空 | 只供服务端重放、审计或派生使用的完整私有事件。 |
-| `protocol_version` | `integer`，非空，正整数 | 固化公开 SSE 载荷所采用的外部协议版本，与私有载荷版本独立。 |
 | `public_event_payload` | `jsonb` 对象，非空 | 已做可见性投影、可以通过 SSE 对外发送的事件载荷。 |
 | `created_at` | `timestamptz`，非空，默认当前时间 | 事件持久化时间。 |
 
@@ -287,7 +282,7 @@ erDiagram
 | --- | --- | --- |
 | `session_id` | `uuid`，PK，FK → `sessions.id` | 场次 ID；同时作为主键，因此每场最多一份当前快照。 |
 | `owner_id` | `uuid`，非空，复合 FK → `sessions` | 快照所属 Owner。 |
-| `private_table_state_payload_version` | `integer`，非空，正整数 | 私有桌面状态信封的结构契约版本。 |
+| `private_table_state_payload_version` | `integer`，非空，正整数 | 私有桌面状态 JSON 的唯一行载荷版本。 |
 | `private_table_state_payload` | `jsonb` 对象，非空 | 当前完整私有桌面状态，包含不能暴露给浏览器的牌局信息。 |
 | `updated_at` | `timestamptz`，非空，默认当前时间 | 快照最后写入时间，由写入方维护。 |
 
@@ -443,135 +438,11 @@ erDiagram
 - 复合外键一次性保证 Run、Owner、Session、Hand、Agent、来源版本、请求 ID 和 Runtime 全部一致。
 - `command_ledger_id` 为空不代表失败，也可能是尚未提交、已拒绝或已过期。
 
-### 6.2 `coach_reviews`
+## 7. 应用设置
 
-**作用**：保存对一手已完成手牌的 Coach 复盘请求、冻结上下文、过程分析、事后补充和最终报告。
+### 7.1 `app_settings`
 
-**一行代表**：一个 Coach Run 的唯一单手复盘。
-
-| 字段 | 类型与约束 | 含义 |
-| --- | --- | --- |
-| `id` | `uuid`，PK | Coach Review ID；同时是对外使用的 `coachReviewId`。 |
-| `agent_run_id` | `uuid`，非空，UQ，复合 FK → `agent_runs` | 执行复盘的 Coach Run；一条 Run 至多一份 Review。 |
-| `owner_id` | `uuid`，非空，复合 FK | 所属 Owner。 |
-| `session_id` | `uuid`，非空，复合 FK | 所属场次。 |
-| `hand_id` | `uuid`，非空，复合 FK | 被复盘的已完成手牌。 |
-| `runtime` | `text`，非空，默认 `coach`，固定值 | 类型判别列，确保只能关联 Coach Run。 |
-| `request_id` | `uuid`，非空 | 上游复盘请求 ID；在同一场次内唯一，用于请求幂等。 |
-| `status` | `text`，非空 | 复盘状态：`pending`、`running`、`completed` 或 `failed`。 |
-| `frozen_context_payload_version` | `integer`，非空，正整数 | 冻结上下文载荷版本。 |
-| `frozen_context_payload` | `jsonb` 对象，非空 | 复盘开始时冻结的手牌、协议和证据边界，防止后续数据变化污染判断。 |
-| `analysis_payload_version` | `integer`，可空，正整数 | 过程分析载荷版本。 |
-| `analysis_payload` | `jsonb` 对象，可空 | 不使用未来信息的分析阶段结果。 |
-| `hindsight_payload_version` | `integer`，可空，正整数 | 事后分析载荷版本。 |
-| `hindsight_payload` | `jsonb` 对象，可空 | 明确隔离的事后信息补充，不得反向污染当时决策评价。 |
-| `final_report_payload_version` | `integer`，可空，正整数 | 最终报告载荷版本。 |
-| `final_report_payload` | `jsonb` 对象，可空 | 面向用户的完整结构化复盘报告。 |
-| `requested_at` | `timestamptz`，非空 | 复盘请求时间。 |
-| `completed_at` | `timestamptz`，可空 | 复盘进入完成终态的时间。 |
-| `updated_at` | `timestamptz`，非空，默认当前时间 | Review 最后更新时间，由写入方维护。 |
-
-**关键规则**：
-
-- Coach Run 和 Review 都只能关联同 Owner、同场次的 `completed` Hand。
-- 存在 Coach Run/Review 后，该 Hand 不能改回 `inProgress` 或 `aborted`。
-- Coach 失败不影响牌局状态。
-
-### 6.3 `coach_decision_assessments`
-
-**作用**：把 Coach Review 中对用户每一个决策点的评价拆成稳定、可排序、可单独读取的条目。
-
-**一行代表**：某次 Coach Review 对用户一个决策的评价。
-
-| 字段 | 类型与约束 | 含义 |
-| --- | --- | --- |
-| `id` | `uuid`，PK | Assessment 行 ID。 |
-| `coach_review_id` | `uuid`，非空，复合 FK → `coach_reviews` | 所属 Coach Review。 |
-| `owner_id` | `uuid`，非空，复合 FK | 所属 Owner。 |
-| `session_id` | `uuid`，非空，复合 FK | 所属场次。 |
-| `hand_id` | `uuid`，非空，复合 FK | 所属手牌。 |
-| `decision_id` | `uuid`，非空 | 被评价用户决策的稳定 ID，由 Hand、Street 和权威动作序号确定。 |
-| `street` | `text`，非空 | 决策所在阶段：`preflop`、`flop`、`turn` 或 `river`；Showdown 不是第五个 Street。 |
-| `ordinal_on_street` | `integer`，非空，`>= 0` | 该用户决策在当前 Street 内的稳定顺序号。 |
-| `assessment_payload_version` | `integer`，非空，正整数 | 评价载荷版本。 |
-| `assessment_payload` | `jsonb` 对象，非空 | 冻结的分类、严重度、基准对比、EV 状态、解释及证据边界。 |
-| `created_at` | `timestamptz`，非空，默认当前时间 | 评价条目创建时间。 |
-
-**关键规则**：
-
-- `(coach_review_id, decision_id)` 唯一，同一 Review 不重复评价同一决策。
-- 只评价用户自己的决策；对手行为仅作为当时可见的判断上下文。
-
-## 7. 统计分片
-
-两张统计分片表都是单场范围内的派生数据，不是不可变事实。它们可以缺失、删除和重算；读取方应把缺失、来源边界过期或生命周期不合法视为 cache miss。
-
-### 7.1 `hand_statistics_shards`
-
-**作用**：为一手已完成手牌中的每个参赛者保存可组合的统计增量，例如 VPIP、PFR、3-bet、WTSD、W$SD、手数和净筹码变化。
-
-**一行代表**：一个 Participant 在一手已完成手牌中的统计分片。
-
-| 字段 | 类型与约束 | 含义 |
-| --- | --- | --- |
-| `id` | `uuid`，PK | 单手统计分片 ID。 |
-| `owner_id` | `uuid`，非空，复合 FK | 所属 Owner。 |
-| `session_id` | `uuid`，非空，复合 FK | 所属场次。 |
-| `hand_id` | `uuid`，非空，复合 FK → `hands` | 来源手牌。 |
-| `participant_id` | `uuid`，非空，复合 FK → `session_participants` | 被统计的参赛者。 |
-| `participant_type` | `text`，非空 | `user` 或 `agent`；必须与 Participant 实际类型一致。 |
-| `completed_at` | `timestamptz`，非空 | 来源手牌完成时间，作为日期范围筛选字段。 |
-| `logical_position` | `text`，非空 | 该 Participant 在此手的逻辑位置，例如按钮位、盲位或其他位置编码；具体枚举由统计写入契约定义。 |
-| `calculation_version` | `integer`，非空，正整数 | 统计公式/计算器版本；公式变化时提升。 |
-| `calculated_at` | `timestamptz`，非空 | 此分片计算完成时间。 |
-| `source_through_event_seq` | `bigint`，非空 | 计算时已消费到的场次事件序号，用于判断分片是否过期。 |
-| `completed_result_payload_version` | `integer`，非空，正整数 | 计算所依据的 `hands.completed_result_payload` 结构版本。 |
-| `persona_id` | `text`，可空 | AI 人物 ID；用户行必须为空。 |
-| `persona_version` | `integer`，可空，正整数 | AI 人物版本；用户行必须为空。 |
-| `config_snapshot_key` | `text`，可空，64 位小写十六进制 | AI 配置快照 SHA-256；用户行必须为空。 |
-| `metrics_payload_version` | `integer`，非空，正整数 | 指标对象结构版本。 |
-| `metrics_payload` | `jsonb` 对象，非空 | 本手产生的指标分子、分母、标志和净变化等可累加数据。 |
-
-**关键规则**：
-
-- `(hand_id, participant_id)` 唯一，每手每人最多一行。
-- AI 行的 `persona_id`、`persona_version`、`config_snapshot_key` 必须全部存在并与 `session_agents` 精确一致；用户行三者必须全为空。
-- 删除 Hand、Participant 或 Session Agent 时，关联分片级联删除。
-
-### 7.2 `session_settlement_statistics_shards`
-
-**作用**：为一个已结束场次中的每个参赛者保存最终结算统计，例如最终筹码减去全部买入/补码后的场次净盈亏。
-
-**一行代表**：一个 Participant 在一个已结束场次中的结算统计分片。
-
-| 字段 | 类型与约束 | 含义 |
-| --- | --- | --- |
-| `id` | `uuid`，PK | 场次结算统计分片 ID。 |
-| `owner_id` | `uuid`，非空，复合 FK | 所属 Owner。 |
-| `session_id` | `uuid`，非空，复合 FK → `sessions` | 来源场次。 |
-| `participant_id` | `uuid`，非空，复合 FK → `session_participants` | 被统计的参赛者。 |
-| `participant_type` | `text`，非空 | `user` 或 `agent`；必须与 Participant 实际类型一致。 |
-| `persona_id` | `text`，可空 | AI 人物 ID；用户行必须为空。 |
-| `persona_version` | `integer`，可空，正整数 | AI 人物版本；用户行必须为空。 |
-| `config_snapshot_key` | `text`，可空，64 位小写十六进制 | AI 配置快照 SHA-256；用户行必须为空。 |
-| `calculation_version` | `integer`，非空，正整数 | 场次结算统计公式/计算器版本。 |
-| `calculated_at` | `timestamptz`，非空 | 分片计算完成时间。 |
-| `source_state_version` | `bigint`，非空 | 计算所依据的最终权威场次状态版本。 |
-| `source_snapshot_payload_version` | `integer`，非空，正整数 | 计算所依据的私有快照结构版本。 |
-| `metrics_payload_version` | `integer`，非空，正整数 | 指标对象结构版本。 |
-| `metrics_payload` | `jsonb` 对象，非空 | 最终筹码、累计买入/补码、场次净盈亏及可扩展结算指标。 |
-
-**关键规则**：
-
-- `(session_id, participant_id)` 唯一，每场每人最多一行。
-- AI 配置身份三列必须全部存在并与 `session_agents` 精确一致；用户行必须全为空。
-- 数据库允许分片暂时缺失；是否确为 `ended` Session 由后续写入服务在事务内校验。
-
-## 8. 应用设置
-
-### 8.1 `app_settings`
-
-**作用**：保存某个 Owner 的非秘密、稳定键名、版本化应用设置。
+**作用**：保存某个 Owner 的非秘密、稳定键名应用设置。
 
 **一行代表**：某个 Owner 的一个设置项。
 
@@ -580,7 +451,6 @@ erDiagram
 | `id` | `uuid`，PK | 设置行 ID。 |
 | `owner_id` | `uuid`，非空，FK → `owners.id` | 设置所属 Owner；删除 Owner 时级联删除。 |
 | `setting_key` | `text`，非空，非空白 | 稳定设置键，例如某类 Provider 的非秘密偏好；具体键由设置契约定义。 |
-| `setting_payload_version` | `integer`，非空，正整数 | 设置对象的结构契约版本。 |
 | `setting_payload` | `jsonb` 对象，非空 | 设置内容，只能保存非秘密配置。 |
 | `updated_at` | `timestamptz`，非空，默认当前时间 | 设置最后更新时间，由写入方维护。 |
 
@@ -589,7 +459,7 @@ erDiagram
 - `(owner_id, setting_key)` 唯一。
 - 不得保存 Provider Key、模型密钥、数据库 URL 或原始连接配置。
 
-## 9. 三组跨行延迟约束
+## 8. 三组跨行延迟约束
 
 普通外键、唯一索引和单行检查不能表达全部业务不变量，因此 M2.2 只引入三组窄范围、事务提交时执行的延迟约束：
 
@@ -597,11 +467,11 @@ erDiagram
 | --- | --- | --- |
 | 阵容完整性 | `sessions`、`session_participants`、`session_agents` | 每场恰好 1 名座位 0 用户、5–8 名 AI、总人数 6–9；用户无 Agent 子行，AI 恰好有一行 Agent 子行。 |
 | Player 活动协调 | `sessions`、`agent_runs` | `thinking` 时恰好一条有效 Player Run 且与 Session 双指针一致；`idle/paused` 时没有有效 Player Run。 |
-| Coach 手牌资格 | `hands`、`agent_runs`、`coach_reviews` | Coach Run/Review 只能绑定同范围的已完成 Hand，已有复盘时不能把 Hand 改成进行中或中止。 |
+| Coach 手牌资格 | `hands`、`agent_runs` | Coach Run 只能绑定同范围的已完成 Hand，存在 Coach Run 时不能把 Hand 改成进行中或中止。 |
 
 这些约束是延迟到事务提交时检查的，因此创建完整业务图时可以在同一事务内按自然顺序插入多张表，只要最终提交状态满足不变量。
 
-## 10. 明确没有建的表
+## 9. 明确没有建的表
 
 为了避免把当前产品需求扩展成通用 Agent 平台或重复存储扑克事实，M2.2 明确没有建立：
 
@@ -609,6 +479,7 @@ erDiagram
 - 通用 Agent 定义、步骤、产物或多 Agent 编排表；
 - 旧的 `hand_events`；
 - `streets`、`betting_rounds`、`showdowns`、`hand_actions` 等扑克投影表；
+- 尚无当前数据消费者的 `coach_reviews`、`coach_decision_assessments`、`hand_statistics_shards`、`session_settlement_statistics_shards`；
 - 跨 Owner 全局统计或任意筛选结果缓存；
 - Supabase Auth、Realtime、Storage、Edge Functions 相关表。
 

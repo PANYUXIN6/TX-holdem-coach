@@ -1,7 +1,7 @@
 import type { TransactionSql } from 'postgres'
 import { z } from 'zod'
 import { StableAuditCodeSchema } from '../agents/audit/audit-primitives.js'
-import type { HandStartCheckpointV2 } from '../sessions/hand-audit/hand-start-checkpoint.js'
+import type { HandStartCheckpoint } from '../sessions/hand-audit/hand-start-checkpoint.js'
 import {
   DatabaseOperationError,
   PersistenceDataCorruptionError,
@@ -27,7 +27,7 @@ const FailedPlayerRunRowSchema = z.strictObject({
 
 export interface PausedAbortContext {
   readonly handId: string
-  readonly checkpoint: HandStartCheckpointV2
+  readonly checkpoint: HandStartCheckpoint
   readonly failedPlayerRunId: string
   readonly failureReasonCode: string
 }

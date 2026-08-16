@@ -284,37 +284,6 @@ async function enterReadonlyDiagnostic(
   }
 }
 
-async function replaceLegacyDiagnosticCode(
-  transaction: TransactionSql,
-  owner: ResolvedOwnerScope,
-  locked: LockedSessionMutation,
-  code: SessionDiagnosticCode,
-  recoveryAt: string,
-): Promise<void> {
-  let rows: readonly { readonly sessionId: string }[]
-  try {
-    rows = await transaction<{ readonly sessionId: string }[]>`
-      UPDATE app_private.sessions
-      SET diagnostic_code = ${code},
-          updated_at = ${recoveryAt}::timestamptz
-      WHERE id = ${locked.sessionId}::uuid
-        AND owner_id = ${owner.databaseOwnerId}::uuid
-        AND lifecycle_status = 'readonlyDiagnostic'
-        AND state_version = ${locked.stateVersion}::bigint
-        AND next_event_seq = ${locked.nextEventSeq}::bigint
-        AND current_hand_id IS NOT DISTINCT FROM ${locked.currentHandId}::uuid
-        AND diagnostic_code = 'legacyDiagnosticState'
-        AND diagnosed_at IS NOT DISTINCT FROM ${locked.diagnosedAt}::timestamptz
-      RETURNING id::text AS "sessionId"
-    `
-  } catch {
-    throw new DatabaseOperationError()
-  }
-  if (rows.length !== 1 || rows[0]?.sessionId !== locked.sessionId) {
-    throw new SessionRecoveryTransitionError()
-  }
-}
-
 async function exitReadonlyDiagnostic(
   transaction: TransactionSql,
   owner: ResolvedOwnerScope,
@@ -418,20 +387,6 @@ async function recover(
         kind: 'readonlyDiagnostic',
         code: decision.code,
         diagnosedAt: recoveryAt,
-      })
-    }
-    if (locked.diagnosticCode === 'legacyDiagnosticState') {
-      await replaceLegacyDiagnosticCode(
-        transaction,
-        owner,
-        locked,
-        decision.code,
-        recoveryAt,
-      )
-      return deepFreeze({
-        kind: 'readonlyDiagnostic',
-        code: decision.code,
-        diagnosedAt: locked.diagnosedAt!,
       })
     }
     return deepFreeze({

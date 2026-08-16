@@ -4,6 +4,7 @@
 - 日期：2026-07-23
 - 最后更新：2026-08-16
 - 本文不包含工期、人数或里程碑时间估算。
+- 2026-08-16 首发前 Schema 收敛：实际开发数据库重建后，以 14 表单一 baseline 为准；删除全局 `protocolVersion`、Settings 版本、重复 JSON 信封版本、Private Event/Checkpoint V1、`legacyDiagnosticState` 及尚无消费者的 Coach/Statistics 预埋表。下文已完成任务中的旧字段/旧表文字仅保留实施历史，不得作为后续任务当前契约；M4 仍保留运行审计、重放/精确恢复身份，Execution Budget 注册表继续支持规划中的 V2，M5/M8 在真实 writer 设计确认时再创建最终统计/Coach Schema。
 - 上位文档：
   - [产品需求文档](../specs/2026-07-23-poker-practice-prd.md)
   - [前端交互与页面设计](../specs/2026-07-23-poker-practice-frontend-design.md)
@@ -911,8 +912,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - 在 `apps/server/src/poker/decision-spot.ts` 实现共享纯 `SpotNormalizer`，输出 `spotSchemaVersion` 与 `normalizerVersion`；规范化桌型、逻辑位置、逐对手位置关系、入池/待行动人数、行动顺序、Hero 后方玩家、街次、翻前节点、底池类型、翻前/当前街主动玩家、行动线及尺度、最后足额加注、是否重新开放和有效筹码档，并拒绝矛盾输入。
 - 固化首版 `pokerRuleSetVersion = nlhe-cash-6to9-10-20-v1`，并输出名义/实际盲注、短盲 all-in 与大盲行动权；固定规则为 6–9 人、10/20、无前注、无 straddle、无抽水、单牌面一次 runout。任何影响合法动作、结算、位置或策略节点解释的规则变化必须发布新版本。
-- 发布 `HandStartCheckpointV2`，在开手时保存 `pokerRuleSetVersion`；Player 和 Coach 都从目标手牌检查点读取。既有 V1 只因历史上没有第二套规则而确定性迁移为 `nlhe-cash-6to9-10-20-v1`，不得用部署时 current 版本覆盖历史绑定；保持 JSON Codec 版本演进，不新增数据库列或 migration。
-- 同步现有 Hand 审计代码：新增 V2 Codec/Decoder 与 Registry 当前版本，更新 `hand-audit-repository`、创建场次/开始下一手 writer、恢复/中止 reader 及对应 Codec、Repository、Handler 测试；V1 文件和载荷保持只读兼容。该兼容改动属于 M4.5 前置工作，不改 M4.1 Foundation 协议、Capability Manifest 或状态机。
+- 使用当前 `HandStartCheckpoint` 在开手时保存 `pokerRuleSetVersion`；Player 和 Coach 都从目标手牌检查点读取。代码 API 使用中性 current 命名，首发数据库行载荷版本统一从 1 起步，不新增数据库列或 migration。
+- 同步现有 Hand 审计代码：当前 Codec/Reader 更新 `hand-audit-repository`、创建场次/开始下一手 writer、恢复/中止 reader 及对应 Codec、Repository、Handler 测试；首发前数据库已重建，不保留 V1 文件、载荷或 Registry。该改动属于 M4.5 前置工作，不改 M4.1 Foundation 协议、Capability Manifest 或状态机。
 - Spot 规范化保留多人池、边池、limp、冷跟注、挤压、重新加注和不足额全下，不能为了命中策略模板静默折叠节点。
 - `SpotNormalizer` 分离 `heroActionCompletes`、`bettingRoundClosesImmediately`、`canFaceFurtherAction`，候选级再明确响应者与可加注者。
 - 在 `apps/server/src/poker/hand-features.ts` 实现共享纯 `HandFeatureAnalyzer`：翻前输出对子/同花、点数间隔、连张、Broadway、A-wheel 潜力；翻后输出最佳五张、比较元组、底牌使用、对子/踢脚/超牌、同花/顺子高张、听牌/后门听牌、重叠改善组、绝对 nuts、redraw、`cardRemovalFacts[]`、`counterfeitRiskFacts[]`，以及原子牌面结构和街间变化。战略 blocker 价值和实际 reverse outs 需要显式对手持牌/范围与版本化算法，否则为 `unavailable`。
@@ -1371,7 +1372,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 产出：
 
 - `HandReviewCaseBuilder` 只从正常完成（`completed`）的内部手牌和权威历史事实构建复盘案例；`aborted` 手牌在入口处拒绝。
-- `HandReviewCaseBuilder` 从目标手牌的开手检查点读取 `pokerRuleSetVersion`；既有 V1 只允许通过版本注册表迁移到唯一历史值 `nlhe-cash-6to9-10-20-v1`，不得使用 Coach 运行时 current 版本回填。
+- `HandReviewCaseBuilder` 从目标手牌的开手检查点读取 `pokerRuleSetVersion`，不得使用 Coach 运行时 current 版本回填。
 - 为用户每个实际决策固化当时可见状态、合法动作、实际动作、筹码投入和对手证据截止点。
 - `compute_decision_metrics` 组合与 Player 同版本的共享纯 `SpotNormalizer`、`HandFeatureAnalyzer`、`ContestablePotProjector` 与 `DecisionMetricsEngine`，生成规则集版本、名义/实际盲注、大盲行动权、规范 spot、原子牌/牌面事实、行动响应拓扑、逐对手有效筹码、可争夺底池、金额语义、翻后 SPR、底池赔率、下注尺度和合法金额边界；不能使用事后牌修正过程评价，也不返回建议动作。
 - 规范 spot 保留 6–9 人逐对手位置关系、行动顺序、Hero 后方玩家、入池/待行动人数、主动权、最后足额加注、重新开放状态、完整行动线及尺度、多人/边池和非标准翻前节点；无法规范化时在模型调用前失败。

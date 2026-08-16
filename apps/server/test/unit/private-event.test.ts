@@ -1,17 +1,15 @@
 import { describe, expect, test } from 'vitest'
 import { AuthoritativeStateValidationError } from '../../src/sessions/authoritative-state/errors.js'
 import {
-  createPrivateEventV2,
+  createPrivateEvent,
   getPrivateEventHandId,
-} from '../../src/sessions/authoritative-state/private-event-v2.js'
+} from '../../src/sessions/authoritative-state/private-event.js'
 import {
-  decodeCurrentPrivateEventV2,
-  encodePrivateEventV2,
-  EVENT_V2_SCHEMA_VERSION,
-  PRIVATE_EVENT_V2_PAYLOAD_VERSION,
-} from '../../src/sessions/authoritative-state/private-event-codec-v2.js'
-import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
-import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
+  currentPrivateEventReader,
+  decodeCurrentPrivateEvent,
+  encodeCurrentPrivateEvent,
+  PRIVATE_EVENT_PAYLOAD_VERSION,
+} from '../../src/sessions/authoritative-state/private-event-codec.js'
 import {
   createHandCompletedEventDraft,
   createHandStartedEventDraft,
@@ -57,7 +55,7 @@ function handAbortedEvent() {
   }
 }
 
-function v1Events() {
+function pokerEvents() {
   const completed = createTestCompletedPokerResult()
   const actionCommitted = completed.eventDrafts.find(
     (event) => event.type === 'actionCommitted',
@@ -118,21 +116,19 @@ const newEventCases = [
   { type: 'sessionEnded' as const, reason: 'userRequested' as const },
 ]
 
-describe('private event V2', () => {
+describe('private event', () => {
   test.each(newEventCases)('round-trips and freezes $type', (input) => {
-    const event = createPrivateEventV2(input)
-    const encoded = encodePrivateEventV2(input)
+    const event = createPrivateEvent(input)
+    const encoded = encodeCurrentPrivateEvent(input)
     expect(event).toEqual(input)
     expect(Object.isFrozen(event)).toBe(true)
-    expect(decodeCurrentPrivateEventV2(structuredClone(encoded))).toEqual(
-      encoded,
-    )
+    expect(decodeCurrentPrivateEvent(structuredClone(encoded))).toEqual(encoded)
     expect(Object.isFrozen(encoded.payload.event)).toBe(true)
   })
 
   test('rejects extra fields, invalid arithmetic and unsafe totals', () => {
     expect(() =>
-      createPrivateEventV2({ ...sessionCreatedEvent(), extra: true }),
+      createPrivateEvent({ ...sessionCreatedEvent(), extra: true }),
     ).toThrow(AuthoritativeStateValidationError)
     for (const initialBuyIns of [
       sessionCreatedEvent().initialBuyIns.slice().reverse(),
@@ -145,11 +141,11 @@ describe('private event V2', () => {
       })),
     ]) {
       expect(() =>
-        createPrivateEventV2({ type: 'sessionCreated', initialBuyIns }),
+        createPrivateEvent({ type: 'sessionCreated', initialBuyIns }),
       ).toThrow(AuthoritativeStateValidationError)
     }
     expect(() =>
-      createPrivateEventV2({
+      createPrivateEvent({
         type: 'userRebuy',
         seatNumber: 0,
         amount: 500,
@@ -160,7 +156,7 @@ describe('private event V2', () => {
       }),
     ).toThrow(AuthoritativeStateValidationError)
     expect(() =>
-      createPrivateEventV2({
+      createPrivateEvent({
         ...handAbortedEvent(),
         beforeAbort: {
           ...handAbortedEvent().beforeAbort,
@@ -171,20 +167,18 @@ describe('private event V2', () => {
   })
 
   test('maps structured hand ids for all nine variants', () => {
-    const events = [...v1Events(), ...newEventCases]
+    const events = [...pokerEvents(), ...newEventCases]
     expect(events).toHaveLength(9)
     expect(
-      events.map((event) => getPrivateEventHandId(createPrivateEventV2(event))),
+      events.map((event) => getPrivateEventHandId(createPrivateEvent(event))),
     ).toEqual([handId, handId, handId, handId, null, null, null, handId, null])
   })
 
-  test('keeps all four V1 variants strict and semantically identical under V2', () => {
-    for (const event of v1Events()) {
-      const v1 = encodePrivateEventV1(event)
-      const v2 = encodePrivateEventV2(event)
-      expect(v2.payload.event).toEqual(v1.payload.event)
+  test('keeps all four poker variants strict in the current codec', () => {
+    for (const event of pokerEvents()) {
+      expect(encodeCurrentPrivateEvent(event).payload.event).toEqual(event)
       expect(() =>
-        encodePrivateEventV2({ ...event, extra: 'not allowed' }),
+        encodeCurrentPrivateEvent({ ...event, extra: 'not allowed' }),
       ).toThrow(AuthoritativeStateValidationError)
     }
   })
@@ -214,10 +208,10 @@ describe('private event V2', () => {
         ),
       },
     }
-    expect(() => createPrivateEventV2(rollback)).not.toThrow()
+    expect(() => createPrivateEvent(rollback)).not.toThrow()
 
     expect(() =>
-      createPrivateEventV2({
+      createPrivateEvent({
         ...rollback,
         restored: {
           ...rollback.restored,
@@ -233,7 +227,7 @@ describe('private event V2', () => {
     ).toThrow(AuthoritativeStateValidationError)
 
     expect(() =>
-      createPrivateEventV2({
+      createPrivateEvent({
         ...rollback,
         beforeAbort: {
           ...rollback.beforeAbort,
@@ -249,40 +243,25 @@ describe('private event V2', () => {
     ).toThrow(AuthoritativeStateValidationError)
   })
 
-  test('publishes V2 as current while reading V1 as legacy', () => {
-    const current = encodePrivateEventV2(sessionCreatedEvent())
-    const legacy = encodePrivateEventV1({
-      type: 'uncalledBetReturned',
-      handId,
-      returns: [{ seatNumber: 1, amount: 10 }],
-    })
+  test('publishes row payload version 1 as the only current format', () => {
+    const current = encodeCurrentPrivateEvent(sessionCreatedEvent())
 
     expect({
-      payload: PRIVATE_EVENT_V2_PAYLOAD_VERSION,
-      envelope: EVENT_V2_SCHEMA_VERSION,
+      payload: PRIVATE_EVENT_PAYLOAD_VERSION,
       current,
     }).toEqual({
-      payload: 2,
-      envelope: 2,
+      payload: 1,
       current: {
-        payloadVersion: 2,
-        payload: { eventSchemaVersion: 2, event: sessionCreatedEvent() },
+        payloadVersion: 1,
+        payload: { event: sessionCreatedEvent() },
       },
     })
-    expect(decodeCurrentPrivateEventV2(structuredClone(current))).toEqual(
-      current,
-    )
+    expect(decodeCurrentPrivateEvent(structuredClone(current))).toEqual(current)
     expect(
-      productionPrivateEventVersionRegistry.read(
-        current.payloadVersion,
-        current.payload,
-      ),
+      currentPrivateEventReader.read(current.payloadVersion, current.payload),
     ).toEqual({ kind: 'decoded', value: sessionCreatedEvent() })
     expect(
-      productionPrivateEventVersionRegistry.read(
-        legacy.payloadVersion,
-        legacy.payload,
-      ),
-    ).toEqual({ kind: 'decoded', value: legacy.payload.event })
+      currentPrivateEventReader.read(2, { event: pokerEvents()[0] }),
+    ).toEqual({ kind: 'unknownVersion' })
   })
 })

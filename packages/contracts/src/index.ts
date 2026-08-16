@@ -1,8 +1,5 @@
 import { z } from 'zod'
 
-export const PROTOCOL_VERSION = 1 as const
-
-export const ProtocolVersionSchema = z.literal(PROTOCOL_VERSION)
 export const SessionIdSchema = z.uuid()
 export const HandIdSchema = z.uuid()
 export const PlayerIdSchema = z.uuid()
@@ -90,7 +87,6 @@ export const CreateSessionRosterSourceSchema = z.discriminatedUnion('type', [
   }),
 ])
 export const CreateSessionRequestSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   rosterSource: CreateSessionRosterSourceSchema,
 })
 export const PersonaSnapshotFilterSchema = z.strictObject({
@@ -529,13 +525,11 @@ const KimiProviderSettingsSchema = z
   })
 
 export const ProviderSettingsResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   deepSeek: DeepSeekProviderSettingsSchema,
   kimi: KimiProviderSettingsSchema,
 })
 
 export const HealthResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   status: z.literal('ok'),
   database: z.literal('available'),
 })
@@ -544,9 +538,7 @@ export const ProviderPathParamsSchema = z.strictObject({
   provider: ProviderIdSchema,
 })
 
-export const ProviderCheckRequestSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
-})
+export const ProviderCheckRequestSchema = z.strictObject({})
 
 export const PlayerAgentSettingsSchema = z
   .strictObject({
@@ -564,7 +556,6 @@ export const PlayerAgentSettingsSchema = z
   })
 
 export const PlayerAgentSettingsPatchRequestSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   settings: z
     .strictObject({
       attemptTimeoutSeconds: z.number().int().min(5).max(30).optional(),
@@ -576,7 +567,6 @@ export const PlayerAgentSettingsPatchRequestSchema = z.strictObject({
 })
 
 export const PlayerAgentSettingsResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   settings: PlayerAgentSettingsSchema,
 })
 
@@ -585,12 +575,10 @@ export const AgentPersonaPathParamsSchema = z.strictObject({
 })
 
 export const AgentPersonaListResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   personas: z.array(AgentPersonaSummarySchema),
 })
 
 export const AgentPersonaDetailResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   persona: AgentPersonaSummarySchema,
 })
 
@@ -841,7 +829,6 @@ export const PublicHandSnapshotSchema = z.strictObject({
 
 export const PublicSessionSnapshotSchema = z
   .strictObject({
-    protocolVersion: ProtocolVersionSchema,
     sessionId: SessionIdSchema,
     stateVersion: StateVersionSchema,
     eventSeq: EventSequenceSchema,
@@ -1009,7 +996,6 @@ export const SessionCreationWarningSchema = z.strictObject({
   message: z.literal('Kimi API Key 未配置，自动降级不可用。'),
 })
 export const CreateSessionResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   snapshot: PublicSessionSnapshotSchema,
   warnings: z.array(SessionCreationWarningSchema).max(1),
 })
@@ -1033,7 +1019,6 @@ export const SseEventTypeSchema = z.enum([
 
 export const SseEventSchema = z
   .strictObject({
-    protocolVersion: ProtocolVersionSchema,
     eventId: EventIdSchema,
     sessionId: SessionIdSchema,
     eventSeq: EventSequenceSchema,
@@ -1055,12 +1040,10 @@ export const SseEventSchema = z
   })
 
 export const CommandRequestSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   command: SessionCommandSchema,
 })
 
 export const CommandResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   snapshot: PublicSessionSnapshotSchema,
 })
 
@@ -1069,28 +1052,23 @@ export const SessionPathParamsSchema = z.strictObject({
 })
 
 export const SessionSnapshotResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   snapshot: PublicSessionSnapshotSchema,
 })
 
 export const DeleteSessionRequestSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   confirmation: z.literal('永久删除本场'),
 })
 
 export const DeleteSessionResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   deletedSessionId: SessionIdSchema,
   invalidatedRunCount: z.number().int().nonnegative(),
 })
 
 export const ClearDataRequestSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   confirmation: z.literal('永久清空全部数据'),
 })
 
 export const ClearDataResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   deletedSessionCount: z.number().int().nonnegative(),
   invalidatedRunCount: z.number().int().nonnegative(),
 })
@@ -1101,7 +1079,6 @@ export const FieldErrorSchema = z.strictObject({
 })
 
 export const ErrorResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   code: z.string().min(1),
   message: z.string().min(1),
   fieldErrors: z.array(FieldErrorSchema).optional(),

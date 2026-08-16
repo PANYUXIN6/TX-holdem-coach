@@ -1,6 +1,6 @@
 import type { LedgerCommand } from '../../persistence/command-ledger-repository.js'
 import { createPokerTableState } from '../../poker/state.js'
-import { createPrivateEventV2 } from '../authoritative-state/private-event-v2.js'
+import { createPrivateEvent } from '../authoritative-state/private-event.js'
 import {
   defineSessionCommandHandlerBinding,
   type SessionCommandHandlerBinding,
@@ -132,7 +132,7 @@ export function createRebuyHandlerBinding(): SessionCommandHandlerBinding<
               }
             : seat,
         )
-        const event = createPrivateEventV2({
+        const event = createPrivateEvent({
           type: 'userRebuy',
           seatNumber: 0,
           amount,

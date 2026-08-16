@@ -6,10 +6,7 @@ export class AuthoritativeStateValidationError extends Error {
 }
 
 export type CurrentPayloadVersionTarget =
-  | 'snapshotRowVersion'
-  | 'snapshotEnvelopeVersion'
-  | 'eventRowVersion'
-  | 'eventEnvelopeVersion'
+  'snapshotRowVersion' | 'eventRowVersion'
 
 export class CurrentPayloadVersionError extends Error {
   public constructor(public readonly target: CurrentPayloadVersionTarget) {
@@ -22,12 +19,5 @@ export class CurrentPayloadValidationError extends Error {
   public constructor() {
     super('当前持久化载荷无效。')
     this.name = 'CurrentPayloadValidationError'
-  }
-}
-
-export class VersionRegistryConfigurationError extends Error {
-  public constructor() {
-    super('持久化版本注册表配置无效。')
-    this.name = 'VersionRegistryConfigurationError'
   }
 }

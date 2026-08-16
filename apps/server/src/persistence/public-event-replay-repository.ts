@@ -50,7 +50,6 @@ const ReplayRowSchema = z.strictObject({
   sessionId: z.uuid(),
   eventSeq: SafeIntegerSchema,
   stateVersionAfter: SafeIntegerSchema,
-  protocolVersion: z.number().int().positive(),
   publicEventPayload: z.unknown(),
 })
 
@@ -222,7 +221,6 @@ export function createPublicEventReplayRepository(input: {
           SELECT e.id::text AS "eventId", e.session_id::text AS "sessionId",
             e.event_seq::float8 AS "eventSeq",
             e.state_version_after::float8 AS "stateVersionAfter",
-            e.protocol_version AS "protocolVersion",
             e.public_event_payload AS "publicEventPayload"
           FROM app_private.session_events e
           JOIN app_private.sessions s

@@ -1,13 +1,13 @@
 import type { TransactionSql } from 'postgres'
 import { SseEventSchema, type SseEvent } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
-import { type StoredPrivateEventV2 } from '../sessions/authoritative-state/private-event-codec-v2.js'
+import { type StoredPrivateEvent } from '../sessions/authoritative-state/private-event-codec.js'
 import type { CurrentPrivateEventProtocol } from '../sessions/authoritative-state/current-private-event-protocol.js'
 import { currentPrivateEventProtocol as productionCurrentPrivateEventProtocol } from '../sessions/authoritative-state/current-private-event-protocol.js'
 import {
   getPrivateEventHandId,
-  type PrivateEventV2,
-} from '../sessions/authoritative-state/private-event-v2.js'
+  type PrivateEvent,
+} from '../sessions/authoritative-state/private-event.js'
 import {
   decodeCurrentSnapshotV1,
   type StoredTableSnapshotV1,
@@ -87,7 +87,7 @@ export interface SessionMutationEventInput {
   readonly commandLedgerId: string | null
   readonly stateVersionBefore: number
   readonly stateVersionAfter: number
-  readonly privateEvent: StoredPrivateEventV2
+  readonly privateEvent: StoredPrivateEvent
   readonly publicEvent: SseEvent
   readonly createdAt: string
 }
@@ -285,8 +285,8 @@ async function lockSessionForMutationFor(
 function validateSessionMutationFor(
   repositoryIdentity: object,
   currentPrivateEventProtocol: CurrentPrivateEventProtocol<
-    PrivateEventV2,
-    StoredPrivateEventV2
+    PrivateEvent,
+    StoredPrivateEvent
   >,
   transaction: TransactionSql,
   locked: LockedSessionMutation,
@@ -300,8 +300,8 @@ function validateSessionMutationFor(
   readonly snapshot: StoredTableSnapshotV1 | null
   readonly events: readonly {
     readonly input: z.infer<typeof SessionMutationBatchSchema>['events'][number]
-    readonly privateEvent: StoredPrivateEventV2
-    readonly privateEventDraft: PrivateEventV2
+    readonly privateEvent: StoredPrivateEvent
+    readonly privateEventDraft: PrivateEvent
     readonly publicEvent: SseEvent
   }[]
 } {
@@ -318,8 +318,8 @@ function validateSessionMutationFor(
   let snapshot: StoredTableSnapshotV1 | null = null
   const events: Array<{
     readonly input: z.infer<typeof SessionMutationBatchSchema>['events'][number]
-    readonly privateEvent: StoredPrivateEventV2
-    readonly privateEventDraft: PrivateEventV2
+    readonly privateEvent: StoredPrivateEvent
+    readonly privateEventDraft: PrivateEvent
     readonly publicEvent: SseEvent
   }> = []
   try {
@@ -331,7 +331,7 @@ function validateSessionMutationFor(
       const publicEvent = SseEventSchema.parse(event.publicEvent)
       events.push({
         input: event,
-        privateEvent: event.privateEvent as StoredPrivateEventV2,
+        privateEvent: event.privateEvent as StoredPrivateEvent,
         privateEventDraft: currentPrivateEventProtocol.decodeStoredCurrent(
           event.privateEvent,
         ),
@@ -440,8 +440,8 @@ function validateSessionMutationFor(
 async function persistSessionMutationFor(
   repositoryIdentity: object,
   currentPrivateEventProtocol: CurrentPrivateEventProtocol<
-    PrivateEventV2,
-    StoredPrivateEventV2
+    PrivateEvent,
+    StoredPrivateEvent
   >,
   transaction: TransactionSql,
   locked: LockedSessionMutation,
@@ -545,7 +545,6 @@ async function persistSessionMutationFor(
     state_version_after: input.stateVersionAfter,
     private_event_payload_version: privateEvent.payloadVersion,
     private_event_payload: privateEvent.payload,
-    protocol_version: publicEvent.protocolVersion,
     public_event_payload: publicEvent,
     created_at: input.createdAt,
   }))
@@ -567,7 +566,6 @@ async function persistSessionMutationFor(
         state_version_after,
         private_event_payload_version,
         private_event_payload,
-        protocol_version,
         public_event_payload,
         created_at
       )
@@ -582,7 +580,6 @@ async function persistSessionMutationFor(
         state_version_after,
         private_event_payload_version,
         private_event_payload,
-        protocol_version,
         public_event_payload,
         created_at
       FROM jsonb_populate_recordset(
@@ -622,8 +619,8 @@ async function persistSessionMutationFor(
 
 export interface SessionMutationRepository {
   readonly currentPrivateEventProtocol: CurrentPrivateEventProtocol<
-    PrivateEventV2,
-    StoredPrivateEventV2
+    PrivateEvent,
+    StoredPrivateEvent
   >
   lockSessionForMutation(
     transaction: TransactionSql,
@@ -644,8 +641,8 @@ export interface SessionMutationRepository {
 
 export function createSessionMutationRepository(input: {
   readonly currentPrivateEventProtocol: CurrentPrivateEventProtocol<
-    PrivateEventV2,
-    StoredPrivateEventV2
+    PrivateEvent,
+    StoredPrivateEvent
   >
 }): SessionMutationRepository {
   if (

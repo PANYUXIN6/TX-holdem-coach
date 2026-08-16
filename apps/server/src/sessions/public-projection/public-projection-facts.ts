@@ -1,6 +1,6 @@
 import type { TransactionSql } from 'postgres'
 import type { LockedSessionView } from '../../persistence/session-mutation-repository.js'
-import type { PrivateEventV2 } from '../authoritative-state/private-event-v2.js'
+import type { PrivateEvent } from '../authoritative-state/private-event.js'
 import type { PrivateTableState } from '../authoritative-state/private-table-state.js'
 
 export type ProjectionRosterSeat =
@@ -20,14 +20,14 @@ export type ProjectionRosterSeat =
 export interface CommittedPrivateEventFact {
   readonly eventSeq: number
   readonly handId: string
-  readonly event: PrivateEventV2
+  readonly event: PrivateEvent
 }
 
 export interface PublicSessionProjectionFacts {
   readonly state: PrivateTableState
   readonly session: LockedSessionView
   readonly eventSeq: number
-  readonly newPrivateEvents: readonly PrivateEventV2[]
+  readonly newPrivateEvents: readonly PrivateEvent[]
   readonly roster: readonly ProjectionRosterSeat[]
   readonly committedCurrentHandEvents: readonly CommittedPrivateEventFact[]
 }

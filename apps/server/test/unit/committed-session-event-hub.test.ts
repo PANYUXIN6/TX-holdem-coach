@@ -7,7 +7,6 @@ const otherSessionId = '20000000-0000-4000-8000-000000000002'
 
 function event(eventSeq: number, overrides: Partial<SseEvent> = {}): SseEvent {
   const snapshot = {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion: 4,
     eventSeq,
@@ -40,7 +39,6 @@ function event(eventSeq: number, overrides: Partial<SseEvent> = {}): SseEvent {
     lastCompletedHandSummary: null,
   }
   return {
-    protocolVersion: 1,
     eventId: `30000000-0000-4000-8000-${String(eventSeq).padStart(12, '0')}`,
     sessionId,
     eventSeq,

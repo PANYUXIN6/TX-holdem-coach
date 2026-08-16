@@ -1,6 +1,5 @@
 import {
   ErrorResponseSchema,
-  PROTOCOL_VERSION,
   type ErrorResponse,
 } from '@tx-holdem-coach/contracts'
 import type { Context } from 'hono'
@@ -46,9 +45,8 @@ export function statusForStableErrorCode(
   return STABLE_SESSION_HTTP_STATUSES[code]
 }
 
-function errorResponse(value: Omit<ErrorResponse, 'protocolVersion'>) {
+function errorResponse(value: ErrorResponse) {
   return ErrorResponseSchema.parse({
-    protocolVersion: PROTOCOL_VERSION,
     ...value,
   })
 }

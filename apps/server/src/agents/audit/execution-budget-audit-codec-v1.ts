@@ -9,7 +9,6 @@ import {
 } from './errors.js'
 
 export const EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION = 1 as const
-export const EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION = 1 as const
 
 const ExecutionBudgetAuditV1Schema = z.strictObject({
   maxAttempts: PositiveSafeIntegerSchema,
@@ -27,7 +26,6 @@ export type ExecutionBudgetAuditV1 = Readonly<
 export interface StoredExecutionBudgetAuditV1 {
   readonly payloadVersion: typeof EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION
   readonly payload: {
-    readonly executionBudgetAuditSchemaVersion: typeof EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION
     readonly budget: ExecutionBudgetAuditV1
   }
 }
@@ -35,9 +33,6 @@ export interface StoredExecutionBudgetAuditV1 {
 const StoredExecutionBudgetAuditV1Schema = z.strictObject({
   payloadVersion: z.literal(EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION),
   payload: z.strictObject({
-    executionBudgetAuditSchemaVersion: z.literal(
-      EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION,
-    ),
     budget: ExecutionBudgetAuditV1Schema,
   }),
 })
@@ -64,13 +59,6 @@ export function decodeCurrentExecutionBudgetAuditV1(
     throw new AgentAuditPayloadVersionError('executionBudgetRowVersion')
   }
   if (!isRecord(input.payload)) throw new AgentAuditPayloadValidationError()
-  const envelopeVersion = PositiveSafeIntegerSchema.safeParse(
-    input.payload.executionBudgetAuditSchemaVersion,
-  )
-  if (!envelopeVersion.success) throw new AgentAuditPayloadValidationError()
-  if (envelopeVersion.data !== EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION) {
-    throw new AgentAuditPayloadVersionError('executionBudgetEnvelopeVersion')
-  }
 
   const parsed = StoredExecutionBudgetAuditV1Schema.safeParse(input)
   if (!parsed.success) throw new AgentAuditPayloadValidationError()
@@ -85,7 +73,6 @@ export function encodeExecutionBudgetAuditV1(
   return decodeCurrentExecutionBudgetAuditV1({
     payloadVersion: EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION,
     payload: {
-      executionBudgetAuditSchemaVersion: EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION,
       budget: budget.data,
     },
   })

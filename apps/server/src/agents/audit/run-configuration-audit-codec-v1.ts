@@ -1,5 +1,9 @@
 import { z } from 'zod'
 import {
+  readCurrentPersistedJson,
+  type PersistedJsonReader,
+} from '../../persisted-json.js'
+import {
   AuditVersionReferenceSchema,
   PositiveSafeIntegerSchema,
 } from './audit-primitives.js'
@@ -9,7 +13,6 @@ import {
 } from './errors.js'
 
 export const RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION = 1 as const
-export const RUN_CONFIGURATION_AUDIT_SCHEMA_VERSION = 1 as const
 
 const UniqueReferencesSchema = z
   .array(AuditVersionReferenceSchema)
@@ -44,7 +47,6 @@ export type RunConfigurationAuditV1 = Readonly<
 export interface StoredRunConfigurationAuditV1 {
   readonly payloadVersion: typeof RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION
   readonly payload: {
-    readonly runConfigurationAuditSchemaVersion: typeof RUN_CONFIGURATION_AUDIT_SCHEMA_VERSION
     readonly configuration: RunConfigurationAuditV1
   }
 }
@@ -52,9 +54,6 @@ export interface StoredRunConfigurationAuditV1 {
 const StoredRunConfigurationAuditV1Schema = z.strictObject({
   payloadVersion: z.literal(RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION),
   payload: z.strictObject({
-    runConfigurationAuditSchemaVersion: z.literal(
-      RUN_CONFIGURATION_AUDIT_SCHEMA_VERSION,
-    ),
     configuration: RunConfigurationAuditV1Schema,
   }),
 })
@@ -81,13 +80,6 @@ export function decodeCurrentRunConfigurationAuditV1(
     throw new AgentAuditPayloadVersionError('runConfigurationRowVersion')
   }
   if (!isRecord(input.payload)) throw new AgentAuditPayloadValidationError()
-  const envelopeVersion = PositiveSafeIntegerSchema.safeParse(
-    input.payload.runConfigurationAuditSchemaVersion,
-  )
-  if (!envelopeVersion.success) throw new AgentAuditPayloadValidationError()
-  if (envelopeVersion.data !== RUN_CONFIGURATION_AUDIT_SCHEMA_VERSION) {
-    throw new AgentAuditPayloadVersionError('runConfigurationEnvelopeVersion')
-  }
 
   const parsed = StoredRunConfigurationAuditV1Schema.safeParse(input)
   if (!parsed.success) throw new AgentAuditPayloadValidationError()
@@ -102,9 +94,22 @@ export function encodeRunConfigurationAuditV1(
   return decodeCurrentRunConfigurationAuditV1({
     payloadVersion: RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION,
     payload: {
-      runConfigurationAuditSchemaVersion:
-        RUN_CONFIGURATION_AUDIT_SCHEMA_VERSION,
       configuration: configuration.data,
     },
   })
 }
+
+export const currentRunConfigurationAuditReader: PersistedJsonReader<RunConfigurationAuditV1> =
+  Object.freeze({
+    read(rowPayloadVersion: unknown, payload: unknown) {
+      return readCurrentPersistedJson({
+        rowPayloadVersion,
+        payload,
+        currentRowPayloadVersion: RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION,
+        decode: (stored) =>
+          decodeCurrentRunConfigurationAuditV1(stored).payload.configuration,
+        isPayloadValidationError: (error) =>
+          error instanceof AgentAuditPayloadValidationError,
+      })
+    },
+  })

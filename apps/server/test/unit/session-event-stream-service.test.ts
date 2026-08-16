@@ -14,7 +14,6 @@ const sessionId = '22222222-2222-4222-8222-222222222222'
 
 function snapshot(eventSeq: number, stateVersion = 1) {
   return {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion,
     eventSeq,
@@ -67,7 +66,6 @@ function repository(highWatermark = 2) {
       sessionId: event.sessionId,
       eventSeq: event.eventSeq,
       stateVersionAfter: event.stateVersion,
-      protocolVersion: event.protocolVersion,
       publicEventPayload: event,
     })),
   )

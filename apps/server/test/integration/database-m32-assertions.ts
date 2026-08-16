@@ -129,7 +129,6 @@ export function projectPublicSnapshot(
   const heroHoleCards =
     privateHeroHoleCards === undefined ? null : [...privateHeroHoleCards]
   return {
-    protocolVersion: 1,
     sessionId: session.sessionId,
     stateVersion: state.stateVersion,
     eventSeq,
@@ -253,7 +252,6 @@ export function createM32Service(
 
 export function currentCatalogRequest(aiCount: number) {
   return {
-    protocolVersion: 1 as const,
     rosterSource: {
       type: 'currentCatalog' as const,
       selections: loadAndValidatePersonaCatalog()
@@ -971,7 +969,6 @@ async function assertLatestEndedReuse(sql: Sql): Promise<void> {
     await createM32Service(sql, (identity) => {
       reusedIdentity = identity
     }).create({
-      protocolVersion: 1,
       rosterSource: { type: 'latestEnded' },
     }),
   )
@@ -1193,7 +1190,6 @@ async function assertLatestEndedClearContention(
     createWork = createM32Service(waitingCreateSql, () => undefined, {
       creationRepository: waitingRepository,
     }).create({
-      protocolVersion: 1,
       rosterSource: { type: 'latestEnded' },
     })
     await waitForTransactionBlock(sql, clearPid, await createStarted.promise)
@@ -1252,7 +1248,6 @@ async function assertLatestEndedClearContention(
     createWork = createM32Service(creatingSql, () => undefined, {
       creationRepository: holdingRepository,
     }).create({
-      protocolVersion: 1,
       rosterSource: { type: 'latestEnded' },
     })
     const createPid = await sourceHeld.promise
@@ -1310,7 +1305,6 @@ async function assertPreflightClearDoesNotReviveHistory(
         identity = created
       },
     ).create({
-      protocolVersion: 1,
       rosterSource: { type: 'latestEnded' },
     })
     await preflightComplete.promise
@@ -1387,7 +1381,6 @@ async function assertDeletedLatestDoesNotFallback(
     createWork = createM32Service(creationSql, () => undefined, {
       creationRepository: waitingRepository,
     }).create({
-      protocolVersion: 1,
       rosterSource: { type: 'latestEnded' },
     })
     await waitForTransactionBlock(

@@ -7,14 +7,16 @@ import {
   CurrentPayloadValidationError,
   CurrentPayloadVersionError,
 } from './errors.js'
+import {
+  readCurrentPersistedJson,
+  type PersistedJsonReader,
+} from '../../persisted-json.js'
 
 export const PRIVATE_TABLE_STATE_PAYLOAD_VERSION = 1 as const
-export const SNAPSHOT_SCHEMA_VERSION = 1 as const
 
 export interface StoredTableSnapshotV1 {
   readonly payloadVersion: typeof PRIVATE_TABLE_STATE_PAYLOAD_VERSION
   readonly payload: {
-    readonly snapshotSchemaVersion: typeof SNAPSHOT_SCHEMA_VERSION
     readonly state: PrivateTableState
   }
 }
@@ -22,7 +24,6 @@ export interface StoredTableSnapshotV1 {
 const SnapshotInputSchema = z.strictObject({
   payloadVersion: z.literal(PRIVATE_TABLE_STATE_PAYLOAD_VERSION),
   payload: z.strictObject({
-    snapshotSchemaVersion: z.literal(SNAPSHOT_SCHEMA_VERSION),
     state: z.unknown(),
   }),
 })
@@ -56,21 +57,11 @@ export function decodeCurrentSnapshotV1(input: unknown): StoredTableSnapshotV1 {
   if (!isRecord(input.payload)) {
     throw new CurrentPayloadValidationError()
   }
-  const envelopeVersion = PayloadVersionSchema.safeParse(
-    input.payload.snapshotSchemaVersion,
-  )
-  if (!envelopeVersion.success) {
-    throw new CurrentPayloadValidationError()
-  }
-  if (envelopeVersion.data !== SNAPSHOT_SCHEMA_VERSION) {
-    throw new CurrentPayloadVersionError('snapshotEnvelopeVersion')
-  }
   try {
     const parsed = SnapshotInputSchema.parse(input)
     return deepFreeze({
       payloadVersion: PRIVATE_TABLE_STATE_PAYLOAD_VERSION,
       payload: {
-        snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
         state: createPrivateTableState(parsed.payload.state),
       },
     })
@@ -83,6 +74,20 @@ export function encodeSnapshotV1(input: unknown): StoredTableSnapshotV1 {
   const state = createPrivateTableState(input)
   return decodeCurrentSnapshotV1({
     payloadVersion: PRIVATE_TABLE_STATE_PAYLOAD_VERSION,
-    payload: { snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION, state },
+    payload: { state },
   })
 }
+
+export const currentSnapshotReader: PersistedJsonReader<PrivateTableState> =
+  Object.freeze({
+    read(rowPayloadVersion: unknown, payload: unknown) {
+      return readCurrentPersistedJson({
+        rowPayloadVersion,
+        payload,
+        currentRowPayloadVersion: PRIVATE_TABLE_STATE_PAYLOAD_VERSION,
+        decode: (stored) => decodeCurrentSnapshotV1(stored).payload.state,
+        isPayloadValidationError: (error) =>
+          error instanceof CurrentPayloadValidationError,
+      })
+    },
+  })

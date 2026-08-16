@@ -15,7 +15,6 @@ export class RepositoryInputValidationError extends Error {
 export type PayloadKind =
   | 'personaConfig'
   | 'agentMemory'
-  | 'playerTimeoutSettings'
   | 'commandResponse'
   | 'handStartCheckpoint'
   | 'completedHandResult'
@@ -28,11 +27,6 @@ export type PayloadKind =
   | 'playerDecisionPacket'
   | 'playerCandidateSet'
   | 'playerValidatorResult'
-  | 'coachFrozenContext'
-  | 'coachAnalysis'
-  | 'coachHindsight'
-  | 'coachFinalReport'
-  | 'coachDecisionAssessment'
 
 export class UnknownPayloadVersionError extends Error {
   public constructor(public readonly payloadKind: PayloadKind) {

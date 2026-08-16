@@ -14,7 +14,6 @@ const otherSessionId = '7c63940e-696c-4476-a128-c9d1e6f6eb36'
 
 function snapshot() {
   return {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion: 1,
     eventSeq: 2,
@@ -43,7 +42,6 @@ test('adapts injectable session ports without installing a production projector'
   const create = vi.fn(async () => ({
     kind: 'created' as const,
     response: {
-      protocolVersion: 1 as const,
       snapshot: snapshot(),
       warnings: [],
     },
@@ -81,7 +79,6 @@ test('adapts injectable session ports without installing a production projector'
     method: 'POST',
     headers: { Origin: origin, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      protocolVersion: 1,
       rosterSource: {
         type: 'currentCatalog',
         selections: [
@@ -109,7 +106,6 @@ test('adapts injectable session ports without installing a production projector'
       method: 'POST',
       headers: { Origin: origin, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         command: {
           sessionId,
           commandId: 'c3887350-23c5-440f-9b12-4b8be9131a88',
@@ -129,7 +125,6 @@ test('adapts injectable session ports without installing a production projector'
       method: 'POST',
       headers: { Origin: origin, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         command: {
           sessionId,
           commandId: '4907e1bc-26d9-403e-9bcb-e18a7bedf10a',
@@ -149,7 +144,6 @@ test('adapts injectable session ports without installing a production projector'
       method: 'POST',
       headers: { Origin: origin, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         command: {
           sessionId,
           commandId: '5907e1bc-26d9-403e-9bcb-e18a7bedf10a',
@@ -169,7 +163,6 @@ test('adapts injectable session ports without installing a production projector'
 
 function commandRequest(commandId: string) {
   return {
-    protocolVersion: 1,
     command: {
       sessionId,
       commandId,
@@ -206,7 +199,6 @@ function sessionRuntime(input: {
           (async () => ({
             kind: 'created',
             response: {
-              protocolVersion: 1,
               snapshot: snapshot(),
               warnings: [],
             },
@@ -222,7 +214,7 @@ function sessionRuntime(input: {
           (async () => ({
             kind: 'completed',
             origin: 'newCommit',
-            response: { protocolVersion: 1, snapshot: snapshot() },
+            response: { snapshot: snapshot() },
             newlyPersistedEvents: [],
           })),
       },
@@ -248,7 +240,6 @@ test('maps the complete session creation and command result matrix', async () =>
       create: async () => ({
         kind: 'activeSessionExists',
         response: {
-          protocolVersion: 1,
           code: 'ACTIVE_SESSION_EXISTS',
           message: '已有活动场次。',
           latestSnapshot: snapshot(),
@@ -261,7 +252,6 @@ test('maps the complete session creation and command result matrix', async () =>
     method: 'POST',
     headers: { Origin: origin, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      protocolVersion: 1,
       rosterSource: {
         type: 'currentCatalog',
         selections: [
@@ -284,7 +274,7 @@ test('maps the complete session creation and command result matrix', async () =>
       result: {
         kind: 'completed',
         origin: 'newCommit',
-        response: { protocolVersion: 1, snapshot: snapshot() },
+        response: { snapshot: snapshot() },
         newlyPersistedEvents: [],
       },
       status: 200,
@@ -293,7 +283,7 @@ test('maps the complete session creation and command result matrix', async () =>
       result: {
         kind: 'completed',
         origin: 'replay',
-        response: { protocolVersion: 1, snapshot: snapshot() },
+        response: { snapshot: snapshot() },
       },
       status: 200,
     },
@@ -312,7 +302,6 @@ test('maps the complete session creation and command result matrix', async () =>
         kind: 'rejected',
         origin: 'ledgerCommit',
         response: {
-          protocolVersion: 1,
           code,
           message: '稳定拒绝。',
           latestSnapshot: snapshot(),

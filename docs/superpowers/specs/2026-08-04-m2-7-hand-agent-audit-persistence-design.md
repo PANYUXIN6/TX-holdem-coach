@@ -131,25 +131,24 @@ agent-foundation-audit-repository
 
 ## 4. Hand 当前契约与版本
 
-### 4.1 四条独立版本序列
+### 4.1 两条独立行载荷版本序列
 
-首版数值均为 `1`，但必须使用四个独立常量：
+首版数值均为 `1`，两类持久化 JSON 各自保留一个行载荷版本常量：
 
 ```ts
 HAND_START_CHECKPOINT_PAYLOAD_VERSION
-CHECKPOINT_SCHEMA_VERSION
 COMPLETED_HAND_RESULT_PAYLOAD_VERSION
-HAND_RESULT_SCHEMA_VERSION
 ```
 
-数据库行版本与 JSON 信封版本组成复合身份。两类载荷不得共享常量、相互比较或假设同步升级。
+两类载荷不得共享常量、相互比较或假设同步升级；JSON 内不再重复保存信封版本。
 
-生产注册表只登记真实 V1。测试可以通过构造器显式注入历史 Decoder 和确定性迁移器；不得提供全局可变 `register()`，也不得发布生产占位版本。
+生产 current-only reader 只接受当前行版本，并统一分类未知版本与损坏载荷；首发前不保留旧 Checkpoint Codec、迁移器或 Registry。
 
-### 4.2 `HandStartCheckpointV1`
+### 4.2 `HandStartCheckpoint`
 
 ```ts
-interface HandStartCheckpointV1 {
+interface HandStartCheckpoint {
+  readonly pokerRuleSetVersion: PokerRuleSetVersion
   readonly stateBeforeStartCommand: PrivateTableState
   readonly startedHand: StartedHandFacts
 }
@@ -168,7 +167,7 @@ interface HandStartCheckpointV1 {
 
 检查点保存 `StartedHandFacts`，使正常完成时可以验证按钮、庄盲、位置、参与座位和起始筹码，而无需从关系表或事件重建开手事实。
 
-后续 M4.5 在不改写已实现 V1 的前提下发布 `HandStartCheckpointV2`，新增手牌级 `pokerRuleSetVersion`。首版规范值为 `nlhe-cash-6to9-10-20-v1`；V1 Decoder 只能因历史上不存在其他规则集而确定性迁移到该值。开手 writer、Player 观察和 Coach 复盘必须读取同一手牌绑定值，不能使用部署时 current 常量重新解释历史手牌。该演进只修改 JSON Codec/Registry 与相关 writer/reader，不需要新增数据库列或 migration。
+首发前已直接在当前 `HandStartCheckpoint` 中加入手牌级 `pokerRuleSetVersion`，行载荷版本从 `1` 起步。首版规则集身份为 `nlhe-cash-6to9-10-20-v1`；开手 writer、Player 观察和 Coach 复盘必须读取同一手牌绑定值，不能使用部署时 current 常量重新解释历史手牌。该调整不需要新增数据库列或 migration。
 
 ### 4.3 `CompletedHandResultV1`
 

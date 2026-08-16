@@ -36,7 +36,6 @@ describe('transaction failure mapping', () => {
 
     await expect(
       service.update({
-        protocolVersion: 1,
         settings: { attemptTimeoutSeconds: 20 },
       }),
     ).rejects.toBeInstanceOf(DatabaseOperationError)
@@ -47,13 +46,11 @@ describe('transaction failure mapping', () => {
 
     await expect(
       service.deleteEndedSession('2a0dc0dd-843a-4e53-a62e-e5ac22f90a3e', {
-        protocolVersion: 1,
         confirmation: '永久删除本场',
       }),
     ).rejects.toBeInstanceOf(DatabaseOperationError)
     await expect(
       service.clearAll({
-        protocolVersion: 1,
         confirmation: '永久清空全部数据',
       }),
     ).rejects.toBeInstanceOf(DatabaseOperationError)
@@ -110,11 +107,9 @@ describe('transaction failure mapping', () => {
 
     await expect(
       service.deleteEndedSession(sessionId, {
-        protocolVersion: 1,
         confirmation: '永久删除本场',
       }),
     ).resolves.toEqual({
-      protocolVersion: 1,
       deletedSessionId: sessionId,
       invalidatedRunCount: 2,
     })

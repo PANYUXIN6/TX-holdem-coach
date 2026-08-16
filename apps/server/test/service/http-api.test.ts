@@ -14,14 +14,12 @@ function runtime() {
     new ServerConfig({ port: 8787, databaseUrl: 'postgresql://runtime' }),
   )
   const update = vi.fn(async () => ({
-    protocolVersion: 1 as const,
     settings: {
       attemptTimeoutSeconds: 20,
       decisionDeadlineSeconds: 45,
     },
   }))
   const deleteEndedSession = vi.fn(async () => ({
-    protocolVersion: 1 as const,
     deletedSessionId: sessionId,
     invalidatedRunCount: 0,
   }))
@@ -29,7 +27,6 @@ function runtime() {
     value: {
       health: {
         read: async () => ({
-          protocolVersion: 1 as const,
           status: 'ok' as const,
           database: 'available' as const,
         }),
@@ -40,7 +37,6 @@ function runtime() {
       },
       playerAgentSettings: {
         read: async () => ({
-          protocolVersion: 1 as const,
           settings: {
             attemptTimeoutSeconds: 15,
             decisionDeadlineSeconds: 45,
@@ -52,7 +48,6 @@ function runtime() {
       deletion: {
         deleteEndedSession,
         clearAll: async () => ({
-          protocolVersion: 1 as const,
           deletedSessionCount: 0,
           invalidatedRunCount: 0,
         }),
@@ -90,7 +85,6 @@ describe('M3.5 HTTP API', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({
-      protocolVersion: 1,
       status: 'ok',
       database: 'available',
     })
@@ -116,7 +110,6 @@ describe('M3.5 HTTP API', () => {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         settings: { attemptTimeoutSeconds: 20 },
       }),
     })
@@ -128,7 +121,6 @@ describe('M3.5 HTTP API', () => {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         settings: { attemptTimeoutSeconds: 20 },
       }),
     })
@@ -150,7 +142,6 @@ describe('M3.5 HTTP API', () => {
       method: 'PATCH',
       headers: { Origin: origin, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         settings: {},
         pad: 'x'.repeat(66_000),
       }),
@@ -202,7 +193,6 @@ describe('M3.5 HTTP API', () => {
       method: 'PATCH',
       headers: { Origin: origin, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         settings: { attemptTimeoutSeconds: 20 },
       }),
     })
@@ -214,7 +204,7 @@ describe('M3.5 HTTP API', () => {
       {
         method: 'DELETE',
         headers: { Origin: origin, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ protocolVersion: 1, confirmation: '删除' }),
+        body: JSON.stringify({ confirmation: '删除' }),
       },
     )
     expect(invalidDelete.status).toBe(400)
@@ -261,7 +251,7 @@ describe('M3.5 HTTP API', () => {
     const response = await app.request(`${baseUrl}/api/settings/agent`, {
       method: 'PATCH',
       headers: { Origin: origin, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ protocolVersion: 1, settings: {}, marker }),
+      body: JSON.stringify({ settings: {}, marker }),
     })
     expect(response.status).toBe(400)
     expect(logRequest).toHaveBeenCalledWith(
@@ -280,7 +270,6 @@ describe('M3.5 HTTP API', () => {
         method: 'DELETE',
         headers: { Origin: origin, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          protocolVersion: 1,
           confirmation: '永久删除本场',
         }),
       },
@@ -386,7 +375,7 @@ describe('M3.5 HTTP API', () => {
       {
         method: 'POST',
         headers: { Origin: origin, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ protocolVersion: 1 }),
+        body: JSON.stringify({}),
       },
     )
 

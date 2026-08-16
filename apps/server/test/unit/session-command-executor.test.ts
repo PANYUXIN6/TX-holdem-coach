@@ -12,8 +12,8 @@ import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { ResourceNotFoundError } from '../../src/persistence/errors.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
-import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
-import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
+import { currentSnapshotReader } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
+import { currentPrivateEventReader } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-state/current-private-event-protocol.js'
 import type { PrepareCommandResult } from '../../src/sessions/command-execution/command-handler.js'
 import { createGuardedPort } from '../../src/sessions/command-execution/command-handler.js'
@@ -148,7 +148,6 @@ async function createExecutionFixture(input: {
   const snapshotProjector = {
     project: vi.fn(
       async ({ state, session, eventSeq }: SnapshotProjectionInput) => ({
-        protocolVersion: 1 as const,
         sessionId,
         stateVersion: state.stateVersion,
         eventSeq,
@@ -180,8 +179,8 @@ async function createExecutionFixture(input: {
     mutationRepository: mutationRepository as never,
     recoveryRepository: recoveryRepository as never,
     recoveryRegistries: {
-      snapshot: productionSnapshotVersionRegistry,
-      privateEvent: productionPrivateEventVersionRegistry,
+      snapshot: currentSnapshotReader,
+      privateEvent: currentPrivateEventReader,
     },
     commandLedgerRepository: {
       registerCommand: registerCommand as never,
@@ -428,7 +427,6 @@ describe('session command execution', () => {
       lastCompletedHandSummary: null,
     })
     const snapshot = {
-      protocolVersion: 1 as const,
       sessionId,
       stateVersion: 7,
       eventSeq: 19,
@@ -522,8 +520,8 @@ describe('session command execution', () => {
       mutationRepository: mutationRepository as never,
       recoveryRepository: recoveryRepository as never,
       recoveryRegistries: {
-        snapshot: productionSnapshotVersionRegistry,
-        privateEvent: productionPrivateEventVersionRegistry,
+        snapshot: currentSnapshotReader,
+        privateEvent: currentPrivateEventReader,
       },
       commandLedgerRepository: {
         registerCommand: vi.fn(async (_tx, _owner, prepared) => ({
@@ -662,7 +660,7 @@ describe('session command execution', () => {
           eventSeq: 20,
           stateVersionBefore: 7,
           stateVersionAfter: 8,
-          privateEvent: { payloadVersion: 2 },
+          privateEvent: { payloadVersion: 1 },
         },
       ],
     })
@@ -746,7 +744,7 @@ describe('session command execution', () => {
         {
           handId: null,
           privateEvent: {
-            payloadVersion: 2,
+            payloadVersion: 1,
             payload: { event: { type: 'sessionEnded' } },
           },
         },
@@ -1060,7 +1058,7 @@ describe('session command execution', () => {
       async () =>
         ({
           status: 'completed',
-          response: { protocolVersion: 1, snapshot: replaySnapshot },
+          response: { snapshot: replaySnapshot },
         }) as never,
     )
     await expect(
@@ -1106,7 +1104,7 @@ describe('session command execution', () => {
       async () =>
         ({
           status: 'completed',
-          response: { protocolVersion: 1, snapshot: replaySnapshot },
+          response: { snapshot: replaySnapshot },
         }) as never,
     )
     await expect(

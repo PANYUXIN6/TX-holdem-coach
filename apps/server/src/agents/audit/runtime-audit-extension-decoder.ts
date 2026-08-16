@@ -23,38 +23,6 @@ export interface PlayerDecisionAuditDecodeInput {
   readonly submittedAt: string | null
 }
 
-export interface CoachDecisionAssessmentAuditDecodeInput {
-  readonly assessmentId: string
-  readonly coachReviewId: string
-  readonly ownerId: string
-  readonly sessionId: string
-  readonly handId: string
-  readonly decisionId: string
-  readonly street: 'preflop' | 'flop' | 'turn' | 'river'
-  readonly ordinalOnStreet: number
-  readonly assessment: RuntimeAuditVersionedPayloadInput
-  readonly createdAt: string
-}
-
-export interface CoachReviewAuditDecodeInput {
-  readonly reviewId: string
-  readonly agentRunId: string
-  readonly ownerId: string
-  readonly sessionId: string
-  readonly handId: string
-  readonly runtime: 'coach'
-  readonly requestId: string
-  readonly status: 'pending' | 'running' | 'completed' | 'failed'
-  readonly frozenContext: RuntimeAuditVersionedPayloadInput
-  readonly analysis: RuntimeAuditVersionedPayloadInput | null
-  readonly hindsight: RuntimeAuditVersionedPayloadInput | null
-  readonly finalReport: RuntimeAuditVersionedPayloadInput | null
-  readonly assessments: readonly CoachDecisionAssessmentAuditDecodeInput[]
-  readonly requestedAt: string
-  readonly completedAt: string | null
-  readonly updatedAt: string
-}
-
 export interface PlayerRuntimeAuditDecodeInput {
   readonly ownerId: string
   readonly sessionId: string
@@ -74,7 +42,6 @@ export interface CoachRuntimeAuditDecodeInput {
   readonly runtime: 'coach'
   readonly checkpoint: RuntimeAuditVersionedPayloadInput | null
   readonly result: RuntimeAuditVersionedPayloadInput | null
-  readonly review: CoachReviewAuditDecodeInput | null
 }
 
 export interface PlayerRuntimeAuditShape<
@@ -90,11 +57,9 @@ export interface PlayerRuntimeAuditShape<
 export interface CoachRuntimeAuditShape<
   TCheckpoint = unknown,
   TResult = unknown,
-  TReview = unknown,
 > {
   readonly checkpoint: TCheckpoint | null
   readonly result: TResult | null
-  readonly review: TReview | null
 }
 
 export type EmptyPlayerRuntimeAudit = PlayerRuntimeAuditShape<
@@ -102,7 +67,7 @@ export type EmptyPlayerRuntimeAudit = PlayerRuntimeAuditShape<
   never,
   never
 >
-export type EmptyCoachRuntimeAudit = CoachRuntimeAuditShape<never, never, never>
+export type EmptyCoachRuntimeAudit = CoachRuntimeAuditShape<never, never>
 
 export const EMPTY_PLAYER_RUNTIME_AUDIT: EmptyPlayerRuntimeAudit =
   Object.freeze({
@@ -114,7 +79,6 @@ export const EMPTY_PLAYER_RUNTIME_AUDIT: EmptyPlayerRuntimeAudit =
 export const EMPTY_COACH_RUNTIME_AUDIT: EmptyCoachRuntimeAudit = Object.freeze({
   checkpoint: null,
   result: null,
-  review: null,
 })
 
 export interface RuntimeAuditExtensionDecoder<

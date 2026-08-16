@@ -55,22 +55,15 @@ const StartedHandFactsSchema = z.strictObject({
   ),
 })
 const HandStartCheckpointInputSchema = z.strictObject({
-  stateBeforeStartCommand: z.unknown(),
-  startedHand: StartedHandFactsSchema,
-})
-const HandStartCheckpointV2InputSchema = z.strictObject({
   pokerRuleSetVersion: z.literal(POKER_RULE_SET_VERSION_V1),
   stateBeforeStartCommand: z.unknown(),
   startedHand: StartedHandFactsSchema,
 })
 
-export interface HandStartCheckpointV1 {
+export interface HandStartCheckpoint {
+  readonly pokerRuleSetVersion: PokerRuleSetVersion
   readonly stateBeforeStartCommand: PrivateTableState
   readonly startedHand: StartedHandFacts
-}
-
-export interface HandStartCheckpointV2 extends HandStartCheckpointV1 {
-  readonly pokerRuleSetVersion: PokerRuleSetVersion
 }
 
 function deepFreeze<Value>(value: Value): Value {
@@ -83,9 +76,7 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
-export function createHandStartCheckpointV1(
-  input: unknown,
-): HandStartCheckpointV1 {
+export function createHandStartCheckpoint(input: unknown): HandStartCheckpoint {
   try {
     const parsed = HandStartCheckpointInputSchema.parse(input)
     const stateBeforeStartCommand = createPrivateTableState(
@@ -120,25 +111,10 @@ export function createHandStartCheckpointV1(
     ) {
       throw new Error('Hand-start checkpoint mirrors do not match.')
     }
-    return deepFreeze({ stateBeforeStartCommand, startedHand })
-  } catch (error) {
-    if (error instanceof HandAuditPayloadValidationError) throw error
-    throw new HandAuditPayloadValidationError()
-  }
-}
-
-export function createHandStartCheckpointV2(
-  input: unknown,
-): HandStartCheckpointV2 {
-  try {
-    const parsed = HandStartCheckpointV2InputSchema.parse(input)
-    const checkpointV1 = createHandStartCheckpointV1({
-      stateBeforeStartCommand: parsed.stateBeforeStartCommand,
-      startedHand: parsed.startedHand,
-    })
     return deepFreeze({
       pokerRuleSetVersion: POKER_RULE_SET_VERSION_V1,
-      ...checkpointV1,
+      stateBeforeStartCommand,
+      startedHand,
     })
   } catch (error) {
     if (error instanceof HandAuditPayloadValidationError) throw error

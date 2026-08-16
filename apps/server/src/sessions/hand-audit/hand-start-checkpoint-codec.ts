@@ -1,28 +1,29 @@
 import { z } from 'zod'
 import {
+  readCurrentPersistedJson,
+  type PersistedJsonReader,
+} from '../../persisted-json.js'
+import {
   HandAuditPayloadValidationError,
   HandAuditPayloadVersionError,
 } from './errors.js'
 import {
-  createHandStartCheckpointV1,
-  type HandStartCheckpointV1,
+  createHandStartCheckpoint,
+  type HandStartCheckpoint,
 } from './hand-start-checkpoint.js'
 
 export const HAND_START_CHECKPOINT_PAYLOAD_VERSION = 1 as const
-export const CHECKPOINT_SCHEMA_VERSION = 1 as const
 
-export interface StoredHandStartCheckpointV1 {
+export interface StoredHandStartCheckpoint {
   readonly payloadVersion: typeof HAND_START_CHECKPOINT_PAYLOAD_VERSION
   readonly payload: {
-    readonly checkpointSchemaVersion: typeof CHECKPOINT_SCHEMA_VERSION
-    readonly checkpoint: HandStartCheckpointV1
+    readonly checkpoint: HandStartCheckpoint
   }
 }
 
 const StoredCheckpointInputSchema = z.strictObject({
   payloadVersion: z.literal(HAND_START_CHECKPOINT_PAYLOAD_VERSION),
   payload: z.strictObject({
-    checkpointSchemaVersion: z.literal(CHECKPOINT_SCHEMA_VERSION),
     checkpoint: z.unknown(),
   }),
 })
@@ -40,9 +41,9 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
-export function decodeCurrentHandStartCheckpointV1(
+export function decodeCurrentHandStartCheckpoint(
   input: unknown,
-): StoredHandStartCheckpointV1 {
+): StoredHandStartCheckpoint {
   if (!isRecord(input)) throw new HandAuditPayloadValidationError()
   const rowVersion = PositiveIntegerSchema.safeParse(input.payloadVersion)
   if (!rowVersion.success) throw new HandAuditPayloadValidationError()
@@ -50,20 +51,12 @@ export function decodeCurrentHandStartCheckpointV1(
     throw new HandAuditPayloadVersionError('checkpointRowVersion')
   }
   if (!isRecord(input.payload)) throw new HandAuditPayloadValidationError()
-  const envelopeVersion = PositiveIntegerSchema.safeParse(
-    input.payload.checkpointSchemaVersion,
-  )
-  if (!envelopeVersion.success) throw new HandAuditPayloadValidationError()
-  if (envelopeVersion.data !== CHECKPOINT_SCHEMA_VERSION) {
-    throw new HandAuditPayloadVersionError('checkpointEnvelopeVersion')
-  }
   try {
     const parsed = StoredCheckpointInputSchema.parse(input)
     return deepFreeze({
       payloadVersion: HAND_START_CHECKPOINT_PAYLOAD_VERSION,
       payload: {
-        checkpointSchemaVersion: CHECKPOINT_SCHEMA_VERSION,
-        checkpoint: createHandStartCheckpointV1(parsed.payload.checkpoint),
+        checkpoint: createHandStartCheckpoint(parsed.payload.checkpoint),
       },
     })
   } catch (error) {
@@ -72,15 +65,29 @@ export function decodeCurrentHandStartCheckpointV1(
   }
 }
 
-export function encodeHandStartCheckpointV1(
+export function encodeCurrentHandStartCheckpoint(
   input: unknown,
-): StoredHandStartCheckpointV1 {
-  const checkpoint = createHandStartCheckpointV1(input)
-  return decodeCurrentHandStartCheckpointV1({
+): StoredHandStartCheckpoint {
+  const checkpoint = createHandStartCheckpoint(input)
+  return decodeCurrentHandStartCheckpoint({
     payloadVersion: HAND_START_CHECKPOINT_PAYLOAD_VERSION,
     payload: {
-      checkpointSchemaVersion: CHECKPOINT_SCHEMA_VERSION,
       checkpoint,
     },
   })
 }
+
+export const currentHandStartCheckpointReader: PersistedJsonReader<HandStartCheckpoint> =
+  Object.freeze({
+    read(rowPayloadVersion: unknown, payload: unknown) {
+      return readCurrentPersistedJson({
+        rowPayloadVersion,
+        payload,
+        currentRowPayloadVersion: HAND_START_CHECKPOINT_PAYLOAD_VERSION,
+        decode: (stored) =>
+          decodeCurrentHandStartCheckpoint(stored).payload.checkpoint,
+        isPayloadValidationError: (error) =>
+          error instanceof HandAuditPayloadValidationError,
+      })
+    },
+  })

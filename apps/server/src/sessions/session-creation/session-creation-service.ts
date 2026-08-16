@@ -26,7 +26,7 @@ import {
 } from '../../persistence/owner-scope.js'
 import type { SessionCreationRepository } from '../../persistence/session-creation-repository.js'
 import type { SessionMutationRepository } from '../../persistence/session-mutation-repository.js'
-import { getPrivateEventHandId } from '../authoritative-state/private-event-v2.js'
+import { getPrivateEventHandId } from '../authoritative-state/private-event.js'
 import { encodeSnapshotV1 } from '../authoritative-state/snapshot-codec-v1.js'
 import {
   prepareCurrentCatalogRoster,
@@ -297,7 +297,6 @@ export function createSessionCreationService(input: {
           return Object.freeze({
             kind: 'activeSessionExists' as const,
             response: ErrorResponseSchema.parse({
-              protocolVersion: 1,
               code: 'ACTIVE_SESSION_EXISTS',
               message: '当前已有进行中的训练场次，请继续该场次。',
               latestSnapshot,
@@ -401,7 +400,6 @@ export function createSessionCreationService(input: {
         const publicEvents = plan.privateEventDrafts.map((draft, index) => {
           const eventSeq = index
           return SseEventSchema.parse({
-            protocolVersion: 1,
             eventId: plan.identityGraph.eventIds[index],
             sessionId: plan.identityGraph.sessionId,
             eventSeq,
@@ -480,7 +478,6 @@ export function createSessionCreationService(input: {
         return Object.freeze({
           kind: 'created' as const,
           response: CreateSessionResponseSchema.parse({
-            protocolVersion: 1,
             snapshot: finalSnapshot,
             warnings,
           }),

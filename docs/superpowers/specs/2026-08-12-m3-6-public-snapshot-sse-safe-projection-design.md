@@ -162,7 +162,7 @@ interface PublicSessionProjectionFacts {
   readonly state: PrivateTableState
   readonly session: LockedSessionView
   readonly eventSeq: number
-  readonly newPrivateEvents: readonly PrivateEventV2[]
+  readonly newPrivateEvents: readonly PrivateEvent[]
   readonly roster: readonly ProjectionRosterSeat[]
   readonly committedCurrentHandEvents: readonly CommittedPrivateEventFact[]
 }
@@ -228,7 +228,7 @@ type ProjectionRosterSeat =
 interface CommittedPrivateEventFact {
   readonly eventSeq: number
   readonly handId: string
-  readonly event: PrivateEventV2
+  readonly event: PrivateEvent
 }
 ```
 

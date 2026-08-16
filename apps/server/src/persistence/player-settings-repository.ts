@@ -6,7 +6,6 @@ import {
   DatabaseOperationError,
   PersistenceDataCorruptionError,
   RepositoryInputValidationError,
-  UnknownPayloadVersionError,
 } from './errors.js'
 import {
   isResolvedOwnerScope,
@@ -16,16 +15,15 @@ import {
 } from './owner-scope.js'
 
 export const PLAYER_TIMEOUT_SETTING_KEY = 'player-timeouts'
-export const SETTING_PAYLOAD_VERSION = 1
 const POSTGRES_TEXT_OID = 25
 
-const PlayerTimeoutSettingsPayloadV1BaseSchema = z.strictObject({
+const PlayerTimeoutSettingsBaseSchema = z.strictObject({
   attemptTimeoutSeconds: z.number().int().min(5).max(30),
   decisionDeadlineSeconds: z.number().int().min(15).max(120),
 })
 
-export const PlayerTimeoutSettingsPayloadV1Schema =
-  PlayerTimeoutSettingsPayloadV1BaseSchema.superRefine((settings, context) => {
+export const PlayerTimeoutSettingsSchema =
+  PlayerTimeoutSettingsBaseSchema.superRefine((settings, context) => {
     if (settings.decisionDeadlineSeconds < settings.attemptTimeoutSeconds) {
       context.addIssue({
         code: 'custom',
@@ -36,7 +34,7 @@ export const PlayerTimeoutSettingsPayloadV1Schema =
   })
 
 export type PlayerTimeoutSettings = Readonly<
-  z.infer<typeof PlayerTimeoutSettingsPayloadV1Schema>
+  z.infer<typeof PlayerTimeoutSettingsSchema>
 >
 
 export const DEFAULT_PLAYER_TIMEOUT_SETTINGS: PlayerTimeoutSettings =
@@ -46,12 +44,11 @@ export const DEFAULT_PLAYER_TIMEOUT_SETTINGS: PlayerTimeoutSettings =
   })
 
 interface PlayerTimeoutSettingsRow {
-  readonly settingPayloadVersion: number
   readonly settingPayload: unknown
 }
 
 const PlayerTimeoutSettingsPatchSchema =
-  PlayerTimeoutSettingsPayloadV1BaseSchema.partial().refine(
+  PlayerTimeoutSettingsBaseSchema.partial().refine(
     (patch) => Object.keys(patch).length > 0,
   )
 
@@ -62,13 +59,7 @@ export type PlayerTimeoutSettingsPatch = Readonly<
 function parsePersistedSettings(
   row: PlayerTimeoutSettingsRow,
 ): PlayerTimeoutSettings {
-  if (row.settingPayloadVersion !== SETTING_PAYLOAD_VERSION) {
-    throw new UnknownPayloadVersionError('playerTimeoutSettings')
-  }
-
-  const result = PlayerTimeoutSettingsPayloadV1Schema.safeParse(
-    row.settingPayload,
-  )
+  const result = PlayerTimeoutSettingsSchema.safeParse(row.settingPayload)
   if (!result.success) {
     throw new PersistenceDataCorruptionError('invalidPayload')
   }
@@ -86,7 +77,6 @@ export async function readPlayerTimeoutSettings(
   try {
     rows = await sql<PlayerTimeoutSettingsRow[]>`
       SELECT
-        setting_payload_version AS "settingPayloadVersion",
         setting_payload AS "settingPayload"
       FROM app_private.app_settings
       WHERE owner_id = ${resolvedOwner.databaseOwnerId}::uuid
@@ -118,7 +108,6 @@ export async function readResolvedPlayerTimeoutSettings(
   try {
     rows = await sql<PlayerTimeoutSettingsRow[]>`
       SELECT
-        setting_payload_version AS "settingPayloadVersion",
         setting_payload AS "settingPayload"
       FROM app_private.app_settings
       WHERE owner_id = ${owner.databaseOwnerId}::uuid
@@ -162,14 +151,12 @@ export async function patchPlayerTimeoutSettings(
         id,
         owner_id,
         setting_key,
-        setting_payload_version,
         setting_payload,
         updated_at
       ) VALUES (
         ${randomUUID()}::uuid,
         ${owner.databaseOwnerId}::uuid,
         ${PLAYER_TIMEOUT_SETTING_KEY},
-        ${SETTING_PAYLOAD_VERSION},
         ${defaultPayload}::jsonb,
         clock_timestamp()
       )
@@ -183,7 +170,6 @@ export async function patchPlayerTimeoutSettings(
   try {
     lockedRows = await transaction<PlayerTimeoutSettingsRow[]>`
       SELECT
-        setting_payload_version AS "settingPayloadVersion",
         setting_payload AS "settingPayload"
       FROM app_private.app_settings
       WHERE owner_id = ${owner.databaseOwnerId}::uuid
@@ -198,7 +184,7 @@ export async function patchPlayerTimeoutSettings(
   }
 
   const current = parsePersistedSettings(lockedRows[0])
-  const merged = PlayerTimeoutSettingsPayloadV1Schema.safeParse({
+  const merged = PlayerTimeoutSettingsSchema.safeParse({
     ...current,
     ...parsedPatch.data,
   })
@@ -214,13 +200,11 @@ export async function patchPlayerTimeoutSettings(
   try {
     updatedRows = await transaction<PlayerTimeoutSettingsRow[]>`
       UPDATE app_private.app_settings
-      SET setting_payload_version = ${SETTING_PAYLOAD_VERSION},
-          setting_payload = ${settingPayload}::jsonb,
+      SET setting_payload = ${settingPayload}::jsonb,
           updated_at = clock_timestamp()
       WHERE owner_id = ${owner.databaseOwnerId}::uuid
         AND setting_key = ${PLAYER_TIMEOUT_SETTING_KEY}
       RETURNING
-        setting_payload_version AS "settingPayloadVersion",
         setting_payload AS "settingPayload"
     `
   } catch {
@@ -238,7 +222,7 @@ export async function writePlayerTimeoutSettings(
   ownerScope: OwnerScope,
   settings: PlayerTimeoutSettings,
 ): Promise<PlayerTimeoutSettings> {
-  const result = PlayerTimeoutSettingsPayloadV1Schema.safeParse(settings)
+  const result = PlayerTimeoutSettingsSchema.safeParse(settings)
   if (!result.success) {
     throw new RepositoryInputValidationError()
   }
@@ -254,19 +238,16 @@ export async function writePlayerTimeoutSettings(
         id,
         owner_id,
         setting_key,
-        setting_payload_version,
         setting_payload,
         updated_at
       ) VALUES (
         ${randomUUID()}::uuid,
         ${resolvedOwner.databaseOwnerId}::uuid,
         ${PLAYER_TIMEOUT_SETTING_KEY},
-        ${SETTING_PAYLOAD_VERSION},
         ${settingPayload}::jsonb,
         clock_timestamp()
       )
       ON CONFLICT (owner_id, setting_key) DO UPDATE SET
-        setting_payload_version = EXCLUDED.setting_payload_version,
         setting_payload = EXCLUDED.setting_payload,
         updated_at = EXCLUDED.updated_at
     `

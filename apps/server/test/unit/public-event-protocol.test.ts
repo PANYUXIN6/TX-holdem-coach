@@ -9,7 +9,6 @@ const eventId = '33333333-3333-4333-8333-333333333333'
 
 function event(type = 'handStarted') {
   return {
-    protocolVersion: 1 as const,
     eventId,
     sessionId,
     eventSeq: 0,
@@ -17,7 +16,6 @@ function event(type = 'handStarted') {
     type,
     payload: {
       snapshot: {
-        protocolVersion: 1 as const,
         sessionId,
         stateVersion: 1,
         eventSeq: 0,
@@ -47,7 +45,6 @@ function row(payload = event()) {
     sessionId,
     eventSeq: 0,
     stateVersionAfter: 1,
-    protocolVersion: 1,
     publicEventPayload: payload,
   }
 }
@@ -63,11 +60,7 @@ describe('stored public event protocol', () => {
     )
   })
 
-  test('rejects unknown protocols, row mismatches, and persisted calibration', () => {
-    expect(decodeStoredPublicEvent({ ...row(), protocolVersion: 2 })).toEqual({
-      kind: 'invalid',
-      reason: 'unsupportedProtocol',
-    })
+  test('rejects row mismatches and persisted calibration', () => {
     expect(decodeStoredPublicEvent({ ...row(), stateVersionAfter: 2 })).toEqual(
       { kind: 'invalid', reason: 'storedPayloadInvalid' },
     )

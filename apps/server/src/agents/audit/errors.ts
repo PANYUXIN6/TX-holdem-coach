@@ -1,10 +1,7 @@
 export type AgentAuditPayloadVersionTarget =
   | 'runConfigurationRowVersion'
-  | 'runConfigurationEnvelopeVersion'
   | 'executionBudgetRowVersion'
-  | 'executionBudgetEnvelopeVersion'
   | 'attemptAuditRowVersion'
-  | 'attemptAuditEnvelopeVersion'
 
 export class AgentAuditPayloadVersionError extends Error {
   public constructor(public readonly target: AgentAuditPayloadVersionTarget) {

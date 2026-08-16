@@ -7,13 +7,15 @@ import {
   decodeCurrentExecutionBudgetAuditV1,
   encodeExecutionBudgetAuditV1,
   EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION,
-  EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION,
   type ExecutionBudgetAuditV1,
 } from './execution-budget-audit-codec-v1.js'
+import {
+  isPositiveSafeInteger,
+  type PersistedJsonReadResult,
+} from '../../persisted-json.js'
 
 export interface ExecutionBudgetAuditVersionIdentity {
   readonly rowPayloadVersion: number
-  readonly envelopeSchemaVersion: number
 }
 
 export type ExecutionBudgetAuditVersionRegistration =
@@ -30,27 +32,13 @@ export type ExecutionBudgetAuditVersionRegistration =
     }
 
 export type ExecutionBudgetAuditVersionReadResult =
-  | { readonly kind: 'decoded'; readonly value: ExecutionBudgetAuditV1 }
-  | { readonly kind: 'unknownVersion' }
-  | { readonly kind: 'invalidPayload' }
+  PersistedJsonReadResult<ExecutionBudgetAuditV1>
 
 export interface ExecutionBudgetAuditVersionRegistry {
   read(
     rowPayloadVersion: unknown,
     payload: unknown,
   ): ExecutionBudgetAuditVersionReadResult
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function isPositiveSafeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-}
-
-function identityKey(identity: ExecutionBudgetAuditVersionIdentity): string {
-  return `${identity.rowPayloadVersion}:${identity.envelopeSchemaVersion}`
 }
 
 function deepFreeze<Value>(value: Value): Value {
@@ -71,16 +59,18 @@ function isPayloadValidationError(error: unknown): boolean {
 export function createExecutionBudgetAuditVersionRegistry(
   registrations: readonly ExecutionBudgetAuditVersionRegistration[],
 ): ExecutionBudgetAuditVersionRegistry {
-  const byIdentity = new Map<string, ExecutionBudgetAuditVersionRegistration>()
+  const byVersion = new Map<number, ExecutionBudgetAuditVersionRegistration>()
   for (const registration of registrations) {
     if (
       !isPositiveSafeInteger(registration.identity.rowPayloadVersion) ||
-      !isPositiveSafeInteger(registration.identity.envelopeSchemaVersion) ||
-      byIdentity.has(identityKey(registration.identity))
+      byVersion.has(registration.identity.rowPayloadVersion)
     ) {
       throw new AgentAuditVersionRegistryConfigurationError()
     }
-    byIdentity.set(identityKey(registration.identity), deepFreeze(registration))
+    byVersion.set(
+      registration.identity.rowPayloadVersion,
+      deepFreeze(registration),
+    )
   }
 
   return deepFreeze({
@@ -88,19 +78,10 @@ export function createExecutionBudgetAuditVersionRegistry(
       rowPayloadVersion: unknown,
       payload: unknown,
     ): ExecutionBudgetAuditVersionReadResult {
-      if (
-        !isPositiveSafeInteger(rowPayloadVersion) ||
-        !isRecord(payload) ||
-        !isPositiveSafeInteger(payload.executionBudgetAuditSchemaVersion)
-      ) {
+      if (!isPositiveSafeInteger(rowPayloadVersion)) {
         return { kind: 'invalidPayload' }
       }
-      const registration = byIdentity.get(
-        identityKey({
-          rowPayloadVersion,
-          envelopeSchemaVersion: payload.executionBudgetAuditSchemaVersion,
-        }),
-      )
+      const registration = byVersion.get(rowPayloadVersion)
       if (registration === undefined) return { kind: 'unknownVersion' }
       try {
         const row = { payloadVersion: rowPayloadVersion, payload }
@@ -125,7 +106,6 @@ export const productionExecutionBudgetAuditVersionRegistry =
       kind: 'current',
       identity: {
         rowPayloadVersion: EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION,
-        envelopeSchemaVersion: EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION,
       },
       decode: (input) =>
         decodeCurrentExecutionBudgetAuditV1(input).payload.budget,

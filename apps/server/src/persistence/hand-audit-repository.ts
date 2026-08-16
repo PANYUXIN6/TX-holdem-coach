@@ -5,17 +5,17 @@ import {
   encodeCompletedHandResultV1,
   type StoredCompletedHandResultV1,
 } from '../sessions/hand-audit/completed-hand-result-codec-v1.js'
-import { productionCompletedHandResultVersionRegistry } from '../sessions/hand-audit/completed-hand-result-version-registry.js'
-import { productionHandStartCheckpointVersionRegistry } from '../sessions/hand-audit/hand-start-checkpoint-version-registry.js'
+import { currentCompletedHandResultReader } from '../sessions/hand-audit/completed-hand-result-codec-v1.js'
+import { currentHandStartCheckpointReader } from '../sessions/hand-audit/hand-start-checkpoint-codec.js'
 import {
   HandAuditPayloadValidationError,
   HandAuditPayloadVersionError,
 } from '../sessions/hand-audit/errors.js'
 import {
-  encodeHandStartCheckpointV2,
-  type StoredHandStartCheckpointV2,
-} from '../sessions/hand-audit/hand-start-checkpoint-codec-v2.js'
-import type { HandStartCheckpointV2 } from '../sessions/hand-audit/hand-start-checkpoint.js'
+  encodeCurrentHandStartCheckpoint,
+  type StoredHandStartCheckpoint,
+} from '../sessions/hand-audit/hand-start-checkpoint-codec.js'
+import type { HandStartCheckpoint } from '../sessions/hand-audit/hand-start-checkpoint.js'
 import {
   DatabaseOperationError,
   HandAuditTransitionError,
@@ -98,7 +98,7 @@ const HandAuditRowSchema = z.strictObject({
 
 export interface InsertInProgressHandAuditInput {
   readonly sessionId: string
-  readonly checkpoint: HandStartCheckpointV2
+  readonly checkpoint: HandStartCheckpoint
   readonly startedAt: string
 }
 
@@ -126,7 +126,7 @@ interface HandAuditBase {
   readonly participantSeatNumbers: readonly number[]
   readonly startedAt: string
   readonly updatedAt: string
-  readonly checkpoint: HandStartCheckpointV2
+  readonly checkpoint: HandStartCheckpoint
 }
 
 export type HandAudit =
@@ -173,7 +173,7 @@ function parseHandAuditRow(row: unknown, owner: ResolvedOwnerScope): HandAudit {
     throw new PersistenceDataCorruptionError('invalidHandAudit')
   }
   const value = parsed.data
-  const checkpointRead = productionHandStartCheckpointVersionRegistry.read(
+  const checkpointRead = currentHandStartCheckpointReader.read(
     value.checkpointPayloadVersion,
     value.checkpointPayload,
   )
@@ -247,7 +247,7 @@ function parseHandAuditRow(row: unknown, owner: ResolvedOwnerScope): HandAudit {
     ) {
       throw new PersistenceDataCorruptionError('invalidHandAudit')
     }
-    const resultRead = productionCompletedHandResultVersionRegistry.read(
+    const resultRead = currentCompletedHandResultReader.read(
       value.completedResultPayloadVersion,
       value.completedResultPayload,
     )
@@ -300,9 +300,9 @@ function parseHandAuditRow(row: unknown, owner: ResolvedOwnerScope): HandAudit {
   })
 }
 
-function decodeCheckpointForWrite(input: unknown): StoredHandStartCheckpointV2 {
+function decodeCheckpointForWrite(input: unknown): StoredHandStartCheckpoint {
   try {
-    return encodeHandStartCheckpointV2(input)
+    return encodeCurrentHandStartCheckpoint(input)
   } catch (error) {
     if (
       error instanceof HandAuditPayloadValidationError ||
@@ -335,7 +335,7 @@ function toDatabaseTimestamp(value: string): string {
 }
 
 function assertCompletionMirrors(
-  checkpoint: HandStartCheckpointV2,
+  checkpoint: HandStartCheckpoint,
   result: CompletedHandResult,
 ): void {
   const startedHand = checkpoint.startedHand

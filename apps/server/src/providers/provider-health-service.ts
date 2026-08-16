@@ -1,5 +1,4 @@
 import {
-  PROTOCOL_VERSION,
   ProviderSettingsResponseSchema,
   type ProviderHealthSummary,
   type ProviderId,
@@ -59,7 +58,6 @@ export function createProviderHealthService(input: {
   }
   const read = (): ProviderSettingsResponse =>
     ProviderSettingsResponseSchema.parse({
-      protocolVersion: PROTOCOL_VERSION,
       deepSeek: {
         ...summary('deepseek'),
         canCreateSession: config.hasDeepSeekApiKey(),

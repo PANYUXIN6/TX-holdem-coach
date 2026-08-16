@@ -35,7 +35,6 @@ const playerCommand = {
 }
 
 const latestSnapshot = {
-  protocolVersion: 1 as const,
   sessionId,
   stateVersion: 7,
   eventSeq: 1,
@@ -205,7 +204,6 @@ describe('command rejection contract', () => {
       expect(
         mapCommandRejectionToErrorResponse(rejection, latestSnapshot),
       ).toEqual({
-        protocolVersion: 1,
         code,
         message,
         latestSnapshot,

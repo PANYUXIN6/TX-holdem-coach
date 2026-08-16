@@ -32,24 +32,20 @@ M2.6 不重放事件生成权威状态，不从关系表拼装筹码、按钮、
 
 ## 2. 当前事实与旧版本策略
 
-当前生产环境只有 M2.5 首次发布的四条 V1 版本序列：
+首发 baseline 只保留两类行载荷版本：
 
 ```text
 PRIVATE_TABLE_STATE_PAYLOAD_VERSION = 1
-SNAPSHOT_SCHEMA_VERSION = 1
 PRIVATE_EVENT_PAYLOAD_VERSION = 1
-EVENT_SCHEMA_VERSION = 1
 ```
 
-仓库没有发布过 V0，数据库版本列也要求正整数。M2.6 不虚构生产 V0，不发布无人写入的旧格式。
-
-生产注册表当前只注册真实 V1。迁移框架通过测试显式注入的旧版 Codec 和迁移器证明确定性迁移能力；测试注册项不得通过生产导出、环境变量或全局可变注册进入运行时。未来真实 V2 发布后，V1 才成为生产支持的旧版本。
+仓库没有上线历史数据，数据库版本列要求正整数。生产 current-only reader 只接受版本 `1`，并统一区分未知版本与损坏载荷；不保留无人写入的旧 Codec、迁移器或 Registry。
 
 版本体系继续严格独立：
 
 - `stateVersion` 是会话领域聚合版本。
-- 快照和事件的行载荷版本、JSON 信封版本用于解释私有持久化数据。
-- `protocolVersion` 属于 HTTP/SSE 对外协议。
+- 快照和事件的行载荷版本用于解释私有持久化数据；JSON 内不再重复保存信封版本。
+- HTTP/SSE 不再携带全局 `protocolVersion`。
 - Drizzle 迁移版本属于数据库发布序列。
 
 这些版本不得共享常量、互相比较或写入纯 M1 类型。

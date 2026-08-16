@@ -17,15 +17,13 @@ import {
 } from '../../src/poker/poker-engine.js'
 import { createPokerTableState } from '../../src/poker/state.js'
 import {
-  EVENT_SCHEMA_VERSION,
   PRIVATE_EVENT_PAYLOAD_VERSION,
-  decodeCurrentPrivateEventV1,
-  encodePrivateEventV1,
-} from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
+  decodeCurrentPrivateEvent,
+  encodeCurrentPrivateEvent,
+} from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   PRIVATE_TABLE_STATE_PAYLOAD_VERSION,
-  SNAPSHOT_SCHEMA_VERSION,
   decodeCurrentSnapshotV1,
   encodeSnapshotV1,
 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
@@ -133,27 +131,23 @@ function preflopRunoutEvent() {
 }
 
 describe('current authoritative-state codecs', () => {
-  test('publishes four independently named current version constants', () => {
+  test('publishes one row payload version per persisted JSON kind', () => {
     expect({
       privateTableStatePayload: PRIVATE_TABLE_STATE_PAYLOAD_VERSION,
-      snapshotEnvelope: SNAPSHOT_SCHEMA_VERSION,
       privateEventPayload: PRIVATE_EVENT_PAYLOAD_VERSION,
-      eventEnvelope: EVENT_SCHEMA_VERSION,
     }).toEqual({
       privateTableStatePayload: 1,
-      snapshotEnvelope: 1,
       privateEventPayload: 1,
-      eventEnvelope: 1,
     })
   })
 
-  test('round-trips the current snapshot row and envelope as a deep-frozen value', () => {
+  test('round-trips the current snapshot row as a deep-frozen value', () => {
     const state = minimalPrivateTableState()
     const encoded = encodeSnapshotV1(state)
 
     expect(encoded).toEqual({
       payloadVersion: 1,
-      payload: { snapshotSchemaVersion: 1, state },
+      payload: { state },
     })
     expect(decodeCurrentSnapshotV1(structuredClone(encoded))).toEqual(encoded)
     expect(Object.isFrozen(encoded)).toBe(true)
@@ -161,18 +155,11 @@ describe('current authoritative-state codecs', () => {
     expect(Object.isFrozen(encoded.payload.state.poker.seats)).toBe(true)
   })
 
-  test('classifies snapshot row version, envelope version, decode corruption and encode input separately', () => {
+  test('classifies snapshot row version, decode corruption and encode input separately', () => {
     const encoded = encodeSnapshotV1(minimalPrivateTableState())
 
     for (const [input, target] of [
       [{ ...encoded, payloadVersion: 2 }, 'snapshotRowVersion'],
-      [
-        {
-          ...encoded,
-          payload: { ...encoded.payload, snapshotSchemaVersion: 2 },
-        },
-        'snapshotEnvelopeVersion',
-      ],
     ] as const) {
       try {
         decodeCurrentSnapshotV1(input)
@@ -202,19 +189,7 @@ describe('current authoritative-state codecs', () => {
       { ...encoded, payloadVersion: null },
       { ...encoded, payloadVersion: 1.5 },
       { payload: encoded.payload },
-      {
-        ...encoded,
-        payload: { ...encoded.payload, snapshotSchemaVersion: '1' },
-      },
-      {
-        ...encoded,
-        payload: { ...encoded.payload, snapshotSchemaVersion: null },
-      },
-      {
-        ...encoded,
-        payload: { ...encoded.payload, snapshotSchemaVersion: 1.5 },
-      },
-      { ...encoded, payload: { state: encoded.payload.state } },
+      { ...encoded, payload: { ...encoded.payload, extra: true } },
     ]
 
     for (const input of malformedInputs) {
@@ -224,7 +199,7 @@ describe('current authoritative-state codecs', () => {
     }
   })
 
-  test('round-trips the handStarted private event through the current V1 row and envelope', () => {
+  test('round-trips the handStarted private event through the current row', () => {
     const event = createHandStartedEventDraft({
       handId: '10000000-0000-4000-8000-000000000001',
       handNumber: 1,
@@ -245,15 +220,13 @@ describe('current authoritative-state codecs', () => {
         stack: 2_000,
       })),
     })
-    const encoded = encodePrivateEventV1(event)
+    const encoded = encodeCurrentPrivateEvent(event)
 
     expect(encoded).toEqual({
       payloadVersion: 1,
-      payload: { eventSchemaVersion: 1, event },
+      payload: { event },
     })
-    expect(decodeCurrentPrivateEventV1(structuredClone(encoded))).toEqual(
-      encoded,
-    )
+    expect(decodeCurrentPrivateEvent(structuredClone(encoded))).toEqual(encoded)
     expect(Object.isFrozen(encoded.payload.event)).toBe(true)
   })
 
@@ -279,17 +252,18 @@ describe('current authoritative-state codecs', () => {
       })),
     })
 
-    expect(() => encodePrivateEventV1(event)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(event)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
 
-  test('round-trips the actionCommitted private event through V1', () => {
+  test('round-trips the actionCommitted private event through the current codec', () => {
     const event = actionCommittedEvent()
 
     expect(
-      decodeCurrentPrivateEventV1(structuredClone(encodePrivateEventV1(event)))
-        .payload.event,
+      decodeCurrentPrivateEvent(
+        structuredClone(encodeCurrentPrivateEvent(event)),
+      ).payload.event,
     ).toEqual(event)
   })
 
@@ -304,7 +278,7 @@ describe('current authoritative-state codecs', () => {
       after: { ...event.after, seats: event.after.seats.slice(0, 1) },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -324,7 +298,7 @@ describe('current authoritative-state codecs', () => {
       },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -344,7 +318,7 @@ describe('current authoritative-state codecs', () => {
       },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -362,7 +336,7 @@ describe('current authoritative-state codecs', () => {
       },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -374,7 +348,7 @@ describe('current authoritative-state codecs', () => {
       progression: { ...event.progression, burnedCardsAdded: [] },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -392,7 +366,7 @@ describe('current authoritative-state codecs', () => {
       },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -410,7 +384,7 @@ describe('current authoritative-state codecs', () => {
       },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -427,7 +401,7 @@ describe('current authoritative-state codecs', () => {
       before: { ...event.before, currentActorSeatNumber: 8 },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -442,7 +416,7 @@ describe('current authoritative-state codecs', () => {
       after: { ...event.after, currentActorSeatNumber: 8 },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -457,7 +431,7 @@ describe('current authoritative-state codecs', () => {
       after: { ...event.after, pot: 31 },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -477,7 +451,7 @@ describe('current authoritative-state codecs', () => {
       },
     }
 
-    expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+    expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
       AuthoritativeStateValidationError,
     )
   })
@@ -511,7 +485,7 @@ describe('current authoritative-state codecs', () => {
     ]
 
     for (const invalidEvent of invalidEvents) {
-      expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
         AuthoritativeStateValidationError,
       )
     }
@@ -534,27 +508,28 @@ describe('current authoritative-state codecs', () => {
     ]
 
     for (const invalidEvent of invalidEvents) {
-      expect(() => encodePrivateEventV1(invalidEvent)).toThrow(
+      expect(() => encodeCurrentPrivateEvent(invalidEvent)).toThrow(
         AuthoritativeStateValidationError,
       )
     }
   })
 
-  test('round-trips the uncalledBetReturned private event through V1', () => {
+  test('round-trips the uncalledBetReturned private event through the current codec', () => {
     const event = createUncalledBetReturnedEventDraft(
       '10000000-0000-4000-8000-000000000001',
       [{ seatNumber: 5, amount: 10 }],
     )
 
     expect(
-      decodeCurrentPrivateEventV1(structuredClone(encodePrivateEventV1(event)))
-        .payload.event,
+      decodeCurrentPrivateEvent(
+        structuredClone(encodeCurrentPrivateEvent(event)),
+      ).payload.event,
     ).toEqual(event)
   })
 
-  test('rejects more than one uncalled-bet return in a V1 private event', () => {
+  test('rejects more than one uncalled-bet return in a current private event', () => {
     expect(() =>
-      encodePrivateEventV1({
+      encodeCurrentPrivateEvent({
         type: 'uncalledBetReturned',
         handId: '10000000-0000-4000-8000-000000000001',
         returns: [
@@ -565,34 +540,28 @@ describe('current authoritative-state codecs', () => {
     ).toThrow(AuthoritativeStateValidationError)
   })
 
-  test('round-trips the handCompleted private event through V1', () => {
+  test('round-trips the handCompleted private event through the current codec', () => {
     const completed = createTestCompletedPokerResult().completedHand
     const event = createHandCompletedEventDraft(completed)
 
     expect(
-      decodeCurrentPrivateEventV1(structuredClone(encodePrivateEventV1(event)))
-        .payload.event,
+      decodeCurrentPrivateEvent(
+        structuredClone(encodeCurrentPrivateEvent(event)),
+      ).payload.event,
     ).toEqual(event)
   })
 
-  test('classifies event versions and matching-version corruption without leaking nested errors', () => {
+  test('classifies the event row version and corruption without leaking nested errors', () => {
     const completed = createTestCompletedPokerResult().completedHand
-    const encoded = encodePrivateEventV1(
+    const encoded = encodeCurrentPrivateEvent(
       createHandCompletedEventDraft(completed),
     )
 
     for (const [input, target] of [
-      [{ ...encoded, payloadVersion: 2 }, 'eventRowVersion'],
-      [
-        {
-          ...encoded,
-          payload: { ...encoded.payload, eventSchemaVersion: 2 },
-        },
-        'eventEnvelopeVersion',
-      ],
+      [{ ...encoded, payloadVersion: 3 }, 'eventRowVersion'],
     ] as const) {
       try {
-        decodeCurrentPrivateEventV1(input)
+        decodeCurrentPrivateEvent(input)
         throw new Error('Expected event version rejection.')
       } catch (error) {
         expect(error).toBeInstanceOf(CurrentPayloadVersionError)
@@ -602,7 +571,7 @@ describe('current authoritative-state codecs', () => {
     }
 
     expect(() =>
-      decodeCurrentPrivateEventV1({
+      decodeCurrentPrivateEvent({
         ...encoded,
         payload: {
           ...encoded.payload,
@@ -610,14 +579,14 @@ describe('current authoritative-state codecs', () => {
         },
       }),
     ).toThrow(CurrentPayloadValidationError)
-    expect(() => encodePrivateEventV1({ type: 'sessionCreated' })).toThrow(
+    expect(() => encodeCurrentPrivateEvent({ type: 'sessionCreated' })).toThrow(
       AuthoritativeStateValidationError,
     )
   })
 
   test('classifies malformed event version fields as payload corruption', () => {
     const completed = createTestCompletedPokerResult().completedHand
-    const encoded = encodePrivateEventV1(
+    const encoded = encodeCurrentPrivateEvent(
       createHandCompletedEventDraft(completed),
     )
     const malformedInputs = [
@@ -625,29 +594,17 @@ describe('current authoritative-state codecs', () => {
       { ...encoded, payloadVersion: null },
       { ...encoded, payloadVersion: 1.5 },
       { payload: encoded.payload },
-      {
-        ...encoded,
-        payload: { ...encoded.payload, eventSchemaVersion: '1' },
-      },
-      {
-        ...encoded,
-        payload: { ...encoded.payload, eventSchemaVersion: null },
-      },
-      {
-        ...encoded,
-        payload: { ...encoded.payload, eventSchemaVersion: 1.5 },
-      },
-      { ...encoded, payload: { event: encoded.payload.event } },
+      { ...encoded, payload: { ...encoded.payload, extra: true } },
     ]
 
     for (const input of malformedInputs) {
-      expect(() => decodeCurrentPrivateEventV1(input)).toThrow(
+      expect(() => decodeCurrentPrivateEvent(input)).toThrow(
         CurrentPayloadValidationError,
       )
     }
   })
 
-  test('rejects deterministic nested corruption in every applicable V1 event shape', () => {
+  test('rejects deterministic nested corruption in every applicable current event shape', () => {
     const startedEvent = createHandStartedEventDraft({
       handId: '10000000-0000-4000-8000-000000000001',
       handNumber: 1,
@@ -713,7 +670,7 @@ describe('current authoritative-state codecs', () => {
       zeroReturn,
       unsafeHandNumber,
     ]) {
-      expect(() => encodePrivateEventV1(event)).toThrow(
+      expect(() => encodeCurrentPrivateEvent(event)).toThrow(
         AuthoritativeStateValidationError,
       )
     }

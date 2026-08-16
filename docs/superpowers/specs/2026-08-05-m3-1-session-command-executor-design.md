@@ -1,4 +1,4 @@
-# M3.1 既有场次串行命令执行器与私有事件 V2 设计
+# M3.1 既有场次串行命令执行器与当前私有事件设计
 
 - 状态：已确认，已实现并验证
 - 日期：2026-08-05
@@ -24,7 +24,7 @@ M3.1 建立：
 - 补齐事件 ID、连续 `eventSeq`、基础设施时间、命令关联和版本字段；
 - 调用 M2.5b 原子持久化 Session、可选快照和事件；
 - 只在事务提交成功后返回本次新写入、可供发布的事件；
-- 发布累积私有事件 V2，并保持 V1 兼容读取。
+- 发布累积当前私有事件，并统一使用行载荷版本 `1`。
 
 M3.1 不负责：
 
@@ -506,49 +506,32 @@ SessionMutationRepository 实例
 
 M2.6 只能通过该实例取得锁 capability，执行器只能把 capability 交回同一实例持久化。不同实例产生的 capability 必须拒绝。M2.6 纯恢复决策与版本注册模块不受影响。
 
-### 6.3 当前注册项同源
+### 6.3 当前版本身份同源
 
-生产注册表直接消费同一个当前协议对象：
-
-```ts
-createPrivateEventVersionRegistry({
-  current: currentPrivateEventProtocol,
-  legacy: [...legacyRegistrations],
-})
-```
+生产 writer 和 current-only reader 直接消费同一个当前协议对象：
 
 这保证：
 
 - 编译期泛型约束当前 Draft 类型；
 - 运行时由同一个对象提供复合身份和当前 Decoder；
 - M2.5b writer 与 M2.6 当前读取不重复声明版本身份；
-- 启动只需验证身份格式、唯一性和重复注册。
+- reader 统一区分未知行版本与损坏载荷。
 
-V2 发布后，V2 协议为 current，V1 为 legacy。M4 发布 V3 时，Handler 当前事件族、当前协议、M2.5b 防御性 Decoder 和生产读取注册表必须作为同一一致组合切换；旧 V1/V2 行继续按各自身份读取。
+首发前数据库不承担历史数据兼容责任，因此不保留 legacy 注册表。将来只有在真实历史数据需要迁移或重放时，才增加对应 reader。
 
-## 7. 私有事件 V2
+## 7. 当前私有事件
 
 ### 7.1 累积联合和版本
 
-V1 已发布常量永久保持：
+首发 baseline 只发布一个行载荷版本：
 
 ```ts
 PRIVATE_EVENT_PAYLOAD_VERSION = 1
-EVENT_SCHEMA_VERSION = 1
 ```
 
-V2 增加独立名称：
-
 ```ts
-PRIVATE_EVENT_V2_PAYLOAD_VERSION = 2
-EVENT_V2_SCHEMA_VERSION = 2
-```
-
-两个 V2 常量属于独立版本序列。本次数值都为 `2` 不允许被解释为同步演进约束。
-
-```ts
-type PrivateEventV2 =
-  | PrivateEventV1
+type PrivateEvent =
+  | PokerPrivateEvent
   | SessionCreatedEvent
   | UserRebuyEvent
   | AiAutoRebuyEvent
@@ -556,7 +539,7 @@ type PrivateEventV2 =
   | SessionEndedEvent
 ```
 
-V2 构造器遇到四种旧 variant 时委托 `createPrivateEventV1()`，不复制 V1 Schema。V2 发布后，所有新写事件——包括旧 Poker variant——统一使用 V2 当前 Codec。
+当前构造器遇到四种 Poker variant 时委托 `createPokerPrivateEvent()`，不复制 Poker Schema。所有事件统一使用当前 Codec，并写入行载荷版本 `1`。
 
 通用严格规则：
 
@@ -703,7 +686,7 @@ interface SessionEndedEvent {
 
 ### 7.7 单事件与命令批次职责
 
-V2 Codec 只验证单条事件严格结构及自身 UUID、座位、集合和算术不变量。
+当前 Codec 只验证单条事件严格结构及自身 UUID、座位、集合和算术不变量。
 
 执行器命令级策略验证：
 
@@ -720,7 +703,7 @@ V2 Codec 只验证单条事件严格结构及自身 UUID、座位、集合和算
 
 ```ts
 getPrivateEventHandId(
-  event: PrivateEventV2,
+  event: PrivateEvent,
 ): string | null
 ```
 
@@ -1012,15 +995,17 @@ M3.1 不新增普通查询 API，也不建立内存读取捷径。后续查询�
 
 ```text
 apps/server/src/sessions/authoritative-state/
-├── private-event-v2.ts
-├── private-event-codec-v2.ts
+├── poker-private-event.ts
+├── private-event.ts
+├── private-event-codec.ts
 └── current-private-event-protocol.ts
 ```
 
 调整：
 
-- `private-event.ts`：永久保留 V1 Schema、构造器和常量；
-- `private-event-version-registry.ts`：current 协议对象 + V1 legacy；
+- `poker-private-event.ts`：保留 Poker 私有事件子集；
+- `private-event.ts`：提供当前累积事件联合与中性构造器；
+- `private-event-codec.ts`：只读写当前行载荷版本并统一分类未知版本/损坏载荷；
 - `private-table-state.ts`：增加严格 `PrivateTableStateContent`；
 - `recovery-decision.ts`：共同使用 nullable Hand ID 映射，保持空历史诊断。
 

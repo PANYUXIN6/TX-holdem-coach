@@ -6,20 +6,15 @@ import {
   StableAuditCodeSchema,
 } from '../../src/agents/audit/audit-primitives.js'
 import {
+  currentRunConfigurationAuditReader,
   decodeCurrentRunConfigurationAuditV1,
   encodeRunConfigurationAuditV1,
   RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION,
-  RUN_CONFIGURATION_AUDIT_SCHEMA_VERSION,
 } from '../../src/agents/audit/run-configuration-audit-codec-v1.js'
-import {
-  createRunConfigurationAuditVersionRegistry,
-  productionRunConfigurationAuditVersionRegistry,
-} from '../../src/agents/audit/run-configuration-audit-version-registry.js'
 import {
   decodeCurrentExecutionBudgetAuditV1,
   encodeExecutionBudgetAuditV1,
   EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION,
-  EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION,
 } from '../../src/agents/audit/execution-budget-audit-codec-v1.js'
 import {
   createExecutionBudgetAuditVersionRegistry,
@@ -27,14 +22,10 @@ import {
 } from '../../src/agents/audit/execution-budget-audit-version-registry.js'
 import {
   ATTEMPT_AUDIT_PAYLOAD_VERSION,
-  ATTEMPT_AUDIT_SCHEMA_VERSION,
   decodeCurrentAttemptAuditV1,
   encodeAttemptAuditV1,
+  readCurrentAttemptAudit,
 } from '../../src/agents/audit/attempt-audit-codec-v1.js'
-import {
-  createAttemptAuditVersionRegistry,
-  productionAttemptAuditVersionRegistry,
-} from '../../src/agents/audit/attempt-audit-version-registry.js'
 import {
   EMPTY_COACH_RUNTIME_AUDIT,
   EMPTY_PLAYER_RUNTIME_AUDIT,
@@ -131,14 +122,10 @@ describe('run configuration audit V1', () => {
 
     const encoded = encodeRunConfigurationAuditV1(configuration)
 
-    expect({
-      rowVersion: RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION,
-      envelopeVersion: RUN_CONFIGURATION_AUDIT_SCHEMA_VERSION,
-    }).toEqual({ rowVersion: 1, envelopeVersion: 1 })
+    expect(RUN_CONFIGURATION_AUDIT_PAYLOAD_VERSION).toBe(1)
     expect(encoded).toEqual({
       payloadVersion: 1,
       payload: {
-        runConfigurationAuditSchemaVersion: 1,
         configuration,
       },
     })
@@ -169,52 +156,25 @@ describe('run configuration audit V1', () => {
     ).toThrow('Agent 审计载荷无效。')
   })
 
-  test('dispatches an immutable, independently versioned production registry and explicit legacy migrations', () => {
+  test('reads the current configuration and classifies unknown or damaged rows', () => {
     const current = encodeRunConfigurationAuditV1(runConfigurationInput())
 
     expect(
-      productionRunConfigurationAuditVersionRegistry.read(
+      currentRunConfigurationAuditReader.read(
         current.payloadVersion,
         current.payload,
       ),
     ).toEqual({ kind: 'decoded', value: current.payload.configuration })
-    expect(
-      productionRunConfigurationAuditVersionRegistry.read(2, current.payload),
-    ).toEqual({ kind: 'unknownVersion' })
-    expect(
-      productionRunConfigurationAuditVersionRegistry.read('1', current.payload),
-    ).toEqual({ kind: 'invalidPayload' })
-    expect(
-      productionRunConfigurationAuditVersionRegistry.read(1, {
-        runConfigurationAuditSchemaVersion: 1,
-        configuration: {},
-      }),
-    ).toEqual({ kind: 'invalidPayload' })
-    expect(
-      Object.isFrozen(productionRunConfigurationAuditVersionRegistry),
-    ).toBe(true)
-    expect('register' in productionRunConfigurationAuditVersionRegistry).toBe(
-      false,
+    expect(currentRunConfigurationAuditReader.read(2, current.payload)).toEqual(
+      { kind: 'unknownVersion' },
     )
-
-    const registration = {
-      kind: 'legacy' as const,
-      identity: { rowPayloadVersion: 7, envelopeSchemaVersion: 3 },
-      decode: () => ({ legacy: true }),
-      migrate: () => runConfigurationInput(),
-    }
-    const legacyRegistry = createRunConfigurationAuditVersionRegistry([
-      registration,
-    ])
     expect(
-      legacyRegistry.read(7, {
-        runConfigurationAuditSchemaVersion: 3,
-        legacy: true,
-      }),
-    ).toEqual({ kind: 'decoded', value: current.payload.configuration })
-    expect(() =>
-      createRunConfigurationAuditVersionRegistry([registration, registration]),
-    ).toThrow('Agent 审计版本注册表配置无效。')
+      currentRunConfigurationAuditReader.read('1', current.payload),
+    ).toEqual({ kind: 'invalidPayload' })
+    expect(
+      currentRunConfigurationAuditReader.read(1, { configuration: {} }),
+    ).toEqual({ kind: 'invalidPayload' })
+    expect(Object.isFrozen(currentRunConfigurationAuditReader)).toBe(true)
   })
 })
 
@@ -231,14 +191,10 @@ describe('execution budget audit V1', () => {
 
     const encoded = encodeExecutionBudgetAuditV1(budget)
 
-    expect({
-      rowVersion: EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION,
-      envelopeVersion: EXECUTION_BUDGET_AUDIT_SCHEMA_VERSION,
-    }).toEqual({ rowVersion: 1, envelopeVersion: 1 })
+    expect(EXECUTION_BUDGET_AUDIT_PAYLOAD_VERSION).toBe(1)
     expect(encoded).toEqual({
       payloadVersion: 1,
       payload: {
-        executionBudgetAuditSchemaVersion: 1,
         budget,
       },
     })
@@ -255,7 +211,7 @@ describe('execution budget audit V1', () => {
     ).toThrow('Agent 审计载荷无效。')
   })
 
-  test('dispatches only its own composite versions and explicit legacy migration', () => {
+  test('retains its row-version registry and explicit legacy migration', () => {
     const budget = {
       maxAttempts: 2,
       maxInputTokens: 10_000,
@@ -273,31 +229,24 @@ describe('execution budget audit V1', () => {
       ),
     ).toEqual({ kind: 'decoded', value: budget })
     expect(
-      productionExecutionBudgetAuditVersionRegistry.read(1, {
-        executionBudgetAuditSchemaVersion: 2,
-      }),
+      productionExecutionBudgetAuditVersionRegistry.read(2, { budget: {} }),
     ).toEqual({ kind: 'unknownVersion' })
     expect(
-      productionExecutionBudgetAuditVersionRegistry.read(1, {
-        executionBudgetAuditSchemaVersion: 1,
-        budget: {},
-      }),
+      productionExecutionBudgetAuditVersionRegistry.read(1, { budget: {} }),
     ).toEqual({ kind: 'invalidPayload' })
 
     const legacyRegistry = createExecutionBudgetAuditVersionRegistry([
       {
         kind: 'legacy',
-        identity: { rowPayloadVersion: 9, envelopeSchemaVersion: 4 },
+        identity: { rowPayloadVersion: 9 },
         decode: () => ({ legacy: true }),
         migrate: () => budget,
       },
     ])
-    expect(
-      legacyRegistry.read(9, {
-        executionBudgetAuditSchemaVersion: 4,
-        legacy: true,
-      }),
-    ).toEqual({ kind: 'decoded', value: budget })
+    expect(legacyRegistry.read(9, { legacy: true })).toEqual({
+      kind: 'decoded',
+      value: budget,
+    })
     expect(Object.isFrozen(productionExecutionBudgetAuditVersionRegistry)).toBe(
       true,
     )
@@ -342,10 +291,7 @@ describe('attempt audit V1', () => {
       },
     ]
 
-    expect({
-      rowVersion: ATTEMPT_AUDIT_PAYLOAD_VERSION,
-      envelopeVersion: ATTEMPT_AUDIT_SCHEMA_VERSION,
-    }).toEqual({ rowVersion: 1, envelopeVersion: 1 })
+    expect(ATTEMPT_AUDIT_PAYLOAD_VERSION).toBe(1)
     for (const attempt of attempts) {
       const encoded = encodeAttemptAuditV1(attempt)
       expect(decodeCurrentAttemptAuditV1(structuredClone(encoded))).toEqual(
@@ -396,7 +342,7 @@ describe('attempt audit V1', () => {
     ).toThrow('Agent 审计载荷无效。')
   })
 
-  test('uses an independent composite registry without allowing lifecycle migration', () => {
+  test('reads the current lifecycle payload and classifies unknown or damaged rows', () => {
     const attempt = {
       lifecycle: 'failed' as const,
       ...attemptStartFacts,
@@ -406,53 +352,25 @@ describe('attempt audit V1', () => {
     const current = encodeAttemptAuditV1(attempt)
 
     expect(
-      productionAttemptAuditVersionRegistry.read(
+      readCurrentAttemptAudit(
         attempt.lifecycle,
         current.payloadVersion,
         current.payload,
       ),
     ).toEqual({ kind: 'decoded', value: attempt })
     expect(
-      productionAttemptAuditVersionRegistry.read(
-        attempt.lifecycle,
-        2,
-        current.payload,
-      ),
+      readCurrentAttemptAudit(attempt.lifecycle, 2, current.payload),
     ).toEqual({ kind: 'unknownVersion' })
     expect(
-      productionAttemptAuditVersionRegistry.read(
+      readCurrentAttemptAudit(
         'unknown',
         current.payloadVersion,
         current.payload,
       ),
     ).toEqual({ kind: 'invalidPayload' })
-    expect(
-      productionAttemptAuditVersionRegistry.read('failed', 1, {
-        attemptAuditSchemaVersion: 1,
-      }),
-    ).toEqual({ kind: 'invalidPayload' })
-
-    const legacyRegistry = createAttemptAuditVersionRegistry([
-      {
-        kind: 'legacy',
-        identity: { rowPayloadVersion: 6, envelopeSchemaVersion: 2 },
-        decode: () => ({ legacy: true }),
-        migrate: () => attempt,
-      },
-    ])
-    expect(
-      legacyRegistry.read('failed', 6, {
-        attemptAuditSchemaVersion: 2,
-        legacy: true,
-      }),
-    ).toEqual({ kind: 'decoded', value: attempt })
-    expect(
-      legacyRegistry.read('started', 6, {
-        attemptAuditSchemaVersion: 2,
-        legacy: true,
-      }),
-    ).toEqual({ kind: 'invalidPayload' })
-    expect(Object.isFrozen(productionAttemptAuditVersionRegistry)).toBe(true)
+    expect(readCurrentAttemptAudit('failed', 1, {})).toEqual({
+      kind: 'invalidPayload',
+    })
   })
 })
 
@@ -465,8 +383,7 @@ describe('runtime audit extension decoder contracts', () => {
     >
     type CoachAudit = CoachRuntimeAuditShape<
       { readonly checkpoint: true },
-      { readonly result: true },
-      { readonly review: true }
+      { readonly result: true }
     >
     const playerDecoder: RuntimeAuditExtensionDecoder<
       'player',
@@ -488,7 +405,6 @@ describe('runtime audit extension decoder contracts', () => {
     expect(EMPTY_COACH_RUNTIME_AUDIT).toEqual({
       checkpoint: null,
       result: null,
-      review: null,
     })
     expect(Object.keys(EMPTY_PLAYER_RUNTIME_AUDIT)).toEqual([
       'checkpoint',

@@ -20,10 +20,10 @@ import {
   productionSessionRecoveryRepository,
 } from '../../src/persistence/session-recovery-repository.js'
 import { createPokerTableState } from '../../src/poker/state.js'
-import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
+import { currentPrivateEventReader } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
-import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
 import {
+  currentSnapshotReader,
   decodeCurrentSnapshotV1,
   encodeSnapshotV1,
 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
@@ -156,8 +156,8 @@ export function createM34Executor(input: {
     mutationRepository,
     recoveryRepository,
     recoveryRegistries: {
-      snapshot: productionSnapshotVersionRegistry,
-      privateEvent: productionPrivateEventVersionRegistry,
+      snapshot: currentSnapshotReader,
+      privateEvent: currentPrivateEventReader,
     },
     snapshotProjectorBinding: {
       bindReadPort: () => Object.freeze({}),
@@ -257,7 +257,7 @@ async function readM34CommandFacts(
     ORDER BY event_seq
   `
   const events = eventRows.map((row) => {
-    const decoded = productionPrivateEventVersionRegistry.read(
+    const decoded = currentPrivateEventReader.read(
       row.payloadVersion,
       row.payload,
     )

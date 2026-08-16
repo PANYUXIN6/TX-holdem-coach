@@ -1,345 +1,220 @@
-import { CardSchema, LegalActionsSchema } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
-import {
-  CompletedHandSummarySchema,
-  createActionCommittedEventDraft,
-  createHandStartedEventDraft,
-  createUncalledBetReturnedEventDraft,
-  type PokerDomainEventDraft,
-} from '../../poker/hand-result.js'
-import { PokerCommandSchema } from '../../poker/commands.js'
 import { AuthoritativeStateValidationError } from './errors.js'
+import {
+  createPokerPrivateEvent,
+  type PokerPrivateEvent,
+} from './poker-private-event.js'
 
+const SafeNonnegativeIntegerSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER)
 const SeatNumberSchema = z.number().int().min(0).max(8)
-const SafeNonnegativeIntegerSchema = z.number().int().nonnegative()
-const LogicalPositionSchema = z.enum([
-  'UTG',
-  'UTG+1',
-  'MP',
-  'LJ',
-  'HJ',
-  'CO',
-  'BTN',
-  'SB',
-  'BB',
-])
-const HAND_STREETS = [
-  'postingBlinds',
-  'preflop',
-  'flop',
-  'turn',
-  'river',
-  'showdown',
-  'complete',
-] as const
-const HandStreetSchema = z.enum(HAND_STREETS)
-const ACTION_STREETS = new Set(['preflop', 'flop', 'turn', 'river'])
-const ActionSeatSnapshotSchema = z.strictObject({
+const EventSeatSchema = z.strictObject({
   seatNumber: SeatNumberSchema,
-  status: z.enum(['active', 'folded', 'allIn', 'out']),
   stack: SafeNonnegativeIntegerSchema,
-  streetContribution: SafeNonnegativeIntegerSchema,
-  totalContribution: SafeNonnegativeIntegerSchema,
+  cumulativeBuyIn: SafeNonnegativeIntegerSchema,
 })
-const BoardSchema = z
-  .array(CardSchema)
-  .max(5)
-  .superRefine((cards, context) => {
-    const cardKeys = cards.map((card) => `${card.rank}:${card.suit}`)
-    if (new Set(cardKeys).size !== cardKeys.length) {
-      context.addIssue({
-        code: 'custom',
-        message: '行动快照公共牌不得重复。',
-      })
-    }
-  })
-const ActionTableSnapshotSchema = z
+const EventTableSchema = z.strictObject({
+  buttonSeatNumber: SeatNumberSchema,
+  completedHandCount: SafeNonnegativeIntegerSchema,
+  seats: z.array(EventSeatSchema).min(6).max(9),
+})
+
+const SessionCreatedEventSchema = z
   .strictObject({
-    street: HandStreetSchema,
-    board: BoardSchema,
-    currentActorSeatNumber: SeatNumberSchema.nullable(),
-    pot: SafeNonnegativeIntegerSchema,
-    seats: z.array(ActionSeatSnapshotSchema).min(6).max(9),
+    type: z.literal('sessionCreated'),
+    initialBuyIns: z
+      .array(
+        z.strictObject({
+          seatNumber: SeatNumberSchema,
+          amount: z.literal(2_000),
+        }),
+      )
+      .min(6)
+      .max(9),
   })
-  .superRefine((snapshot, context) => {
-    const isActionStreet = ACTION_STREETS.has(snapshot.street)
+  .superRefine((event, context) => {
     if (
-      (isActionStreet && snapshot.currentActorSeatNumber === null) ||
-      (!isActionStreet && snapshot.currentActorSeatNumber !== null)
+      event.initialBuyIns[0]?.seatNumber !== 0 ||
+      event.initialBuyIns.some(
+        (buyIn, index) =>
+          index > 0 &&
+          buyIn.seatNumber <= event.initialBuyIns[index - 1]!.seatNumber,
+      )
     ) {
       context.addIssue({
         code: 'custom',
-        message: '快照街道必须与当前行动者是否存在一致。',
-        path: ['currentActorSeatNumber'],
+        message: '创建场次买入必须包含座位 0 并按唯一座位严格升序。',
+        path: ['initialBuyIns'],
       })
     }
-    snapshot.seats.forEach((seat, index) => {
-      if (seat.totalContribution < seat.streetContribution) {
-        context.addIssue({
-          code: 'custom',
-          message: '本手总投入不得小于本街投入。',
-          path: ['seats', index, 'totalContribution'],
-        })
-      }
-    })
-    const currentActor = snapshot.seats.find(
-      (seat) => seat.seatNumber === snapshot.currentActorSeatNumber,
-    )
+  })
+
+const UserRebuyEventSchema = z
+  .strictObject({
+    type: z.literal('userRebuy'),
+    seatNumber: z.literal(0),
+    amount: SafeNonnegativeIntegerSchema.positive(),
+    stackBefore: SafeNonnegativeIntegerSchema,
+    stackAfter: SafeNonnegativeIntegerSchema.max(2_000),
+    cumulativeBuyInBefore: SafeNonnegativeIntegerSchema,
+    cumulativeBuyInAfter: SafeNonnegativeIntegerSchema,
+  })
+  .superRefine((event, context) => {
     if (
-      snapshot.currentActorSeatNumber !== null &&
-      currentActor === undefined
+      BigInt(event.stackBefore) + BigInt(event.amount) !==
+        BigInt(event.stackAfter) ||
+      BigInt(event.cumulativeBuyInBefore) + BigInt(event.amount) !==
+        BigInt(event.cumulativeBuyInAfter)
     ) {
       context.addIssue({
         code: 'custom',
-        message: '当前行动者必须存在于快照座位集合。',
-        path: ['currentActorSeatNumber'],
+        message: '用户补码事件的前后金额必须精确镜像。',
       })
     }
+  })
+
+const AiAutoRebuyEventSchema = z
+  .strictObject({
+    type: z.literal('aiAutoRebuy'),
+    seatNumber: z.number().int().min(1).max(8),
+    amount: z.literal(2_000),
+    stackBefore: z.literal(0),
+    stackAfter: z.literal(2_000),
+    cumulativeBuyInBefore: SafeNonnegativeIntegerSchema,
+    cumulativeBuyInAfter: SafeNonnegativeIntegerSchema,
+  })
+  .superRefine((event, context) => {
     if (
-      currentActor !== undefined &&
-      (currentActor.status !== 'active' || currentActor.stack === 0)
+      BigInt(event.cumulativeBuyInBefore) + 2_000n !==
+      BigInt(event.cumulativeBuyInAfter)
     ) {
       context.addIssue({
         code: 'custom',
-        message: '当前行动者必须处于可行动状态。',
-        path: ['currentActorSeatNumber'],
+        message: 'AI 自动买入事件的累计买入必须精确增加 2000。',
       })
     }
-    const totalContributions = snapshot.seats.reduce(
-      (total, seat) => total + BigInt(seat.totalContribution),
+  })
+
+const HandAbortedEventSchema = z
+  .strictObject({
+    type: z.literal('handAborted'),
+    handId: z.uuid(),
+    beforeAbort: EventTableSchema.extend({
+      pot: SafeNonnegativeIntegerSchema,
+    }),
+    restored: EventTableSchema,
+  })
+  .superRefine((event, context) => {
+    const beforeSeats = event.beforeAbort.seats
+    const restoredSeats = event.restored.seats
+    const beforeSeatNumbers = beforeSeats.map((seat) => seat.seatNumber)
+    const restoredSeatNumbers = restoredSeats.map((seat) => seat.seatNumber)
+    const isStrictlySortedUnique = (seatNumbers: readonly number[]) =>
+      seatNumbers.every(
+        (seatNumber, index) =>
+          index === 0 || seatNumber > (seatNumbers[index - 1] as number),
+      )
+    const sameSeats =
+      beforeSeatNumbers.length === restoredSeatNumbers.length &&
+      beforeSeatNumbers.every(
+        (seatNumber, index) => seatNumber === restoredSeatNumbers[index],
+      )
+    if (
+      !isStrictlySortedUnique(beforeSeatNumbers) ||
+      !isStrictlySortedUnique(restoredSeatNumbers) ||
+      !sameSeats ||
+      !beforeSeatNumbers.includes(0) ||
+      !beforeSeatNumbers.includes(event.beforeAbort.buttonSeatNumber) ||
+      !restoredSeatNumbers.includes(event.restored.buttonSeatNumber) ||
+      event.beforeAbort.completedHandCount !== event.restored.completedHandCount
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: '中止前后桌面集合、按钮和完成手数必须一致有效。',
+      })
+      return
+    }
+
+    const maximumSafeInteger = BigInt(Number.MAX_SAFE_INTEGER)
+    const beforeBuyIns = beforeSeats.reduce(
+      (total, seat) => total + BigInt(seat.cumulativeBuyIn),
       0n,
     )
-    if (BigInt(snapshot.pot) !== totalContributions) {
+    const beforeFunds = beforeSeats.reduce(
+      (total, seat) => total + BigInt(seat.stack),
+      BigInt(event.beforeAbort.pot),
+    )
+    const restoredBuyIns = restoredSeats.reduce(
+      (total, seat) => total + BigInt(seat.cumulativeBuyIn),
+      0n,
+    )
+    const restoredFunds = restoredSeats.reduce(
+      (total, seat) => total + BigInt(seat.stack),
+      0n,
+    )
+    if (
+      beforeBuyIns > maximumSafeInteger ||
+      beforeFunds > maximumSafeInteger ||
+      restoredBuyIns > maximumSafeInteger ||
+      restoredFunds > maximumSafeInteger ||
+      beforeBuyIns !== beforeFunds ||
+      restoredBuyIns !== restoredFunds
+    ) {
       context.addIssue({
         code: 'custom',
-        message: '快照底池必须等于全部座位总投入之和。',
-        path: ['pot'],
+        message: '中止事件的资金必须安全且守恒。',
       })
+    }
+
+    for (let index = 0; index < beforeSeats.length; index += 1) {
+      const before = beforeSeats[index]!
+      const restored = restoredSeats[index]!
+      const rollback =
+        BigInt(before.cumulativeBuyIn) - BigInt(restored.cumulativeBuyIn)
+      if (
+        (before.seatNumber === 0 && rollback !== 0n) ||
+        (before.seatNumber !== 0 &&
+          (rollback < 0n ||
+            (rollback !== 0n && rollback !== 2_000n) ||
+            (rollback === 2_000n) !== (restored.stack === 0)))
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: '中止事件的买入回退不满足固定规则。',
+          path: ['restored', 'seats', index],
+        })
+      }
     }
   })
 
-const HandStartedEventSchema = z
-  .strictObject({
-    type: z.literal('handStarted'),
-    startedHand: z.strictObject({
-      handId: z.uuid(),
-      handNumber: SafeNonnegativeIntegerSchema,
-      participantSeatNumbers: z.array(SeatNumberSchema),
-      buttonSeatNumber: SeatNumberSchema,
-      smallBlindSeatNumber: SeatNumberSchema,
-      bigBlindSeatNumber: SeatNumberSchema,
-      positions: z.array(
-        z.strictObject({
-          seatNumber: SeatNumberSchema,
-          position: LogicalPositionSchema,
-        }),
-      ),
-      startingStacks: z.array(
-        z.strictObject({
-          seatNumber: SeatNumberSchema,
-          stack: SafeNonnegativeIntegerSchema.positive(),
-        }),
-      ),
-    }),
-  })
-  .superRefine((event, context) => {
-    const positions = event.startedHand.positions
-    const positionBySeat = new Map(
-      positions.map((position) => [position.seatNumber, position.position]),
-    )
-    if (
-      new Set(positions.map((position) => position.position)).size !==
-        positions.length ||
-      positionBySeat.get(event.startedHand.buttonSeatNumber) !== 'BTN' ||
-      positionBySeat.get(event.startedHand.smallBlindSeatNumber) !== 'SB' ||
-      positionBySeat.get(event.startedHand.bigBlindSeatNumber) !== 'BB'
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '开手位置必须唯一并与按钮和庄盲镜像一致。',
-        path: ['startedHand', 'positions'],
-      })
-    }
-  })
-
-const ActionCommittedEventSchema = z
-  .strictObject({
-    type: z.literal('actionCommitted'),
-    handId: z.uuid(),
-    actorSeatNumber: SeatNumberSchema,
-    command: PokerCommandSchema,
-    legalActionsBefore: LegalActionsSchema,
-    before: ActionTableSnapshotSchema,
-    after: ActionTableSnapshotSchema,
-    progression: z.strictObject({
-      streetTransitions: z.array(HandStreetSchema),
-      burnedCardsAdded: z.array(CardSchema),
-      boardCardsAdded: z.array(CardSchema),
-      terminationReason: z.enum(['showdown', 'complete']).nullable(),
-    }),
-    statistics: z.strictObject({
-      isVoluntaryPreflopContribution: z.boolean(),
-      isPreflopRaise: z.boolean(),
-      isVoluntaryPreflopFullRaise: z.boolean(),
-      canMakeFullRaiseBeforeAction: z.boolean(),
-    }),
-  })
-  .superRefine((event, context) => {
-    const beforeSeatNumbers = new Set(
-      event.before.seats.map((seat) => seat.seatNumber),
-    )
-    const afterSeatNumbers = new Set(
-      event.after.seats.map((seat) => seat.seatNumber),
-    )
-    if (!beforeSeatNumbers.has(event.actorSeatNumber)) {
-      context.addIssue({
-        code: 'custom',
-        message: '行动者必须存在于行动前快照座位集合。',
-        path: ['actorSeatNumber'],
-      })
-    }
-    if (
-      event.before.seats.length !== event.after.seats.length ||
-      event.before.seats.some((seat) => !afterSeatNumbers.has(seat.seatNumber))
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '行动前后快照必须具有相同座位集合。',
-        path: ['after', 'seats'],
-      })
-    }
-    const beforeFunds =
-      event.before.seats.reduce(
-        (total, seat) => total + BigInt(seat.stack),
-        0n,
-      ) + BigInt(event.before.pot)
-    const afterFunds =
-      event.after.seats.reduce(
-        (total, seat) => total + BigInt(seat.stack),
-        0n,
-      ) + BigInt(event.after.pot)
-    if (beforeFunds !== afterFunds) {
-      context.addIssue({
-        code: 'custom',
-        message: '行动前后筹码与底池总额必须守恒。',
-        path: ['after'],
-      })
-    }
-    const beforeBoard = event.before.board.map(
-      (card) => `${card.rank}:${card.suit}`,
-    )
-    const afterBoard = event.after.board.map(
-      (card) => `${card.rank}:${card.suit}`,
-    )
-    const boardCardsAdded = event.progression.boardCardsAdded.map(
-      (card) => `${card.rank}:${card.suit}`,
-    )
-    const expectedBoardCardsAdded = afterBoard.slice(beforeBoard.length)
-    if (
-      beforeBoard.length > afterBoard.length ||
-      beforeBoard.some((card, index) => card !== afterBoard[index]) ||
-      boardCardsAdded.length !== expectedBoardCardsAdded.length ||
-      boardCardsAdded.some(
-        (card, index) => card !== expectedBoardCardsAdded[index],
-      )
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '公共牌新增事实必须等于行动后公共牌的精确新增后缀。',
-        path: ['progression', 'boardCardsAdded'],
-      })
-    }
-    const beforeStreetIndex = HAND_STREETS.indexOf(event.before.street)
-    const afterStreetIndex = HAND_STREETS.indexOf(event.after.street)
-    const expectedStreetTransitions =
-      event.after.street === 'complete'
-        ? ['complete']
-        : afterStreetIndex < beforeStreetIndex
-          ? null
-          : HAND_STREETS.slice(beforeStreetIndex + 1, afterStreetIndex + 1)
-    if (
-      expectedStreetTransitions === null ||
-      event.progression.streetTransitions.length !==
-        expectedStreetTransitions.length ||
-      event.progression.streetTransitions.some(
-        (street, index) => street !== expectedStreetTransitions[index],
-      )
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '街道转换事实必须与行动前后街道精确一致。',
-        path: ['progression', 'streetTransitions'],
-      })
-    }
-    const expectedBurnedCardsAddedCount =
-      event.progression.streetTransitions.filter(
-        (street) =>
-          street === 'flop' || street === 'turn' || street === 'river',
-      ).length
-    if (
-      event.progression.burnedCardsAdded.length !==
-      expectedBurnedCardsAddedCount
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '新增 burn card 数量必须与经过的公共牌街道精确一致。',
-        path: ['progression', 'burnedCardsAdded'],
-      })
-    }
-    const expectedTerminationReason =
-      event.after.street === 'showdown' || event.after.street === 'complete'
-        ? event.after.street
-        : null
-    if (event.progression.terminationReason !== expectedTerminationReason) {
-      context.addIssue({
-        code: 'custom',
-        message: '终止原因必须与行动后街道一致。',
-        path: ['progression', 'terminationReason'],
-      })
-    }
-  })
-
-const UncalledBetReturnedEventSchema = z.strictObject({
-  type: z.literal('uncalledBetReturned'),
-  handId: z.uuid(),
-  returns: z
-    .array(
-      z.strictObject({
-        seatNumber: SeatNumberSchema,
-        amount: SafeNonnegativeIntegerSchema.positive(),
-      }),
-    )
-    .max(1),
+const SessionEndedEventSchema = z.strictObject({
+  type: z.literal('sessionEnded'),
+  reason: z.enum(['userRequested', 'handAborted']),
 })
 
-const HandCompletedEventSchema = z
-  .strictObject({
-    type: z.literal('handCompleted'),
-    handId: z.uuid(),
-    terminationReason: z.enum(['showdown', 'complete']),
-    summary: CompletedHandSummarySchema,
-  })
-  .superRefine((event, context) => {
-    if (
-      event.handId !== event.summary.handId ||
-      event.terminationReason !== event.summary.terminationReason
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '完成手事件必须与摘要镜像一致。',
-        path: ['summary'],
-      })
-    }
-  })
-
-const PrivateEventV1Schema = z.discriminatedUnion('type', [
-  HandStartedEventSchema,
-  ActionCommittedEventSchema,
-  UncalledBetReturnedEventSchema,
-  HandCompletedEventSchema,
+const SessionPrivateEventSchema = z.discriminatedUnion('type', [
+  SessionCreatedEventSchema,
+  UserRebuyEventSchema,
+  AiAutoRebuyEventSchema,
+  HandAbortedEventSchema,
+  SessionEndedEventSchema,
 ])
 
-export type PrivateEventV1 = PokerDomainEventDraft
+export type SessionCreatedEvent = z.infer<typeof SessionCreatedEventSchema>
+export type UserRebuyEvent = z.infer<typeof UserRebuyEventSchema>
+export type AiAutoRebuyEvent = z.infer<typeof AiAutoRebuyEventSchema>
+export type HandAbortedEvent = z.infer<typeof HandAbortedEventSchema>
+export type SessionEndedEvent = z.infer<typeof SessionEndedEventSchema>
+export type PrivateEvent =
+  | PokerPrivateEvent
+  | SessionCreatedEvent
+  | UserRebuyEvent
+  | AiAutoRebuyEvent
+  | HandAbortedEvent
+  | SessionEndedEvent
 
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object') {
@@ -351,20 +226,41 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
-export function createPrivateEventV1(input: unknown): PrivateEventV1 {
+export function createPrivateEvent(input: unknown): PrivateEvent {
   try {
-    const parsed = PrivateEventV1Schema.parse(input)
-    if (parsed.type === 'handStarted') {
-      return createHandStartedEventDraft(parsed.startedHand)
+    if (
+      typeof input === 'object' &&
+      input !== null &&
+      'type' in input &&
+      typeof input.type === 'string' &&
+      [
+        'handStarted',
+        'actionCommitted',
+        'uncalledBetReturned',
+        'handCompleted',
+      ].includes(input.type)
+    ) {
+      return createPokerPrivateEvent(input)
     }
-    if (parsed.type === 'actionCommitted') {
-      return createActionCommittedEventDraft(parsed)
-    }
-    if (parsed.type === 'uncalledBetReturned') {
-      return createUncalledBetReturnedEventDraft(parsed.handId, parsed.returns)
-    }
-    return deepFreeze(structuredClone(parsed))
+    return deepFreeze(structuredClone(SessionPrivateEventSchema.parse(input)))
   } catch {
     throw new AuthoritativeStateValidationError()
+  }
+}
+
+export function getPrivateEventHandId(event: PrivateEvent): string | null {
+  switch (event.type) {
+    case 'handStarted':
+      return event.startedHand.handId
+    case 'actionCommitted':
+    case 'uncalledBetReturned':
+    case 'handCompleted':
+    case 'handAborted':
+      return event.handId
+    case 'sessionCreated':
+    case 'userRebuy':
+    case 'aiAutoRebuy':
+    case 'sessionEnded':
+      return null
   }
 }

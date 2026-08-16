@@ -6,7 +6,7 @@ import { loadPausedAbortContext } from '../../src/persistence/session-lifecycle-
 import { startPokerHand } from '../../src/poker/poker-engine.js'
 import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
-import { encodeHandStartCheckpointV1 } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v1.js'
+import { encodeCurrentHandStartCheckpoint } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
 const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
@@ -33,6 +33,7 @@ function checkpoint() {
     lastCompletedHandSummary: null,
   })
   return {
+    pokerRuleSetVersion: POKER_RULE_SET_VERSION,
     stateBeforeStartCommand: state,
     startedHand: startPokerHand(poker, {
       handId,
@@ -43,7 +44,7 @@ function checkpoint() {
 }
 
 function handRow() {
-  const encoded = encodeHandStartCheckpointV1(checkpoint())
+  const encoded = encodeCurrentHandStartCheckpoint(checkpoint())
   return {
     handId,
     sessionId,
@@ -95,10 +96,8 @@ describe('session lifecycle repository', () => {
 
     expect(context).toEqual({
       handId,
-      checkpoint: {
-        pokerRuleSetVersion: POKER_RULE_SET_VERSION,
-        ...encodeHandStartCheckpointV1(checkpoint()).payload.checkpoint,
-      },
+      checkpoint:
+        encodeCurrentHandStartCheckpoint(checkpoint()).payload.checkpoint,
       failedPlayerRunId,
       failureReasonCode: 'provider_timeout',
     })

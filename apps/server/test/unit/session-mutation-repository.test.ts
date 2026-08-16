@@ -15,7 +15,7 @@ import {
   SessionMutationTransitionError,
 } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
-import { encodePrivateEventV2 } from '../../src/sessions/authoritative-state/private-event-codec-v2.js'
+import { encodeCurrentPrivateEvent } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-state/current-private-event-protocol.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
@@ -116,7 +116,6 @@ function publicSnapshot(
   > = {},
 ) {
   return {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion,
     eventSeq,
@@ -151,7 +150,7 @@ function validBatch() {
     })),
     lastCompletedHandSummary: null,
   })
-  const privateEvent = encodePrivateEventV2(
+  const privateEvent = encodeCurrentPrivateEvent(
     createHandStartedEventDraft({
       handId,
       handNumber: 1,
@@ -175,7 +174,6 @@ function validBatch() {
   )
   const snapshot = publicSnapshot()
   const publicEvent = {
-    protocolVersion: 1 as const,
     eventId,
     sessionId,
     eventSeq: 20,
@@ -712,17 +710,9 @@ describe('session mutation repository', () => {
     expect(eventRow?.public_event_payload).toEqual(
       validBatch().events[0]?.publicEvent,
     )
-    expect(
-      tracked
-        .getSqlParameters()
-        .flat()
-        .some(
-          (parameter) =>
-            parameter !== null &&
-            typeof parameter === 'object' &&
-            'snapshotSchemaVersion' in parameter,
-        ),
-    ).toBe(true)
+    expect(tracked.getSqlParameters().flat()).toContainEqual(
+      validBatch().snapshot.payload,
+    )
   })
 
   test('converts each SQL-stage failure, stops immediately and consumes the lock capability', async () => {

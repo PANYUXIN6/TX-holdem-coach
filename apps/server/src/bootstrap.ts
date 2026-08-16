@@ -25,8 +25,8 @@ import { productionSessionMutationRepository } from './persistence/session-mutat
 import { productionSessionRecoveryRepository } from './persistence/session-recovery-repository.js'
 import { insertInProgressHandAudit } from './persistence/hand-audit-repository.js'
 import { createPublicProjectionFactsRepository } from './persistence/public-projection-repository.js'
-import { productionSnapshotVersionRegistry } from './sessions/authoritative-state/snapshot-version-registry.js'
-import { productionPrivateEventVersionRegistry } from './sessions/authoritative-state/private-event-version-registry.js'
+import { currentSnapshotReader } from './sessions/authoritative-state/snapshot-codec-v1.js'
+import { currentPrivateEventReader } from './sessions/authoritative-state/private-event-codec.js'
 import { SECURE_RANDOM_SOURCE } from './poker/random-source.js'
 import { createSessionCreationIdentityGraph } from './sessions/session-creation/session-creation-consistency.js'
 import { createSessionCreationService } from './sessions/session-creation/session-creation-service.js'
@@ -122,8 +122,8 @@ export async function createApiRuntime(
     mutationRepository,
     recoveryRepository,
     recoveryRegistries: {
-      snapshot: productionSnapshotVersionRegistry,
-      privateEvent: productionPrivateEventVersionRegistry,
+      snapshot: currentSnapshotReader,
+      privateEvent: currentPrivateEventReader,
     },
     snapshotProjectorBinding: projectionBindings.command,
     now: () => new Date().toISOString(),

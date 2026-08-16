@@ -1,5 +1,9 @@
 import { z } from 'zod'
 import {
+  readCurrentPersistedJson,
+  type PersistedJsonReader,
+} from '../../persisted-json.js'
+import {
   CompletedHandResultSchema,
   type CompletedHandResult,
 } from '../../poker/hand-result.js'
@@ -9,12 +13,10 @@ import {
 } from './errors.js'
 
 export const COMPLETED_HAND_RESULT_PAYLOAD_VERSION = 1 as const
-export const HAND_RESULT_SCHEMA_VERSION = 1 as const
 
 export interface StoredCompletedHandResultV1 {
   readonly payloadVersion: typeof COMPLETED_HAND_RESULT_PAYLOAD_VERSION
   readonly payload: {
-    readonly handResultSchemaVersion: typeof HAND_RESULT_SCHEMA_VERSION
     readonly result: CompletedHandResult
   }
 }
@@ -22,7 +24,6 @@ export interface StoredCompletedHandResultV1 {
 const StoredCompletedResultInputSchema = z.strictObject({
   payloadVersion: z.literal(COMPLETED_HAND_RESULT_PAYLOAD_VERSION),
   payload: z.strictObject({
-    handResultSchemaVersion: z.literal(HAND_RESULT_SCHEMA_VERSION),
     result: CompletedHandResultSchema,
   }),
 })
@@ -50,13 +51,6 @@ export function decodeCurrentCompletedHandResultV1(
     throw new HandAuditPayloadVersionError('completedResultRowVersion')
   }
   if (!isRecord(input.payload)) throw new HandAuditPayloadValidationError()
-  const envelopeVersion = PositiveIntegerSchema.safeParse(
-    input.payload.handResultSchemaVersion,
-  )
-  if (!envelopeVersion.success) throw new HandAuditPayloadValidationError()
-  if (envelopeVersion.data !== HAND_RESULT_SCHEMA_VERSION) {
-    throw new HandAuditPayloadVersionError('completedResultEnvelopeVersion')
-  }
   try {
     const parsed = StoredCompletedResultInputSchema.parse(input)
     return deepFreeze(structuredClone(parsed))
@@ -77,6 +71,21 @@ export function encodeCompletedHandResultV1(
   }
   return decodeCurrentCompletedHandResultV1({
     payloadVersion: COMPLETED_HAND_RESULT_PAYLOAD_VERSION,
-    payload: { handResultSchemaVersion: HAND_RESULT_SCHEMA_VERSION, result },
+    payload: { result },
   })
 }
+
+export const currentCompletedHandResultReader: PersistedJsonReader<CompletedHandResult> =
+  Object.freeze({
+    read(rowPayloadVersion: unknown, payload: unknown) {
+      return readCurrentPersistedJson({
+        rowPayloadVersion,
+        payload,
+        currentRowPayloadVersion: COMPLETED_HAND_RESULT_PAYLOAD_VERSION,
+        decode: (stored) =>
+          decodeCurrentCompletedHandResultV1(stored).payload.result,
+        isPayloadValidationError: (error) =>
+          error instanceof HandAuditPayloadValidationError,
+      })
+    },
+  })

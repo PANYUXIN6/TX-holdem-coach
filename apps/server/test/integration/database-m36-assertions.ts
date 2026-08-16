@@ -84,7 +84,6 @@ export async function assertM36PublicProjectionRuntime(
         method: 'POST',
         headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          protocolVersion: 1,
           command: {
             sessionId: createdBody.snapshot.sessionId,
             commandId: randomUUID(),

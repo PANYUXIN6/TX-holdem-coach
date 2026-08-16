@@ -7,8 +7,8 @@ import {
   RepositoryInputValidationError,
 } from './errors.js'
 import type { LockedSessionView } from './session-mutation-repository.js'
-import { productionPrivateEventVersionRegistry } from '../sessions/authoritative-state/private-event-version-registry.js'
-import { productionSnapshotVersionRegistry } from '../sessions/authoritative-state/snapshot-version-registry.js'
+import { currentPrivateEventReader } from '../sessions/authoritative-state/private-event-codec.js'
+import { currentSnapshotReader } from '../sessions/authoritative-state/snapshot-codec-v1.js'
 import type {
   CommittedPrivateEventFact,
   ProjectionRosterSeat,
@@ -110,7 +110,7 @@ function mapEvents(
   let previous = -1
   return Object.freeze(
     parsed.data.map((row) => {
-      const decoded = productionPrivateEventVersionRegistry.read(
+      const decoded = currentPrivateEventReader.read(
         row.privateEventPayloadVersion,
         row.privateEventPayload,
       )
@@ -164,7 +164,7 @@ export function mapPublicSessionProjectionFacts(
   ) {
     return corruption()
   }
-  const decoded = productionSnapshotVersionRegistry.read(
+  const decoded = currentSnapshotReader.read(
     parsed.data.snapshotPayloadVersion,
     parsed.data.snapshotPayload,
   )

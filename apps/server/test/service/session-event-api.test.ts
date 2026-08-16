@@ -12,7 +12,6 @@ const sessionId = '22222222-2222-4222-8222-222222222222'
 
 function calibration(): SseEvent {
   const snapshot = {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion: 1,
     eventSeq: 2,
@@ -33,7 +32,6 @@ function calibration(): SseEvent {
     lastCompletedHandSummary: null,
   }
   return {
-    protocolVersion: 1,
     eventId: '33333333-3333-4333-8333-333333333333',
     sessionId,
     eventSeq: 2,

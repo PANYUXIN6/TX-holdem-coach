@@ -5,7 +5,7 @@ import {
 } from '@tx-holdem-coach/contracts'
 import { getLegalActions } from '../../poker/betting.js'
 import type { CompletedHandSummary } from '../../poker/hand-result.js'
-import type { PrivateEventV2 } from '../authoritative-state/private-event-v2.js'
+import type { PrivateEvent } from '../authoritative-state/private-event.js'
 import type {
   CommittedPrivateEventFact,
   PublicSessionProjectionFacts,
@@ -203,7 +203,7 @@ export function projectPublicSessionSnapshot(
                 ? getLegalActions(state.poker)
                 : [],
             actionTimeline: mergedEvents.flatMap((fact) => {
-              const event: PrivateEventV2 = fact.event
+              const event: PrivateEvent = fact.event
               if (event.type !== 'actionCommitted') return []
               return [
                 {
@@ -246,7 +246,6 @@ export function projectPublicSessionSnapshot(
     if (session.agentRunState === 'thinking' && activeDecision === null) fail()
 
     const snapshot = PublicSessionSnapshotSchema.parse({
-      protocolVersion: 1,
       sessionId: session.sessionId,
       stateVersion: state.stateVersion,
       eventSeq: facts.eventSeq,

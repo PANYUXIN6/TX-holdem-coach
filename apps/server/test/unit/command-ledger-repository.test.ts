@@ -119,7 +119,6 @@ async function resolvedOwner() {
 
 function snapshot(stateVersion = 13, eventSeq = 20) {
   return {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion,
     eventSeq,
@@ -143,14 +142,12 @@ function snapshot(stateVersion = 13, eventSeq = 20) {
 
 function commandResponse(stateVersion = 13, eventSeq = 20) {
   return {
-    protocolVersion: 1 as const,
     snapshot: snapshot(stateVersion, eventSeq),
   }
 }
 
 function errorResponse(withSnapshot = true) {
   return {
-    protocolVersion: 1 as const,
     code: 'state_conflict',
     message: '场次状态已变化。',
     ...(withSnapshot ? { latestSnapshot: snapshot() } : {}),

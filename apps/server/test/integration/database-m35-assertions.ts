@@ -90,7 +90,7 @@ function playerSettingsRequest(
   return {
     method: 'PATCH',
     headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ protocolVersion: 1, settings }),
+    body: JSON.stringify({ settings }),
   }
 }
 
@@ -345,7 +345,6 @@ export async function assertM35HttpAndAtomicSettings(
       method: 'PATCH',
       headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         settings: { attemptTimeoutSeconds: 25 },
       }),
     })
@@ -386,7 +385,7 @@ export async function assertM35HttpAndAtomicSettings(
       {
         method: 'POST',
         headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ protocolVersion: 1 }),
+        body: JSON.stringify({}),
       },
     )
     expect(provider.status).toBe(200)
@@ -431,7 +430,6 @@ export async function assertM35HttpAndAtomicSettings(
         method: 'DELETE',
         headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          protocolVersion: 1,
           confirmation: '永久删除本场',
         }),
       },
@@ -451,7 +449,7 @@ export async function assertM35HttpAndAtomicSettings(
     const invalidConfirmation = await app.request(`${BASE_URL}/api/data`, {
       method: 'DELETE',
       headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ protocolVersion: 1, confirmation: '清空' }),
+      body: JSON.stringify({ confirmation: '清空' }),
     })
     expect(invalidConfirmation.status).toBe(400)
     await expect(
@@ -476,7 +474,6 @@ export async function assertM35HttpAndAtomicSettings(
 
     const commandId = crypto.randomUUID()
     const command = {
-      protocolVersion: 1,
       command: {
         sessionId: createdSessionId,
         commandId,
@@ -530,7 +527,6 @@ export async function assertM35HttpAndAtomicSettings(
         method: 'DELETE',
         headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          protocolVersion: 1,
           confirmation: '永久删除本场',
         }),
       },
@@ -550,7 +546,6 @@ export async function assertM35HttpAndAtomicSettings(
       method: 'DELETE',
       headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        protocolVersion: 1,
         confirmation: '永久清空全部数据',
       }),
     })

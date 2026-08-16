@@ -16,7 +16,6 @@ describe('public event replay repository', () => {
           sessionId,
           eventSeq: 1,
           stateVersionAfter: 2,
-          protocolVersion: 1,
           publicEventPayload: {},
         },
       ])

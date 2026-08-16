@@ -49,9 +49,9 @@ M3.2 的服务与 Repository 可以完整测试，但在 M3.6 安装生产公开
 | `initializePokerTable()` | 从规范化实际座位中安全随机选择首手按钮 |
 | `startPokerHand()` | 下盲、发牌并生成 `StartedHandFacts` 与 `handStarted` 草稿 |
 | `createPrivateTableState()` | 构造版本 0 检查点状态和版本 1 最终状态 |
-| `createHandStartCheckpointV1()` | 冻结开手命令前状态与首手事实 |
+| `createHandStartCheckpoint()` | 冻结开手命令前状态、首手事实与规则集身份 |
 | `insertInProgressHandAudit()` | 写入首个 `hands.inProgress` 与检查点 |
-| `currentPrivateEventProtocol` | 解析并编码 `sessionCreated` 与 `handStarted` V2 事件 |
+| `currentPrivateEventProtocol` | 解析并编码 `sessionCreated` 与 `handStarted` 当前事件 |
 | `SessionMutationRepository` | 从 Session `0/0` 原子推进到 `1/2` 并写快照、事件 |
 | Session 活动部分唯一索引 | 作为单 Owner 只有一个 active Session 的最终约束 |
 
@@ -310,7 +310,8 @@ const stateBeforeStart = createPrivateTableState({
 服务构造：
 
 ```ts
-const checkpoint = createHandStartCheckpointV1({
+const checkpoint = createHandStartCheckpoint({
+  pokerRuleSetVersion: POKER_RULE_SET_VERSION,
   stateBeforeStartCommand: stateBeforeStart,
   startedHand,
 })
@@ -340,7 +341,7 @@ const finalState = createPrivateTableState({
 - `stateVersionBefore = 0`；
 - `stateVersionAfter = 1`；
 - 使用同一个规范 UTC `createdAt`；
-- 私有载荷统一通过当前 V2 协议编码；
+- 私有载荷统一通过当前协议编码为行载荷版本 `1`；
 - 公开负载使用同一最终业务快照，只允许顶层 `eventSeq` 分别为 0、1。
 
 ### 6.4 创建一致性校验
@@ -583,7 +584,7 @@ interface SessionCreationSnapshotProjectionInput<ReadPort> {
   readonly state: PrivateTableState
   readonly session: LockedSessionView
   readonly eventSeq: number
-  readonly newPrivateEvents: readonly [PrivateEventV2, PrivateEventV2]
+  readonly newPrivateEvents: readonly [PrivateEvent, PrivateEvent]
   readonly reads: ReadPort
 }
 

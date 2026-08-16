@@ -7,9 +7,9 @@ import {
 } from '../agents/audit/audit-primitives.js'
 import {
   encodeAttemptAuditV1,
+  readCurrentAttemptAudit,
   type AttemptAuditV1,
 } from '../agents/audit/attempt-audit-codec-v1.js'
-import { productionAttemptAuditVersionRegistry } from '../agents/audit/attempt-audit-version-registry.js'
 import {
   AgentAuditPayloadValidationError,
   AgentAuditPayloadVersionError,
@@ -20,10 +20,10 @@ import {
 } from '../agents/audit/execution-budget-audit-codec-v1.js'
 import { productionExecutionBudgetAuditVersionRegistry } from '../agents/audit/execution-budget-audit-version-registry.js'
 import {
+  currentRunConfigurationAuditReader,
   encodeRunConfigurationAuditV1,
   type RunConfigurationAuditV1,
 } from '../agents/audit/run-configuration-audit-codec-v1.js'
-import { productionRunConfigurationAuditVersionRegistry } from '../agents/audit/run-configuration-audit-version-registry.js'
 import type {
   AgentAuditDecoderBundle,
   CoachRuntimeAuditDecodeInput,
@@ -318,41 +318,6 @@ const PlayerDecisionAuditRowSchema = z.strictObject({
   createdAt: DatabaseUtcTimestampSchema,
   submittedAt: DatabaseUtcTimestampSchema.nullable(),
 })
-const CoachDecisionAssessmentAuditRowSchema = z.strictObject({
-  assessmentId: z.uuid(),
-  coachReviewId: z.uuid(),
-  databaseOwnerId: z.uuid(),
-  sessionId: z.uuid(),
-  handId: z.uuid(),
-  decisionId: z.uuid(),
-  street: z.enum(['preflop', 'flop', 'turn', 'river']),
-  ordinalOnStreet: z.number().int().min(0).max(2_147_483_647),
-  assessmentPayloadVersion: PositiveSafeIntegerSchema,
-  assessmentPayload: z.record(z.string(), z.unknown()),
-  createdAt: DatabaseUtcTimestampSchema,
-})
-const CoachReviewAuditRowSchema = z.strictObject({
-  reviewId: z.uuid(),
-  agentRunId: z.uuid(),
-  databaseOwnerId: z.uuid(),
-  sessionId: z.uuid(),
-  handId: z.uuid(),
-  runtime: z.literal('coach'),
-  requestId: z.uuid(),
-  status: z.enum(['pending', 'running', 'completed', 'failed']),
-  frozenContextPayloadVersion: PositiveSafeIntegerSchema,
-  frozenContextPayload: z.record(z.string(), z.unknown()),
-  analysisPayloadVersion: PositiveSafeIntegerSchema.nullable(),
-  analysisPayload: z.record(z.string(), z.unknown()).nullable(),
-  hindsightPayloadVersion: PositiveSafeIntegerSchema.nullable(),
-  hindsightPayload: z.record(z.string(), z.unknown()).nullable(),
-  finalReportPayloadVersion: PositiveSafeIntegerSchema.nullable(),
-  finalReportPayload: z.record(z.string(), z.unknown()).nullable(),
-  assessments: z.array(CoachDecisionAssessmentAuditRowSchema),
-  requestedAt: DatabaseUtcTimestampSchema,
-  completedAt: DatabaseUtcTimestampSchema.nullable(),
-  updatedAt: DatabaseUtcTimestampSchema,
-})
 const AgentRunAuditRowSchema = z.strictObject({
   agentRunId: z.uuid(),
   databaseOwnerId: z.uuid(),
@@ -396,7 +361,6 @@ const AgentRunAuditRowSchema = z.strictObject({
   attempts: z.array(z.unknown()),
   invocations: z.array(z.unknown()),
   playerDecision: z.unknown().nullable(),
-  coachReview: z.unknown().nullable(),
 })
 
 interface InsertAgentRunAuditBaseInput {
@@ -640,7 +604,7 @@ function readAgentAttempts(
     ) {
       throw new PersistenceDataCorruptionError('invalidAgentAttemptAudit')
     }
-    const decoded = productionAttemptAuditVersionRegistry.read(
+    const decoded = readCurrentAttemptAudit(
       row.lifecycle,
       row.payloadVersion,
       row.payload,
@@ -834,9 +798,6 @@ function decodePlayerRuntimeAudit<
     row.checkpointPayload,
   )
   const result = runtimePayload(row.resultPayloadVersion, row.resultPayload)
-  if (row.coachReview !== null) {
-    throw new PersistenceDataCorruptionError('invalidRuntimeAuditExtension')
-  }
   const parsedDecision =
     row.playerDecision === null
       ? null
@@ -944,53 +905,7 @@ function decodeCoachRuntimeAudit<
   if (row.playerDecision !== null) {
     throw new PersistenceDataCorruptionError('invalidRuntimeAuditExtension')
   }
-  const parsedReview =
-    row.coachReview === null
-      ? null
-      : CoachReviewAuditRowSchema.safeParse(row.coachReview)
-  if (parsedReview !== null && !parsedReview.success) {
-    throw new PersistenceDataCorruptionError('invalidRuntimeAuditExtension')
-  }
-  const reviewRow = parsedReview?.data ?? null
-  if (
-    reviewRow !== null &&
-    (reviewRow.agentRunId !== row.agentRunId ||
-      reviewRow.databaseOwnerId !== row.databaseOwnerId ||
-      reviewRow.sessionId !== row.sessionId ||
-      reviewRow.handId !== row.handId ||
-      (reviewRow.analysisPayloadVersion === null) !==
-        (reviewRow.analysisPayload === null) ||
-      (reviewRow.hindsightPayloadVersion === null) !==
-        (reviewRow.hindsightPayload === null) ||
-      (reviewRow.finalReportPayloadVersion === null) !==
-        (reviewRow.finalReportPayload === null))
-  ) {
-    throw new PersistenceDataCorruptionError('invalidRuntimeAuditExtension')
-  }
-  const assessments =
-    reviewRow === null
-      ? []
-      : [...reviewRow.assessments].sort((left, right) => {
-          const streetOrder = ['preflop', 'flop', 'turn', 'river'] as const
-          return (
-            streetOrder.indexOf(left.street) -
-              streetOrder.indexOf(right.street) ||
-            left.ordinalOnStreet - right.ordinalOnStreet ||
-            left.assessmentId.localeCompare(right.assessmentId)
-          )
-        })
-  for (const assessment of assessments) {
-    if (
-      reviewRow === null ||
-      assessment.coachReviewId !== reviewRow.reviewId ||
-      assessment.databaseOwnerId !== row.databaseOwnerId ||
-      assessment.sessionId !== row.sessionId ||
-      assessment.handId !== row.handId
-    ) {
-      throw new PersistenceDataCorruptionError('invalidRuntimeAuditExtension')
-    }
-  }
-  if (checkpoint === null && result === null && reviewRow === null) {
+  if (checkpoint === null && result === null) {
     return EMPTY_COACH_RUNTIME_AUDIT as unknown as TCoachRuntimeAudit
   }
   if (decoder === undefined) {
@@ -998,9 +913,6 @@ function decodeCoachRuntimeAudit<
       throw new UnknownPayloadVersionError('agentRunCheckpoint')
     }
     if (result !== null) throw new UnknownPayloadVersionError('agentRunResult')
-    if (reviewRow !== null) {
-      throw new UnknownPayloadVersionError('coachFrozenContext')
-    }
     throw new PersistenceDataCorruptionError('invalidRuntimeAuditExtension')
   }
   const input: CoachRuntimeAuditDecodeInput = {
@@ -1011,62 +923,6 @@ function decodeCoachRuntimeAudit<
     runtime: 'coach',
     checkpoint,
     result,
-    review:
-      reviewRow === null
-        ? null
-        : {
-            reviewId: reviewRow.reviewId,
-            agentRunId: reviewRow.agentRunId,
-            ownerId: reviewRow.databaseOwnerId,
-            sessionId: reviewRow.sessionId,
-            handId: reviewRow.handId,
-            runtime: 'coach',
-            requestId: reviewRow.requestId,
-            status: reviewRow.status,
-            frozenContext: {
-              rowPayloadVersion: reviewRow.frozenContextPayloadVersion,
-              payload: reviewRow.frozenContextPayload,
-            },
-            analysis:
-              reviewRow.analysisPayloadVersion === null
-                ? null
-                : {
-                    rowPayloadVersion: reviewRow.analysisPayloadVersion,
-                    payload: reviewRow.analysisPayload,
-                  },
-            hindsight:
-              reviewRow.hindsightPayloadVersion === null
-                ? null
-                : {
-                    rowPayloadVersion: reviewRow.hindsightPayloadVersion,
-                    payload: reviewRow.hindsightPayload,
-                  },
-            finalReport:
-              reviewRow.finalReportPayloadVersion === null
-                ? null
-                : {
-                    rowPayloadVersion: reviewRow.finalReportPayloadVersion,
-                    payload: reviewRow.finalReportPayload,
-                  },
-            assessments: assessments.map((assessment) => ({
-              assessmentId: assessment.assessmentId,
-              coachReviewId: assessment.coachReviewId,
-              ownerId: assessment.databaseOwnerId,
-              sessionId: assessment.sessionId,
-              handId: assessment.handId,
-              decisionId: assessment.decisionId,
-              street: assessment.street,
-              ordinalOnStreet: assessment.ordinalOnStreet,
-              assessment: {
-                rowPayloadVersion: assessment.assessmentPayloadVersion,
-                payload: assessment.assessmentPayload,
-              },
-              createdAt: assessment.createdAt,
-            })),
-            requestedAt: reviewRow.requestedAt,
-            completedAt: reviewRow.completedAt,
-            updatedAt: reviewRow.updatedAt,
-          },
   }
   let decoded: TCoachRuntimeAudit
   try {
@@ -1077,8 +933,8 @@ function decodeCoachRuntimeAudit<
   }
   assertRuntimeDecoderResult(
     decoded,
-    ['checkpoint', 'result', 'review'],
-    [checkpoint !== null, result !== null, reviewRow !== null],
+    ['checkpoint', 'result'],
+    [checkpoint !== null, result !== null],
   )
   return deepFreeze(decoded)
 }
@@ -1531,7 +1387,7 @@ export function createAgentFoundationAuditRepository<
         throw new AgentAttemptAuditTransitionError()
       }
       const startedRow = locked.data[0]
-      const startedRead = productionAttemptAuditVersionRegistry.read(
+      const startedRead = readCurrentAttemptAudit(
         startedRow.lifecycle,
         startedRow.payloadVersion,
         startedRow.payload,
@@ -1888,65 +1744,7 @@ export function createAgentFoundationAuditRepository<
                 AND pd.owner_id = ar.owner_id
                 AND pd.session_id = ar.session_id
                 AND pd.hand_id = ar.hand_id
-            ) AS "playerDecision",
-            (
-              SELECT jsonb_build_object(
-                'reviewId', cr.id::text,
-                'agentRunId', cr.agent_run_id::text,
-                'databaseOwnerId', cr.owner_id::text,
-                'sessionId', cr.session_id::text,
-                'handId', cr.hand_id::text,
-                'runtime', cr.runtime,
-                'requestId', cr.request_id::text,
-                'status', cr.status,
-                'frozenContextPayloadVersion', cr.frozen_context_payload_version,
-                'frozenContextPayload', cr.frozen_context_payload,
-                'analysisPayloadVersion', cr.analysis_payload_version,
-                'analysisPayload', cr.analysis_payload,
-                'hindsightPayloadVersion', cr.hindsight_payload_version,
-                'hindsightPayload', cr.hindsight_payload,
-                'finalReportPayloadVersion', cr.final_report_payload_version,
-                'finalReportPayload', cr.final_report_payload,
-                'assessments', COALESCE((
-                  SELECT jsonb_agg(
-                    jsonb_build_object(
-                      'assessmentId', cda.id::text,
-                      'coachReviewId', cda.coach_review_id::text,
-                      'databaseOwnerId', cda.owner_id::text,
-                      'sessionId', cda.session_id::text,
-                      'handId', cda.hand_id::text,
-                      'decisionId', cda.decision_id::text,
-                      'street', cda.street,
-                      'ordinalOnStreet', cda.ordinal_on_street,
-                      'assessmentPayloadVersion', cda.assessment_payload_version,
-                      'assessmentPayload', cda.assessment_payload,
-                      'createdAt', to_char(cda.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-                    ) ORDER BY
-                      CASE cda.street
-                        WHEN 'preflop' THEN 0
-                        WHEN 'flop' THEN 1
-                        WHEN 'turn' THEN 2
-                        WHEN 'river' THEN 3
-                      END,
-                      cda.ordinal_on_street,
-                      cda.id
-                  )
-                  FROM app_private.coach_decision_assessments AS cda
-                  WHERE cda.coach_review_id = cr.id
-                    AND cda.owner_id = cr.owner_id
-                    AND cda.session_id = cr.session_id
-                    AND cda.hand_id = cr.hand_id
-                ), '[]'::jsonb),
-                'requestedAt', to_char(cr.requested_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
-                'completedAt', CASE WHEN cr.completed_at IS NULL THEN NULL ELSE to_char(cr.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') END,
-                'updatedAt', to_char(cr.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-              )
-              FROM app_private.coach_reviews AS cr
-              WHERE cr.agent_run_id = ar.id
-                AND cr.owner_id = ar.owner_id
-                AND cr.session_id = ar.session_id
-                AND cr.hand_id = ar.hand_id
-            ) AS "coachReview"
+            ) AS "playerDecision"
           FROM app_private.agent_runs AS ar
           WHERE ar.id = ${parsedIds.data.agentRunId}::uuid
             AND ar.session_id = ${parsedIds.data.sessionId}::uuid
@@ -1972,11 +1770,10 @@ export function createAgentFoundationAuditRepository<
       ) {
         throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
       }
-      const configurationRead =
-        productionRunConfigurationAuditVersionRegistry.read(
-          row.runConfigurationPayloadVersion,
-          row.runConfigurationPayload,
-        )
+      const configurationRead = currentRunConfigurationAuditReader.read(
+        row.runConfigurationPayloadVersion,
+        row.runConfigurationPayload,
+      )
       if (configurationRead.kind === 'unknownVersion') {
         throw new UnknownPayloadVersionError('agentRunConfiguration')
       }
@@ -2037,8 +1834,7 @@ export function createAgentFoundationAuditRepository<
         if (
           row.participantId === null ||
           row.sourceStateVersion === null ||
-          row.decisionRequestId === null ||
-          row.coachReview !== null
+          row.decisionRequestId === null
         ) {
           throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
         }

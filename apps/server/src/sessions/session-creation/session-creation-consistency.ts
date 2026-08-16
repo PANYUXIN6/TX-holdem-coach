@@ -8,16 +8,16 @@ import type { RandomSource } from '../../poker/random-source.js'
 import type { StartedHandFacts } from '../../poker/hand-result.js'
 import { POKER_RULE_SET_VERSION } from '../../poker/poker-rule-set.js'
 import {
-  createPrivateEventV2,
-  type PrivateEventV2,
-} from '../authoritative-state/private-event-v2.js'
+  createPrivateEvent,
+  type PrivateEvent,
+} from '../authoritative-state/private-event.js'
 import {
   createPrivateTableState,
   type PrivateTableState,
 } from '../authoritative-state/private-table-state.js'
 import {
-  createHandStartCheckpointV2,
-  type HandStartCheckpointV2,
+  createHandStartCheckpoint,
+  type HandStartCheckpoint,
 } from '../hand-audit/hand-start-checkpoint.js'
 
 const IdentityGraphSchema = z.strictObject({
@@ -65,10 +65,10 @@ export interface SessionCreationPlanInput {
 export interface SessionCreationPlan {
   readonly identityGraph: SessionCreationIdentityGraph
   readonly stateBeforeStart: PrivateTableState
-  readonly checkpoint: HandStartCheckpointV2
+  readonly checkpoint: HandStartCheckpoint
   readonly startedHand: StartedHandFacts
   readonly finalState: PrivateTableState
-  readonly privateEventDrafts: readonly [PrivateEventV2, PrivateEventV2]
+  readonly privateEventDrafts: readonly [PrivateEvent, PrivateEvent]
 }
 
 export function createSessionCreationIdentityGraph(
@@ -193,7 +193,7 @@ export function createSessionCreationPlan(
       completedHandCountBeforeStart: 0,
       randomSource: input.randomSource,
     })
-    const checkpoint = createHandStartCheckpointV2({
+    const checkpoint = createHandStartCheckpoint({
       pokerRuleSetVersion: POKER_RULE_SET_VERSION,
       stateBeforeStartCommand: stateBeforeStart,
       startedHand: startResult.startedHand,
@@ -205,7 +205,7 @@ export function createSessionCreationPlan(
       seatAccounting,
       lastCompletedHandSummary: null,
     })
-    const sessionCreated = createPrivateEventV2({
+    const sessionCreated = createPrivateEvent({
       type: 'sessionCreated',
       initialBuyIns: seats.map(({ seatNumber }) => ({
         seatNumber,
@@ -223,11 +223,11 @@ export function createSessionCreationPlan(
     ) {
       throw new SessionCreationInvariantError()
     }
-    const handStarted = createPrivateEventV2(handStartedDraft)
+    const handStarted = createPrivateEvent(handStartedDraft)
     const privateEventDrafts = Object.freeze([
       sessionCreated,
       handStarted,
-    ]) as readonly [PrivateEventV2, PrivateEventV2]
+    ]) as readonly [PrivateEvent, PrivateEvent]
 
     return Object.freeze({
       identityGraph: normalizedIdentityGraph,

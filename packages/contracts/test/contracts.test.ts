@@ -79,7 +79,6 @@ function createPublicSeat(seatNumber: number) {
 }
 
 const publicSnapshot = {
-  protocolVersion: 1,
   sessionId: ids.session,
   stateVersion: 4,
   eventSeq: 8,
@@ -176,19 +175,16 @@ describe('共享外部协议', () => {
 
     expect(
       CreateSessionRequestSchema.safeParse({
-        protocolVersion: 1,
         rosterSource: { type: 'currentCatalog', selections },
       }).success,
     ).toBe(true)
     expect(
       CreateSessionRequestSchema.safeParse({
-        protocolVersion: 1,
         rosterSource: { type: 'latestEnded' },
       }).success,
     ).toBe(true)
     expect(
       CreateSessionResponseSchema.safeParse({
-        protocolVersion: 1,
         snapshot: publicSnapshot,
         warnings: [
           {
@@ -201,20 +197,16 @@ describe('共享外部协议', () => {
 
     for (const request of [
       {
-        protocolVersion: 1,
         rosterSource: { type: 'currentCatalog', selections },
         userSeatNumber: 0,
       },
       {
-        protocolVersion: 1,
         rosterSource: { type: 'currentCatalog', selections, button: 1 },
       },
       {
-        protocolVersion: 1,
         rosterSource: { type: 'latestEnded', sessionId: ids.session },
       },
       {
-        protocolVersion: 1,
         rosterSource: { type: 'latestEnded', selections },
       },
     ]) {
@@ -247,7 +239,6 @@ describe('共享外部协议', () => {
     ]) {
       expect(
         CreateSessionResponseSchema.safeParse({
-          protocolVersion: 1,
           snapshot: publicSnapshot,
           warnings,
         }).success,
@@ -462,7 +453,6 @@ describe('共享外部协议', () => {
     }
     expect(
       SseEventSchema.safeParse({
-        protocolVersion: 1,
         eventId: ids.event,
         sessionId: ids.session,
         eventSeq: 7,
@@ -473,7 +463,6 @@ describe('共享外部协议', () => {
     ).toBe(false)
     expect(
       SseEventSchema.safeParse({
-        protocolVersion: 1,
         eventId: ids.event,
         sessionId: ids.command,
         eventSeq: 8,
@@ -484,7 +473,6 @@ describe('共享外部协议', () => {
     ).toBe(false)
     expect(
       SseEventSchema.safeParse({
-        protocolVersion: 1,
         eventId: ids.event,
         sessionId: ids.session,
         eventSeq: 8,
@@ -509,7 +497,6 @@ describe('共享外部协议', () => {
 
   it('可解析所有主 Schema 的代表性合法数据', () => {
     const commandRequest = {
-      protocolVersion: 1,
       command: {
         sessionId: ids.session,
         commandId: ids.command,
@@ -521,7 +508,6 @@ describe('共享外部协议', () => {
       },
     }
     const sseEvent = {
-      protocolVersion: 1,
       eventId: ids.event,
       sessionId: ids.session,
       eventSeq: 8,
@@ -530,7 +516,6 @@ describe('共享外部协议', () => {
       payload: { snapshot: publicSnapshot },
     }
     const errorResponse = {
-      protocolVersion: 1,
       code: 'state_conflict',
       message: '场次状态已变化，请刷新后重试。',
       fieldErrors: [
@@ -549,7 +534,6 @@ describe('共享外部协议', () => {
     expect(CommandRequestSchema.safeParse(commandRequest).success).toBe(true)
     expect(
       CommandResponseSchema.safeParse({
-        protocolVersion: 1,
         snapshot: publicSnapshot,
       }).success,
     ).toBe(true)
@@ -736,10 +720,10 @@ describe('共享外部协议', () => {
     )
   })
 
-  it('拒绝未知 SSE 协议版本', () => {
+  it('拒绝已删除的 SSE 全局协议版本字段', () => {
     expect(
       SseEventSchema.safeParse({
-        protocolVersion: 2,
+        protocolVersion: 999,
         eventId: ids.event,
         sessionId: ids.session,
         eventSeq: 8,
@@ -764,7 +748,6 @@ describe('共享外部协议', () => {
 
     expect(
       SseEventSchema.safeParse({
-        protocolVersion: 1,
         eventId: ids.event,
         sessionId: ids.session,
         eventSeq: 9,
@@ -784,7 +767,6 @@ describe('共享外部协议', () => {
     ).toBe(false)
     expect(
       SseEventSchema.safeParse({
-        protocolVersion: 1,
         eventId: ids.event,
         sessionId: ids.session,
         eventSeq: 8,
@@ -1055,7 +1037,6 @@ describe('共享外部协议', () => {
     ).toBe(false)
 
     const response = {
-      protocolVersion: 1,
       deepSeek: { ...summaries[1], canCreateSession: true },
       kimi: { ...summaries[0], canFallback: false },
     }
@@ -1081,12 +1062,9 @@ describe('共享外部协议', () => {
         kimi: { ...response.kimi, model: 'must-not-be-public' },
       }).success,
     ).toBe(false)
-    expect(
-      ProviderCheckRequestSchema.safeParse({ protocolVersion: 1 }).success,
-    ).toBe(true)
+    expect(ProviderCheckRequestSchema.safeParse({}).success).toBe(true)
     expect(
       ProviderCheckRequestSchema.safeParse({
-        protocolVersion: 1,
         provider: 'kimi',
       }).success,
     ).toBe(false)
@@ -1148,7 +1126,6 @@ describe('共享外部协议', () => {
   it('约束 M3.5 健康、设置、人物和删除协议', () => {
     expect(
       HealthResponseSchema.safeParse({
-        protocolVersion: 1,
         status: 'ok',
         database: 'available',
       }).success,
@@ -1156,19 +1133,16 @@ describe('共享外部协议', () => {
 
     expect(
       PlayerAgentSettingsPatchRequestSchema.safeParse({
-        protocolVersion: 1,
         settings: { attemptTimeoutSeconds: 20 },
       }).success,
     ).toBe(true)
     expect(
       PlayerAgentSettingsPatchRequestSchema.safeParse({
-        protocolVersion: 1,
         settings: {},
       }).success,
     ).toBe(false)
     expect(
       PlayerAgentSettingsResponseSchema.safeParse({
-        protocolVersion: 1,
         settings: {
           attemptTimeoutSeconds: 30,
           decisionDeadlineSeconds: 15,
@@ -1178,45 +1152,38 @@ describe('共享外部协议', () => {
 
     expect(
       AgentPersonaListResponseSchema.safeParse({
-        protocolVersion: 1,
         personas: [agentPersonaSummary],
       }).success,
     ).toBe(true)
     expect(
       AgentPersonaDetailResponseSchema.safeParse({
-        protocolVersion: 1,
         persona: { ...agentPersonaSummary, prompt: 'private' },
       }).success,
     ).toBe(false)
 
     expect(
       DeleteSessionRequestSchema.safeParse({
-        protocolVersion: 1,
         confirmation: '永久删除本场',
       }).success,
     ).toBe(true)
     expect(
       DeleteSessionRequestSchema.safeParse({
-        protocolVersion: 1,
         confirmation: '删除',
       }).success,
     ).toBe(false)
     expect(
       DeleteSessionResponseSchema.safeParse({
-        protocolVersion: 1,
         deletedSessionId: ids.session,
         invalidatedRunCount: 2,
       }).success,
     ).toBe(true)
     expect(
       ClearDataRequestSchema.safeParse({
-        protocolVersion: 1,
         confirmation: '永久清空全部数据',
       }).success,
     ).toBe(true)
     expect(
       ClearDataResponseSchema.safeParse({
-        protocolVersion: 1,
         deletedSessionCount: 3,
         invalidatedRunCount: 1,
       }).success,

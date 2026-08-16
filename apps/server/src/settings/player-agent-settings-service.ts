@@ -1,7 +1,6 @@
 import {
   PlayerAgentSettingsPatchRequestSchema,
   PlayerAgentSettingsResponseSchema,
-  PROTOCOL_VERSION,
   type PlayerAgentSettingsResponse,
 } from '@tx-holdem-coach/contracts'
 import type { Sql } from 'postgres'
@@ -29,7 +28,6 @@ export function createPlayerAgentSettingsService(input: {
     async read(): Promise<PlayerAgentSettingsResponse> {
       const settings = await readResolvedPlayerTimeoutSettings(sql, owner)
       return PlayerAgentSettingsResponseSchema.parse({
-        protocolVersion: PROTOCOL_VERSION,
         settings,
       })
     },
@@ -45,7 +43,6 @@ export function createPlayerAgentSettingsService(input: {
         throw new DatabaseOperationError()
       }
       return PlayerAgentSettingsResponseSchema.parse({
-        protocolVersion: PROTOCOL_VERSION,
         settings,
       })
     },

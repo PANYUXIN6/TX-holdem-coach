@@ -624,8 +624,8 @@ Coach 投影：
 
 - 在 `apps/server/src/poker/decision-spot.ts` 实现共享纯 `SpotNormalizer`，输出 `spotSchemaVersion` 与 `normalizerVersion`；规范化桌型、逻辑位置、逐对手位置关系、入池/待行动人数、行动顺序、Hero 后方玩家、街次、翻前节点、底池类型、翻前/当前街主动玩家、行动线及尺度、最后足额加注目标/增量、加注是否重新开放和有效筹码档。
 - 固化首版 `pokerRuleSetVersion = nlhe-cash-6to9-10-20-v1`；当前规则集固定为 6–9 人、10/20 盲注、无前注、无 straddle、无抽水、单牌面一次 runout，永久不设计 `ante`/`anteModel` 或 `rakeModel`。任何影响合法动作、结算、位置或策略节点解释的规则变化必须发布新版本。
-- 发布 `HandStartCheckpointV2`，在开手时保存 `pokerRuleSetVersion`；Player/Coach 从目标手牌检查点读取同一值。既有 V1 只因历史上没有第二套规则而确定性迁移为 `nlhe-cash-6to9-10-20-v1`，不得使用部署时 current 值覆盖历史绑定；只升级 JSON Codec/Registry 与相关 writer/reader，不新增数据库列或 migration。
-- 同步现有 `sessions/hand-audit` Codec/Registry、`hand-audit-repository`、创建场次/开始下一手 writer、恢复/中止 reader 及对应单元/数据库里程碑测试；保留 V1 只读兼容。该工作不修改已完成的 M4.1 Foundation 协议、Capability Manifest 或状态机。
+- 使用当前 `HandStartCheckpoint` 在开手时保存 `pokerRuleSetVersion`；Player/Coach 从目标手牌检查点读取同一值，不得使用部署时 current 值覆盖历史绑定。首发行载荷版本从 `1` 起步，不新增数据库列或 migration。
+- 同步现有 `sessions/hand-audit` Codec/Reader、`hand-audit-repository`、创建场次/开始下一手 writer、恢复/中止 reader 及对应单元/数据库里程碑测试；首发前数据库已重建，不保留旧载荷或 Registry。该工作不修改已完成的 M4.1 Foundation 协议、Capability Manifest 或状态机。
 - 输出 `forcedPosts[] { seatNumber, kind, nominalAmount, actualAmount, isAllIn }` 与 `bigBlindOptionAvailable`；短码盲注不能改变名义 10/20 基准。后者只在翻前当前行动者为未 all-in、尚未自愿行动的大盲，下注层级仍为名义 20、`amountToCall=0`，且合法动作同时含 `check` 与主动 `raise | allIn` 时为 `true`。
 - Spot 规范化必须保留多人池、边池、limp、冷跟注、挤压、重新加注和不足额全下等节点差异；矛盾或无法规范化的输入失败，不能为命中模板而静默折叠。
 - 分别输出 `heroActionCompletes`、`bettingRoundClosesImmediately` 和 `canFaceFurtherAction`，不能用一个 `closesAction` 混合三种语义。
@@ -853,7 +853,7 @@ Coach 投影：
 实现：
 
 - `compute_decision_metrics` 组合与 Player 同版本的共享纯 `SpotNormalizer`、`HandFeatureAnalyzer`、`ContestablePotProjector` 与 `DecisionMetricsEngine`，生成规则集版本、名义/实际盲注、大盲行动权、规范 spot、原子起手牌/最佳五张/牌面结构、响应拓扑、可争夺底池、逐对手有效筹码、金额语义、结构性 outs、SPR、底池赔率、尺度和合法边界。
-- `HandReviewCaseBuilder` 必须从目标手牌开手检查点读取 `pokerRuleSetVersion`；既有 V1 只允许通过版本注册表迁移到 `nlhe-cash-6to9-10-20-v1`，不得使用 Coach 运行时 current 版本回填。
+- `HandReviewCaseBuilder` 必须从目标手牌开手检查点读取 `pokerRuleSetVersion`，不得使用 Coach 运行时 current 版本回填。
 - `lookup_strategy_baseline` 返回版本、支持状态、频率与尺度语义。
 - 基准返回后由共享纯 `CandidateOutcomeProjector` 计算实际动作和可比较候选的未跟注返还、真正风险、执行后总/可争夺底池、逐对手有效筹码、预计下一街 SPR、强制 runout、响应者、可加注者、行动完成/关闭语义与后继空间。
 - `get_opponent_evidence` 只使用决策前样本并返回分子、分母、过滤器和置信度。

@@ -19,8 +19,7 @@ import {
   ResourceNotFoundError,
 } from '../../src/persistence/errors.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
-import { encodeHandStartCheckpointV1 } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v1.js'
-import { encodeHandStartCheckpointV2 } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec-v2.js'
+import { encodeCurrentHandStartCheckpoint } from '../../src/sessions/hand-audit/hand-start-checkpoint-codec.js'
 import { encodeCompletedHandResultV1 } from '../../src/sessions/hand-audit/completed-hand-result-codec-v1.js'
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
@@ -93,10 +92,8 @@ async function resolvedOwner() {
   return resolveOwnerScope(sql, { ownerId: 'local-user' })
 }
 
-function inProgressRow(options: { readonly current?: boolean } = {}) {
-  const checkpoint = options.current
-    ? encodeHandStartCheckpointV2(createCurrentCheckpoint())
-    : encodeHandStartCheckpointV1(createCheckpoint())
+function inProgressRow() {
+  const checkpoint = encodeCurrentHandStartCheckpoint(createCurrentCheckpoint())
   return {
     handId,
     sessionId,
@@ -180,11 +177,11 @@ describe('hand audit repository', () => {
     ).rejects.toBeInstanceOf(ResourceNotFoundError)
   })
 
-  test('reads one owner-scoped in-progress hand through the current V2 checkpoint registry', async () => {
-    const checkpoint = encodeHandStartCheckpointV2(createCurrentCheckpoint())
-    const transaction = createTransactionMock([
-      [inProgressRow({ current: true })],
-    ])
+  test('reads one owner-scoped in-progress hand through the current checkpoint reader', async () => {
+    const checkpoint = encodeCurrentHandStartCheckpoint(
+      createCurrentCheckpoint(),
+    )
+    const transaction = createTransactionMock([[inProgressRow()]])
 
     const audit = await readHandAudit(
       transaction,
@@ -362,8 +359,8 @@ describe('hand audit repository', () => {
   })
 
   test('rejects a stored completed result whose starting stacks do not mirror its checkpoint', async () => {
-    const checkpointInput = createCheckpoint()
-    const checkpoint = encodeHandStartCheckpointV1({
+    const checkpointInput = createCurrentCheckpoint()
+    const checkpoint = encodeCurrentHandStartCheckpoint({
       ...checkpointInput,
       startedHand: {
         ...checkpointInput.startedHand,

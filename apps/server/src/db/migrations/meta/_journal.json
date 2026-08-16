@@ -5,29 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1785318513387,
-      "tag": "0000_app_private_baseline",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1785335095517,
-      "tag": "0001_cheerful_johnny_blaze",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1785382105231,
-      "tag": "0002_unusual_rocket_racer",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1785823720199,
-      "tag": "0003_modern_supreme_intelligence",
+      "when": 1786867488919,
+      "tag": "0000_baseline",
       "breakpoints": true
     }
   ]

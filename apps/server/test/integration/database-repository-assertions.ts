@@ -75,15 +75,18 @@ import {
   prepareCurrentCatalogRosterSnapshot,
   prepareLatestEndedRosterSnapshotForReuse,
 } from '../helpers/session-roster-fixture.js'
-import { encodePrivateEventV2 } from '../../src/sessions/authoritative-state/private-event-codec-v2.js'
-import { encodePrivateEventV1 } from '../../src/sessions/authoritative-state/private-event-codec-v1.js'
-import { productionPrivateEventVersionRegistry } from '../../src/sessions/authoritative-state/private-event-version-registry.js'
+import {
+  currentPrivateEventReader,
+  encodeCurrentPrivateEvent,
+} from '../../src/sessions/authoritative-state/private-event-codec.js'
 import {
   createPrivateTableState,
   type PrivateTableState,
 } from '../../src/sessions/authoritative-state/private-table-state.js'
-import { encodeSnapshotV1 } from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
-import { productionSnapshotVersionRegistry } from '../../src/sessions/authoritative-state/snapshot-version-registry.js'
+import {
+  currentSnapshotReader,
+  encodeSnapshotV1,
+} from '../../src/sessions/authoritative-state/snapshot-codec-v1.js'
 import { createSessionCommandHandlerMap } from '../../src/sessions/command-execution/command-handler-map.js'
 import { createSessionCommandExecutor } from '../../src/sessions/command-execution/session-command-executor.js'
 import type { PreparedMutationCapability } from '../../src/sessions/command-execution/command-handler.js'
@@ -632,7 +635,6 @@ export async function assertM23Repositories(sql: Sql): Promise<void> {
 
 function createCommandSnapshot(sessionId: string, stateVersion = 1) {
   return {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion,
     eventSeq: 1,
@@ -768,11 +770,9 @@ async function assertCommandLedgerLifecycle(sql: Sql): Promise<void> {
       const expectedResponse =
         index % 2 === 0
           ? {
-              protocolVersion: 1 as const,
               snapshot: createCommandSnapshot(input.sessionId),
             }
           : {
-              protocolVersion: 1 as const,
               code: 'expected_failure',
               message: '预期失败。',
             }
@@ -912,7 +912,6 @@ async function assertCommandLedgerRollbacks(sql: Sql): Promise<void> {
       transaction,
       acquired,
       {
-        protocolVersion: 1,
         snapshot: createCommandSnapshot(rolledBackSessionId),
       },
       null,
@@ -960,7 +959,6 @@ async function assertCommandLedgerRollbacks(sql: Sql): Promise<void> {
       const forged = { ...acquired } as typeof acquired
       await expect(
         failCommand(transaction, forged, {
-          protocolVersion: 1,
           code: 'expected_failure',
           message: '预期失败。',
         }),
@@ -1129,7 +1127,6 @@ async function assertConcurrentCommandReplay(
         throw new Error('测试未取得命令处理权。')
       }
       const response = {
-        protocolVersion: 1 as const,
         snapshot: createCommandSnapshot(sessionId),
       }
       await completeCommand(transaction, first, response, null)
@@ -1215,7 +1212,6 @@ function createMutationPublicSnapshot(
   userStack = 2_000,
 ) {
   return {
-    protocolVersion: 1 as const,
     sessionId,
     stateVersion,
     eventSeq,
@@ -1265,7 +1261,7 @@ function createMutationBatch(
     })),
     lastCompletedHandSummary: null,
   })
-  const privateEvent = encodePrivateEventV2(
+  const privateEvent = encodeCurrentPrivateEvent(
     createHandStartedEventDraft({
       handId: input.handId,
       handNumber: 1,
@@ -1314,7 +1310,6 @@ function createMutationBatch(
         stateVersionAfter: finalStateVersion,
         privateEvent,
         publicEvent: {
-          protocolVersion: 1,
           eventId,
           sessionId: input.sessionId,
           eventSeq,
@@ -1948,8 +1943,8 @@ export async function assertM25SessionMutationRepository(
 }
 
 const recoveryRegistries = {
-  snapshot: productionSnapshotVersionRegistry,
-  privateEvent: productionPrivateEventVersionRegistry,
+  snapshot: currentSnapshotReader,
+  privateEvent: currentPrivateEventReader,
 }
 
 async function insertRecoverableSession(
@@ -2244,7 +2239,7 @@ async function assertRecoveryDiagnosticMatrix(sql: Sql): Promise<void> {
     async (query, sessionId) => {
       await query`
         UPDATE app_private.session_events
-        SET private_event_payload = '{"eventSchemaVersion":2,"event":{}}'::jsonb
+        SET private_event_payload = '{"event":{}}'::jsonb
         WHERE session_id = ${sessionId}::uuid
       `
     },
@@ -2305,70 +2300,12 @@ async function assertRecoveryDiagnosticMatrix(sql: Sql): Promise<void> {
       await query`
         UPDATE app_private.session_snapshots
         SET private_table_state_payload =
-          '{"snapshotSchemaVersion":1,"state":{}}'::jsonb
+          '{"state":{}}'::jsonb
         WHERE session_id = ${sessionId}::uuid
       `
     },
     'snapshotPayloadInvalid',
   )
-}
-
-async function assertLegacyDiagnosticRetry(sql: Sql): Promise<void> {
-  const fixture = createDatabaseFixtureContext()
-  const sessionId = fixture.id(26_600)
-  const handId = fixture.id(26_601)
-  const owner = await resolveOwnerScope(sql, ownerScope)
-  const diagnosedAt = '2026-08-04T10:06:00.000000Z'
-  try {
-    await insertRecoverableSession(sql, sessionId, handId, fixture.id(26_602))
-    await sql`
-      UPDATE app_private.sessions
-      SET lifecycle_status = 'readonlyDiagnostic',
-          diagnostic_code = 'legacyDiagnosticState',
-          diagnosed_at = ${diagnosedAt}::timestamptz
-      WHERE id = ${sessionId}::uuid
-    `
-    await sql`
-      UPDATE app_private.session_snapshots
-      SET private_table_state_payload_version = 2
-      WHERE session_id = ${sessionId}::uuid
-    `
-
-    await expect(
-      sql.begin((transaction) =>
-        retryReadonlySessionRecovery(
-          transaction,
-          owner,
-          sessionId,
-          '2026-08-04T10:07:00.000Z',
-          recoveryRegistries,
-        ),
-      ),
-    ).resolves.toMatchObject({
-      kind: 'readonlyDiagnostic',
-      code: 'snapshotVersionUnknown',
-      diagnosedAt,
-    })
-
-    const rows = await sql<
-      {
-        readonly diagnosticCode: string | null
-        readonly retainedDiagnosedAt: boolean
-      }[]
-    >`
-      SELECT
-        diagnostic_code AS "diagnosticCode",
-        diagnosed_at = ${diagnosedAt}::timestamptz AS "retainedDiagnosedAt"
-      FROM app_private.sessions
-      WHERE id = ${sessionId}::uuid
-    `
-    expect(rows[0]).toEqual({
-      diagnosticCode: 'snapshotVersionUnknown',
-      retainedDiagnosedAt: true,
-    })
-  } finally {
-    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
-  }
 }
 
 async function assertEndedDiagnosticRetry(sql: Sql): Promise<void> {
@@ -2590,7 +2527,6 @@ export async function assertM26SessionRecoveryRepository(
   await assertRecoveryRepairAndCapability(sql, runtimeUrl)
   await assertRecoveryDiagnosticAndRetry(sql)
   await assertRecoveryDiagnosticMatrix(sql)
-  await assertLegacyDiagnosticRetry(sql)
   await assertEndedDiagnosticRetry(sql)
   await assertRecoveryOwnerIsolation(sql)
   await assertRecoveryActiveConflictRollback(sql)
@@ -2645,7 +2581,6 @@ export async function assertM24M25AtomicComposition(sql: Sql): Promise<void> {
         transaction,
         acquired,
         {
-          protocolVersion: 1,
           snapshot: batch.events[0]!.publicEvent.payload.snapshot,
         },
         {
@@ -2766,7 +2701,6 @@ export async function assertM24M25AtomicComposition(sql: Sql): Promise<void> {
           transaction,
           acquired,
           {
-            protocolVersion: 1,
             snapshot: createMutationPublicSnapshot(
               completeFailureSessionId,
               1,
@@ -2877,7 +2811,6 @@ export async function assertM24M25AtomicComposition(sql: Sql): Promise<void> {
           transaction,
           acquired,
           {
-            protocolVersion: 1,
             snapshot: batch.events[0]!.publicEvent.payload.snapshot,
           },
           {
@@ -4044,7 +3977,6 @@ async function assertM27AgentPublicAggregateRoundTrip(sql: Sql): Promise<void> {
       runtimeAudit: {
         checkpoint: null,
         result: null,
-        review: null,
       },
     })
     expect(audit.attempts).toHaveLength(5)
@@ -4390,49 +4322,6 @@ async function assertM27AgentUnknownAndCorruptRows(sql: Sql): Promise<void> {
         repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
       ),
     ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
-
-    await sql`
-      UPDATE app_private.agent_attempts
-      SET attempt_payload = ${serializeJsonbFixture(original.attemptPayload)}::text::jsonb
-      WHERE id = ${attempt.attemptId}::uuid
-    `
-    await sql`
-      INSERT INTO app_private.coach_reviews (
-        id,
-        agent_run_id,
-        owner_id,
-        session_id,
-        hand_id,
-        runtime,
-        request_id,
-        status,
-        frozen_context_payload_version,
-        frozen_context_payload,
-        requested_at,
-        updated_at
-      ) VALUES (
-        ${randomUUID()}::uuid,
-        ${agentRunId}::uuid,
-        ${owner.databaseOwnerId}::uuid,
-        ${sessionId}::uuid,
-        ${handId}::uuid,
-        'coach',
-        ${randomUUID()}::uuid,
-        'pending',
-        777,
-        '{}'::jsonb,
-        '2026-08-04T13:00:20.000Z'::timestamptz,
-        '2026-08-04T13:00:20.000Z'::timestamptz
-      )
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toMatchObject({
-      name: UnknownPayloadVersionError.name,
-      payloadKind: 'coachFrozenContext',
-    })
   } finally {
     await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
   }
@@ -4657,10 +4546,6 @@ const M28_SESSION_SCOPED_TABLES = Object.freeze([
   'agent_attempts',
   'agent_capability_invocations',
   'player_decisions',
-  'coach_reviews',
-  'coach_decision_assessments',
-  'hand_statistics_shards',
-  'session_settlement_statistics_shards',
 ] as const)
 
 async function insertM28RosterSession(sql: Sql, sessionId: string) {
@@ -4875,28 +4760,6 @@ async function insertM28CascadeFixture(
     )
   })
 
-  const configRows = await sql<
-    {
-      readonly personaId: string
-      readonly personaVersion: number
-      readonly configSnapshotKey: string
-    }[]
-  >`
-    SELECT
-      persona_id AS "personaId",
-      persona_version AS "personaVersion",
-      config_snapshot_key AS "configSnapshotKey"
-    FROM app_private.session_agents
-    WHERE participant_id = ${firstAgent.agentParticipantId}::uuid
-      AND session_id = ${sessionId}::uuid
-      AND owner_id = ${roster.owner.databaseOwnerId}::uuid
-  `
-  const config = configRows[0]
-  if (config === undefined) {
-    throw new Error('M2.8 Cascade fixture 缺少 Agent 配置。')
-  }
-
-  const coachReviewId = randomUUID()
   await sql.begin(async (transaction) => {
     await transaction`
       INSERT INTO app_private.player_decisions (
@@ -4913,62 +4776,6 @@ async function insertM28CascadeFixture(
         1, ${decisionRequestId}::uuid, 0,
         'player', 'pending', ${command.ledgerId}::uuid,
         1, '{}'::jsonb, 1, '{}'::jsonb, 1, '{}'::jsonb
-      )
-    `
-    await transaction`
-      INSERT INTO app_private.coach_reviews (
-        id, agent_run_id, owner_id, session_id, hand_id, runtime,
-        request_id, status, frozen_context_payload_version,
-        frozen_context_payload, requested_at
-      ) VALUES (
-        ${coachReviewId}::uuid, ${coachRunId}::uuid,
-        ${roster.owner.databaseOwnerId}::uuid, ${sessionId}::uuid,
-        ${handId}::uuid, 'coach', ${randomUUID()}::uuid, 'running',
-        1, '{}'::jsonb, '2026-08-05T03:55:00.000Z'::timestamptz
-      )
-    `
-    await transaction`
-      INSERT INTO app_private.coach_decision_assessments (
-        id, coach_review_id, owner_id, session_id, hand_id, decision_id,
-        street, ordinal_on_street, assessment_payload_version,
-        assessment_payload
-      ) VALUES (
-        ${randomUUID()}::uuid, ${coachReviewId}::uuid,
-        ${roster.owner.databaseOwnerId}::uuid, ${sessionId}::uuid,
-        ${handId}::uuid, ${randomUUID()}::uuid,
-        'preflop', 0, 1, '{}'::jsonb
-      )
-    `
-    await transaction`
-      INSERT INTO app_private.hand_statistics_shards (
-        id, owner_id, session_id, hand_id, participant_id,
-        participant_type, completed_at, logical_position,
-        calculation_version, calculated_at, source_through_event_seq,
-        completed_result_payload_version, persona_id, persona_version,
-        config_snapshot_key, metrics_payload_version, metrics_payload
-      ) VALUES (
-        ${randomUUID()}::uuid, ${roster.owner.databaseOwnerId}::uuid,
-        ${sessionId}::uuid, ${handId}::uuid,
-        ${firstAgent.agentParticipantId}::uuid, 'agent',
-        '2026-08-05T03:51:00.000Z'::timestamptz, 'BTN', 1,
-        '2026-08-05T03:56:00.000Z'::timestamptz, 0, 1,
-        ${config.personaId}, ${config.personaVersion},
-        ${config.configSnapshotKey}, 1, '{}'::jsonb
-      )
-    `
-    await transaction`
-      INSERT INTO app_private.session_settlement_statistics_shards (
-        id, owner_id, session_id, participant_id, participant_type,
-        persona_id, persona_version, config_snapshot_key,
-        calculation_version, calculated_at, source_state_version,
-        source_snapshot_payload_version, metrics_payload_version,
-        metrics_payload
-      ) VALUES (
-        ${randomUUID()}::uuid, ${roster.owner.databaseOwnerId}::uuid,
-        ${sessionId}::uuid, ${firstAgent.agentParticipantId}::uuid, 'agent',
-        ${config.personaId}, ${config.personaVersion},
-        ${config.configSnapshotKey}, 1,
-        '2026-08-05T03:57:00.000Z'::timestamptz, 1, 1, 1, '{}'::jsonb
       )
     `
   })
@@ -5006,11 +4813,7 @@ async function readM28SessionScopedCounts(
       (SELECT count(*)::int FROM app_private.agent_runs WHERE session_id = ${sessionId}::uuid) AS "agent_runs",
       (SELECT count(*)::int FROM app_private.agent_attempts WHERE session_id = ${sessionId}::uuid) AS "agent_attempts",
       (SELECT count(*)::int FROM app_private.agent_capability_invocations WHERE session_id = ${sessionId}::uuid) AS "agent_capability_invocations",
-      (SELECT count(*)::int FROM app_private.player_decisions WHERE session_id = ${sessionId}::uuid) AS "player_decisions",
-      (SELECT count(*)::int FROM app_private.coach_reviews WHERE session_id = ${sessionId}::uuid) AS "coach_reviews",
-      (SELECT count(*)::int FROM app_private.coach_decision_assessments WHERE session_id = ${sessionId}::uuid) AS "coach_decision_assessments",
-      (SELECT count(*)::int FROM app_private.hand_statistics_shards WHERE session_id = ${sessionId}::uuid) AS "hand_statistics_shards",
-      (SELECT count(*)::int FROM app_private.session_settlement_statistics_shards WHERE session_id = ${sessionId}::uuid) AS "session_settlement_statistics_shards"
+      (SELECT count(*)::int FROM app_private.player_decisions WHERE session_id = ${sessionId}::uuid) AS "player_decisions"
   `
   const counts = rows[0]
   if (counts === undefined) {
@@ -5157,14 +4960,12 @@ async function assertM28ClearAndPreservedRoots(sql: Sql): Promise<void> {
   const originalSettingRows = await sql<
     {
       readonly id: string
-      readonly settingPayloadVersion: number
       readonly settingPayload: JSONValue
       readonly updatedAt: string
     }[]
   >`
     SELECT
       id::text AS id,
-      setting_payload_version AS "settingPayloadVersion",
       setting_payload AS "settingPayload",
       updated_at::text AS "updatedAt"
     FROM app_private.app_settings
@@ -5271,11 +5072,10 @@ async function assertM28ClearAndPreservedRoots(sql: Sql): Promise<void> {
     if (originalSetting !== undefined) {
       await sql`
         INSERT INTO app_private.app_settings (
-          id, owner_id, setting_key, setting_payload_version,
-          setting_payload, updated_at
+          id, owner_id, setting_key, setting_payload, updated_at
         ) VALUES (
           ${originalSetting.id}::uuid, ${owner.databaseOwnerId}::uuid,
-          'player-timeouts', ${originalSetting.settingPayloadVersion},
+          'player-timeouts',
           ${serializeJsonbFixture(originalSetting.settingPayload)}::text::jsonb,
           ${originalSetting.updatedAt}::timestamptz
         )
@@ -6207,7 +6007,6 @@ function createM31SnapshotProjectorBinding(sessionId: string) {
       }: SnapshotProjectionInput) => {
         const hand = state.poker.hand
         return PublicSessionSnapshotSchema.parse({
-          protocolVersion: 1 as const,
           sessionId,
           stateVersion: state.stateVersion,
           eventSeq,
@@ -6480,12 +6279,12 @@ async function cleanupM31ConcurrentFixture(input: {
   }
 }
 
-async function storeInitialM31EventAsV1(
+async function storeInitialM31EventAsCurrent(
   sql: Sql,
   sessionId: string,
   handId: string,
 ): Promise<void> {
-  const stored = encodePrivateEventV1(
+  const stored = encodeCurrentPrivateEvent(
     createUncalledBetReturnedEventDraft(handId, [
       { seatNumber: 1, amount: 10 },
     ]),
@@ -6519,7 +6318,7 @@ async function insertM31RebuyableSession(
     WHERE id = ${previousHandId}::uuid
       AND session_id = ${sessionId}::uuid
   `
-  const stored = encodePrivateEventV2(
+  const stored = encodeCurrentPrivateEvent(
     createUncalledBetReturnedEventDraft(previousHandId, [
       { seatNumber: 1, amount: 10 },
     ]),
@@ -6576,7 +6375,7 @@ async function assertM31ConcurrentVersionConflict(
         previousHandId,
         fixture.id(31_202),
       )
-      await storeInitialM31EventAsV1(sql, sessionId, previousHandId)
+      await storeInitialM31EventAsCurrent(sql, sessionId, previousHandId)
       const firstExecutor = createM31Executor({
         sql: reportM31ContentionTransactionPid(firstSql, signalFirstPid),
         owner,
@@ -6673,7 +6472,7 @@ async function assertM31ConcurrentVersionConflict(
       expect(rows[0]).toEqual({
         stateVersion: 2,
         nextEventSeq: 2,
-        eventVersions: [1, 2],
+        eventVersions: [2, 2],
         completedLedgers: 1,
         failedLedgers: 1,
       })

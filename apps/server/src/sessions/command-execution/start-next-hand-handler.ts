@@ -7,10 +7,10 @@ import { startPokerHand } from '../../poker/poker-engine.js'
 import type { RandomSource } from '../../poker/random-source.js'
 import { POKER_RULE_SET_VERSION } from '../../poker/poker-rule-set.js'
 import { createPokerTableState } from '../../poker/state.js'
-import { createPrivateEventV2 } from '../authoritative-state/private-event-v2.js'
+import { createPrivateEvent } from '../authoritative-state/private-event.js'
 import {
-  createHandStartCheckpointV2,
-  type HandStartCheckpointV2,
+  createHandStartCheckpoint,
+  type HandStartCheckpoint,
 } from '../hand-audit/hand-start-checkpoint.js'
 import {
   defineSessionCommandHandlerBinding,
@@ -26,13 +26,13 @@ export interface StartNextHandRelationPlan {
   readonly kind: 'startNextHand'
   readonly sessionId: string
   readonly handId: string
-  readonly checkpoint: HandStartCheckpointV2
+  readonly checkpoint: HandStartCheckpoint
 }
 
 interface StartNextHandWritePort {
   insertHand(input: {
     readonly sessionId: string
-    readonly checkpoint: HandStartCheckpointV2
+    readonly checkpoint: HandStartCheckpoint
     readonly startedAt: string
   }): Promise<{ readonly handId: string; readonly handNumber: number }>
 }
@@ -72,7 +72,7 @@ export function parseStartNextHandRelationPlan(
   const parsed = StartNextHandPlanInputSchema.safeParse(input)
   if (!parsed.success) return null
   try {
-    const checkpoint = createHandStartCheckpointV2(parsed.data.checkpoint)
+    const checkpoint = createHandStartCheckpoint(parsed.data.checkpoint)
     if (!uuidEquals(checkpoint.startedHand.handId, parsed.data.handId)) {
       return null
     }
@@ -182,7 +182,7 @@ export function createStartNextHandHandlerBinding(input: {
           if (cumulativeBuyInAfter > BigInt(Number.MAX_SAFE_INTEGER)) {
             throw new StartNextHandHandlerInvariantError()
           }
-          const event = createPrivateEventV2({
+          const event = createPrivateEvent({
             type: 'aiAutoRebuy',
             seatNumber: seat.seatNumber,
             amount: 2_000,
@@ -219,12 +219,12 @@ export function createStartNextHandHandlerBinding(input: {
           completedHandCountBeforeStart: state.completedHandCount,
           randomSource: input.randomSource,
         })
-        const checkpoint = createHandStartCheckpointV2({
+        const checkpoint = createHandStartCheckpoint({
           pokerRuleSetVersion: POKER_RULE_SET_VERSION,
           stateBeforeStartCommand: state,
           startedHand: startResult.startedHand,
         })
-        const handStarted = createPrivateEventV2(startResult.eventDrafts[0])
+        const handStarted = createPrivateEvent(startResult.eventDrafts[0])
         if (
           startResult.eventDrafts.length !== 1 ||
           handStarted.type !== 'handStarted'
@@ -292,7 +292,7 @@ export function createStartNextHandHandlerBinding(input: {
       Object.freeze({
         insertHand: (insertInput: {
           readonly sessionId: string
-          readonly checkpoint: HandStartCheckpointV2
+          readonly checkpoint: HandStartCheckpoint
           readonly startedAt: string
         }) => insertInProgressHandAudit(transaction, input.owner, insertInput),
       }),

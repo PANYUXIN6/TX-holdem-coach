@@ -30,7 +30,7 @@ import {
   createPrivateTableStateContent,
 } from '../authoritative-state/private-table-state.js'
 import { encodeSnapshotV1 } from '../authoritative-state/snapshot-codec-v1.js'
-import { getPrivateEventHandId } from '../authoritative-state/private-event-v2.js'
+import { getPrivateEventHandId } from '../authoritative-state/private-event.js'
 import { isCommandMutationConsistent } from './command-event-policy.js'
 import {
   consumePreparedMutationCapability,
@@ -227,7 +227,6 @@ function unregisteredError(
     kind: 'rejected',
     origin: 'unregistered',
     response: parseStableSessionCommandErrorResponse({
-      protocolVersion: 1,
       code,
       message,
     }),
@@ -381,7 +380,6 @@ export function createSessionCommandExecutor(input: {
                 lastCommittedEventSeq,
               )
               const response = parseStableSessionCommandErrorResponse({
-                protocolVersion: 1,
                 code: 'STATE_VERSION_CONFLICT',
                 message: '场次状态已变化。',
                 latestSnapshot,
@@ -590,7 +588,6 @@ export function createSessionCommandExecutor(input: {
                 throw new SessionCommandInvariantError()
               }
               const publicEvent = SseEventSchema.safeParse({
-                protocolVersion: 1,
                 eventId,
                 sessionId: recovery.locked.sessionId,
                 eventSeq,
@@ -617,7 +614,6 @@ export function createSessionCommandExecutor(input: {
               })
             })
             const response = CommandResponseSchema.parse({
-              protocolVersion: 1,
               snapshot: finalSnapshot,
             })
             const mutationBatch = deepFreeze({

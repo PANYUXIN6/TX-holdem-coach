@@ -137,7 +137,6 @@ export function mapCommandRejectionToErrorResponse(
     }
   })()
   return ErrorResponseSchema.parse({
-    protocolVersion: 1,
     ...error,
     latestSnapshot,
   })

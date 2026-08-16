@@ -1,9 +1,9 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { LedgerCommand } from '../../persistence/command-ledger-repository.js'
 import type { CompletedHandResult } from '../../poker/hand-result.js'
-import type { PrivateEventV2 } from '../authoritative-state/private-event-v2.js'
+import type { PrivateEvent } from '../authoritative-state/private-event.js'
 import type { PrivateTableState } from '../authoritative-state/private-table-state.js'
-import { getPrivateEventHandId } from '../authoritative-state/private-event-v2.js'
+import { getPrivateEventHandId } from '../authoritative-state/private-event.js'
 import { parseEndSessionRelationPlan } from './end-session-handler.js'
 import { parsePlayerActionRelationPlan } from './player-action-handler.js'
 import { parseRebuyRelationPlan } from './rebuy-handler.js'
@@ -11,7 +11,7 @@ import { parseStartNextHandRelationPlan } from './start-next-hand-handler.js'
 
 export function isEventSequenceAllowedForCommand(
   commandType: LedgerCommand['type'],
-  events: readonly PrivateEventV2[],
+  events: readonly PrivateEvent[],
 ): boolean {
   if (events.length === 0) return false
   switch (commandType) {
@@ -69,7 +69,7 @@ export interface CommandMutationConsistencyInput {
     readonly activePlayerRunId: string | null
     readonly activeDecisionRequestId: string | null
   }
-  readonly events: readonly PrivateEventV2[]
+  readonly events: readonly PrivateEvent[]
   readonly relationPlan: unknown
 }
 
@@ -409,7 +409,7 @@ function endSessionMirrors(input: CommandMutationConsistencyInput): boolean {
 }
 
 function actionSnapshotMirrors(
-  snapshot: Extract<PrivateEventV2, { type: 'actionCommitted' }>['before'],
+  snapshot: Extract<PrivateEvent, { type: 'actionCommitted' }>['before'],
   state: PrivateTableState['poker'],
 ): boolean {
   const hand = state.hand
@@ -460,7 +460,7 @@ function rosterAndTableMirrors(
 }
 
 function terminalActionSnapshotMirrors(
-  event: Extract<PrivateEventV2, { type: 'actionCommitted' }>,
+  event: Extract<PrivateEvent, { type: 'actionCommitted' }>,
   result: CompletedHandResult,
 ): boolean {
   const beforeBySeat = new Map(

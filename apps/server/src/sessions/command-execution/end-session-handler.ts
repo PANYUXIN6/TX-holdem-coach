@@ -11,10 +11,10 @@ import {
   loadPausedAbortContext,
   type PausedAbortContext,
 } from '../../persistence/session-lifecycle-repository.js'
-import { createPrivateEventV2 } from '../authoritative-state/private-event-v2.js'
+import { createPrivateEvent } from '../authoritative-state/private-event.js'
 import {
-  createHandStartCheckpointV2,
-  type HandStartCheckpointV2,
+  createHandStartCheckpoint,
+  type HandStartCheckpoint,
 } from '../hand-audit/hand-start-checkpoint.js'
 import {
   defineSessionCommandHandlerBinding,
@@ -31,7 +31,7 @@ export type EndSessionRelationPlan =
       readonly handId: string
       readonly failedPlayerRunId: string
       readonly failureReasonCode: string
-      readonly checkpoint: HandStartCheckpointV2
+      readonly checkpoint: HandStartCheckpoint
     }
 
 interface EndSessionReadPort {
@@ -96,7 +96,7 @@ export function parseEndSessionRelationPlan(
   const parsed = AbortHandPlanInputSchema.safeParse(input)
   if (!parsed.success) return null
   try {
-    const checkpoint = createHandStartCheckpointV2(parsed.data.checkpoint)
+    const checkpoint = createHandStartCheckpoint(parsed.data.checkpoint)
     if (!uuidEquals(checkpoint.startedHand.handId, parsed.data.handId)) {
       return null
     }
@@ -146,7 +146,7 @@ export function createEndSessionHandlerBinding(input: {
           ) {
             throw new EndSessionHandlerInvariantError()
           }
-          const event = createPrivateEventV2({
+          const event = createPrivateEvent({
             type: 'sessionEnded',
             reason: 'userRequested',
           })
@@ -207,7 +207,7 @@ export function createEndSessionHandlerBinding(input: {
           throw new EndSessionHandlerInvariantError()
         }
         const checkpointState = abortContext.checkpoint.stateBeforeStartCommand
-        const handAborted = createPrivateEventV2({
+        const handAborted = createPrivateEvent({
           type: 'handAborted',
           handId: hand.handId,
           beforeAbort: {
@@ -240,7 +240,7 @@ export function createEndSessionHandlerBinding(input: {
               })),
           },
         })
-        const sessionEnded = createPrivateEventV2({
+        const sessionEnded = createPrivateEvent({
           type: 'sessionEnded',
           reason: 'handAborted',
         })

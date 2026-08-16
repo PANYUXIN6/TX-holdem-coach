@@ -349,7 +349,7 @@ flowchart TD
 - 把 6–9 人桌的安全观察转换为版本化、可复现的策略节点，不做策略建议。
 - 至少规范化桌型、逻辑位置、逐对手位置关系、仍在手/已入池/待行动人数、行动顺序与 Hero 后方玩家、街次、翻前节点、底池类型、翻前/当前街主动玩家、最后足额加注目标与增量、是否重新开放加注、行动历史及其尺度和有效筹码档。
 - 固化 `pokerRuleSetVersion`。首版规范值为 `nlhe-cash-6to9-10-20-v1`，对应 6–9 人、10/20 盲注、无前注、无 straddle、无抽水、单牌面一次 runout；永久不设计可配置 `ante`/`anteModel` 或 `rakeModel`。任何会改变合法动作、结算、位置或策略节点解释的规则变化都必须发布新值，不能复用该版本。
-- `pokerRuleSetVersion` 的权威来源是目标手牌开手时固化的 Hand 检查点，不是 Runtime 部署时的 current 常量。M4.5 发布 `HandStartCheckpointV2` 保存该值；既有 V1 只能因历史上不存在第二套规则而确定性迁移为 `nlhe-cash-6to9-10-20-v1`。Player、Coach、策略查询和检查点复用均读取同一手牌绑定值。
+- `pokerRuleSetVersion` 的权威来源是目标手牌开手时固化的当前 Hand 检查点，不是 Runtime 部署时的 current 常量。首发前检查点已直接保存该值并使用行载荷版本 `1`；Player、Coach、策略查询和检查点复用均读取同一手牌绑定值。
 - 输出 `forcedPosts[] { seatNumber, kind, nominalAmount, actualAmount, isAllIn }` 和 `bigBlindOptionAvailable`，短码盲注的实际投入不能覆盖名义 10/20 下注基准。`bigBlindOptionAvailable=true` 当且仅当当前为翻前、当前行动者是未 all-in 且尚未自愿行动的大盲、下注层级仍为名义大盲 20、`amountToCall=0`，并且合法动作同时包含 `check` 和至少一种主动提高下注层级的 `raise | allIn`；其他情况一律为 `false`。
 - 显式输出 `heroActionCompletes`、`bettingRoundClosesImmediately` 与 `canFaceFurtherAction`，不能用一个含混的 `closesAction` 同时表达三者；候选级响应者和可加注者由结果投影补充。
 - 规范键保留多人池、边池、limp、冷跟注、挤压、重新加注和不足额全下等会改变节点语义的事实，不能为命中模板而静默降级成单挑或标准单加注底池。

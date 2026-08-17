@@ -6,12 +6,12 @@
 
 开发数据库里程碑时按以下顺序执行，禁止用反复重跑全套代替定位：
 
-1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m37`
+1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m42`
 2. 若修改共享事务、锁或测试运行时，再分别运行受影响的相邻里程碑。
 3. 离线 `pnpm run verify`。
 4. 提交前只运行一次 `pnpm --filter @tx-holdem-coach/server run db:test:full`。
 
-可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`、`m28`、`m31`、`m32`、`m33`、`m34`、`m35`、`m36`、`m37`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
+可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`、`m28`、`m31`、`m32`、`m33`、`m34`、`m35`、`m36`、`m37`、`m42`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
 
 ## 进度与失败定位
 

@@ -989,7 +989,9 @@ async function assertPlayerCoordination(
   await sql.begin(async (tx) => {
     await tx`
       UPDATE app_private.agent_runs
-      SET lifecycle = 'stale', completed_at = now()
+      SET lifecycle = 'stale',
+          termination_reason = 'fixture_stale',
+          completed_at = now()
       WHERE id = ${firstRunId}
     `
     await insertAgentRun(tx, {
@@ -1042,7 +1044,11 @@ async function assertPlayerCoordination(
     sql.begin(async (tx) => {
       await tx`
         UPDATE app_private.agent_runs
-        SET lifecycle = 'completed', completed_at = now()
+        SET lifecycle = 'completed',
+            started_at = COALESCE(started_at, now()),
+            result_payload_version = 1,
+            result_payload = '{}'::jsonb,
+            completed_at = now()
         WHERE id = ${secondRunId}
       `
       await tx`
@@ -1058,7 +1064,11 @@ async function assertPlayerCoordination(
   await sql.begin(async (tx) => {
     await tx`
       UPDATE app_private.agent_runs
-      SET lifecycle = 'completed', completed_at = now()
+      SET lifecycle = 'completed',
+          started_at = COALESCE(started_at, now()),
+          result_payload_version = 1,
+          result_payload = '{}'::jsonb,
+          completed_at = now()
       WHERE id = ${secondRunId}
     `
     await tx`
@@ -1359,6 +1369,7 @@ async function assertAgentAuditAndCommandConstraints(sql: Sql): Promise<void> {
       owner_id,
       session_id,
       attempt_number,
+      fencing_token,
       stage,
       lifecycle,
       provider,
@@ -1379,6 +1390,7 @@ async function assertAgentAuditAndCommandConstraints(sql: Sql): Promise<void> {
       ${fixtureOwnerId()},
       ${graph.sessionId},
       0,
+      1,
       'analysis',
       'completed',
       'test-provider',
@@ -1401,6 +1413,7 @@ async function assertAgentAuditAndCommandConstraints(sql: Sql): Promise<void> {
       owner_id,
       session_id,
       invocation_number,
+      fencing_token,
       capability_name,
       capability_version,
       authorized,
@@ -1421,6 +1434,7 @@ async function assertAgentAuditAndCommandConstraints(sql: Sql): Promise<void> {
       ${fixtureOwnerId()},
       ${graph.sessionId},
       0,
+      1,
       'equity',
       1,
       true,

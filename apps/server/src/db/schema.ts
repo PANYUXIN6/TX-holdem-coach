@@ -712,11 +712,16 @@ export const agentRuns = appPrivateSchema.table(
           AND ${table.lifecycle} IN ('queued', 'leased', 'running')`,
       ),
     index('agent_runs_worker_claim_idx').on(
+      table.runtime,
       table.lifecycle,
       table.leaseExpiresAt,
       table.deadlineAt,
       table.createdAt,
+      table.id,
     ),
+    index('agent_runs_runtime_concurrency_idx')
+      .on(table.runtime, table.lifecycle, table.ownerId, table.leaseExpiresAt)
+      .where(sql`${table.lifecycle} IN ('leased', 'running')`),
     index('agent_runs_session_created_idx').on(
       table.sessionId,
       table.createdAt,
@@ -777,6 +782,63 @@ export const agentRuns = appPrivateSchema.table(
         )`,
     ),
     check(
+      'agent_runs_lifecycle_fields_check',
+      sql`(
+        ${table.lifecycle} = 'queued'
+        AND ${table.leaseOwner} IS NULL
+        AND ${table.startedAt} IS NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.terminationReason} IS NULL
+        AND ${table.resultPayloadVersion} IS NULL
+      ) OR (
+        ${table.lifecycle} = 'leased'
+        AND ${table.leaseOwner} IS NOT NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.terminationReason} IS NULL
+        AND ${table.resultPayloadVersion} IS NULL
+      ) OR (
+        ${table.lifecycle} = 'running'
+        AND ${table.leaseOwner} IS NOT NULL
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.terminationReason} IS NULL
+        AND ${table.resultPayloadVersion} IS NULL
+      ) OR (
+        ${table.lifecycle} = 'completed'
+        AND ${table.leaseOwner} IS NULL
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.terminationReason} IS NULL
+        AND ${table.resultPayloadVersion} IS NOT NULL
+      ) OR (
+        ${table.lifecycle} = 'failed'
+        AND ${table.leaseOwner} IS NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.terminationReason} IS NOT NULL
+      ) OR (
+        ${table.lifecycle} IN ('cancelled', 'stale')
+        AND ${table.leaseOwner} IS NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.terminationReason} IS NOT NULL
+        AND ${table.resultPayloadVersion} IS NULL
+      )`,
+    ),
+    check(
+      'agent_runs_timestamp_order_check',
+      sql`${table.deadlineAt} >= ${table.createdAt}
+        AND (${table.startedAt} IS NULL OR ${table.startedAt} >= ${table.createdAt})
+        AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})
+        AND (
+          ${table.startedAt} IS NULL
+          OR ${table.completedAt} IS NULL
+          OR ${table.completedAt} >= ${table.startedAt}
+        )
+        AND (
+          ${table.leaseExpiresAt} IS NULL
+          OR ${table.leaseExpiresAt} > ${table.updatedAt}
+        )`,
+    ),
+    check(
       'agent_runs_required_payloads_check',
       sql`${table.runConfigPayloadVersion} > 0
         AND jsonb_typeof(${table.runConfigPayload}) = 'object'
@@ -818,6 +880,7 @@ export const agentAttempts = appPrivateSchema.table(
     ownerId: uuid('owner_id').notNull(),
     sessionId: uuid('session_id').notNull(),
     attemptNumber: integer('attempt_number').notNull(),
+    fencingToken: safeBigint('fencing_token').notNull(),
     stage: text('stage').notNull(),
     lifecycle: text('lifecycle').notNull(),
     accepted: boolean('accepted').notNull().default(false),
@@ -854,7 +917,8 @@ export const agentAttempts = appPrivateSchema.table(
     ),
     check(
       'agent_attempts_attempt_number_check',
-      sql`${table.attemptNumber} >= 0`,
+      sql`${table.attemptNumber} >= 0
+        AND ${table.fencingToken} BETWEEN 1 AND 9007199254740991`,
     ),
     check(
       'agent_attempts_lifecycle_check',
@@ -893,6 +957,7 @@ export const agentCapabilityInvocations = appPrivateSchema.table(
     ownerId: uuid('owner_id').notNull(),
     sessionId: uuid('session_id').notNull(),
     invocationNumber: integer('invocation_number').notNull(),
+    fencingToken: safeBigint('fencing_token').notNull(),
     capabilityName: text('capability_name').notNull(),
     capabilityVersion: integer('capability_version').notNull(),
     authorized: boolean('authorized').notNull(),
@@ -926,7 +991,8 @@ export const agentCapabilityInvocations = appPrivateSchema.table(
     ),
     check(
       'agent_capability_invocations_number_check',
-      sql`${table.invocationNumber} >= 0`,
+      sql`${table.invocationNumber} >= 0
+        AND ${table.fencingToken} BETWEEN 1 AND 9007199254740991`,
     ),
     check(
       'agent_capability_invocations_schema_versions_check',

@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-08-16（M0–M2、M3.1–M3.7、M4.1 与开发期版本层收敛状态已同步）
+更新时间：2026-08-17（M0–M2、M3.1–M3.7、M4.1–M4.2 与开发期版本层收敛状态已同步）
 
 ## 当前目录与职责
 
@@ -21,6 +21,7 @@
 - `docs/superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md`：M1.7 以后非 Agent 运行时唯一重基线，定义纯引擎、会话聚合、版本、事件、持久化、公开投影和前端同步的事实归属。
 - `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md`：Agent 大模块总体事实源，定义 Foundation、Runtime、权限、运行生命周期、策略事实源、数据模型与当前/未来边界。
 - `docs/superpowers/specs/2026-08-14-m4-1-agent-foundation-core-protocol-static-registry-design.md`：M4.1 正式事实源；冻结 Foundation 核心协议、Player/Coach 隔离定义、静态 Registry、预算/能力/Context/状态机和专属 Commit Gate 类型，并明确不解除 M3.8 的后续门禁。
+- `docs/superpowers/specs/2026-08-16-m4-2-agent-run-persistence-coordinator-worker-design.md`：M4.2 正式事实源；冻结 current-only Run Config/Budget、事务绑定 Coordinator、PostgreSQL 原子领取与并发裁决、租约/fencing、恢复资格、双 lane Worker 和提交后事件边界。Worker 可构造但未接入 `bootstrap.ts`，M3.8 门禁仍关闭。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
 - `docs/superpowers/specs/2026-07-26-poker-coach-agent-design.md`：已确认的 Coach Agent 唯一详细设计源，约束手动复盘、两阶段信息隔离、确定性工具、策略抽象、决策分级、教学降噪、长期趋势/画像边界、后置训练闭环和验收。
 - `docs/superpowers/plans/`：开发任务的依赖顺序与验收清单。
@@ -43,9 +44,9 @@
 - `apps/server/`：Node/Hono 本地服务入口；`ServerConfig` 只读取后端私有 `DATABASE_URL`。`config/database-targets.json` 固定实际测试与生产 Supabase project ref；`src/db/database-url-policy.ts` 统一校验 6543 transaction pooler 和 5432 session/direct URL，并只在 host、端口、用户、数据库名和密码策略通过后提取 ref。`src/db/test-database-safety.ts` 只读取两条 `TEST_*_URL` 并与固定测试 ref 比较，任何 ref 环境变量都不参与决策；`src/db/database-test-mode.ts` 要求显式启动器标记后才启用远程测试；`src/db/migration-release.ts` 则只比较制品注册表生产 ref 与 `DATABASE_MIGRATION_URL` 提取值。`src/db/client.ts` 按需创建固定 TLS/`prepare: false` 的 `postgres.js`/Drizzle 客户端，`src/db/schema.ts` 是 14 张 `app_private` 业务表、普通约束、复合外键与查询索引的唯一 Drizzle 入口；`src/db/migrations/0000_baseline.sql` 是由最终 Schema 生成并人工补入固定 Owner、循环外键和三组延迟约束触发器的唯一开发基线。`src/db/migration-compatibility.ts` 在同一 journal/SQL hash 实现上提供 `exact|prefix` 比对；启动只用 `exact`，持久测试库迁移前用 `prefix`、迁移后用 `exact`。构建把迁移序列、目标注册表副本和目标 digest manifest 写入 `dist/db/`；`db:migrate` 通过制品目标预检后只从 `dist` 迁移。未安装 `supabase-js`；Repository 直接使用服务端私有 `postgres.js` 参数化查询。
 - `apps/server/.env.example` 与 `.env.test.example`：前者只描述线上运行/迁移 URL 与 Provider Key，后者只描述两条测试 URL；project ref 只存在于非秘密注册表，不接受环境覆盖，真实 `.env.test.local` 被 Git 忽略。
 - `apps/server/scripts/run-database-integration-tests.mjs`：本地只解析 `.env.test.local`，CI 只接受已注入的两条测试 URL；构造子进程 allowlist，剔除线上 URL 和 ref 环境变量，并按纯计划注入 Run ID、迁移-only、单里程碑、full 或 cleanup scope；Vitest 子进程在首个失败或阶段超时后停止调度后续里程碑，普通 Server 集成测试脚本明确排除远程数据库测试文件。
-- `apps/server/scripts/database-test-plan.mjs`：数据库测试 CLI 的纯计划边界；只接受迁移-only、`--full`、`--cleanup-stale` 或 allowlist 中的 `m22…m28`/`m31`…`m37` 里程碑，并为子进程生成唯一 Run ID、显式 scope 与失败即停的 Vitest 参数。
+- `apps/server/scripts/database-test-plan.mjs`：数据库测试 CLI 的纯计划边界；只接受迁移-only、`--full`、`--cleanup-stale` 或 allowlist 中的 `m22…m28`/`m31`…`m37`/`m42` 里程碑，并为子进程生成唯一 Run ID、显式 scope 与失败即停的 Vitest 参数。
 - `apps/server/scripts/managed-child-process.mjs`、`copy-migrations.mjs`、`verify-migration-assets.mjs`、`migrate-production.mjs`：受管子进程模块统一把取消信号转发到完整进程组并等待退出，父进程一旦收到取消信号就不会因子进程退出码为 0 而误报成功；其余脚本依次负责构建迁移/注册表制品、核对源与 `dist` 资产及 digest、在联网前用制品生产 ref 校验合法迁移 URL并启动 `drizzle.release.config.ts`。
-- `apps/server/test/`：`unit/` 覆盖统一 URL 与迁移安全门、M2.3–M2.8 Repository、权威状态/恢复、Hand/Agent Codec、M3.1 命令执行、M3.2 创建服务/capability、M3.3 用户行动、M3.4 三种 Handler/verifier、M3.5 HTTP 边界、M3.6 公开投影、M3.7 replay/连接状态机及 M4.1 Registry/预算/能力/Context/执行状态/决策身份；`helpers/session-roster-fixture.ts` 是仅供旧里程碑造数的测试结构 writer，不进入生产依赖图；`integration/database-infrastructure.test.ts` 面向长期保留的测试 Supabase，只有显式入口标记存在时才运行。`m32`–`m37` 分别验收创建/锁竞争、行动/Hand 完成、补码/下一手/结束、HTTP 生产组合、公开投影以及 SSE 重连补发。日常 `db:test:integration` 只执行 `prefix → migrate → exact`，默认 `verify` 不收集远程数据库文件。
+- `apps/server/test/`：`unit/` 覆盖统一 URL 与迁移安全门、M2.3–M2.8 Repository、权威状态/恢复、Hand/Agent Codec、M3.1 命令执行、M3.2 创建服务/capability、M3.3 用户行动、M3.4 三种 Handler/verifier、M3.5 HTTP 边界、M3.6 公开投影、M3.7 replay/连接状态机、M4.1 Registry/预算/能力/Context/执行状态/决策身份及 M4.2 Coordinator/Worker；`helpers/session-roster-fixture.ts` 与 `helpers/agent-run-fixture.ts` 仅供历史里程碑造数，不进入生产依赖图；`integration/database-infrastructure.test.ts` 面向长期保留的测试 Supabase，只有显式入口标记存在时才运行。`m32`–`m37` 分别验收创建/锁竞争、行动/Hand 完成、补码/下一手/结束、HTTP 生产组合、公开投影以及 SSE 重连补发；`m42` 验收并发创建、Player 设置锁、活动唯一、双连接领取、容量、续租、租约接管、恢复拒绝、fencing、终态竞争、旧 Attempt 收敛和损坏行分页。日常 `db:test:integration` 只执行 `prefix → migrate → exact`，默认 `verify` 不收集远程数据库文件。
 - `apps/server/test/integration/database-test-runtime.ts` 与 `README.md`：远程测试运行时和操作事实源；前者统一阶段选择/计时、Run ID 连接标签、数据库侧超时、冲突事务预检/显式连接清理、事务内 PID、JSONB fixture，以及“清理失败不覆盖主失败且只报告脱敏类型/稳定码”的执行边界；M3.1 竞争夹具在阶段内额外收敛全部命令 Promise，并以目标 DELETE 的 `55P03` 有界重试精确删除自身 Session，不依赖 transaction-pooler backend PID 生命周期，后者固定“当前里程碑 → 相邻共享层 → 离线 verify → 一次 full”的执行顺序。
 - `apps/server/test/unit/command-ledger-repository.test.ts` 与 `database-repository-assertions.ts` 的 M2.4 入口：分别验证导出 Repository API，以及真实 PostgreSQL 的 Owner 隔离、整体回滚、已提交 processing 只读重放、候选 ID 碰撞和双连接并发重放；仅 `db:test:full` 运行远程部分。
 - `apps/server/src/poker/hand-result.ts`：仅定义、校验、排序和冻结手牌领域结果与事件草稿；不编排行为。
@@ -55,13 +56,13 @@
 - `apps/server/src/http/`：M3.5/M3.7 HTTP 适配边界；`create-app.ts` 组合安全中间件与路由，`session-event-routes.ts` 只把应用连接写成 SSE wire，并以同一个串行 writer 发送数据与心跳；HTTP 不读取数据库或拼装公开快照。
 - `apps/server/src/sessions/public-projection/`：M3.6/M3.7 生产公开投影与事件流应用边界；同步 projector 只消费完整事实值，进程内 Hub 只分发已提交事件且不保存历史；stream service 固定 high watermark、全量分页预验证和二次读取 proof，connection 维护容量一页交接、64 项实时队列、可取消数据/心跳等待与幂等关闭。
 - `apps/server/src/providers/` 与 `src/settings/`：前者拥有 Provider 固定模型目录检测、10 秒超时、脱敏分类和同 Provider 单飞缓存；后者在同一数据库事务内调用 Player 设置部分更新入口。缓存不保存 Key 或供应商原文，设置服务不维护数据库外镜像。
-- `apps/server/src/persistence/`：PostgreSQL Repository 落点；除既有事务内 mutation/recovery/ledger 职责外，`public-event-replay-repository.ts` 以 Owner-scoped 独立只读语句提供 head、同一 MVCC 视图 bootstrap 和闭区间 replay 页，不持有跨页或 SSE 生命周期事务，也不读取私有载荷生成历史公开事件。
+- `apps/server/src/persistence/`：PostgreSQL Repository 落点；除既有事务内 mutation/recovery/ledger 与公开 replay 职责外，`agent-run-lifecycle-repository.ts` 提供 M4.2 current-only Run 创建/读取、Runtime advisory-lock 领取、数据库容量裁决、租约/fencing、旧 Attempt 收敛、取消、终态和 checkpoint 持久化原语。Repository 不拥有事务，也不决定 Player/Coach 业务终态。
 - `apps/server/src/sessions/command-execution/`：M3.1 Session 命令编排与 M3.3/M3.4 生产 Handler 落点；包含不可变启用 Handler 映射、两阶段候选/capability、命令级 verifier、投影端口、每场尾队列和单事务执行器。`player-action-handler.ts` 组合 M2.7 完成手审计；`rebuy-handler.ts` 只改变用户资金；`start-next-hand-handler.ts` 组合 AI 自动买入、M1.9 与新 Hand；`end-session-handler.ts` 处理正常结束或暂停中止。`aiAction` 与 `retryAgent` 仍安全拒绝；该目录不含 HTTP/SSE 路由或内存业务状态缓存。
 - `apps/server/src/sessions/session-creation/`：M3.2 创建编排边界；一次生成身份图与首手领域计划，读取固定 Provider 创建能力，在外层事务中组合创建 Repository、M2.7 Hand writer、M2.5 mutation writer 和测试投影端口，并只在 COMMIT 后返回快照与两条 SSE 信封；latest-ended 的通用 Repository 失败在此转换为 `ROSTER_SOURCE_NOT_FOUND|ROSTER_SOURCE_CHANGED|ROSTER_MODEL_INACTIVE` 稳定服务错误。该目录不登记命令账本，也不安装 Hono 路由。
 - `apps/server/src/sessions/authoritative-state/poker-private-event.ts`、`private-event.ts`、`private-event-codec.ts`、`current-private-event-protocol.ts`：Poker 私有事件子集、当前累积私有事件、严格 Codec 和组合期协议对象；中性代码 API 覆盖四种 Poker 事件与五种 Session/Accounting 事件，只读取首发行载荷版本 1，不再保留旧 Private Event reader 或重复 JSON 信封版本。
 - `apps/server/src/sessions/hand-audit/`：M2.7/M4.5 纯 Hand 审计边界；当前 `HandStartCheckpoint` 绑定 `pokerRuleSetVersion` 并只读取首发行载荷版本 1，旧 reader 已删除；`CompletedHandResult` 同样保留行载荷版本 1。检查点仍允许同命令自动买入造成起始筹码差异。
 - `apps/server/src/agents/audit/`：M2.7 Foundation 审计纯模块；定义规范引用、Run Config、完整 Execution Budget、Attempt 生命周期联合及固定 `player|coach` Runtime Decoder 端口。全部持久化载荷使用 current-only reader，不提供 legacy 注册或迁移。
-- `apps/server/src/agents/foundation/`：M4.1 服务器私有纯协议边界；拥有 Runtime Definition/Registry、运行时预算、默认拒绝能力授权、严格 Context 信封、执行状态机、稳定错误和最小事件/Commit Authority 类型，不导入数据库 Schema、Hono、供应商 SDK 或扑克私有状态。
+- `apps/server/src/agents/foundation/`：M4.1–M4.2 服务器私有协议与应用编排边界；除 Runtime Definition/Registry、预算、能力、Context 和状态机外，现拥有事务绑定 `AgentRunCoordinator`、不可伪造 Runtime Commit Authority、Worker 窄控制端口及显式双 lane Worker。该目录不导入 Drizzle Schema、Hono、供应商 SDK 或扑克私有状态；Worker 未接生产启动。
 - `apps/server/src/agents/player/` 与 `apps/server/src/agents/coach/`：M4.1 各自拥有唯一当前 Definition、能力定义、预算政策、状态图和专属 Result/Commit Gate 类型；当前没有模型执行、业务 Validator 或 Gate 实现，两个 Runtime 不共享业务 Context、结果或提交端口。
 - `apps/server/src/agents/production-runtime-registry.ts`：唯一生产组合点；以代码内固定对象一次组合 Player/Coach 的唯一当前 Definition，不维护多版本集合或 current 指针，不读取环境、数据库或目录，也不暴露动态注册、替换或插件入口。`resolveExact()` 只用于校验持久版本是否等于当前定义版本，为首发后显式设计版本演进保留协议边界。
 - `apps/server/src/sessions/authoritative-state/decision-identity.ts` 与 `agent-authority-ports.ts`：M4.1 权威 Agent 身份协议；前者严格构造 Player 决策身份并按固定 UUIDv5 规则派生 Coach `decisionId`，后者只定义 Owner-scoped Player 观察与 Coach 复盘读取端口，不提供投影实现。
@@ -72,9 +73,9 @@
 
 ## 当前主链路
 
-本节描述 M4.1 完成后的代码现状；会话版本仍属于 `PrivateTableState`，纯扑克规则、审计 Repository 与 Agent Foundation 协议都不自行推进它。
+本节描述 M4.2 完成后的代码现状；会话版本仍属于 `PrivateTableState`，纯扑克规则、审计 Repository 与 Agent Foundation 协议都不自行推进它。
 
-根 pnpm 脚本编排三个 workspace；`verify` 固定执行格式检查、类型检查与后端分类测试，且不读取模型 Key、数据库凭据或联网。Server 启动门依次执行配置、人物目录、数据库/迁移精确检查、固定 Owner 解析、M3.5 服务、M3.6 事实读取/同步投影/查询/事件 Hub、M3.7 replay Repository/stream service 与 `createApp()` 组合，再只监听回环地址。生产已安装 `/api/sessions/:sessionId/events`；命令与创建只在事务 COMMIT 后发布，断线恢复从 PostgreSQL 固化公开载荷补发。M4.1 静态 Registry 已可解析协议版本，但 AgentRun/Worker/ModelGateway/Commit Gate 实现与 bootstrap 接线仍不存在。
+根 pnpm 脚本编排三个 workspace；`verify` 固定执行格式检查、类型检查与后端分类测试，且不读取模型 Key、数据库凭据或联网。Server 启动门依次执行配置、人物目录、数据库/迁移精确检查、固定 Owner 解析、M3.5 服务、M3.6 事实读取/同步投影/查询/事件 Hub、M3.7 replay Repository/stream service 与 `createApp()` 组合，再只监听回环地址。生产已安装 `/api/sessions/:sessionId/events`；命令与创建只在事务 COMMIT 后发布，断线恢复从 PostgreSQL 固化公开载荷补发。M4.2 的 AgentRun Coordinator/Worker 已可独立构造和测试，但 ModelGateway、业务 Commit Gate 与 `bootstrap.ts` 接线仍不存在。
 
 M3.3 用户行动链固定为“恢复并锁定 Session → 登记命令 → `playerAction.prepare` 调用一次 M1.9 → 专属 verifier → 预验证 mutation → 可选 `completeHandAudit` → Session/快照/事件持久化 → 完成账本 → COMMIT”。M3.4 在同一执行器中增加三条链：补码只写用户资金；下一手在一个事务内写 AI 自动买入、checkpoint、新 Hand、事件和快照；正常结束不写快照或推进状态版本；暂停中止按 `Session → Hand → AgentRun` 锁序恢复 checkpoint、标记 Hand aborted 并结束 Session。`aiAction` 仍由后续里程碑拥有。
 
@@ -105,7 +106,8 @@ M3.4 命令链固定为“严格 `rebuy|startNextHand|endSession` → Session re
 - `apps/server/src/persistence/session-recovery-repository.ts`：M2.6 事务内恢复边界；由工厂注入同一个 mutation Repository 实例，复用其行锁读取一致事实并在修复/退出诊断后重新锁定；不开启或提交事务，不解析公开 SSE 载荷。
 - `apps/server/src/persistence/hand-audit-repository.ts`：M2.7 Hand 审计边界；重新进入当前 Codec，Owner-scoped 锁定 Hand，验证 checkpoint/result 镜像以及 Player Run 中止关联，返回完整 `HandAudit`，不更新 Session、快照、事件或账本。
 - `apps/server/src/persistence/session-lifecycle-repository.ts`：M3.4 暂停中止窄读取边界；复用 Hand 审计解码并按当前行动 AI 与来源版本解析唯一合法 failed Player leaf，只返回 Hand ID、checkpoint、失败 Run ID 和稳定原因码。
-- `apps/server/src/persistence/agent-foundation-audit-repository.ts`：M2.7 Foundation 审计边界；固定创建 queued Run，串行分配 Attempt/Invocation 独立序号，严格终结 Attempt，并通过固定 Decoder bundle 返回完整 `AgentRunAudit`。它不决定 Run 生命周期、租约、fencing、迟到结果或 Commit Gate。
+- `apps/server/src/persistence/agent-foundation-audit-repository.ts`：M2.7/M4.2 Foundation 子审计边界；串行分配 Attempt/Invocation 独立序号并严格终结 Attempt。M4.2 写入路径必须携带当前 `RuntimeCommitAuthority`，在父 Run 锁内复验 Runtime、Owner、Session、lease owner、fencing token 与数据库租约时间；它仍不决定 Run 生命周期或业务 Commit Gate。
+- `apps/server/src/persistence/agent-run-lifecycle-repository.ts`：M4.2 通用 Run 持久化原语；current-only 解码 Config/Budget，以 Runtime 专属 advisory lock 串行裁决系统/Owner 容量，以固定 watermark 和 16 行 keyset 扫描跳过损坏候选，并为领取、续租、接管、取消、终态和 checkpoint 执行条件写入。
 - `apps/server/src/persistence/session-deletion-repository.ts`：M2.8 删除边界；提供 `deleteEndedSessionData()` 与 `clearOwnerSessionData()`，按冻结锁序取消非终态 Run、保留 fencing、原子清理 Player 协调字段并删除 Session 根；所有集合均校验精确影响 ID，返回值确定排序并深冻结。
 
 目标行动链固定为 `PokerTableState + PokerCommand → poker-engine.ts → PokerEngineResult`；开手也只通过同一模块返回 `StartedHandFacts`。M3 不得取得未结算的 `showdown/complete`，也不得自行组合发牌、庄盲、推进与结算模块；M2/M3/M5 可直接消费 `hand-result.ts` 的纯领域数据契约，但不得绕过门面调用行为原语。

@@ -1,6 +1,6 @@
 # M4.2 AgentRun 持久化、Coordinator 与 Worker 设计
 
-状态：已按评审与首发前瘦身原则修订；等待重新确认
+状态：实现修复与验收中，尚未满足完成定义；生产启动门禁仍保持关闭
 
 任务来源：[项目开发任务 M4.2](../plans/2026-07-23-poker-practice-development-tasks.md#m42-实现-agentrun-持久化coordinator-与-worker)
 
@@ -143,7 +143,7 @@ M4.2 完成只满足 M3.8 的一个前置项。以下仍不能发生：
 - `apps/server/src/db/schema.ts` 已定义三张通用 Agent 表、生命周期列、租约列、fencing token、deadline、版本化 JSONB、Player 有效运行部分唯一索引和领取索引。
 - `agent_runs` 当前允许 `queued|leased|running|completed|failed|cancelled|stale`，但约束尚未完整绑定生命周期、租约、时间和终态字段。
 - `agent_attempts` 和 `agent_capability_invocations` 尚未保存执行它们的 fencing token；现有 writer 只锁父 Run，不校验父 Run 是否 running、租约是否有效或 token 是否匹配。
-- `agent-foundation-audit-repository.ts` 只拥有固定 queued 插入、Attempt/Capability 审计与精确聚合读取；它明确没有生命周期 writer。
+- `agent-foundation-audit-repository.ts` 只拥有 Attempt/Capability 子审计与精确聚合读取；父 Run 创建已统一收口到 Coordinator 与生命周期 Repository。
 - `ExecutionBudgetAudit` 已直接保存 M4.1 十一个预算字段，使用单一 current reader 严格区分未知行版本与损坏载荷。
 - `RunConfigurationAudit` 已能保存 M4.2 需要的稳定执行身份，不含密钥、Prompt 原文或可执行配置。
 - `player-agent-settings-service` 与 `player-settings-repository` 已实现严格 5–30 秒 Attempt、15–120 秒 deadline 和默认 15/45 秒设置。
@@ -178,11 +178,10 @@ apps/server/src/
 apps/server/test/
 ├── unit/
 │   ├── agent-run-coordinator.test.ts
-│   ├── agent-run-lifecycle-repository.test.ts
 │   ├── agent-worker.test.ts
 │   └── agent-audit-codecs.test.ts
 └── integration/
-    └── database-repository-assertions.ts     # 新增 m42 阶段断言
+    └── database-m42-assertions.ts            # m42 阶段断言
 ```
 
 不移动 M4.1 文件，不重命名 2,000 行的既有审计 Repository，不建立通用表 CRUD。生命周期 Repository 只拥有父 Run 的状态与租约；既有审计 Repository 继续拥有 Attempt、Capability 和聚合回读，但这些 child writer 必须消费 M4.2 authority。
@@ -213,7 +212,7 @@ AgentRunWorkerControl（Coordinator 内部实现）
 
 ### 3.4 地图判断
 
-现有 `REPO_MAP.md` 与 `ARCHITECTURE.md` 在 M4.2 相关范围内可用且与源码一致。设计阶段不把未来 Worker 写成已实现。M4.2 实施完成后才同步：
+现有 `REPO_MAP.md` 与 `ARCHITECTURE.md` 已按 M4.2 当前实现同步：
 
 - Budget 当前完整载荷与单一 current reader；
 - AgentRun 生命周期 Repository、Coordinator 和双槽 Worker 的真实责任；
@@ -557,11 +556,11 @@ AGENT_WORKER_CLAIM_BATCH_SIZE = 16
 2. 统计该 Runtime 当前未过期 leased/running 的系统和各 Owner 数量，并严格读取这些在途 Run 的 Budget；
 3. 取得本轮候选集合最大的 `(createdAt, id)` 作为固定 watermark；没有候选时结束；
 4. 从空 cursor 开始，以 `(createdAt, id)` keyset 排序读取 watermark 以内最多 16 行；批次查询不预先锁住未知/损坏行；
-5. 对每行严格解码 Run Config、Budget，并执行 `Registry.resolveExact()`、恢复资格和并发额度校验；不可执行行记录稳定诊断后推进 cursor；
-6. 遇到可执行候选时只锁该精确 `agent_runs` 行并重新读取、严格解码和复验资格；若它已变化则推进 cursor 继续；
+5. 对每行严格解码 Run Config、Budget 和非负安全整数 `fencingToken`，并执行 `Registry.resolveExact()`、恢复资格、`fencingToken < Number.MAX_SAFE_INTEGER` 和并发额度校验；不可执行行记录稳定诊断后推进 cursor；
+6. 遇到可执行候选时只锁该精确 `agent_runs` 行并重新读取、严格解码和复验资格；若它已变化则推进 cursor 继续；若 token 已等于 `Number.MAX_SAFE_INTEGER`，返回稳定 `agent_run_fencing_rejected` 诊断、保持该行不变并推进 cursor；
 7. 对接管候选锁定并终结旧 started Attempts；
-8. 原子写 `lifecycle='leased'`、新 lease owner/expiry、`fencing_token + 1` 和 `updated_at`；
-9. Coordinator 签发不可伪造 `RuntimeCommitAuthority`，返回深冻结 `LeasedAgentRun`；
+8. 以 `fencing_token < 9007199254740991` 作为条件更新的一部分，原子写 `lifecycle='leased'`、新 lease owner/expiry、`fencing_token + 1` 和 `updated_at`；条件更新返回零行时重新分类而不是签发 authority；
+9. Coordinator 在同一领取事务提交前签发不可伪造 `RuntimeCommitAuthority`，只有签发成功才提交并返回深冻结 `LeasedAgentRun`；任何意外签发失败都回滚整笔领取事务；
 10. 批次用尽但尚未超过 watermark 时继续下一批，直到成功领取或本轮 watermark 穷尽。
 
 `16` 只是单批读取大小，不是单轮扫描上限。固定 watermark 让本轮工作量有界，新到 Run 留给下一轮；keyset cursor 保证未知/损坏前缀不会永久遮住第 17 行及以后有效 Run，也不需要保存跨轮游标。
@@ -601,7 +600,9 @@ issueRuntimeCommitAuthority({
 ```
 
 - 只有 Coordinator 的 `workerControl.claimNext()` 在领取 Repository 成功后调用；
-- 工厂重新校验规范 Runtime、UUID、lease owner 和正安全整数；
+- 父行 `agent_runs.fencing_token` 保留唯一 baseline 已有的 `BETWEEN 0 AND 9007199254740991` CHECK；authority token 域固定为 `1..9007199254740991`，两者使用同一 JavaScript 安全整数上界；
+- 领取只能把 `0..9007199254740990` 增加到 `1..9007199254740991`。达到上界的行在加一前按 §7.3 返回 `agent_run_fencing_rejected`、零生命周期写入并继续扫描，不能依赖数据库 CHECK 异常或 authority 工厂异常做正常分支；
+- 工厂重新校验规范 Runtime、UUID、lease owner 和正安全整数；该校验是纵深防御，不替代领取前上界裁决；
 - 单纯构造同形对象仍不能通过 `isRuntimeCommitAuthority()`；
 - authority 不是数据库事实替代品。每次写入都重新验证当前行 runtime、runId、owner、leaseOwner、fencingToken、`lifecycle IN ('leased','running')` 和 `leaseExpiresAt > clock_timestamp()`；
 - authority 不序列化、不写日志、不进入 Context/Prompt/HTTP。
@@ -613,7 +614,7 @@ issueRuntimeCommitAuthority({
 - `writeCheckpoint()`：只接受 running authority、Runtime state machine 允许的 checkpoint 和严格当前 Runtime Codec；写入后不隐式延长租约；
 - `startAttempt/finishAttempt/appendCapabilityInvocation()`：既有审计 Repository 新增 authority 参数并在父 Run 锁内复验；
 - `complete/fail/cancel/stale()`：清租约、写终态时间和稳定分类；Player 调用方必须在同一外层事务完成 Session/业务协调；
-- 所有条件更新返回零行时统一映射为稳定 `agent_run_fencing_rejected`，不区分是 token、lease owner、过期还是已终结，避免把内部竞态暴露到模型或公共边界。
+- `finalize()` 先锁定精确 Run；与已持久终态完全一致的同 authority 请求返回 `changed=false` 且不重复事件，不同终态或不同终态载荷稳定拒绝为 `agent_run_already_terminal`；仍处于 active 时，条件更新返回零行统一映射为 `agent_run_fencing_rejected`，不区分 token、lease owner 或过期。
 
 ### 7.8 取消
 
@@ -749,7 +750,7 @@ M4.2 不反向导入启动恢复模块。
 
 ### 10.1 Run 事件
 
-M4.2 只发布 M4.1 已定义的已持久事件：queued、leased、started、completed、failed、cancelled、stale。
+M4.2 通过总体架构的 `AgentRunEventPort` 只发布已持久事件：queued、leased、running、completed、failed、cancelled、stale。`running` 表示 `markRunning()` 已提交后的持久生命周期事实；M4.2 实施时把尚未上线的 M4.1 `AgentRunEventKind.started` 原地重命名为 `running`，不保留双名、别名或兼容映射。
 
 - Repository 事务返回事件草稿；调用方在 COMMIT 后发布；
 - 事件只含 `runtimeType + kind + runId`；

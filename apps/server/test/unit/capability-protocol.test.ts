@@ -8,7 +8,10 @@ import {
   playerCapabilityDefinitions,
   playerRuntimeDefinition,
 } from '../../src/agents/player/foundation-definition.js'
-import { isRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
+import {
+  isRuntimeCommitAuthority,
+  issueRuntimeCommitAuthority,
+} from '../../src/agents/foundation/runtime-ports.js'
 
 describe('M4.1 capability protocol', () => {
   test('authorizes only the exact state-declared, manifested definition', () => {
@@ -111,5 +114,22 @@ describe('M4.1 capability protocol', () => {
         'player',
       ),
     ).toBe(false)
+
+    const issued = issueRuntimeCommitAuthority({
+      runtimeType: 'player',
+      runId: '00000000-0000-4000-8000-000000000001',
+      leaseOwner: 'worker-1',
+      fencingToken: Number.MAX_SAFE_INTEGER,
+    })
+    expect(isRuntimeCommitAuthority(issued, 'player')).toBe(true)
+    expect(isRuntimeCommitAuthority(issued, 'coach')).toBe(false)
+    expect(() =>
+      issueRuntimeCommitAuthority({
+        runtimeType: 'player',
+        runId: '00000000-0000-4000-8000-000000000001',
+        leaseOwner: 'worker-1',
+        fencingToken: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).toThrow()
   })
 })

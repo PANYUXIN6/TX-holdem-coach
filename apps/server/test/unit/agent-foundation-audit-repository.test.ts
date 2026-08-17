@@ -3,7 +3,8 @@ import { describe, expect, test } from 'vitest'
 import { encodeAttemptAudit } from '../../src/agents/audit/attempt-audit-codec.js'
 import { encodeExecutionBudgetAudit } from '../../src/agents/audit/execution-budget-audit-codec.js'
 import { encodeRunConfigurationAudit } from '../../src/agents/audit/run-configuration-audit-codec.js'
-import { createAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
+import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
+import { createAgentFoundationAuditRepository as createRawAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { UnknownPayloadVersionError } from '../../src/persistence/errors.js'
 
@@ -13,6 +14,57 @@ const handId = '33333333-3333-4333-8333-333333333333'
 const agentRunId = '44444444-4444-4444-8444-444444444444'
 const participantId = '55555555-5555-4555-8555-555555555555'
 const decisionRequestId = '66666666-6666-4666-8666-666666666666'
+
+function testAuthority(runId = agentRunId) {
+  return issueRuntimeCommitAuthority({
+    runtimeType: 'player',
+    runId,
+    leaseOwner: 'unit-test:player:0',
+    fencingToken: 1,
+  })
+}
+
+function createAgentFoundationAuditRepository(
+  options: Parameters<typeof createRawAgentFoundationAuditRepository>[0],
+) {
+  const repository = createRawAgentFoundationAuditRepository(options)
+  return {
+    ...repository,
+    startAgentAttemptAudit: (
+      transaction: TransactionSql,
+      owner: Parameters<typeof repository.startAgentAttemptAudit>[1],
+      input: Parameters<typeof repository.startAgentAttemptAudit>[3],
+    ) =>
+      repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        testAuthority(input.agentRunId),
+        input,
+      ),
+    finishAgentAttemptAudit: (
+      transaction: TransactionSql,
+      owner: Parameters<typeof repository.finishAgentAttemptAudit>[1],
+      input: Parameters<typeof repository.finishAgentAttemptAudit>[3],
+    ) =>
+      repository.finishAgentAttemptAudit(
+        transaction,
+        owner,
+        testAuthority(input.agentRunId),
+        input,
+      ),
+    appendCapabilityInvocationAudit: (
+      transaction: TransactionSql,
+      owner: Parameters<typeof repository.appendCapabilityInvocationAudit>[1],
+      input: Parameters<typeof repository.appendCapabilityInvocationAudit>[3],
+    ) =>
+      repository.appendCapabilityInvocationAudit(
+        transaction,
+        owner,
+        testAuthority(input.agentRunId),
+        input,
+      ),
+  }
+}
 
 type SqlResponse =
   unknown | Error | ((values: readonly unknown[]) => unknown | Error)
@@ -26,8 +78,42 @@ function createTransactionMock(
     ...values: unknown[]
   ) => {
     if (!('raw' in template)) throw new Error('Unexpected helper call.')
+    const sqlText = template.join(' ')
+    const nextPending = pending[0]
+    if (
+      sqlText.includes("AND lifecycle = 'running'") &&
+      Array.isArray(nextPending) &&
+      nextPending.some(
+        (row) => row !== null && typeof row === 'object' && 'attemptId' in row,
+      )
+    ) {
+      return Promise.resolve([
+        { agentRunId, sessionId, runtime: 'player', fencingToken: 1 },
+      ])
+    }
     const next = pending.shift()
-    const response = typeof next === 'function' ? next(values) : next
+    const rawResponse = typeof next === 'function' ? next(values) : next
+    const response = Array.isArray(rawResponse)
+      ? rawResponse.map((row) => {
+          if (
+            row !== null &&
+            typeof row === 'object' &&
+            Object.keys(row).sort().join(',') === 'agentRunId,sessionId'
+          ) {
+            return { ...row, runtime: 'player', fencingToken: 1 }
+          }
+          if (
+            row !== null &&
+            typeof row === 'object' &&
+            'attemptId' in row &&
+            'lifecycle' in row &&
+            !('fencingToken' in row)
+          ) {
+            return { ...row, fencingToken: 1 }
+          }
+          return row
+        })
+      : rawResponse
     return response instanceof Error
       ? Promise.reject(response)
       : Promise.resolve(response)
@@ -161,6 +247,7 @@ function attemptRow(attemptNumber: number, lifecycle: 'started' | 'completed') {
     databaseOwnerId,
     sessionId,
     attemptNumber,
+    fencingToken: 1,
     stage: 'model_selection',
     lifecycle,
     accepted: lifecycle === 'completed',
@@ -191,6 +278,7 @@ function invocationRow(invocationNumber: number) {
     databaseOwnerId,
     sessionId,
     invocationNumber,
+    fencingToken: 1,
     capabilityName: 'equity.calculate',
     capabilityVersion: 2,
     authorized: true,
@@ -235,139 +323,6 @@ function playerDecisionRow() {
 }
 
 describe('agent foundation audit repository', () => {
-  test('inserts only the fixed queued AgentRun initial state from current codecs', async () => {
-    const repository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
-    const transaction = createTransactionMock([
-      [{ handId, participantId, parentRunExists: true }],
-      [{ agentRunId }],
-    ])
-
-    await expect(
-      repository.insertAgentRunAudit(transaction, await resolvedOwner(), {
-        agentRunId,
-        sessionId,
-        handId,
-        runtime: 'player',
-        triggerType: 'player_action_required',
-        idempotencyKey: 'decision/0001',
-        participantId,
-        sourceStateVersion: 7,
-        decisionRequestId,
-        parentRunId: null,
-        deadlineAt: '2026-08-04T12:00:45.000Z',
-        runtimeDefinitionVersion: 4,
-        runConfiguration: runConfiguration(),
-        budget: executionBudget(),
-        createdAt: '2026-08-04T12:00:00.000Z',
-      }),
-    ).resolves.toEqual({ agentRunId })
-  })
-
-  test.each([
-    ['Hand', [], null],
-    [
-      'Player participant',
-      [{ handId, participantId: null, parentRunExists: true }],
-      null,
-    ],
-    [
-      'parent AgentRun',
-      [{ handId, participantId, parentRunExists: false }],
-      '77777777-7777-4777-8777-777777777777',
-    ],
-  ])(
-    'reports a missing Owner-scoped %s before inserting an AgentRun',
-    async (_resource, parentRows, parentRunId) => {
-      const repository = createAgentFoundationAuditRepository({
-        runtimeAuditDecoders: {},
-      })
-      const transaction = createTransactionMock([parentRows])
-
-      await expect(
-        repository.insertAgentRunAudit(transaction, await resolvedOwner(), {
-          agentRunId,
-          sessionId,
-          handId,
-          runtime: 'player',
-          triggerType: 'player_action_required',
-          idempotencyKey: 'decision/0001',
-          participantId,
-          sourceStateVersion: 7,
-          decisionRequestId,
-          parentRunId,
-          deadlineAt: '2026-08-04T12:00:45.000Z',
-          runtimeDefinitionVersion: 4,
-          runConfiguration: runConfiguration(),
-          budget: executionBudget(),
-          createdAt: '2026-08-04T12:00:00.000Z',
-        }),
-      ).rejects.toMatchObject({ name: 'ResourceNotFoundError' })
-    },
-  )
-
-  test('rejects forbidden Run Configuration fields before issuing any repository SQL', async () => {
-    const repository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
-    const transaction = createTransactionMock([])
-
-    await expect(
-      repository.insertAgentRunAudit(transaction, await resolvedOwner(), {
-        agentRunId,
-        sessionId,
-        handId,
-        runtime: 'player',
-        triggerType: 'player_action_required',
-        idempotencyKey: 'decision/0001',
-        participantId,
-        sourceStateVersion: 7,
-        decisionRequestId,
-        parentRunId: null,
-        deadlineAt: '2026-08-04T12:00:45.000Z',
-        runtimeDefinitionVersion: 4,
-        runConfiguration: {
-          ...runConfiguration(),
-          reasoning_content: 'secret-sentinel',
-        } as never,
-        budget: executionBudget(),
-        createdAt: '2026-08-04T12:00:00.000Z',
-      }),
-    ).rejects.toMatchObject({ name: 'RepositoryInputValidationError' })
-  })
-
-  test('rejects a Run definition version beyond the PostgreSQL integer boundary before SQL', async () => {
-    const repository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
-    const transaction = createTransactionMock([])
-    const runtimeDefinitionVersion = 2_147_483_648
-
-    await expect(
-      repository.insertAgentRunAudit(transaction, await resolvedOwner(), {
-        agentRunId,
-        sessionId,
-        handId,
-        runtime: 'player',
-        triggerType: 'player_action_required',
-        idempotencyKey: 'decision/0001',
-        participantId,
-        sourceStateVersion: 7,
-        decisionRequestId,
-        parentRunId: null,
-        deadlineAt: '2026-08-04T12:00:45.000Z',
-        runtimeDefinitionVersion,
-        runConfiguration: {
-          ...runConfiguration(),
-          runtimeDefinitionVersion,
-        },
-        budget: executionBudget(),
-        createdAt: '2026-08-04T12:00:00.000Z',
-      }),
-    ).rejects.toMatchObject({ name: 'RepositoryInputValidationError' })
-  })
-
   test('starts a persisted Attempt with an independently allocated zero-based number', async () => {
     const repository = createAgentFoundationAuditRepository({
       runtimeAuditDecoders: {},

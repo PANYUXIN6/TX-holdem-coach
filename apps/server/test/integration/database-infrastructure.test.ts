@@ -16,6 +16,7 @@ import { assertM34RebuyNextHandSessionEnd } from './database-m34-assertions.js'
 import { assertM35HttpAndAtomicSettings } from './database-m35-assertions.js'
 import { assertM36PublicProjectionRuntime } from './database-m36-assertions.js'
 import { assertM37SessionEventReplay } from './database-m37-assertions.js'
+import { assertM42AgentRunLifecycle } from './database-m42-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -23,12 +24,15 @@ import {
   assertM25SessionMutationRepository,
   assertM26SessionRecoveryRepository,
   assertM27HandAgentAuditRepositories,
+  assertM28ClearAndPreservedRoots,
   assertM28CoachDeletionContention,
   assertM28CurrentCatalogCreationContention,
+  assertM28DeletionRollback,
+  assertM28EndedDeletionAndCascade,
   assertM28HistoricalCandidateContention,
   assertM28HistoricalClearContention,
   assertM28PlayerDeletionContention,
-  assertM28SessionDataDeletionRepositories,
+  assertM28SingleDeletionLifecycleBoundary,
   assertM31SessionCommandExecutor,
 } from './database-repository-assertions.js'
 import {
@@ -173,8 +177,29 @@ registerMilestoneTest(
   (sql, runtimeUrl) => assertM27HandAgentAuditRepositories(sql, runtimeUrl),
   300_000,
 )
-registerMilestoneTest('m28', 'M2.8 session data deletion', (sql, runtimeUrl) =>
-  assertM28SessionDataDeletionRepositories(sql, runtimeUrl),
+registerMilestoneTest(
+  'm28',
+  'M2.8 ended session deletion and cascade',
+  (sql) => assertM28EndedDeletionAndCascade(sql),
+  300_000,
+)
+registerMilestoneTest(
+  'm28',
+  'M2.8 single deletion lifecycle boundary',
+  (sql) => assertM28SingleDeletionLifecycleBoundary(sql),
+  300_000,
+)
+registerMilestoneTest(
+  'm28',
+  'M2.8 owner clear and preserved roots',
+  (sql) => assertM28ClearAndPreservedRoots(sql),
+  300_000,
+)
+registerMilestoneTest(
+  'm28',
+  'M2.8 deletion rollback',
+  (sql) => assertM28DeletionRollback(sql),
+  300_000,
 )
 registerMilestoneTest(
   'm28',
@@ -221,6 +246,12 @@ registerMilestoneTest(
   'm37',
   'M3.7 SSE reconnection and event replay',
   (sql, runtimeUrl) => assertM37SessionEventReplay(sql, runtimeUrl),
+  300_000,
+)
+registerMilestoneTest(
+  'm42',
+  'M4.2 AgentRun lifecycle, fencing, and claim scanning',
+  (sql, runtimeUrl) => assertM42AgentRunLifecycle(sql, runtimeUrl),
   300_000,
 )
 registerMilestoneTest(

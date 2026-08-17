@@ -6,6 +6,7 @@ CREATE TABLE "app_private"."agent_attempts" (
 	"owner_id" uuid NOT NULL,
 	"session_id" uuid NOT NULL,
 	"attempt_number" integer NOT NULL,
+	"fencing_token" bigint NOT NULL,
 	"stage" text NOT NULL,
 	"lifecycle" text NOT NULL,
 	"accepted" boolean DEFAULT false NOT NULL,
@@ -26,7 +27,8 @@ CREATE TABLE "app_private"."agent_attempts" (
 	"completed_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "agent_attempts_run_number_unique" UNIQUE("agent_run_id","attempt_number"),
-	CONSTRAINT "agent_attempts_attempt_number_check" CHECK ("app_private"."agent_attempts"."attempt_number" >= 0),
+	CONSTRAINT "agent_attempts_attempt_number_check" CHECK ("app_private"."agent_attempts"."attempt_number" >= 0
+        AND "app_private"."agent_attempts"."fencing_token" BETWEEN 1 AND 9007199254740991),
 	CONSTRAINT "agent_attempts_lifecycle_check" CHECK ("app_private"."agent_attempts"."lifecycle" IN ('started', 'completed', 'failed', 'cancelled', 'stale')),
 	CONSTRAINT "agent_attempts_safe_values_check" CHECK ("app_private"."agent_attempts"."input_tokens" BETWEEN 0 AND 9007199254740991
         AND "app_private"."agent_attempts"."output_tokens" BETWEEN 0 AND 9007199254740991
@@ -52,6 +54,7 @@ CREATE TABLE "app_private"."agent_capability_invocations" (
 	"owner_id" uuid NOT NULL,
 	"session_id" uuid NOT NULL,
 	"invocation_number" integer NOT NULL,
+	"fencing_token" bigint NOT NULL,
 	"capability_name" text NOT NULL,
 	"capability_version" integer NOT NULL,
 	"authorized" boolean NOT NULL,
@@ -68,7 +71,8 @@ CREATE TABLE "app_private"."agent_capability_invocations" (
 	"completed_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "agent_capability_invocations_run_number_unique" UNIQUE("agent_run_id","invocation_number"),
-	CONSTRAINT "agent_capability_invocations_number_check" CHECK ("app_private"."agent_capability_invocations"."invocation_number" >= 0),
+	CONSTRAINT "agent_capability_invocations_number_check" CHECK ("app_private"."agent_capability_invocations"."invocation_number" >= 0
+        AND "app_private"."agent_capability_invocations"."fencing_token" BETWEEN 1 AND 9007199254740991),
 	CONSTRAINT "agent_capability_invocations_schema_versions_check" CHECK ("app_private"."agent_capability_invocations"."capability_version" > 0
         AND "app_private"."agent_capability_invocations"."input_schema_version" > 0
         AND (
@@ -179,6 +183,57 @@ CREATE TABLE "app_private"."agent_runs" (
           AND "app_private"."agent_runs"."lease_expires_at" IS NOT NULL
           AND
           length(btrim("app_private"."agent_runs"."lease_owner")) > 0
+        )),
+	CONSTRAINT "agent_runs_lifecycle_fields_check" CHECK ((
+        "app_private"."agent_runs"."lifecycle" = 'queued'
+        AND "app_private"."agent_runs"."lease_owner" IS NULL
+        AND "app_private"."agent_runs"."started_at" IS NULL
+        AND "app_private"."agent_runs"."completed_at" IS NULL
+        AND "app_private"."agent_runs"."termination_reason" IS NULL
+        AND "app_private"."agent_runs"."result_payload_version" IS NULL
+      ) OR (
+        "app_private"."agent_runs"."lifecycle" = 'leased'
+        AND "app_private"."agent_runs"."lease_owner" IS NOT NULL
+        AND "app_private"."agent_runs"."completed_at" IS NULL
+        AND "app_private"."agent_runs"."termination_reason" IS NULL
+        AND "app_private"."agent_runs"."result_payload_version" IS NULL
+      ) OR (
+        "app_private"."agent_runs"."lifecycle" = 'running'
+        AND "app_private"."agent_runs"."lease_owner" IS NOT NULL
+        AND "app_private"."agent_runs"."started_at" IS NOT NULL
+        AND "app_private"."agent_runs"."completed_at" IS NULL
+        AND "app_private"."agent_runs"."termination_reason" IS NULL
+        AND "app_private"."agent_runs"."result_payload_version" IS NULL
+      ) OR (
+        "app_private"."agent_runs"."lifecycle" = 'completed'
+        AND "app_private"."agent_runs"."lease_owner" IS NULL
+        AND "app_private"."agent_runs"."started_at" IS NOT NULL
+        AND "app_private"."agent_runs"."completed_at" IS NOT NULL
+        AND "app_private"."agent_runs"."termination_reason" IS NULL
+        AND "app_private"."agent_runs"."result_payload_version" IS NOT NULL
+      ) OR (
+        "app_private"."agent_runs"."lifecycle" = 'failed'
+        AND "app_private"."agent_runs"."lease_owner" IS NULL
+        AND "app_private"."agent_runs"."completed_at" IS NOT NULL
+        AND "app_private"."agent_runs"."termination_reason" IS NOT NULL
+      ) OR (
+        "app_private"."agent_runs"."lifecycle" IN ('cancelled', 'stale')
+        AND "app_private"."agent_runs"."lease_owner" IS NULL
+        AND "app_private"."agent_runs"."completed_at" IS NOT NULL
+        AND "app_private"."agent_runs"."termination_reason" IS NOT NULL
+        AND "app_private"."agent_runs"."result_payload_version" IS NULL
+      )),
+	CONSTRAINT "agent_runs_timestamp_order_check" CHECK ("app_private"."agent_runs"."deadline_at" >= "app_private"."agent_runs"."created_at"
+        AND ("app_private"."agent_runs"."started_at" IS NULL OR "app_private"."agent_runs"."started_at" >= "app_private"."agent_runs"."created_at")
+        AND ("app_private"."agent_runs"."completed_at" IS NULL OR "app_private"."agent_runs"."completed_at" >= "app_private"."agent_runs"."created_at")
+        AND (
+          "app_private"."agent_runs"."started_at" IS NULL
+          OR "app_private"."agent_runs"."completed_at" IS NULL
+          OR "app_private"."agent_runs"."completed_at" >= "app_private"."agent_runs"."started_at"
+        )
+        AND (
+          "app_private"."agent_runs"."lease_expires_at" IS NULL
+          OR "app_private"."agent_runs"."lease_expires_at" > "app_private"."agent_runs"."updated_at"
         )),
 	CONSTRAINT "agent_runs_required_payloads_check" CHECK ("app_private"."agent_runs"."run_config_payload_version" > 0
         AND jsonb_typeof("app_private"."agent_runs"."run_config_payload") = 'object'
@@ -530,7 +585,8 @@ CREATE INDEX "agent_capability_invocations_capability_idx" ON "app_private"."age
 CREATE INDEX "agent_memory_revisions_session_idx" ON "app_private"."agent_memory_revisions" USING btree ("session_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "agent_runs_one_active_player_decision" ON "app_private"."agent_runs" USING btree ("session_id","source_state_version","participant_id") WHERE "app_private"."agent_runs"."runtime" = 'player'
           AND "app_private"."agent_runs"."lifecycle" IN ('queued', 'leased', 'running');--> statement-breakpoint
-CREATE INDEX "agent_runs_worker_claim_idx" ON "app_private"."agent_runs" USING btree ("lifecycle","lease_expires_at","deadline_at","created_at");--> statement-breakpoint
+CREATE INDEX "agent_runs_runtime_concurrency_idx" ON "app_private"."agent_runs" USING btree ("runtime","lifecycle","owner_id","lease_expires_at") WHERE "app_private"."agent_runs"."lifecycle" IN ('leased', 'running');--> statement-breakpoint
+CREATE INDEX "agent_runs_worker_claim_idx" ON "app_private"."agent_runs" USING btree ("runtime","lifecycle","lease_expires_at","deadline_at","created_at","id");--> statement-breakpoint
 CREATE INDEX "agent_runs_session_created_idx" ON "app_private"."agent_runs" USING btree ("session_id","created_at");--> statement-breakpoint
 CREATE INDEX "agent_runs_hand_runtime_idx" ON "app_private"."agent_runs" USING btree ("hand_id","runtime");--> statement-breakpoint
 CREATE INDEX "agent_runs_participant_created_idx" ON "app_private"."agent_runs" USING btree ("participant_id","created_at");--> statement-breakpoint

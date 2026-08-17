@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres'
+import type { Sql, TransactionSql } from 'postgres'
 import { describe, expect, test } from 'vitest'
 import {
   DatabaseOperationError,
@@ -34,6 +34,9 @@ function createSqlMock(responses: readonly unknown[]): {
     return Promise.resolve(response)
   }) as unknown as Sql
   Object.assign(tag, {
+    begin: <Result>(
+      callback: (transaction: TransactionSql) => Promise<Result>,
+    ) => callback(tag as unknown as TransactionSql),
     json: (value: unknown) => value,
     typed: (value: string) => JSON.parse(value) as unknown,
   })
@@ -157,7 +160,7 @@ describe('player timeout settings repository', () => {
   })
 
   test('upserts only the app_settings row with a complete validated payload', async () => {
-    const { sql, calls } = createSqlMock([[{ databaseOwnerId }], []])
+    const { sql, calls } = createSqlMock([[{ databaseOwnerId }], [], []])
 
     await expect(
       writePlayerTimeoutSettings(sql, ownerScope, {
@@ -182,6 +185,7 @@ describe('player timeout settings repository', () => {
   test('patches the locked latest value instead of a stale pre-read value', async () => {
     const { sql, calls } = createSqlMock([
       [{ databaseOwnerId }],
+      [],
       [],
       [
         {
@@ -211,11 +215,12 @@ describe('player timeout settings repository', () => {
       decisionDeadlineSeconds: 90,
     })
 
-    expect(calls[1]?.text).toContain('ON CONFLICT')
-    expect(calls[1]?.text).toContain('DO NOTHING')
-    expect(calls[2]?.text).toContain('FOR UPDATE')
-    expect(calls[3]?.text).toContain('RETURNING')
-    expect(calls[3]?.parameters).toContainEqual({
+    expect(calls[1]?.text).toContain('pg_advisory_xact_lock')
+    expect(calls[2]?.text).toContain('ON CONFLICT')
+    expect(calls[2]?.text).toContain('DO NOTHING')
+    expect(calls[3]?.text).toContain('FOR UPDATE')
+    expect(calls[4]?.text).toContain('RETURNING')
+    expect(calls[4]?.parameters).toContainEqual({
       attemptTimeoutSeconds: 20,
       decisionDeadlineSeconds: 90,
     })
@@ -224,6 +229,7 @@ describe('player timeout settings repository', () => {
   test('rejects an invalid locked merge before updating', async () => {
     const { sql, calls } = createSqlMock([
       [{ databaseOwnerId }],
+      [],
       [],
       [
         {

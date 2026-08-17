@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres'
+import type { Sql, TransactionSql } from 'postgres'
 import { z } from 'zod'
 import {
   DatabaseOperationError,
@@ -35,7 +35,7 @@ export function isResolvedOwnerScope(
 }
 
 export async function resolveOwnerScope(
-  sql: Sql,
+  sql: Sql | TransactionSql,
   ownerScope: OwnerScope,
 ): Promise<ResolvedOwnerScope> {
   const parsedScope = OwnerScopeSchema.safeParse(ownerScope)

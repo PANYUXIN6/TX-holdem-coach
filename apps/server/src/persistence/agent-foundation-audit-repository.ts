@@ -16,12 +16,10 @@ import {
 } from '../agents/audit/errors.js'
 import {
   currentExecutionBudgetAuditReader,
-  encodeExecutionBudgetAudit,
   type ExecutionBudgetAudit,
 } from '../agents/audit/execution-budget-audit-codec.js'
 import {
   currentRunConfigurationAuditReader,
-  encodeRunConfigurationAudit,
   type RunConfigurationAudit,
 } from '../agents/audit/run-configuration-audit-codec.js'
 import type {
@@ -37,6 +35,11 @@ import {
   EMPTY_COACH_RUNTIME_AUDIT,
   EMPTY_PLAYER_RUNTIME_AUDIT,
 } from '../agents/audit/runtime-audit-extension-decoder.js'
+import { AgentRunTransitionError } from '../agents/foundation/agent-run-lifecycle.js'
+import {
+  isRuntimeCommitAuthority,
+  type RuntimeCommitAuthority,
+} from '../agents/foundation/runtime-ports.js'
 import {
   AgentAttemptAuditTransitionError,
   DatabaseOperationError,
@@ -85,39 +88,6 @@ const IdempotencyKeySchema = z
   .max(256)
   .regex(/^[a-z0-9](?:[a-z0-9._:/@-]*[a-z0-9])?$/)
 
-const InsertAgentRunAuditBaseSchema = z.strictObject({
-  agentRunId: z.uuid(),
-  sessionId: z.uuid(),
-  handId: z.uuid(),
-  triggerType: StableAuditCodeSchema,
-  idempotencyKey: IdempotencyKeySchema,
-  parentRunId: z.uuid().nullable(),
-  deadlineAt: CanonicalUtcTimestampSchema,
-  runtimeDefinitionVersion: PositivePostgresIntegerSchema,
-  runConfiguration: z.unknown(),
-  budget: z.unknown(),
-  createdAt: CanonicalUtcTimestampSchema,
-})
-const InsertAgentRunAuditInputSchema = z.discriminatedUnion('runtime', [
-  InsertAgentRunAuditBaseSchema.extend({
-    runtime: z.literal('player'),
-    participantId: z.uuid(),
-    sourceStateVersion: NonnegativeSafeIntegerSchema,
-    decisionRequestId: z.uuid(),
-  }),
-  InsertAgentRunAuditBaseSchema.extend({
-    runtime: z.literal('coach'),
-    participantId: z.null(),
-    sourceStateVersion: z.null(),
-    decisionRequestId: z.null(),
-  }),
-])
-const InsertedAgentRunRowSchema = z.strictObject({ agentRunId: z.uuid() })
-const AgentRunParentScopeRowSchema = z.strictObject({
-  handId: z.uuid(),
-  participantId: z.uuid().nullable(),
-  parentRunExists: z.boolean(),
-})
 const StartAgentAttemptAuditInputSchema = z.strictObject({
   sessionId: z.uuid(),
   agentRunId: z.uuid(),
@@ -134,6 +104,8 @@ const StartAgentAttemptAuditInputSchema = z.strictObject({
 const LockedAgentRunRowSchema = z.strictObject({
   agentRunId: z.uuid(),
   sessionId: z.uuid(),
+  runtime: z.enum(['player', 'coach']),
+  fencingToken: PositiveSafeIntegerSchema,
 })
 const MaximumNumberRowSchema = z.strictObject({
   maxNumber: z.number().int().min(0).max(2_147_483_647).nullable(),
@@ -197,6 +169,7 @@ const LockedStartedAttemptRowSchema = z.strictObject({
   agentRunId: z.uuid(),
   sessionId: z.uuid(),
   lifecycle: z.literal('started'),
+  fencingToken: PositiveSafeIntegerSchema,
   payloadVersion: z.unknown(),
   payload: z.unknown(),
 })
@@ -247,6 +220,7 @@ const AgentAttemptAuditRowSchema = z.strictObject({
   databaseOwnerId: z.uuid(),
   sessionId: z.uuid(),
   attemptNumber: z.number().int().min(0).max(2_147_483_647),
+  fencingToken: PositiveSafeIntegerSchema,
   stage: StableAuditCodeSchema,
   lifecycle: z.enum(['started', 'completed', 'failed', 'cancelled', 'stale']),
   accepted: z.boolean(),
@@ -273,6 +247,7 @@ const CapabilityInvocationAuditRowSchema = z.strictObject({
   databaseOwnerId: z.uuid(),
   sessionId: z.uuid(),
   invocationNumber: z.number().int().min(0).max(2_147_483_647),
+  fencingToken: PositiveSafeIntegerSchema,
   capabilityName: CanonicalAuditReferenceIdSchema,
   capabilityVersion: PositivePostgresIntegerSchema,
   authorized: z.boolean(),
@@ -363,36 +338,6 @@ const AgentRunAuditRowSchema = z.strictObject({
   playerDecision: z.unknown().nullable(),
 })
 
-interface InsertAgentRunAuditBaseInput {
-  readonly agentRunId: string
-  readonly sessionId: string
-  readonly handId: string
-  readonly triggerType: string
-  readonly idempotencyKey: string
-  readonly parentRunId: string | null
-  readonly deadlineAt: string
-  readonly runtimeDefinitionVersion: number
-  readonly runConfiguration: RunConfigurationAudit
-  readonly budget: ExecutionBudgetAudit
-  readonly createdAt: string
-}
-
-export type InsertAgentRunAuditInput = InsertAgentRunAuditBaseInput &
-  (
-    | {
-        readonly runtime: 'player'
-        readonly participantId: string
-        readonly sourceStateVersion: number
-        readonly decisionRequestId: string
-      }
-    | {
-        readonly runtime: 'coach'
-        readonly participantId: null
-        readonly sourceStateVersion: null
-        readonly decisionRequestId: null
-      }
-  )
-
 export interface StartAgentAttemptAuditInput {
   readonly sessionId: string
   readonly agentRunId: string
@@ -445,6 +390,7 @@ export interface AppendCapabilityInvocationAuditInput {
 export interface AgentAttemptAudit {
   readonly attemptId: string
   readonly attemptNumber: number
+  readonly fencingToken: number
   readonly stage: string
   readonly lifecycle: 'started' | 'completed' | 'failed' | 'cancelled' | 'stale'
   readonly accepted: boolean
@@ -472,6 +418,7 @@ export interface AgentAttemptAudit {
 export interface CapabilityInvocationAudit {
   readonly invocationId: string
   readonly invocationNumber: number
+  readonly fencingToken: number
   readonly capabilityName: string
   readonly capabilityVersion: number
   readonly authorized: boolean
@@ -550,34 +497,6 @@ function deepFreeze<Value>(value: Value): Value {
     Object.freeze(value)
   }
   return value
-}
-
-function decodeRunConfigurationForWrite(input: unknown) {
-  try {
-    return encodeRunConfigurationAudit(input)
-  } catch (error) {
-    if (
-      error instanceof AgentAuditPayloadValidationError ||
-      error instanceof AgentAuditPayloadVersionError
-    ) {
-      throw new RepositoryInputValidationError()
-    }
-    throw error
-  }
-}
-
-function decodeExecutionBudgetForWrite(input: unknown) {
-  try {
-    return encodeExecutionBudgetAudit(input)
-  } catch (error) {
-    if (
-      error instanceof AgentAuditPayloadValidationError ||
-      error instanceof AgentAuditPayloadVersionError
-    ) {
-      throw new RepositoryInputValidationError()
-    }
-    throw error
-  }
 }
 
 function readAgentAttempts(
@@ -660,6 +579,7 @@ function readAgentAttempts(
     return deepFreeze({
       attemptId: row.attemptId,
       attemptNumber: row.attemptNumber,
+      fencingToken: row.fencingToken,
       stage: row.stage,
       lifecycle: row.lifecycle,
       accepted: row.accepted,
@@ -728,6 +648,7 @@ function readCapabilityInvocations(
     return deepFreeze({
       invocationId: row.invocationId,
       invocationNumber: row.invocationNumber,
+      fencingToken: row.fencingToken,
       capabilityName: row.capabilityName,
       capabilityVersion: row.capabilityVersion,
       authorized: row.authorized,
@@ -779,6 +700,53 @@ function assertRuntimeDecoderResult(
     })
   ) {
     throw new PersistenceDataCorruptionError('invalidRuntimeAuditExtension')
+  }
+}
+
+async function lockFencedRunningAgentRun(
+  transaction: TransactionSql,
+  owner: ResolvedOwnerScope,
+  authority: RuntimeCommitAuthority,
+  input: { readonly sessionId: string; readonly agentRunId: string },
+): Promise<void> {
+  if (
+    !isRuntimeCommitAuthority(authority, authority.runtimeType) ||
+    authority.runId !== input.agentRunId
+  ) {
+    throw new AgentRunTransitionError('agent_run_fencing_rejected')
+  }
+  let rows: readonly unknown[]
+  try {
+    rows = await transaction`
+      SELECT
+        id::text AS "agentRunId",
+        session_id::text AS "sessionId",
+        runtime,
+        fencing_token::float8 AS "fencingToken"
+      FROM app_private.agent_runs
+      WHERE id = ${input.agentRunId}::uuid
+        AND owner_id = ${owner.databaseOwnerId}::uuid
+        AND session_id = ${input.sessionId}::uuid
+        AND runtime = ${authority.runtimeType}
+        AND lifecycle = 'running'
+        AND lease_owner = ${authority.leaseOwner}
+        AND fencing_token = ${authority.fencingToken}::bigint
+        AND lease_expires_at > clock_timestamp()
+      FOR UPDATE
+    `
+  } catch {
+    throw new DatabaseOperationError()
+  }
+  const parsed = z.array(LockedAgentRunRowSchema).safeParse(rows)
+  if (
+    !parsed.success ||
+    parsed.data.length !== 1 ||
+    parsed.data[0]?.agentRunId !== input.agentRunId ||
+    parsed.data[0]?.sessionId !== input.sessionId ||
+    parsed.data[0]?.runtime !== authority.runtimeType ||
+    parsed.data[0]?.fencingToken !== authority.fencingToken
+  ) {
+    throw new AgentRunTransitionError('agent_run_fencing_rejected')
   }
 }
 
@@ -943,24 +911,22 @@ export interface AgentFoundationAuditRepository<
   TPlayerRuntimeAudit extends PlayerRuntimeAuditShape,
   TCoachRuntimeAudit extends CoachRuntimeAuditShape,
 > {
-  insertAgentRunAudit(
-    transaction: TransactionSql,
-    owner: ResolvedOwnerScope,
-    input: InsertAgentRunAuditInput,
-  ): Promise<{ readonly agentRunId: string }>
   startAgentAttemptAudit(
     transaction: TransactionSql,
     owner: ResolvedOwnerScope,
+    authority: RuntimeCommitAuthority,
     input: StartAgentAttemptAuditInput,
   ): Promise<{ readonly attemptId: string; readonly attemptNumber: number }>
   finishAgentAttemptAudit(
     transaction: TransactionSql,
     owner: ResolvedOwnerScope,
+    authority: RuntimeCommitAuthority,
     input: FinishAgentAttemptAuditInput,
   ): Promise<void>
   appendCapabilityInvocationAudit(
     transaction: TransactionSql,
     owner: ResolvedOwnerScope,
+    authority: RuntimeCommitAuthority,
     input: AppendCapabilityInvocationAuditInput,
   ): Promise<{
     readonly invocationId: string
@@ -1028,173 +994,10 @@ export function createAgentFoundationAuditRepository<
   })
 
   return Object.freeze({
-    async insertAgentRunAudit(
-      transaction: TransactionSql,
-      owner: ResolvedOwnerScope,
-      input: InsertAgentRunAuditInput,
-    ): Promise<{ readonly agentRunId: string }> {
-      const parsed = InsertAgentRunAuditInputSchema.safeParse(input)
-      if (!isResolvedOwnerScope(owner) || !parsed.success) {
-        throw new RepositoryInputValidationError()
-      }
-      const configuration = decodeRunConfigurationForWrite(
-        parsed.data.runConfiguration,
-      )
-      const budget = decodeExecutionBudgetForWrite(parsed.data.budget)
-      if (
-        configuration.payload.configuration.runtime !== parsed.data.runtime ||
-        configuration.payload.configuration.runtimeDefinitionVersion !==
-          parsed.data.runtimeDefinitionVersion
-      ) {
-        throw new RepositoryInputValidationError()
-      }
-
-      let parentScopeRows: readonly unknown[]
-      try {
-        parentScopeRows = await transaction`
-          SELECT
-            h.id::text AS "handId",
-            CASE WHEN ${parsed.data.runtime} = 'player' THEN (
-              SELECT sa.participant_id::text
-              FROM app_private.session_agents AS sa
-              WHERE sa.participant_id = ${parsed.data.participantId}::uuid
-                AND sa.session_id = h.session_id
-                AND sa.owner_id = h.owner_id
-            ) ELSE NULL END AS "participantId",
-            CASE WHEN ${parsed.data.parentRunId}::uuid IS NULL THEN true ELSE EXISTS (
-              SELECT 1
-              FROM app_private.agent_runs AS parent_run
-              WHERE parent_run.id = ${parsed.data.parentRunId}::uuid
-                AND parent_run.session_id = h.session_id
-                AND parent_run.owner_id = h.owner_id
-            ) END AS "parentRunExists"
-          FROM app_private.hands AS h
-          WHERE h.id = ${parsed.data.handId}::uuid
-            AND h.session_id = ${parsed.data.sessionId}::uuid
-            AND h.owner_id = ${owner.databaseOwnerId}::uuid
-        `
-      } catch {
-        throw new DatabaseOperationError()
-      }
-      if (parentScopeRows.length === 0) throw new ResourceNotFoundError()
-      const parentScope = z
-        .array(AgentRunParentScopeRowSchema)
-        .safeParse(parentScopeRows)
-      if (!parentScope.success || parentScope.data.length !== 1) {
-        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
-      }
-      if (
-        parentScope.data[0]?.handId !== parsed.data.handId ||
-        (parsed.data.runtime === 'player' &&
-          parentScope.data[0]?.participantId !== parsed.data.participantId) ||
-        !parentScope.data[0]?.parentRunExists
-      ) {
-        if (
-          parentScope.data[0]?.handId === parsed.data.handId &&
-          ((parsed.data.runtime === 'player' &&
-            parentScope.data[0]?.participantId === null) ||
-            !parentScope.data[0]?.parentRunExists)
-        ) {
-          throw new ResourceNotFoundError()
-        }
-        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
-      }
-      const configurationPayload = transaction.typed(
-        JSON.stringify(configuration.payload),
-        POSTGRES_TEXT_OID,
-      )
-      const budgetPayload = transaction.typed(
-        JSON.stringify(budget.payload),
-        POSTGRES_TEXT_OID,
-      )
-
-      let rows: readonly unknown[]
-      try {
-        rows = await transaction`
-          INSERT INTO app_private.agent_runs (
-            id,
-            owner_id,
-            session_id,
-            runtime,
-            trigger_type,
-            lifecycle,
-            idempotency_key,
-            hand_id,
-            participant_id,
-            source_state_version,
-            decision_request_id,
-            parent_run_id,
-            replacement_run_id,
-            lease_owner,
-            lease_expires_at,
-            fencing_token,
-            deadline_at,
-            runtime_definition_version,
-            termination_reason,
-            run_config_payload_version,
-            run_config_payload,
-            budget_payload_version,
-            budget_payload,
-            checkpoint_payload_version,
-            checkpoint_payload,
-            result_payload_version,
-            result_payload,
-            created_at,
-            started_at,
-            completed_at,
-            updated_at
-          ) VALUES (
-            ${parsed.data.agentRunId}::uuid,
-            ${owner.databaseOwnerId}::uuid,
-            ${parsed.data.sessionId}::uuid,
-            ${parsed.data.runtime},
-            ${parsed.data.triggerType},
-            'queued',
-            ${parsed.data.idempotencyKey},
-            ${parsed.data.handId}::uuid,
-            ${parsed.data.participantId}::uuid,
-            ${parsed.data.sourceStateVersion}::bigint,
-            ${parsed.data.decisionRequestId}::uuid,
-            ${parsed.data.parentRunId}::uuid,
-            NULL,
-            NULL,
-            NULL,
-            0,
-            ${parsed.data.deadlineAt}::timestamptz,
-            ${parsed.data.runtimeDefinitionVersion},
-            NULL,
-            ${configuration.payloadVersion},
-            ${configurationPayload}::jsonb,
-            ${budget.payloadVersion},
-            ${budgetPayload}::jsonb,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            ${parsed.data.createdAt}::timestamptz,
-            NULL,
-            NULL,
-            ${parsed.data.createdAt}::timestamptz
-          )
-          RETURNING id::text AS "agentRunId"
-        `
-      } catch {
-        throw new DatabaseOperationError()
-      }
-      const inserted = z.array(InsertedAgentRunRowSchema).safeParse(rows)
-      if (
-        !inserted.success ||
-        inserted.data.length !== 1 ||
-        inserted.data[0]?.agentRunId !== parsed.data.agentRunId
-      ) {
-        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
-      }
-      return Object.freeze({ agentRunId: parsed.data.agentRunId })
-    },
-
     async startAgentAttemptAudit(
       transaction: TransactionSql,
       owner: ResolvedOwnerScope,
+      authority: RuntimeCommitAuthority,
       input: StartAgentAttemptAuditInput,
     ): Promise<{ readonly attemptId: string; readonly attemptNumber: number }> {
       const parsed = StartAgentAttemptAuditInputSchema.safeParse(input)
@@ -1219,31 +1022,12 @@ export function createAgentFoundationAuditRepository<
         throw error
       }
 
-      let lockedRows: readonly unknown[]
-      try {
-        lockedRows = await transaction`
-          SELECT
-            id::text AS "agentRunId",
-            session_id::text AS "sessionId"
-          FROM app_private.agent_runs
-          WHERE id = ${parsed.data.agentRunId}::uuid
-            AND owner_id = ${owner.databaseOwnerId}::uuid
-            AND session_id = ${parsed.data.sessionId}::uuid
-          FOR UPDATE
-        `
-      } catch {
-        throw new DatabaseOperationError()
-      }
-      if (lockedRows.length === 0) throw new ResourceNotFoundError()
-      const locked = z.array(LockedAgentRunRowSchema).safeParse(lockedRows)
-      if (
-        !locked.success ||
-        locked.data.length !== 1 ||
-        locked.data[0]?.agentRunId !== parsed.data.agentRunId ||
-        locked.data[0]?.sessionId !== parsed.data.sessionId
-      ) {
-        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
-      }
+      await lockFencedRunningAgentRun(
+        transaction,
+        owner,
+        authority,
+        parsed.data,
+      )
 
       let maximumRows: readonly unknown[]
       try {
@@ -1281,6 +1065,7 @@ export function createAgentFoundationAuditRepository<
             owner_id,
             session_id,
             attempt_number,
+            fencing_token,
             stage,
             lifecycle,
             accepted,
@@ -1306,6 +1091,7 @@ export function createAgentFoundationAuditRepository<
             ${owner.databaseOwnerId}::uuid,
             ${parsed.data.sessionId}::uuid,
             ${attemptNumber},
+            ${authority.fencingToken}::bigint,
             ${parsed.data.stage},
             'started',
             false,
@@ -1346,12 +1132,20 @@ export function createAgentFoundationAuditRepository<
     async finishAgentAttemptAudit(
       transaction: TransactionSql,
       owner: ResolvedOwnerScope,
+      authority: RuntimeCommitAuthority,
       input: FinishAgentAttemptAuditInput,
     ): Promise<void> {
       const parsed = FinishAgentAttemptAuditInputSchema.safeParse(input)
       if (!isResolvedOwnerScope(owner) || !parsed.success) {
         throw new RepositoryInputValidationError()
       }
+
+      await lockFencedRunningAgentRun(
+        transaction,
+        owner,
+        authority,
+        parsed.data,
+      )
 
       let lockedRows: readonly unknown[]
       try {
@@ -1361,6 +1155,7 @@ export function createAgentFoundationAuditRepository<
             agent_run_id::text AS "agentRunId",
             session_id::text AS "sessionId",
             lifecycle,
+            fencing_token::float8 AS "fencingToken",
             attempt_payload_version AS "payloadVersion",
             attempt_payload AS "payload"
           FROM app_private.agent_attempts
@@ -1368,6 +1163,7 @@ export function createAgentFoundationAuditRepository<
             AND agent_run_id = ${parsed.data.agentRunId}::uuid
             AND owner_id = ${owner.databaseOwnerId}::uuid
             AND session_id = ${parsed.data.sessionId}::uuid
+            AND fencing_token = ${authority.fencingToken}::bigint
           FOR UPDATE
         `
       } catch {
@@ -1382,7 +1178,8 @@ export function createAgentFoundationAuditRepository<
         locked.data.length !== 1 ||
         locked.data[0]?.attemptId !== parsed.data.attemptId ||
         locked.data[0]?.agentRunId !== parsed.data.agentRunId ||
-        locked.data[0]?.sessionId !== parsed.data.sessionId
+        locked.data[0]?.sessionId !== parsed.data.sessionId ||
+        locked.data[0]?.fencingToken !== authority.fencingToken
       ) {
         throw new AgentAttemptAuditTransitionError()
       }
@@ -1447,6 +1244,7 @@ export function createAgentFoundationAuditRepository<
             AND agent_run_id = ${parsed.data.agentRunId}::uuid
             AND owner_id = ${owner.databaseOwnerId}::uuid
             AND session_id = ${parsed.data.sessionId}::uuid
+            AND fencing_token = ${authority.fencingToken}::bigint
             AND lifecycle = 'started'
           RETURNING id::text AS "attemptId"
         `
@@ -1468,6 +1266,7 @@ export function createAgentFoundationAuditRepository<
     async appendCapabilityInvocationAudit(
       transaction: TransactionSql,
       owner: ResolvedOwnerScope,
+      authority: RuntimeCommitAuthority,
       input: AppendCapabilityInvocationAuditInput,
     ): Promise<{
       readonly invocationId: string
@@ -1478,31 +1277,12 @@ export function createAgentFoundationAuditRepository<
         throw new RepositoryInputValidationError()
       }
 
-      let lockedRows: readonly unknown[]
-      try {
-        lockedRows = await transaction`
-          SELECT
-            id::text AS "agentRunId",
-            session_id::text AS "sessionId"
-          FROM app_private.agent_runs
-          WHERE id = ${parsed.data.agentRunId}::uuid
-            AND owner_id = ${owner.databaseOwnerId}::uuid
-            AND session_id = ${parsed.data.sessionId}::uuid
-          FOR UPDATE
-        `
-      } catch {
-        throw new DatabaseOperationError()
-      }
-      if (lockedRows.length === 0) throw new ResourceNotFoundError()
-      const locked = z.array(LockedAgentRunRowSchema).safeParse(lockedRows)
-      if (
-        !locked.success ||
-        locked.data.length !== 1 ||
-        locked.data[0]?.agentRunId !== parsed.data.agentRunId ||
-        locked.data[0]?.sessionId !== parsed.data.sessionId
-      ) {
-        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
-      }
+      await lockFencedRunningAgentRun(
+        transaction,
+        owner,
+        authority,
+        parsed.data,
+      )
 
       let maximumRows: readonly unknown[]
       try {
@@ -1538,6 +1318,7 @@ export function createAgentFoundationAuditRepository<
             owner_id,
             session_id,
             invocation_number,
+            fencing_token,
             capability_name,
             capability_version,
             authorized,
@@ -1559,6 +1340,7 @@ export function createAgentFoundationAuditRepository<
             ${owner.databaseOwnerId}::uuid,
             ${parsed.data.sessionId}::uuid,
             ${invocationNumber},
+            ${authority.fencingToken}::bigint,
             ${parsed.data.capabilityName},
             ${parsed.data.capabilityVersion},
             ${parsed.data.authorized},
@@ -1660,6 +1442,7 @@ export function createAgentFoundationAuditRepository<
                   'databaseOwnerId', aa.owner_id::text,
                   'sessionId', aa.session_id::text,
                   'attemptNumber', aa.attempt_number,
+                  'fencingToken', aa.fencing_token::float8,
                   'stage', aa.stage,
                   'lifecycle', aa.lifecycle,
                   'accepted', aa.accepted,
@@ -1694,6 +1477,7 @@ export function createAgentFoundationAuditRepository<
                   'databaseOwnerId', aci.owner_id::text,
                   'sessionId', aci.session_id::text,
                   'invocationNumber', aci.invocation_number,
+                  'fencingToken', aci.fencing_token::float8,
                   'capabilityName', aci.capability_name,
                   'capabilityVersion', aci.capability_version,
                   'authorized', aci.authorized,

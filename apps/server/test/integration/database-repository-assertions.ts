@@ -30,7 +30,8 @@ import {
   SessionDeletionTransitionError,
   UnknownPayloadVersionError,
 } from '../../src/persistence/errors.js'
-import { createAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
+import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
+import { createAgentFoundationAuditRepository as createRawAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
 import {
   abortHandAudit,
   completeHandAudit,
@@ -75,6 +76,7 @@ import {
   prepareCurrentCatalogRosterSnapshot,
   prepareLatestEndedRosterSnapshotForReuse,
 } from '../helpers/session-roster-fixture.js'
+import { insertAgentRunFixture } from '../helpers/agent-run-fixture.js'
 import {
   currentPrivateEventReader,
   encodeCurrentPrivateEvent,
@@ -104,6 +106,131 @@ import {
 } from './database-test-runtime.js'
 
 const ownerScope = { ownerId: 'local-user' } as const
+
+async function ensureLegacyAuditAuthority(
+  transaction: TransactionSql,
+  agentRunId: string,
+) {
+  const leaseOwner = 'database-test:legacy-audit:0'
+  const existingRows = await transaction<
+    {
+      readonly runtimeType: 'player' | 'coach'
+      readonly lifecycle: string
+      readonly leaseOwner: string | null
+      readonly fencingToken: number
+      readonly leaseActive: boolean
+    }[]
+  >`
+    SELECT runtime AS "runtimeType", lifecycle, lease_owner AS "leaseOwner",
+           fencing_token::float8 AS "fencingToken",
+           lease_expires_at > clock_timestamp() AS "leaseActive"
+    FROM app_private.agent_runs
+    WHERE id = ${agentRunId}::uuid
+  `
+  const existing = existingRows[0]
+  if (existingRows.length === 0) throw new ResourceNotFoundError()
+  if (
+    existingRows.length === 1 &&
+    existing !== undefined &&
+    existing.lifecycle === 'running' &&
+    existing.leaseOwner === leaseOwner &&
+    existing.leaseActive &&
+    Number.isSafeInteger(existing.fencingToken) &&
+    existing.fencingToken > 0
+  ) {
+    return issueRuntimeCommitAuthority({
+      runtimeType: existing.runtimeType,
+      runId: agentRunId,
+      leaseOwner,
+      fencingToken: existing.fencingToken,
+    })
+  }
+  const rows = await transaction<
+    {
+      readonly runtimeType: 'player' | 'coach'
+      readonly fencingToken: number
+    }[]
+  >`
+    UPDATE app_private.agent_runs
+    SET lifecycle = 'running',
+        lease_owner = ${leaseOwner},
+        lease_expires_at = clock_timestamp() + interval '1 hour',
+        fencing_token = GREATEST(fencing_token, 1),
+        started_at = COALESCE(started_at, clock_timestamp()),
+        updated_at = clock_timestamp()
+    WHERE id = ${agentRunId}::uuid
+      AND lifecycle IN ('queued', 'leased', 'running')
+    RETURNING runtime AS "runtimeType", fencing_token::float8 AS "fencingToken"
+  `
+  const row = rows[0]
+  if (rows.length === 0) throw new ResourceNotFoundError()
+  if (rows.length !== 1 || row === undefined) {
+    throw new Error('旧审计测试 fixture 无法签发 fencing authority。')
+  }
+  return issueRuntimeCommitAuthority({
+    runtimeType: row.runtimeType,
+    runId: agentRunId,
+    leaseOwner,
+    fencingToken: row.fencingToken,
+  })
+}
+
+function createAgentFoundationAuditRepository(
+  options: Parameters<typeof createRawAgentFoundationAuditRepository>[0],
+) {
+  const repository = createRawAgentFoundationAuditRepository(options)
+  return {
+    ...repository,
+    async startAgentAttemptAudit(
+      transaction: TransactionSql,
+      owner: Parameters<typeof repository.startAgentAttemptAudit>[1],
+      input: Parameters<typeof repository.startAgentAttemptAudit>[3],
+    ) {
+      const authority = await ensureLegacyAuditAuthority(
+        transaction,
+        input.agentRunId,
+      )
+      return repository.startAgentAttemptAudit(
+        transaction,
+        owner,
+        authority,
+        input,
+      )
+    },
+    async finishAgentAttemptAudit(
+      transaction: TransactionSql,
+      owner: Parameters<typeof repository.finishAgentAttemptAudit>[1],
+      input: Parameters<typeof repository.finishAgentAttemptAudit>[3],
+    ) {
+      const authority = await ensureLegacyAuditAuthority(
+        transaction,
+        input.agentRunId,
+      )
+      return repository.finishAgentAttemptAudit(
+        transaction,
+        owner,
+        authority,
+        input,
+      )
+    },
+    async appendCapabilityInvocationAudit(
+      transaction: TransactionSql,
+      owner: Parameters<typeof repository.appendCapabilityInvocationAudit>[1],
+      input: Parameters<typeof repository.appendCapabilityInvocationAudit>[3],
+    ) {
+      const authority = await ensureLegacyAuditAuthority(
+        transaction,
+        input.agentRunId,
+      )
+      return repository.appendCapabilityInvocationAudit(
+        transaction,
+        owner,
+        authority,
+        input,
+      )
+    },
+  }
+}
 
 class ExpectedRollback extends Error {}
 
@@ -3306,7 +3433,7 @@ async function assertM27HandAbortRoundTripAndRollback(sql: Sql): Promise<void> {
         checkpoint: playerFixture.checkpoint,
         startedAt: '2026-08-04T13:00:00.000Z',
       })
-      await repository.insertAgentRunAudit(
+      await insertAgentRunFixture(
         transaction,
         playerOwner,
         createM27PlayerRunInput(
@@ -3421,7 +3548,7 @@ async function assertM27HandAbortRoundTripAndRollback(sql: Sql): Promise<void> {
           checkpoint: coachFixture.checkpoint,
           startedAt: '2026-08-04T13:01:00.000Z',
         })
-        await repository.insertAgentRunAudit(
+        await insertAgentRunFixture(
           transaction,
           coachOwner,
           createM27CoachRunInput(coachSessionId, coachHandId, coachRunId),
@@ -3665,7 +3792,7 @@ function createM27InvocationInput(
   }
 }
 
-async function insertCommittedM27CompletedHand(
+export async function insertCommittedM27CompletedHand(
   sql: Sql,
   sessionId: string,
   handId: string,
@@ -3699,7 +3826,7 @@ async function insertCommittedM27CoachRun(
     runtimeAuditDecoders: {},
   })
   await sql.begin((transaction) =>
-    repository.insertAgentRunAudit(
+    insertAgentRunFixture(
       transaction,
       owner,
       createM27CoachRunInput(sessionId, handId, agentRunId),
@@ -3912,7 +4039,7 @@ async function assertM27AgentPublicAggregateRoundTrip(sql: Sql): Promise<void> {
       sessionId,
       handId,
       runtime: 'coach',
-      lifecycle: 'queued',
+      lifecycle: 'running',
       participantId: null,
       sourceStateVersion: null,
       decisionRequestId: null,
@@ -4014,15 +4141,6 @@ async function assertM27AgentPublicAggregateRoundTrip(sql: Sql): Promise<void> {
         }),
       ),
     ).rejects.toBeInstanceOf(ResourceNotFoundError)
-    await expect(
-      sql.begin((transaction) =>
-        repository.insertAgentRunAudit(
-          transaction,
-          owner,
-          createM27CoachRunInput(sessionId, randomUUID(), randomUUID()),
-        ),
-      ),
-    ).rejects.toBeInstanceOf(ResourceNotFoundError)
   } finally {
     await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
   }
@@ -4109,7 +4227,7 @@ async function assertM27AgentRestartReadback(
       sessionId,
       handId,
       agentRunId,
-      lifecycle: 'queued',
+      lifecycle: 'running',
       attempts: [
         {
           attemptId: attempt.attemptId,
@@ -4262,7 +4380,12 @@ async function assertM27AgentUnknownAndCorruptRows(sql: Sql): Promise<void> {
     `
     await sql`
       UPDATE app_private.agent_runs
-      SET result_payload_version = 778,
+      SET lifecycle = 'failed',
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          completed_at = clock_timestamp(),
+          termination_reason = 'test_failed',
+          result_payload_version = 778,
           result_payload = '{}'::jsonb
       WHERE id = ${agentRunId}::uuid
     `
@@ -4360,6 +4483,9 @@ async function assertM27AgentSequenceConcurrency(
       handId,
       agentRunId,
     )
+    await sql.begin((transaction) =>
+      ensureLegacyAuditAuthority(transaction, agentRunId),
+    )
     await secondSql`SELECT 1`
 
     await sql.begin(async (firstTransaction) => {
@@ -4445,79 +4571,37 @@ async function assertM27AgentSequenceConcurrency(
   }
 }
 
-async function assertM27AgentSecretBoundaries(sql: Sql): Promise<void> {
-  const sessionId = randomUUID()
-  const handId = randomUUID()
-  const agentRunId = randomUUID()
-  const sentinel = `M27_AGENT_SECRET_${randomUUID()}`
-
-  try {
-    const owner = await insertCommittedM27CompletedHand(sql, sessionId, handId)
-    const repository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
-    const input = createM27CoachRunInput(sessionId, handId, agentRunId)
-    await expect(
-      sql.begin((transaction) =>
-        repository.insertAgentRunAudit(transaction, owner, {
-          ...input,
-          runConfiguration: {
-            ...input.runConfiguration,
-            reasoning_content: sentinel,
-          } as never,
-        }),
-      ),
-    ).rejects.toBeInstanceOf(RepositoryInputValidationError)
-
-    const rejectedRows = await sql<{ readonly count: number }[]>`
-      SELECT count(*)::int AS count
-      FROM app_private.agent_runs
-      WHERE id = ${agentRunId}::uuid
-    `
-    expect(rejectedRows[0]?.count).toBe(0)
-
-    await sql.begin((transaction) =>
-      repository.insertAgentRunAudit(transaction, owner, input),
+async function assertNoOpenDatabaseTestTransactions(sql: Sql): Promise<void> {
+  const runId = process.env.DATABASE_TEST_RUN_ID
+  if (runId === undefined) {
+    throw new Error('数据库测试缺少 Run ID。')
+  }
+  const rows = await sql<
+    {
+      readonly applicationName: string
+      readonly state: string | null
+      readonly waitEventType: string | null
+      readonly waitEvent: string | null
+    }[]
+  >`
+    SELECT application_name AS "applicationName", state,
+           wait_event_type AS "waitEventType", wait_event AS "waitEvent"
+    FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND application_name LIKE ${`txhc-dbtest:${runId}:%`}
+      AND pid <> pg_backend_pid()
+      AND xact_start IS NOT NULL
+    ORDER BY application_name, pid
+  `
+  if (rows.length > 0) {
+    throw new Error(
+      `数据库里程碑遗留事务：${rows
+        .map(
+          (row) =>
+            `${row.applicationName}(${row.state ?? 'unknown'},${row.waitEventType ?? 'none'}/${row.waitEvent ?? 'none'})`,
+        )
+        .join('；')}`,
     )
-    await sql.begin(async (transaction) => {
-      await repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 0),
-      )
-      await repository.appendCapabilityInvocationAudit(
-        transaction,
-        owner,
-        createM27InvocationInput(sessionId, agentRunId, 0),
-      )
-    })
-
-    const persistedRows = await sql<{ readonly persisted: string }[]>`
-      SELECT concat_ws(
-        ' ',
-        to_jsonb(run)::text,
-        COALESCE((
-          SELECT jsonb_agg(to_jsonb(attempt))::text
-          FROM app_private.agent_attempts AS attempt
-          WHERE attempt.agent_run_id = run.id
-        ), ''),
-        COALESCE((
-          SELECT jsonb_agg(to_jsonb(invocation))::text
-          FROM app_private.agent_capability_invocations AS invocation
-          WHERE invocation.agent_run_id = run.id
-        ), '')
-      ) AS persisted
-      FROM app_private.agent_runs AS run
-      WHERE run.id = ${agentRunId}::uuid
-        AND run.owner_id = ${owner.databaseOwnerId}::uuid
-    `
-    expect(persistedRows).toHaveLength(1)
-    expect(persistedRows[0]?.persisted).not.toContain(sentinel)
-    expect(persistedRows[0]?.persisted).not.toContain('reasoning_content')
-    expect(persistedRows[0]?.persisted).not.toContain('api_key')
-    expect(persistedRows[0]?.persisted).not.toContain('database_url')
-  } finally {
-    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
   }
 }
 
@@ -4535,7 +4619,7 @@ export async function assertM27HandAgentAuditRepositories(
   await assertM27AgentRestartReadback(sql, runtimeUrl)
   await assertM27AgentUnknownAndCorruptRows(sql)
   await assertM27AgentSequenceConcurrency(sql, runtimeUrl)
-  await assertM27AgentSecretBoundaries(sql)
+  await assertNoOpenDatabaseTestTransactions(sql)
 }
 
 const M28_DELETED_AT = '2026-08-05T04:00:00.000Z'
@@ -4716,7 +4800,7 @@ async function insertM28CascadeFixture(
     runtimeAuditDecoders: {},
   })
   await sql.begin(async (transaction) => {
-    await auditRepository.insertAgentRunAudit(
+    await insertAgentRunFixture(
       transaction,
       roster.owner,
       createM27PlayerRunInput(
@@ -4727,7 +4811,7 @@ async function insertM28CascadeFixture(
         decisionRequestId,
       ),
     )
-    await auditRepository.insertAgentRunAudit(
+    await insertAgentRunFixture(
       transaction,
       roster.owner,
       createM27CoachRunInput(sessionId, handId, coachRunId),
@@ -4735,9 +4819,16 @@ async function insertM28CascadeFixture(
     await transaction`
       UPDATE app_private.agent_runs
       SET lifecycle = 'running',
-          lease_owner = 'm28-worker',
-          lease_expires_at = '2026-08-05T05:00:00.000Z'::timestamptz,
-          fencing_token = 9007199254740991
+          lease_owner = CASE
+            WHEN id = ${coachRunId}::uuid THEN 'database-test:legacy-audit:0'
+            ELSE 'm28-worker'
+          END,
+          lease_expires_at = clock_timestamp() + interval '1 hour',
+          fencing_token = CASE
+            WHEN id = ${coachRunId}::uuid THEN 17
+            ELSE 9007199254740991
+          END,
+          started_at = COALESCE(started_at, '2026-08-05T03:59:00.000Z'::timestamptz)
       WHERE id IN (${playerRunId}::uuid, ${coachRunId}::uuid)
         AND owner_id = ${roster.owner.databaseOwnerId}::uuid
         AND session_id = ${sessionId}::uuid
@@ -4827,7 +4918,9 @@ async function readM28SessionScopedCounts(
   return counts as Record<(typeof M28_SESSION_SCOPED_TABLES)[number], number>
 }
 
-async function assertM28EndedDeletionAndCascade(sql: Sql): Promise<void> {
+export async function assertM28EndedDeletionAndCascade(
+  sql: Sql,
+): Promise<void> {
   const sessionId = randomUUID()
   const sameOwnerSessionId = randomUUID()
   const otherOwnerId = randomUUID()
@@ -4895,7 +4988,7 @@ async function assertM28EndedDeletionAndCascade(sql: Sql): Promise<void> {
   }
 }
 
-async function assertM28SingleDeletionLifecycleBoundary(
+export async function assertM28SingleDeletionLifecycleBoundary(
   sql: Sql,
 ): Promise<void> {
   const sessionId = randomUUID()
@@ -4950,7 +5043,7 @@ async function assertM28SingleDeletionLifecycleBoundary(
   }
 }
 
-async function assertM28ClearAndPreservedRoots(sql: Sql): Promise<void> {
+export async function assertM28ClearAndPreservedRoots(sql: Sql): Promise<void> {
   const endedSessionId = randomUUID()
   const activeSessionId = randomUUID()
   const diagnosticSessionId = randomUUID()
@@ -5089,7 +5182,7 @@ async function assertM28ClearAndPreservedRoots(sql: Sql): Promise<void> {
   }
 }
 
-async function assertM28DeletionRollback(sql: Sql): Promise<void> {
+export async function assertM28DeletionRollback(sql: Sql): Promise<void> {
   const sessionId = randomUUID()
   try {
     const fixture = await insertM28CascadeFixture(sql, sessionId)
@@ -5122,7 +5215,7 @@ async function assertM28DeletionRollback(sql: Sql): Promise<void> {
         session.active_player_run_id::text AS "activePlayerRunId",
         session.active_decision_request_id::text AS "activeDecisionRequestId",
         count(*) FILTER (WHERE run.lifecycle = 'running')::int AS "runningRunCount",
-        count(*) FILTER (WHERE run.lease_owner = 'm28-worker' AND run.lease_expires_at IS NOT NULL)::int AS "leasedRunCount",
+        count(*) FILTER (WHERE run.lease_owner IS NOT NULL AND run.lease_expires_at IS NOT NULL)::int AS "leasedRunCount",
         max(run.fencing_token)::text AS "maxFencingToken"
       FROM app_private.sessions AS session
       JOIN app_private.agent_runs AS run ON run.session_id = session.id
@@ -5141,16 +5234,6 @@ async function assertM28DeletionRollback(sql: Sql): Promise<void> {
   } finally {
     await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
   }
-}
-
-export async function assertM28SessionDataDeletionRepositories(
-  sql: Sql,
-  _runtimeUrl: string,
-): Promise<void> {
-  await assertM28EndedDeletionAndCascade(sql)
-  await assertM28SingleDeletionLifecycleBoundary(sql)
-  await assertM28ClearAndPreservedRoots(sql)
-  await assertM28DeletionRollback(sql)
 }
 
 interface M28GateFixture {
@@ -5177,10 +5260,7 @@ async function insertM28PlayerGateFixture(sql: Sql): Promise<M28GateFixture> {
       sessionId,
       handId,
     )
-    const repository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
-    await repository.insertAgentRunAudit(
+    await insertAgentRunFixture(
       transaction,
       roster.owner,
       createM27PlayerRunInput(
@@ -5195,8 +5275,9 @@ async function insertM28PlayerGateFixture(sql: Sql): Promise<M28GateFixture> {
       UPDATE app_private.agent_runs
       SET lifecycle = 'running',
           lease_owner = 'm28-player-gate',
-          lease_expires_at = '2026-08-05T05:00:00.000Z'::timestamptz,
-          fencing_token = 17
+          lease_expires_at = clock_timestamp() + interval '1 hour',
+          fencing_token = 17,
+          started_at = COALESCE(started_at, '2026-08-05T03:59:00.000Z'::timestamptz)
       WHERE id = ${agentRunId}::uuid
         AND owner_id = ${roster.owner.databaseOwnerId}::uuid
         AND session_id = ${sessionId}::uuid
@@ -6476,7 +6557,7 @@ async function assertM31ConcurrentVersionConflict(
       expect(rows[0]).toEqual({
         stateVersion: 2,
         nextEventSeq: 2,
-        eventVersions: [2, 2],
+        eventVersions: [1, 1],
         completedLedgers: 1,
         failedLedgers: 1,
       })

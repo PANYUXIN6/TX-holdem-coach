@@ -16,6 +16,7 @@ import {
 
 export const PLAYER_TIMEOUT_SETTING_KEY = 'player-timeouts'
 const POSTGRES_TEXT_OID = 25
+const PLAYER_TIMEOUT_ADVISORY_NAMESPACE = 1_296_312_404
 
 const PlayerTimeoutSettingsBaseSchema = z.strictObject({
   attemptTimeoutSeconds: z.number().int().min(5).max(30),
@@ -67,6 +68,25 @@ function parsePersistedSettings(
   return deepFreeze(result.data)
 }
 
+export async function lockPlayerTimeoutSettings(
+  transaction: TransactionSql,
+  owner: ResolvedOwnerScope,
+): Promise<void> {
+  if (typeof transaction !== 'function' || !isResolvedOwnerScope(owner)) {
+    throw new RepositoryInputValidationError()
+  }
+  try {
+    await transaction`
+      SELECT pg_advisory_xact_lock(
+        hashtext(${owner.databaseOwnerId}),
+        ${PLAYER_TIMEOUT_ADVISORY_NAMESPACE}
+      )
+    `
+  } catch {
+    throw new DatabaseOperationError()
+  }
+}
+
 export async function readPlayerTimeoutSettings(
   sql: Sql,
   ownerScope: OwnerScope,
@@ -97,7 +117,7 @@ export async function readPlayerTimeoutSettings(
 }
 
 export async function readResolvedPlayerTimeoutSettings(
-  sql: Sql,
+  sql: Sql | TransactionSql,
   owner: ResolvedOwnerScope,
 ): Promise<PlayerTimeoutSettings> {
   if (!isResolvedOwnerScope(owner)) {
@@ -140,6 +160,8 @@ export async function patchPlayerTimeoutSettings(
   ) {
     throw new RepositoryInputValidationError()
   }
+
+  await lockPlayerTimeoutSettings(transaction, owner)
 
   const defaultPayload = transaction.typed(
     JSON.stringify(DEFAULT_PLAYER_TIMEOUT_SETTINGS),
@@ -218,7 +240,7 @@ export async function patchPlayerTimeoutSettings(
 }
 
 export async function writePlayerTimeoutSettings(
-  sql: Sql,
+  sql: Sql | TransactionSql,
   ownerScope: OwnerScope,
   settings: PlayerTimeoutSettings,
 ): Promise<PlayerTimeoutSettings> {
@@ -228,12 +250,13 @@ export async function writePlayerTimeoutSettings(
   }
 
   const resolvedOwner = await resolveOwnerScope(sql, ownerScope)
-  const settingPayload = sql.typed(
-    JSON.stringify(result.data),
-    POSTGRES_TEXT_OID,
-  )
-  try {
-    await sql`
+  const write = async (transaction: TransactionSql): Promise<void> => {
+    await lockPlayerTimeoutSettings(transaction, resolvedOwner)
+    const settingPayload = transaction.typed(
+      JSON.stringify(result.data),
+      POSTGRES_TEXT_OID,
+    )
+    await transaction`
       INSERT INTO app_private.app_settings (
         id,
         owner_id,
@@ -251,6 +274,13 @@ export async function writePlayerTimeoutSettings(
         setting_payload = EXCLUDED.setting_payload,
         updated_at = EXCLUDED.updated_at
     `
+  }
+  try {
+    if ('begin' in sql && typeof sql.begin === 'function') {
+      await sql.begin(write)
+    } else {
+      await write(sql as TransactionSql)
+    }
   } catch {
     throw new DatabaseOperationError()
   }

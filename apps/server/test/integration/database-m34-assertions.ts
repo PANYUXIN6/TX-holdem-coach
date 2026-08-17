@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Sql, TransactionSql } from 'postgres'
 import { expect } from 'vitest'
-import { createAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
 import {
   completeCommand,
   failCommand,
@@ -48,6 +47,7 @@ import {
   readPrivateState,
 } from './database-m33-assertions.js'
 import { createM27PlayerRunInput } from './database-repository-assertions.js'
+import { insertAgentRunFixture } from '../helpers/agent-run-fixture.js'
 import {
   createDatabaseTestSqlForRole,
   readTransactionBackendPid,
@@ -1321,11 +1321,8 @@ export async function assertM34RebuyNextHandSessionEnd(
     const failedPlayerRunId = randomUUID()
     const supersededDecisionRequestId = randomUUID()
     const decisionRequestId = randomUUID()
-    const auditRepository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
     await sql.begin(async (transaction: TransactionSql) => {
-      await auditRepository.insertAgentRunAudit(transaction, owner, {
+      await insertAgentRunFixture(transaction, owner, {
         ...createM27PlayerRunInput(
           identity.sessionId,
           nextHandId,
@@ -1343,7 +1340,7 @@ export async function assertM34RebuyNextHandSessionEnd(
             updated_at = ${ABORT_AT}::timestamptz
         WHERE id = ${supersededFailedPlayerRunId}::uuid
       `
-      await auditRepository.insertAgentRunAudit(transaction, owner, {
+      await insertAgentRunFixture(transaction, owner, {
         ...createM27PlayerRunInput(
           identity.sessionId,
           nextHandId,

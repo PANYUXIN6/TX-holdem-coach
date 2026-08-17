@@ -1,5 +1,5 @@
 {
-  "id": "681aee5d-9552-42fb-b1e8-590d52ac1a95",
+  "id": "e9fdd630-773e-44b9-80e7-f7967378de9d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -35,6 +35,12 @@
         "attempt_number": {
           "name": "attempt_number",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fencing_token": {
+          "name": "fencing_token",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -207,7 +213,7 @@
       "checkConstraints": {
         "agent_attempts_attempt_number_check": {
           "name": "agent_attempts_attempt_number_check",
-          "value": "\"app_private\".\"agent_attempts\".\"attempt_number\" >= 0"
+          "value": "\"app_private\".\"agent_attempts\".\"attempt_number\" >= 0\n        AND \"app_private\".\"agent_attempts\".\"fencing_token\" BETWEEN 1 AND 9007199254740991"
         },
         "agent_attempts_lifecycle_check": {
           "name": "agent_attempts_lifecycle_check",
@@ -255,6 +261,12 @@
         "invocation_number": {
           "name": "invocation_number",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fencing_token": {
+          "name": "fencing_token",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -404,7 +416,7 @@
       "checkConstraints": {
         "agent_capability_invocations_number_check": {
           "name": "agent_capability_invocations_number_check",
-          "value": "\"app_private\".\"agent_capability_invocations\".\"invocation_number\" >= 0"
+          "value": "\"app_private\".\"agent_capability_invocations\".\"invocation_number\" >= 0\n        AND \"app_private\".\"agent_capability_invocations\".\"fencing_token\" BETWEEN 1 AND 9007199254740991"
         },
         "agent_capability_invocations_schema_versions_check": {
           "name": "agent_capability_invocations_schema_versions_check",
@@ -755,6 +767,12 @@
           "name": "agent_runs_worker_claim_idx",
           "columns": [
             {
+              "expression": "runtime",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
               "expression": "lifecycle",
               "isExpression": false,
               "asc": true,
@@ -777,9 +795,49 @@
               "isExpression": false,
               "asc": true,
               "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_runs_runtime_concurrency_idx": {
+          "name": "agent_runs_runtime_concurrency_idx",
+          "columns": [
+            {
+              "expression": "runtime",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lifecycle",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"app_private\".\"agent_runs\".\"lifecycle\" IN ('leased', 'running')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -956,6 +1014,14 @@
         "agent_runs_lease_pair_check": {
           "name": "agent_runs_lease_pair_check",
           "value": "(\"app_private\".\"agent_runs\".\"lease_owner\" IS NULL AND \"app_private\".\"agent_runs\".\"lease_expires_at\" IS NULL)\n        OR (\n          \"app_private\".\"agent_runs\".\"lease_owner\" IS NOT NULL\n          AND \"app_private\".\"agent_runs\".\"lease_expires_at\" IS NOT NULL\n          AND\n          length(btrim(\"app_private\".\"agent_runs\".\"lease_owner\")) > 0\n        )"
+        },
+        "agent_runs_lifecycle_fields_check": {
+          "name": "agent_runs_lifecycle_fields_check",
+          "value": "(\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'queued'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'leased'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'running'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'completed'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NOT NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'failed'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NOT NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" IN ('cancelled', 'stale')\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n      )"
+        },
+        "agent_runs_timestamp_order_check": {
+          "name": "agent_runs_timestamp_order_check",
+          "value": "\"app_private\".\"agent_runs\".\"deadline_at\" >= \"app_private\".\"agent_runs\".\"created_at\"\n        AND (\"app_private\".\"agent_runs\".\"started_at\" IS NULL OR \"app_private\".\"agent_runs\".\"started_at\" >= \"app_private\".\"agent_runs\".\"created_at\")\n        AND (\"app_private\".\"agent_runs\".\"completed_at\" IS NULL OR \"app_private\".\"agent_runs\".\"completed_at\" >= \"app_private\".\"agent_runs\".\"created_at\")\n        AND (\n          \"app_private\".\"agent_runs\".\"started_at\" IS NULL\n          OR \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n          OR \"app_private\".\"agent_runs\".\"completed_at\" >= \"app_private\".\"agent_runs\".\"started_at\"\n        )\n        AND (\n          \"app_private\".\"agent_runs\".\"lease_expires_at\" IS NULL\n          OR \"app_private\".\"agent_runs\".\"lease_expires_at\" > \"app_private\".\"agent_runs\".\"updated_at\"\n        )"
         },
         "agent_runs_required_payloads_check": {
           "name": "agent_runs_required_payloads_check",

@@ -2,14 +2,9 @@
   "name": "tx-holdem-coach",
   "version": "0.0.0",
   "private": true,
-  "packageManager": "pnpm@10.14.0",
+  "packageManager": "pnpm@11.22.0",
   "engines": {
-    "node": ">=22.12.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "pnpm --parallel --filter @tx-holdem-coach/web --filter @tx-holdem-coach/server run dev",

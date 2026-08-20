@@ -36,17 +36,10 @@ describe('private persona configuration', () => {
         maxOutputTokens: 256,
         thinkingMode: 'disabled',
       })
-      expect(entry.models.kimi).toEqual({
-        modelId: 'kimi-k2.6',
-        temperature: 0.6,
-        maxOutputTokens: 256,
-        thinkingMode: 'disabled',
-      })
       expect(Object.isFrozen(entry)).toBe(true)
       expect(Object.isFrozen(entry.style)).toBe(true)
       expect(Object.isFrozen(entry.models)).toBe(true)
       expect(Object.isFrozen(entry.models.deepSeek)).toBe(true)
-      expect(Object.isFrozen(entry.models.kimi)).toBe(true)
     }
     expect(entries[0]?.models).not.toBe(entries[1]?.models)
   })
@@ -145,9 +138,10 @@ describe('private persona configuration', () => {
         models: {
           ...entry?.models,
           kimi: {
-            ...entry?.models.kimi,
-            temperature: 1,
-            thinkingMode: 'enabled',
+            modelId: 'kimi-k2.6',
+            temperature: 0.6,
+            maxOutputTokens: 256,
+            thinkingMode: 'disabled',
           },
         },
       }).success,

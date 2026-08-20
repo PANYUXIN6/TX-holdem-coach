@@ -59,7 +59,7 @@
 
 共享协议不得包含范围表、行动频率、漏洞标签、内部策略说明、Prompt、模型密钥、模型标识、路由或模型参数。人物目录中不存在用户写入操作的 Schema，也不存在“模型配置摘要”字段。
 
-DeepSeek 是否满足开场条件、Kimi 是否可用于降级以及连接检测结果不属于人物，由 [后端设计 §13.1](./2026-07-23-poker-practice-backend-design.md) 定义的独立 Provider Settings/Health 共享协议提供。其四态检测摘要只作诊断，开场与降级资格只由对应 Key 是否配置决定；前端不得根据人物目录推断供应商状态。
+DeepSeek 是否满足开场条件以及连接检测结果不属于人物，由 [后端设计 §13.1](./2026-07-23-poker-practice-backend-design.md) 定义的独立 Provider Settings/Health 共享协议提供。四态检测摘要只作诊断，开场资格只由 DeepSeek Key 是否配置决定；前端不得根据人物目录推断供应商状态。
 
 ## 4. 服务端边界
 

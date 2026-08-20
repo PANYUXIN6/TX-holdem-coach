@@ -8,19 +8,12 @@ const MODEL_ENDPOINTS = {
     url: 'https://api.deepseek.com/models',
     targetModelId: PERSONA_MODEL_BUNDLE_DEFAULTS.deepSeek.modelId,
   },
-  kimi: {
-    url: 'https://api.moonshot.ai/v1/models',
-    targetModelId: PERSONA_MODEL_BUNDLE_DEFAULTS.kimi.modelId,
-  },
 } as const
 
 const ProviderModelsResponseSchema = z.strictObject({
   data: z
     .array(z.object({ id: z.string().trim().min(1).max(200) }).passthrough())
     .max(1_000),
-})
-const KimiErrorResponseSchema = z.object({
-  error: z.object({ type: z.string() }).passthrough(),
 })
 const MAX_PROVIDER_RESPONSE_BYTES = 256 * 1_024
 
@@ -81,33 +74,6 @@ function classifyStatus(status: number): ProviderCheckFailure {
   return new ProviderCheckFailure('unknown')
 }
 
-async function classifyKimiRateLimit(
-  response: Response,
-): Promise<ProviderCheckFailure> {
-  const declaredLength = Number(response.headers.get('content-length'))
-  if (
-    Number.isFinite(declaredLength) &&
-    declaredLength > MAX_PROVIDER_RESPONSE_BYTES
-  ) {
-    await cancelResponseBody(response)
-    return new ProviderCheckFailure('rateLimited')
-  }
-
-  try {
-    const bytes = await readLimitedResponseBytes(response)
-    const payload: unknown = JSON.parse(new TextDecoder().decode(bytes))
-    const parsed = KimiErrorResponseSchema.safeParse(payload)
-    return new ProviderCheckFailure(
-      parsed.success &&
-        parsed.data.error.type === 'exceeded_current_quota_error'
-        ? 'billing'
-        : 'rateLimited',
-    )
-  } catch {
-    return new ProviderCheckFailure('rateLimited')
-  }
-}
-
 export function createProviderCheckTransport(
   input: {
     readonly fetch?: typeof fetch
@@ -130,9 +96,6 @@ export function createProviderCheckTransport(
         })
 
         if (!response.ok) {
-          if (provider === 'kimi' && response.status === 429) {
-            throw await classifyKimiRateLimit(response)
-          }
           await cancelResponseBody(response)
           throw classifyStatus(response.status)
         }

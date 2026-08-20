@@ -16,7 +16,7 @@
 
 ## 1. 产品概述
 
-本项目是一个用于个人练习无限注德州扑克的本机 Web 应用。用户从后端预设人物目录选择 5–8 个 AI 对手进行连续现金桌练习。每个 AI 对手是独立的单回合决策 Agent，默认使用 DeepSeek；仅在 DeepSeek 欠费、传输失败、请求超时或明确返回 502/503/504 时，针对当前行动降级到 Kimi。
+本项目是一个用于个人练习无限注德州扑克的本机 Web 应用。用户从后端预设人物目录选择 5–8 个 AI 对手进行连续现金桌练习。每个 AI 对手都是使用 DeepSeek 的独立单回合决策 Agent。
 
 产品的核心价值是：
 
@@ -40,7 +40,7 @@
 ## 3. 技术约束
 
 - 前端：React + Vite + TypeScript；TanStack Query 管理服务端状态，Zustand 管理页面级或跨组件的纯客户端状态，组件私有状态使用 React 内置状态。
-- 后端：Node.js + Hono + TypeScript；Zod 负责边界校验，dotenv 只在后端加载环境变量，Vercel AI SDK 接入 DeepSeek 和 Kimi。
+- 后端：Node.js + Hono + TypeScript；Zod 负责边界校验，dotenv 只在后端加载环境变量，Vercel AI SDK 接入 DeepSeek。
 - 数据库：Supabase 托管 PostgreSQL。Hono 服务端使用 Drizzle ORM + `postgres.js`，运行时客户端通过 TLS 连接 `6543` transaction pooler 并固定 `prepare: false`；Drizzle Kit 通过独立的 `5432` session/direct 连接执行显式发布迁移。数据库客户端、`app_private` Schema、迁移兼容门控和 M2 Repository 已经落地；服务启动不自动执行 DDL。
 - 当前 Hono 服务仍只监听本机；未来产品上线时，Agent 后端目标为常驻 Node.js/Hono 服务，承载 HTTP/SSE、Coordinator、进程内 Player/Coach Worker 和 Runtime。Supabase PostgreSQL 已是独立托管的唯一数据库，服务容器不保存数据库文件或挂载数据库持久卷；公网监听、Host/Origin、TLS 与真实身份需在上线前另行确认。
 - 仓库：单仓库，使用 pnpm workspace。
@@ -71,7 +71,7 @@
 - 姓名、背景描述及从固定高对比度色板分配的文字头像颜色。
 - 松紧度、激进度、诈唬倾向、抗压跟注倾向和风险偏好。
 
-自由文本策略说明、Prompt、DeepSeek/Kimi 模型标识、路由和模型参数属于 Player Runtime 私有配置，不进入人物公开协议或人物目录响应。DeepSeek 是否满足开场条件、Kimi 是否可降级及连接检测结果由独立的 Provider Settings/Health 接口提供，不能从人物字段推断。
+自由文本策略说明、Prompt、DeepSeek 模型标识、Route Policy 和模型参数属于 Player Runtime 私有配置，不进入人物公开协议或人物目录响应。DeepSeek 是否满足开场条件及连接检测结果由独立的 Provider Settings/Health 接口提供，不能从人物字段推断。
 
 首版至少预置八个差异化人物，包含紧弱鱼、松凶娱乐玩家、标签职业玩家、短筹码鲨鱼、跟注站、超深筹码浪人、小球常客和慢打猎手。用户只能读取和选择，不能创建、编辑、复制、删除或导入人物。预设人物不保存跨场记忆，同一场次不得重复选择同一个人物。
 
@@ -89,7 +89,7 @@
 1. 首手已随创建场次原子发出并直接使用随机按钮；从第二手开始，服务端在每次开手时按有效座位顺时针轮转按钮并发牌。
 2. 玩家和 AI 按合法顺序行动。
 3. 每个合法行动成功持久化后，前端才展示新状态。
-4. AI 调用失败且无法降级或纠错时，整桌暂停，不使用本地策略代打。
+4. AI 调用失败或纠错耗尽时，整桌暂停，不使用本地策略代打。
 5. 每手结束后停留在结果摘要。
 6. 用户可以补码、继续下一手或结束本场。
 
@@ -179,31 +179,30 @@ Agent 只能看到：
 
 Agent 不得看到其他玩家未公开的底牌、未来牌张、完整牌堆或其他 Agent 的私有记忆。
 
-### 7.3 供应商路由
+### 7.3 DeepSeek 执行与失败处理
 
-DeepSeek Key 是开场必需配置。Kimi Key 缺失时允许开场，但必须明确提示自动降级不可用；如果之后确实需要降级，牌局暂停。
+DeepSeek Key 是开场必需配置。
 
 每次 AI 行动：
 
-1. 优先请求 DeepSeek。
+1. 请求 DeepSeek。
 2. DeepSeek 返回结构或扑克规则错误时，仅在 DeepSeek 内最多纠错两次。
-3. DeepSeek 欠费、传输失败、超过当前配置的超时时间，或明确返回 502/503/504 时，使用相同的供应商无关上下文降级到 Kimi。
-4. Kimi 同样执行结构与扑克规则校验，并允许最多两次纠错。
-5. Kimi 仍失败时暂停整桌。
-6. 下一次行动重新优先请求 DeepSeek，不保持降级状态。
+3. DeepSeek 发生欠费、传输失败、超时、鉴权、限流、服务不可用或未知基础设施错误时，记录稳定失败并暂停整桌。
+4. 两次纠错后内容仍非法时暂停整桌。
+5. 用户人工重试时基于当前权威状态创建新的运行和请求。
 
-如果 DeepSeek 的纠错请求发生允许降级的故障，Kimi 使用原始 `PlayerDecisionPacket` 重新开始全新决策，不接收 DeepSeek 的错误响应或纠错历史。DeepSeek 两次纠错都返回但内容仍非法时直接暂停，不切换 Kimi。
+纠错请求使用原始 `PlayerDecisionPacket` 和受控纠错提示，不接收前一次响应之外的隐藏上下文。DeepSeek 两次纠错都返回但内容仍非法时直接暂停。
 
-普通 500、429、鉴权或配置错误、Schema 错误、非法扑克动作及合法但策略较差的行动不触发降级。
+配置错误、Schema 错误、非法扑克动作及合法但策略较差的行动均按各自稳定错误语义处理，不改变模型执行路径。
 
-Player 和 Coach 使用互不占用容量的进程内任务队列。首版分别保留一个 Player Worker 槽位和一个 Coach Worker 槽位，Coach 复盘不能占满 Player 容量。单次供应商尝试默认超时 15 秒、合法范围 5–30 秒；一次完整 Player 决策使用独立总 deadline，默认 45 秒、合法范围 15–120 秒。初始请求、纠错和降级共享剩余总时间；新尝试开始前不足 5 秒时直接暂停并记录 `player_deadline_exhausted`。
+Player 和 Coach 使用互不占用容量的进程内任务队列。首版分别保留一个 Player Worker 槽位和一个 Coach Worker 槽位，Coach 复盘不能占满 Player 容量。单次供应商尝试默认超时 15 秒、合法范围 5–30 秒；一次完整 Player 决策使用独立总 deadline，默认 45 秒、合法范围 15–120 秒。初始请求和纠错共享剩余总时间；新尝试开始前不足 5 秒时直接暂停并记录 `player_deadline_exhausted`。
 
 Provider Settings/Health 只提供安全配置能力和最近一次手动检测结果，不把健康检测作为开场前置条件：
 
-- DeepSeek 配置了 Key 即满足创建场次条件；Kimi 配置了 Key 即具备降级资格。
-- 查询接口只读取缓存状态，不发起供应商网络请求；只有用户显式执行检测才连接对应供应商。
+- DeepSeek 配置了 Key 即满足创建场次条件。
+- 查询接口只读取缓存状态，不发起供应商网络请求；只有用户显式执行检测才连接 DeepSeek。
 - 检测结果使用 `notConfigured | notChecked | available | unavailable`，并只返回可空检测时间和脱敏错误码。
-- 检测失败不永久禁用创建或降级能力；实际行动仍由 Player 路由、纠错、降级和暂停规则处理。
+- 检测失败不永久禁用创建能力；实际行动仍由 Player Route Policy、纠错和暂停规则处理。
 - 响应不得包含 Key、模型标识、路由、原始供应商错误或响应正文。
 
 ### 7.4 调试与审计
@@ -211,7 +210,7 @@ Provider Settings/Health 只提供安全配置能力和最近一次手动检测�
 每次调用保存：
 
 - 角色、手牌、行动位、状态版本和请求标识。
-- 服务商、模型和路由原因。
+- 服务商、模型和尝试原因。
 - 脱敏请求、最终原始输出和归一化结果。
 - Schema 与扑克规则校验结果。
 - 自动纠错链。
@@ -284,7 +283,7 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 - 每个命令、合法动作集合及状态版本。
 - 场次内统一排序的扑克和 Agent 运行事件。
 - 每次筹码和底池变化。
-- Agent 请求、响应、纠错、降级和失败。
+- Agent 请求、响应、纠错和失败。
 - 最终牌型、底池分配和净输赢。
 
 完整隐藏信息只保存在 `app_private` 的服务端私有数据中，用于应用内审计、调试和可控揭示。浏览器只能通过 Hono 获得按可见性生成的公开投影；首版不提供任何数据或手牌导出功能。
@@ -327,7 +326,7 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 - 扑克状态保持 `inHand`，独立的 `agentRunState` 表示 `idle`、`thinking` 或 `paused`；Agent 暂停和重试不递增扑克 `stateVersion`。
 - 页面刷新、浏览器关闭或服务重启后，可以继续未完成场次。
 - 正在等待但尚未成功提交的模型结果不会被重复采用。
-- 服务重启后，原来处于 `thinking` 的 Player 运行标记为 `cancelled(process_restart)`，旧 `decisionRequestId` 和全部旧尝试失效；系统保留旧审计并创建带 `supersedesRunId` 的新 AgentRun、新请求和新 attempts，从 DeepSeek 重新开始。新运行继续使用本场已经固化的人物、Runtime、Prompt、策略和路由版本，不复用旧供应商位置、纠错次数或模型输出。原来已经 `paused` 的行动保持暂停，等待人工重试。
+- 服务重启后，原来处于 `thinking` 的 Player 运行标记为 `cancelled(process_restart)`，旧 `decisionRequestId` 和全部旧尝试失效；系统保留旧审计并创建带 `supersedesRunId` 的新 AgentRun、新请求和新 attempts，从 DeepSeek 重新开始。新运行继续使用本场已经固化的人物、Runtime、Prompt、策略和路由版本，不复用旧纠错次数或模型输出。原来已经 `paused` 的行动保持暂停，等待人工重试。
 - 浏览器刷新或 SSE 重连不取消服务端仍有效的模型请求。
 - SSE 断开时前端暂停新行动；重连时通过 `Last-Event-ID` 补发遗漏事件，并读取由私有扑克状态与会话协调状态组合生成、包含当前 `agentRunState` 的最新 `PublicSessionSnapshot`。
 - 对外 HTTP/SSE 协议使用 `protocolVersion`，私有扑克快照使用独立的 `snapshotSchemaVersion`，私有事件负载使用 `eventSchemaVersion`；三者与 Drizzle 数据库迁移版本互相独立，不得混用或跨体系比较。
@@ -372,7 +371,7 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 2. 可以连续完成多手标准无限注德州。
 3. 下注、累计不足额全下、短盲、未跟注返还、一次性发完剩余公共牌并逐街 burn、边池、平分以及 6–9 人位置和行动顺序正确。
 4. 玩家刷新页面、SSE 重连或服务重启后可以按 `stateVersion`、`eventSeq` 和 `agentRunState` 恢复。
-5. DeepSeek 正常决策、DeepSeek→Kimi 条件降级、非法响应纠错和最终暂停均可验证。
+5. DeepSeek 正常决策、基础设施失败、非法响应纠错和最终暂停均可验证。
 6. 不同 Agent 之间没有隐藏信息或记忆串线。
 7. 每手可以查看分街日志、全部结果和关联调用链。
 8. 用户与 AI 的基础统计符合固定分子、分母和净盈亏口径。
@@ -387,9 +386,9 @@ AI 人物目录由后端只读提供。组桌页只允许选择 5–8 个不同�
 17. Coach 每次重新执行生成新的 `coachReviewId`；每个复盘内以 `(coachReviewId, decisionId)` 唯一保存逐决策冻结 assessment，历史不覆盖。
 18. `active + inHand + paused` 场次可以原子中止当前手并结束；最终快照回到开手前内容但使用更高 `stateVersion`，中止手牌不进入普通历史、统计或 Coach。
 19. 每个 Owner 只能有一个活动场次，并发创建由数据库唯一约束保证；删除/清空后的迟到 Player 或 Coach 结果不能提交或重建任务。
-20. Coach 任务不能占用 Player 保留容量；Player 初始请求、纠错与降级受同一个总 deadline 约束。
+20. Coach 任务不能占用 Player 保留容量；Player 初始请求与纠错受同一个总 deadline 约束。
 21. 创建场次时服务端从规范化的实际入座座位中安全随机首手按钮，并原子创建首手检查点、`hands.inProgress` 与最终 `inHand` 快照；固定随机源下结果可复现，前端无法覆盖或重复开第一手。
-22. Provider Settings/Health 返回严格脱敏的配置能力和缓存检测结果；查询不触发网络，检测失败不改变由 Key 配置决定的开场或降级资格。
+22. Provider Settings/Health 返回严格脱敏的配置能力和缓存检测结果；查询不触发网络，检测失败不改变由 Key 配置决定的开场资格。
 
 ## 13. 首版明确不做
 

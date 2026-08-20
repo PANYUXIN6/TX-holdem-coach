@@ -339,7 +339,6 @@ describe('session creation service', () => {
       catalog: loadAndValidatePersonaCatalog(),
       readProviderPolicy: () => ({
         deepSeekConfigured: false,
-        kimiConfigured: true,
       }),
       createIdentityGraph: () => {
         identityCalls += 1
@@ -381,7 +380,7 @@ describe('session creation service', () => {
     expect(dependencies.boundary.beginCount()).toBe(0)
   })
 
-  test('atomically creates the first hand and returns the fixed Kimi warning after commit', async () => {
+  test('atomically creates the first hand and publishes after commit', async () => {
     const dependencies = createDependencies()
     const publish = vi.fn()
     let identityCalls = 0
@@ -391,7 +390,6 @@ describe('session creation service', () => {
       catalog: loadAndValidatePersonaCatalog(),
       readProviderPolicy: () => ({
         deepSeekConfigured: true,
-        kimiConfigured: false,
       }),
       createIdentityGraph: (seatNumbers) => {
         identityCalls += 1
@@ -433,12 +431,7 @@ describe('session creation service', () => {
     expect(result.kind).toBe('created')
     if (result.kind !== 'created') throw new Error('expected created')
     expect(identityCalls).toBe(1)
-    expect(result.response.warnings).toEqual([
-      {
-        code: 'KIMI_FALLBACK_UNAVAILABLE',
-        message: 'Kimi API Key 未配置，自动降级不可用。',
-      },
-    ])
+    expect('warnings' in result.response).toBe(false)
     expect(result.response.snapshot).toMatchObject({
       sessionId,
       stateVersion: 1,
@@ -520,7 +513,6 @@ describe('session creation service', () => {
       catalog,
       readProviderPolicy: () => ({
         deepSeekConfigured: true,
-        kimiConfigured: true,
       }),
       createIdentityGraph: (seatNumbers) => ({
         sessionId,
@@ -582,7 +574,6 @@ describe('session creation service', () => {
       catalog: loadAndValidatePersonaCatalog(),
       readProviderPolicy: () => ({
         deepSeekConfigured: true,
-        kimiConfigured: true,
       }),
       createIdentityGraph: () => {
         throw new Error('identity must not be generated')
@@ -676,7 +667,6 @@ describe('session creation service', () => {
         catalog,
         readProviderPolicy: () => ({
           deepSeekConfigured: true,
-          kimiConfigured: true,
         }),
         createIdentityGraph: (seatNumbers) => ({
           sessionId,
@@ -746,7 +736,6 @@ describe('session creation service', () => {
       catalog: loadAndValidatePersonaCatalog(),
       readProviderPolicy: () => ({
         deepSeekConfigured: true,
-        kimiConfigured: true,
       }),
       createIdentityGraph: (seatNumbers) => ({
         sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',

@@ -476,7 +476,7 @@ Player 使用三道运行时边界：
 
 租约过期本身不把运行标记为 stale：在同一服务进程生命周期内，新 Worker 可以领取同一 AgentRun 的新租约和 fencing token，但必须先重新读取权威状态。只有权威 `stateVersion`、行动者或有效请求已经不再匹配原决策点，或 Commit Gate 发现该决策点已经失效时，旧运行才标记为 stale。该规则不适用于服务进程重启。
 
-进程重启是 Player 的独立恢复分支，不使用上述同运行续租：恢复协调器把原 `thinking` Player AgentRun 标记为 `cancelled(process_restart)`，使旧请求、attempts、租约和 fencing 失效；权威状态仍为 `active + inHand`、仍轮到同一 AI 且无其他有效运行时，新建带 `supersedesRunId` 的 AgentRun 和 `decisionRequestId`，从 DeepSeek 首次尝试开始。新运行沿用本场固化版本，但不继承旧供应商位置、纠错次数、模型输出或检查点。原来已经 `paused` 的决策保持暂停。
+进程重启是 Player 的独立恢复分支，不使用上述同运行续租：恢复协调器把原 `thinking` Player AgentRun 标记为 `cancelled(process_restart)`，使旧请求、attempts、租约和 fencing 失效；权威状态仍为 `active + inHand`、仍轮到同一 AI 且无其他有效运行时，新建带 `supersedesRunId` 的 AgentRun 和 `decisionRequestId`，从 DeepSeek 首次尝试开始。新运行沿用本场固化版本，但不继承旧纠错次数、模型输出或检查点。原来已经 `paused` 的决策保持暂停。
 
 stale 后：
 
@@ -671,7 +671,7 @@ INDEX  (decisionId)
 - 独立保留一个 Worker 槽位，不与 Coach 共享容量。
 - 单次供应商尝试默认 15 秒，合法范围 5–30 秒。
 - 完整决策 deadline 默认 45 秒，合法范围 15–120 秒且不得小于单次超时。
-- 初始请求、纠错和降级共享剩余总时间；实际尝试超时取单次上限与剩余时间的较小值，剩余不足 5 秒时不再启动尝试并返回 `player_deadline_exhausted`。
+- 初始请求和纠错共享剩余总时间；实际尝试超时取单次上限与剩余时间的较小值，剩余不足 5 秒时不再启动尝试并返回 `player_deadline_exhausted`。
 
 Coach 使用自己的并发、时限与成本预算；Coach 排队或运行不能阻塞 Player 领取。
 
@@ -680,7 +680,7 @@ Coach 使用自己的并发、时限与成本预算；Coach 排队或运行不�
 指标至少包括：
 
 - 运行数、成功率、延迟、Token 和成本。
-- 降级率、纠错率、能力调用和信息边界拒绝。
+- 基础设施失败率、纠错率、能力调用和信息边界拒绝。
 - 队列等待、租约超时和 stale。
 
 Trace 不记录底牌、Prompt 原文、API Key 或用户敏感数据。本地版实现结构化日志和测试指标端口；未来上线接 OpenTelemetry。

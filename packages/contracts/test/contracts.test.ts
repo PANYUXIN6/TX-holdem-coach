@@ -163,7 +163,7 @@ const publicCompletedHandSummary = {
 }
 
 describe('共享外部协议', () => {
-  it('严格解析场次创建请求与固定成功警告', () => {
+  it('严格解析场次创建请求与响应', () => {
     const selections = [
       { personaId: 'nit_fish', seatNumber: 5 },
       { personaId: 'lag_rec', seatNumber: 1 },
@@ -185,12 +185,6 @@ describe('共享外部协议', () => {
     expect(
       CreateSessionResponseSchema.safeParse({
         snapshot: publicSnapshot,
-        warnings: [
-          {
-            code: 'KIMI_FALLBACK_UNAVAILABLE',
-            message: 'Kimi API Key 未配置，自动降级不可用。',
-          },
-        ],
       }).success,
     ).toBe(true)
 
@@ -212,37 +206,12 @@ describe('共享外部协议', () => {
       expect(CreateSessionRequestSchema.safeParse(request).success).toBe(false)
     }
 
-    for (const warnings of [
-      [
-        {
-          code: 'KIMI_FALLBACK_UNAVAILABLE',
-          message: '另一个消息',
-        },
-      ],
-      [
-        {
-          code: 'UNKNOWN',
-          message: 'Kimi API Key 未配置，自动降级不可用。',
-        },
-      ],
-      [
-        {
-          code: 'KIMI_FALLBACK_UNAVAILABLE',
-          message: 'Kimi API Key 未配置，自动降级不可用。',
-        },
-        {
-          code: 'KIMI_FALLBACK_UNAVAILABLE',
-          message: 'Kimi API Key 未配置，自动降级不可用。',
-        },
-      ],
-    ]) {
-      expect(
-        CreateSessionResponseSchema.safeParse({
-          snapshot: publicSnapshot,
-          warnings,
-        }).success,
-      ).toBe(false)
-    }
+    expect(
+      CreateSessionResponseSchema.safeParse({
+        snapshot: publicSnapshot,
+        warnings: [],
+      }).success,
+    ).toBe(false)
   })
 
   it('收紧阶段并验证公开时间线与规范派奖', () => {
@@ -998,7 +967,7 @@ describe('共享外部协议', () => {
     ]
 
     expect(ProviderIdSchema.safeParse('deepseek').success).toBe(true)
-    expect(ProviderIdSchema.safeParse('kimi').success).toBe(true)
+    expect(ProviderIdSchema.safeParse('kimi').success).toBe(false)
     expect(ProviderIdSchema.safeParse('other').success).toBe(false)
     expect(ProviderCheckStatusSchema.safeParse('available').success).toBe(true)
     expect(ProviderCheckStatusSchema.safeParse('checking').success).toBe(false)
@@ -1034,7 +1003,6 @@ describe('共享外部协议', () => {
 
     const response = {
       deepSeek: { ...summaries[1], canCreateSession: true },
-      kimi: { ...summaries[0], canFallback: false },
     }
 
     expect(ProviderSettingsResponseSchema.safeParse(response).success).toBe(
@@ -1055,7 +1023,7 @@ describe('共享外部协议', () => {
     expect(
       ProviderSettingsResponseSchema.safeParse({
         ...response,
-        kimi: { ...response.kimi, model: 'must-not-be-public' },
+        kimi: { ...summaries[0], canFallback: false },
       }).success,
     ).toBe(false)
     expect(ProviderCheckRequestSchema.safeParse({}).success).toBe(true)

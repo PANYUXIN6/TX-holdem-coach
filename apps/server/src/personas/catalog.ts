@@ -38,7 +38,6 @@ const PersonaCatalogSourceDefinitionSchema = PersonaConfigPayloadSchema.omit({
 function cloneDefaultModels() {
   return {
     deepSeek: { ...PERSONA_MODEL_BUNDLE_DEFAULTS.deepSeek },
-    kimi: { ...PERSONA_MODEL_BUNDLE_DEFAULTS.kimi },
   }
 }
 

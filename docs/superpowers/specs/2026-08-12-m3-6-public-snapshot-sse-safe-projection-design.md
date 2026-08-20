@@ -67,7 +67,7 @@ M3.6 不负责：
 
 - `GET /api/sessions/:sessionId/events`、SSE 文本编码、心跳、连接生命周期或 CORS 流式细节；
 - 解析 `Last-Event-ID`、从 PostgreSQL 补发、补发连续性诊断或最新快照校准；这些属于 M3.7；
-- Player Agent 真实运行、`agentStarted/agentProviderFallback/agentRepairAttempted/agentPaused` 的业务 writer、`aiAction` Commit Gate 或 `retryAgent` 实现；这些属于 M4；
+- Player Agent 真实运行、`agentStarted/agentRepairAttempted/agentPaused` 的业务 writer、`aiAction` Commit Gate 或 `retryAgent` 实现；这些属于 M4；
 - 历史、统计、审计揭示或 Coach 查询；这些属于 M5/M8；
 - 改变扑克规则、结算、命令幂等、恢复诊断、Schema 或 migration；
 - 通过 Outbox 提供跨进程可靠实时投递。首版是单进程本地服务，断线后的可靠恢复由 M3.7 读取持久化事件完成。

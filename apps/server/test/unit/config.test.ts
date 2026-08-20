@@ -21,16 +21,15 @@ function createEnvironment(
 describe('server configuration', () => {
   test('projects only boolean provider capabilities for session creation', () => {
     const config = loadServerConfig(
-      createEnvironment({ DEEPSEEK_API_KEY: 'deepseek', KIMI_API_KEY: '' }),
+      createEnvironment({ DEEPSEEK_API_KEY: 'deepseek' }),
     )
 
     expect(getProviderCreationPolicy(config)).toEqual({
       deepSeekConfigured: true,
-      kimiConfigured: false,
     })
   })
 
-  test('reports both providers as unavailable when their keys are missing', () => {
+  test('reports DeepSeek as unavailable when its key is missing', () => {
     const config = loadServerConfig(createEnvironment())
 
     expect(getProviderSettingsResponse(config)).toStrictEqual({
@@ -41,13 +40,6 @@ describe('server configuration', () => {
         errorCode: null,
         canCreateSession: false,
       },
-      kimi: {
-        configured: false,
-        checkStatus: 'notConfigured',
-        lastCheckedAt: null,
-        errorCode: null,
-        canFallback: false,
-      },
     })
   })
 
@@ -55,7 +47,6 @@ describe('server configuration', () => {
     const config = loadServerConfig(
       createEnvironment({
         DEEPSEEK_API_KEY: '   ',
-        KIMI_API_KEY: '',
       }),
     )
 
@@ -65,11 +56,7 @@ describe('server configuration', () => {
   })
 
   test('blocks session creation when the DeepSeek key is missing', () => {
-    const config = loadServerConfig(
-      createEnvironment({
-        KIMI_API_KEY: 'kimi-test-key',
-      }),
-    )
+    const config = loadServerConfig(createEnvironment())
 
     expect(getProviderSettingsResponse(config)).toStrictEqual({
       deepSeek: {
@@ -79,17 +66,10 @@ describe('server configuration', () => {
         errorCode: null,
         canCreateSession: false,
       },
-      kimi: {
-        configured: true,
-        checkStatus: 'notChecked',
-        lastCheckedAt: null,
-        errorCode: null,
-        canFallback: true,
-      },
     })
   })
 
-  test('allows session creation and reports unavailable fallback when the Kimi key is missing', () => {
+  test('allows session creation when the DeepSeek key is configured', () => {
     const config = loadServerConfig(
       createEnvironment({
         DEEPSEEK_API_KEY: 'deepseek-test-key',
@@ -104,13 +84,6 @@ describe('server configuration', () => {
         errorCode: null,
         canCreateSession: true,
       },
-      kimi: {
-        configured: false,
-        checkStatus: 'notConfigured',
-        lastCheckedAt: null,
-        errorCode: null,
-        canFallback: false,
-      },
     })
   })
 
@@ -123,7 +96,6 @@ describe('server configuration', () => {
         PORT: '8799',
         DATABASE_URL: markedDatabaseUrl,
         DEEPSEEK_API_KEY: marker,
-        KIMI_API_KEY: marker,
       }),
     )
 
@@ -137,13 +109,6 @@ describe('server configuration', () => {
         lastCheckedAt: null,
         errorCode: null,
         canCreateSession: true,
-      },
-      kimi: {
-        configured: true,
-        checkStatus: 'notChecked',
-        lastCheckedAt: null,
-        errorCode: null,
-        canFallback: true,
       },
     })
     expect(JSON.stringify(config)).not.toContain(marker)
@@ -213,7 +178,6 @@ describe('server configuration', () => {
         ...environment,
         DATABASE_URL: markedDatabaseUrl,
         DEEPSEEK_API_KEY: marker,
-        KIMI_API_KEY: marker,
       })
 
       expect(() => loadServerConfig(invalidEnvironment)).toThrow(

@@ -13,12 +13,6 @@ export const PublishedPersonaModelBundleSchema = z.strictObject({
     maxOutputTokens: z.literal(256),
     thinkingMode: z.literal('disabled'),
   }),
-  kimi: z.strictObject({
-    modelId: z.literal('kimi-k2.6'),
-    temperature: z.literal(0.6),
-    maxOutputTokens: z.literal(256),
-    thinkingMode: z.literal('disabled'),
-  }),
 })
 
 export type PublishedPersonaModelBundle = z.infer<
@@ -29,12 +23,6 @@ export const PERSONA_MODEL_BUNDLE_DEFAULTS = {
   deepSeek: {
     modelId: 'deepseek-v4-flash',
     temperature: 0.2,
-    maxOutputTokens: 256,
-    thinkingMode: 'disabled',
-  },
-  kimi: {
-    modelId: 'kimi-k2.6',
-    temperature: 0.6,
     maxOutputTokens: 256,
     thinkingMode: 'disabled',
   },

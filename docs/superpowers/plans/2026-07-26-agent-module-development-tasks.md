@@ -159,7 +159,7 @@ Player 与 Coach 可以在 A0–A5 稳定后并行开发，但不能各自复制
   - 单用户并发和系统并发。
   - Coach 单次成本上限。
 - Coordinator、CapabilityExecutor 和 ModelGateway 共同消费同一预算快照。
-- Player 固化单次尝试超时（默认 15 秒，5–30 秒）和完整决策 deadline（默认 45 秒，15–120 秒且不小于单次超时）；初始请求、纠错和降级共享剩余时间，少于 5 秒不再启动 Attempt。
+- Player 固化单次尝试超时（默认 15 秒，5–30 秒）和完整决策 deadline（默认 45 秒，15–120 秒且不小于单次超时）；初始请求和纠错共享剩余时间，少于 5 秒不再启动 Attempt。
 - Player/Coach 使用独立并发预算，首版各保留一个互不占用的 Worker 槽位。
 
 验证：
@@ -254,7 +254,7 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 - 供应商、模型、请求/响应哈希
 - Token、成本、耗时
 - 结构化错误分类
-- 纠错和降级关系
+- 纠错和失败关系
 
 验证：
 
@@ -416,7 +416,7 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 实现：
 
 - 进程重启时把原 `thinking` Player AgentRun 标记为 `cancelled(process_restart)`，使旧请求、attempts、租约和 fencing 失效；状态仍需同一 AI 行动时创建带 `supersedesRunId` 的新运行、新请求和 attempts，并从 DeepSeek 开始。
-- 新运行沿用本场固化的人物、Runtime、Prompt、策略和路由版本，不继承旧供应商位置、纠错次数、输出或检查点；原 `paused` 状态不自动新建。
+- 新运行沿用本场固化的人物、Runtime、Prompt、策略和路由版本，不继承旧纠错次数、输出或检查点；原 `paused` 状态不自动新建。
 - stale 触发条件为旧 Worker 租约失效并且权威状态版本变化，或 Commit 前版本复验失败。
 - `SessionAgentCoordinator` 重新读取当前权威状态：
   - 若已不需要 AI 行动，不创建替代运行。
@@ -478,20 +478,20 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 
 实现：
 
-- 建立共享模型适配器端口和 DeepSeek、Kimi 适配器。
+- 建立共享模型适配器端口和 DeepSeek 适配器。
 - Player、Coach 各自定义版本化 Route Policy。
 - 统一供应商错误分类和使用量元数据。
 - API Key 仅从私有运行环境读取。
 
 验证：
 
-- 相同 Runtime 的降级不改变 Context、输出 Schema 或权限。
+- 相同 Runtime 的纠错不改变 Context、输出 Schema 或权限。
 - Player 与 Coach 可以独立升级路由版本。
 - 密钥不会写入日志、数据库或响应。
 
 完成标准：
 
-- 当前可采用相同供应商顺序，但不存在硬耦合。
+- Player 与 Coach 可独立演进 Route Policy，但共享同一窄适配器端口。
 
 ### A4.4 实现结构化输出与有界纠错
 
@@ -499,8 +499,8 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 
 - Foundation 解析结构化输出并执行 Schema 纠错。
 - Runtime 执行业务语义校验。
-- 每个供应商的纠错次数受预算限制。
-- 降级供应商从原始 Context 开始，不接收前一供应商错误输出。
+- DeepSeek 的纠错次数受预算限制。
+- 纠错请求从原始 Context 开始，只附加受控纠错提示。
 - Player 每个新 Attempt 先计算完整决策剩余时间，实际超时取单次上限与剩余时间的较小值；不足 5 秒时不调用供应商。
 
 验证：
@@ -508,7 +508,7 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 - 非法 JSON、未知枚举、额外字段和越界值被拒绝。
 - 内容仍非法达到上限后按 Runtime 失败策略结束。
 - 迟到、取消或旧 fencing 响应不能提交。
-- Player 初始请求、两次纠错和 Kimi 降级不会各自重置总 deadline。
+- Player 初始请求和两次纠错不会各自重置总 deadline。
 
 完成标准：
 
@@ -802,7 +802,7 @@ Coach 投影：
 
 验证：
 
-- DeepSeek 可降级故障进入 Kimi。
+- DeepSeek 基础设施故障进入稳定失败并暂停。
 - 内容非法达到预算后 paused。
 - stale 接替使用 A3.4 路径。
 - 中止手不进入普通历史、统计或 Coach，迟到 Player 结果不能提交或重建运行。
@@ -1009,7 +1009,7 @@ Coach 投影：
 实现：
 
 - 统一关联 `ownerId` 的不可逆摘要、runId、attemptId、sessionId 和 reviewId。
-- 指标覆盖成功率、延迟、Token、成本、降级、纠错、队列、租约、stale 和泄露拒绝。
+- 指标覆盖成功率、延迟、Token、成本、基础设施失败、纠错、队列、租约、stale 和泄露拒绝。
 - 本地使用轻量实现；只保留 OpenTelemetry 适配端口。
 
 验证：
@@ -1134,7 +1134,7 @@ Coach 投影：
 
 - Contracts、数据库迁移和 Repository 合约。
 - 权威状态投影和三道 Player/Coach Guard。
-- Player 成功、降级、纠错、暂停、stale 接替和唯一提交。
+- Player 成功、基础设施失败、纠错、暂停、stale 接替和唯一提交。
 - Player 服务重启新运行、完整决策 deadline、保留 Worker 槽位和暂停中止。
 - Coach 分类、两阶段解释、版本恢复、重新复盘和历史不覆盖。
 - OwnerScope、CapabilityManifest、单活动场次唯一索引、删除提交屏障、级联删除和敏感信息扫描。

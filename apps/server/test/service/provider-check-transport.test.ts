@@ -34,7 +34,9 @@ describe('provider check transport', () => {
         ),
     })
 
-    await expect(transport.check('kimi', 'private-key')).rejects.toMatchObject({
+    await expect(
+      transport.check('deepseek', 'private-key'),
+    ).rejects.toMatchObject({
       name: 'ProviderCheckFailure',
       kind: 'auth',
       message: 'Provider 检测失败。',
@@ -54,79 +56,6 @@ describe('provider check transport', () => {
     await expect(
       transport.check('deepseek', 'private-key'),
     ).rejects.toMatchObject({ kind })
-  })
-
-  test.each([
-    ['exceeded_current_quota_error', 'billing'],
-    ['rate_limit_reached_error', 'rateLimited'],
-  ] as const)('maps Kimi 429 error type %s to %s', async (type, kind) => {
-    const transport = createProviderCheckTransport({
-      fetch: async () => Response.json({ error: { type } }, { status: 429 }),
-    })
-
-    await expect(transport.check('kimi', 'private-key')).rejects.toMatchObject({
-      kind,
-    })
-  })
-
-  test('keeps malformed Kimi 429 responses rate-limited', async () => {
-    const transport = createProviderCheckTransport({
-      fetch: async () => new Response('{invalid-json', { status: 429 }),
-    })
-
-    await expect(transport.check('kimi', 'private-key')).rejects.toMatchObject({
-      kind: 'rateLimited',
-    })
-  })
-
-  test('bounds Kimi 429 error classification to 256 KiB', async () => {
-    let cancelled = false
-    const transport = createProviderCheckTransport({
-      fetch: async () =>
-        new Response(
-          new ReadableStream({
-            cancel() {
-              cancelled = true
-            },
-          }),
-          {
-            status: 429,
-            headers: { 'Content-Length': String(300 * 1_024) },
-          },
-        ),
-    })
-
-    await expect(transport.check('kimi', 'private-key')).rejects.toMatchObject({
-      kind: 'rateLimited',
-    })
-    expect(cancelled).toBe(true)
-  })
-
-  test('keeps the timeout active while reading a stalled Kimi 429 body', async () => {
-    const fetchMock = (async (_input, init) => {
-      const signal = init?.signal
-      return new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode('{"error":'))
-            signal?.addEventListener(
-              'abort',
-              () => controller.error(new DOMException('aborted', 'AbortError')),
-              { once: true },
-            )
-          },
-        }),
-        { status: 429 },
-      )
-    }) as typeof fetch
-    const transport = createProviderCheckTransport({
-      fetch: fetchMock,
-      timeoutMs: 10,
-    })
-
-    await expect(transport.check('kimi', 'private-key')).rejects.toMatchObject({
-      kind: 'timeout',
-    })
   })
 
   test.each([

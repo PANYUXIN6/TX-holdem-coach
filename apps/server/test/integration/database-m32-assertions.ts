@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import type { PublicSessionSnapshot } from '@tx-holdem-coach/contracts'
 import type { Sql, TransactionSql } from 'postgres'
 import { expect } from 'vitest'
@@ -182,7 +183,6 @@ export function createM32Service(
         catalog,
         readProviderPolicy: () => ({
           deepSeekConfigured: true,
-          kimiConfigured: true,
         }),
         createIdentityGraph: (seatNumbers) => {
           const identity = createSessionCreationIdentityGraph(seatNumbers)
@@ -275,6 +275,65 @@ export async function clearLocalOwnerSessions(sql: Sql): Promise<void> {
       SELECT id FROM app_private.owners WHERE identity_key = 'local-user'
     )
   `
+}
+
+async function executeKimiDataCleanupMigration(sql: Sql): Promise<void> {
+  const migrationUrl = new URL(
+    '../../src/db/migrations/0001_remove_kimi_data.sql',
+    import.meta.url,
+  )
+  const statements = (await readFile(migrationUrl, 'utf8'))
+    .split('--> statement-breakpoint')
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0)
+
+  for (const statement of statements) await sql.unsafe(statement)
+}
+
+async function assertKimiDataCleanupMigration(sql: Sql): Promise<void> {
+  await clearLocalOwnerSessions(sql)
+  let identity: SessionCreationIdentityGraph | undefined
+  await createM32Service(sql, (created) => {
+    identity = created
+  }).create(currentCatalogRequest(5))
+  if (identity === undefined) throw new Error('M3.2 缺少清理迁移身份图。')
+
+  await executeKimiDataCleanupMigration(sql)
+  const preservedRows = await sql<{ readonly count: number }[]>`
+    SELECT count(*)::int AS count
+    FROM app_private.sessions
+    WHERE id = ${identity.sessionId}::uuid
+  `
+  expect(preservedRows[0]?.count).toBe(1)
+
+  await sql`
+    UPDATE app_private.session_agents
+    SET config_payload = jsonb_set(
+      config_payload,
+      '{models,kimi}',
+      '{"modelId":"kimi-k2.6"}'::jsonb,
+      true
+    )
+    WHERE session_id = ${identity.sessionId}::uuid
+  `
+  await executeKimiDataCleanupMigration(sql)
+
+  const cleanedRows = await sql<
+    { readonly sessionCount: number; readonly ownerCount: number }[]
+  >`
+    SELECT
+      (
+        SELECT count(*)::int
+        FROM app_private.sessions
+        WHERE id = ${identity.sessionId}::uuid
+      ) AS "sessionCount",
+      (
+        SELECT count(*)::int
+        FROM app_private.owners
+        WHERE identity_key = 'local-user'
+      ) AS "ownerCount"
+  `
+  expect(cleanedRows[0]).toEqual({ sessionCount: 0, ownerCount: 1 })
 }
 
 function createDeferred<Value>(): {
@@ -1394,6 +1453,7 @@ export async function assertM32SessionCreation(
   runtimeUrl: string,
 ): Promise<void> {
   try {
+    await assertKimiDataCleanupMigration(sql)
     await assertSixToNinePlayerCreation(sql)
     await assertLatestEndedReuse(sql)
     await assertRollbackOnMutationFailures(sql)

@@ -72,7 +72,7 @@ function isKnownRoute(method: string, path: string): boolean {
     'DELETE /api/data',
   ])
   if (fixed.has(`${method} ${path}`)) return true
-  if (/^\/api\/settings\/providers\/(deepseek|kimi)\/check$/.test(path)) {
+  if (/^\/api\/settings\/providers\/deepseek\/check$/.test(path)) {
     return method === 'POST'
   }
   if (/^\/api\/agent-personas\/[^/]+$/.test(path)) return method === 'GET'

@@ -393,7 +393,7 @@ export const PublicHandCategorySchema = z.enum([
   'straightFlush',
 ])
 
-export const ProviderIdSchema = z.enum(['deepseek', 'kimi'])
+export const ProviderIdSchema = z.enum(['deepseek'])
 export const ProviderCheckStatusSchema = z.enum([
   'notConfigured',
   'notChecked',
@@ -497,26 +497,8 @@ const DeepSeekProviderSettingsSchema = z
     }
   })
 
-const KimiProviderSettingsSchema = z
-  .strictObject({
-    ...providerHealthSummaryShape,
-    canFallback: z.boolean(),
-  })
-  .superRefine((provider, context) => {
-    validateProviderHealthSummary(provider, context)
-
-    if (provider.canFallback !== provider.configured) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: '自动降级能力必须与 Kimi 配置状态一致。',
-        path: ['canFallback'],
-      })
-    }
-  })
-
 export const ProviderSettingsResponseSchema = z.strictObject({
   deepSeek: DeepSeekProviderSettingsSchema,
-  kimi: KimiProviderSettingsSchema,
 })
 
 export const HealthResponseSchema = z.strictObject({
@@ -981,13 +963,8 @@ export const PublicSessionSnapshotSchema = z
     }
   })
 
-export const SessionCreationWarningSchema = z.strictObject({
-  code: z.literal('KIMI_FALLBACK_UNAVAILABLE'),
-  message: z.literal('Kimi API Key 未配置，自动降级不可用。'),
-})
 export const CreateSessionResponseSchema = z.strictObject({
   snapshot: PublicSessionSnapshotSchema,
-  warnings: z.array(SessionCreationWarningSchema).max(1),
 })
 
 export const SseEventTypeSchema = z.enum([
@@ -999,7 +976,6 @@ export const SseEventTypeSchema = z.enum([
   'aiAutoRebuy',
   'actionCommitted',
   'agentStarted',
-  'agentProviderFallback',
   'agentRepairAttempted',
   'agentPaused',
   'handAborted',
@@ -1089,9 +1065,6 @@ export type CreateSessionRosterSource = z.infer<
   typeof CreateSessionRosterSourceSchema
 >
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>
-export type SessionCreationWarning = z.infer<
-  typeof SessionCreationWarningSchema
->
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>
 export type PokerAction = z.infer<typeof PokerActionSchema>
 export type SuggestedTarget = z.infer<typeof SuggestedTargetSchema>

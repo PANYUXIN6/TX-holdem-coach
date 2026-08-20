@@ -30,16 +30,10 @@ export function createProviderHealthService(input: {
   const checked = new Map<ProviderId, ProviderHealthSummary>()
   const inFlight = new Map<ProviderId, Promise<ProviderSettingsResponse>>()
 
-  const configured = (provider: ProviderId) =>
-    provider === 'deepseek'
-      ? config.hasDeepSeekApiKey()
-      : config.hasKimiApiKey()
-  const key = (provider: ProviderId) =>
-    provider === 'deepseek'
-      ? config.getDeepSeekApiKey()
-      : config.getKimiApiKey()
+  const configured = () => config.hasDeepSeekApiKey()
+  const key = () => config.getDeepSeekApiKey()
   const summary = (provider: ProviderId): ProviderHealthSummary => {
-    if (!configured(provider)) {
+    if (!configured()) {
       return {
         configured: false,
         checkStatus: 'notConfigured',
@@ -62,16 +56,12 @@ export function createProviderHealthService(input: {
         ...summary('deepseek'),
         canCreateSession: config.hasDeepSeekApiKey(),
       },
-      kimi: {
-        ...summary('kimi'),
-        canFallback: config.hasKimiApiKey(),
-      },
     })
 
   return Object.freeze({
     read,
     async check(provider: ProviderId): Promise<ProviderSettingsResponse> {
-      const apiKey = key(provider)
+      const apiKey = key()
       if (apiKey === undefined) return read()
       const existing = inFlight.get(provider)
       if (existing !== undefined) return existing

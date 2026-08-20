@@ -72,10 +72,10 @@ M3.8 完成时必须能证明：
 M3.8 不负责：
 
 - 定义或实现 AgentRun 状态机、租约领取/续期、fencing token 分配、并发额度或 Worker 轮询；
-- 定义 DeepSeek/Kimi 路由、创建/结束 Attempt、模型请求、纠错、降级、预算或 deadline；
+- 定义 DeepSeek Route Policy、创建/结束 Attempt、模型请求、纠错、预算或 deadline；
 - 定义 Player `process_restart`、stale、暂停、人工重试或替代运行的业务决策；
 - 实现 Player Commit Gate、`aiAction`、迟到结果判断或扑克命令提交；
-- 发布私有事件 V3、增加 `agentStarted|agentProviderFallback|agentRepairAttempted|agentPaused` 内容契约，或修改 M3.6/M3.7 SSE 协议；
+- 发布私有事件 V3、增加 `agentStarted|agentRepairAttempted|agentPaused` 内容契约，或修改 M3.6/M3.7 SSE 协议；
 - 恢复 Coach Runtime。Coach 的可恢复运行由 M4 Foundation/Coach Recovery Policy 和 Worker 自身处理，不经 Session Player 启动协调；
 - 扫描全部历史 ended Session、主动重试既有 `readonlyDiagnostic`、修复损坏 Agent 审计或重新投影历史公开事件；
 - 提供 HTTP 手工恢复端点、管理 API、健康状态新字段或浏览器启动恢复 UI；

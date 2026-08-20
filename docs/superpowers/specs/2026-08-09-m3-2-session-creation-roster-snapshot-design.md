@@ -15,8 +15,8 @@ M3.2 采用：
 
 M3.2 负责：
 
-- 冻结严格的创建请求、成功响应与警告协议；
-- 每次创建时重新读取安全的 Provider 能力，DeepSeek 未配置时拒绝创建，Kimi 未配置时返回固定警告；
+- 冻结严格的创建请求与成功响应协议；
+- 每次创建时重新读取安全的 Provider 能力，DeepSeek 未配置时拒绝创建；
 - 支持“当前目录选择”和“沿用最新 ended 场次”两种互斥阵容来源；
 - 在事务前一次生成本次创建所需的 Session、Participant、Hand 和 Event UUID；
 - 固定用户座位为 `0`，将 5–8 个 AI 座位规范化为 `1..8` 内的唯一升序集合；
@@ -147,25 +147,16 @@ const CreateSessionRequestSchema = z.strictObject({
 
 `currentCatalog.selections` 的数组顺序没有业务语义。服务必须按 `seatNumber` 规范化后再生成身份图和调用 Poker 引擎。
 
-### 4.2 成功警告与响应
+### 4.2 成功响应
 
 ```ts
-const SessionCreationWarningSchema = z.strictObject({
-  code: z.literal('KIMI_FALLBACK_UNAVAILABLE'),
-  message: z.literal('Kimi API Key 未配置，自动降级不可用。'),
-})
-
 const CreateSessionResponseSchema = z.strictObject({
-  protocolVersion: ProtocolVersionSchema,
   snapshot: PublicSessionSnapshotSchema,
-  warnings: z.array(SessionCreationWarningSchema).max(1),
 })
 ```
 
-- Kimi 已配置时 `warnings = []`；
-- Kimi 未配置时恰有一个固定警告；
-- 最近手动健康检测为 `unavailable` 不产生创建警告，也不改变能力；
-- 警告不包含 Key、模型名、路由或原始供应商错误。
+- 最近手动健康检测为 `unavailable` 不改变创建能力，也不增加成功响应字段；
+- 响应不包含 Key、模型名、Route Policy 或原始供应商错误。
 
 ### 4.3 服务结果联合
 
@@ -204,13 +195,11 @@ M3.5 将该分支映射为 HTTP 409。创建服务不返回 `processing`、`repl
 ```ts
 interface ProviderCreationPolicy {
   readonly deepSeekConfigured: boolean
-  readonly kimiConfigured: boolean
 }
 ```
 
 - `deepSeekConfigured = false`：抛出稳定服务错误 `DEEPSEEK_NOT_CONFIGURED`，零数据库和随机副作用；
 - `deepSeekConfigured = true`：允许继续；
-- `kimiConfigured = false`：不阻止创建，只在最终成功响应中返回警告；
 - 不调用 Provider 网络，不读取最近健康检测作为门禁；
 - 该端口只暴露布尔能力，不暴露 Key 值。
 
@@ -508,8 +497,7 @@ insertLockedSessionRoster(
 ```text
 严格解析 CreateSessionRequest
 -> 读取 Provider 创建能力
-   |- DeepSeek 缺失：稳定拒绝，停止
-   `- Kimi 缺失：记录成功警告
+   `- DeepSeek 缺失：稳定拒绝，停止
 -> resolveOwnerScope({ ownerId: 'local-user' })
 -> current catalog：规范化显式选择
    或 latest ended：执行只返回来源 ID/座位的最小预检
@@ -727,7 +715,7 @@ apps/server/test/unit/
 
 | 文件 | 修改 |
 | --- | --- |
-| `packages/contracts/src/index.ts` | 创建请求、来源、警告、成功响应 Schema 与类型 |
+| `packages/contracts/src/index.ts` | 创建请求、来源、成功响应 Schema 与类型 |
 | `apps/server/src/sessions/roster-preparation.ts` | 当前目录纯准备；历史返回最小预检，不再返回可写结构 |
 | `apps/server/src/persistence/session-repository.ts` | 保留读取；结构型 roster writer 降为创建 Repository 私有适配细节 |
 | `apps/server/src/persistence/errors.ts` | 增加创建来源变化/创建不变量所需稳定分类 |
@@ -745,7 +733,6 @@ M3.2 不修改 `db/schema.ts`、Drizzle migrations、M3.1 命令 Handler 映射�
 - 4/9 个 AI、重复人物、重复座位、0、9、非整数座位被拒绝；
 - `latestEnded` 只接受空分支；
 - `userSeatNumber`、按钮、Session/Participant/Hand/Event ID 和配置载荷被 strict object 拒绝；
-- 成功响应 Kimi warning 只允许固定码与固定中文消息；
 - response snapshot 必须是合法 `PublicSessionSnapshot`。
 
 ### 13.2 纯首手计划
@@ -765,7 +752,6 @@ M3.2 不修改 `db/schema.ts`、Drizzle migrations、M3.1 命令 Handler 映射�
 ### 13.3 创建服务
 
 - DeepSeek 缺失时不预检、不生成 ID、不取随机数、不开始事务；
-- Kimi 缺失不阻止成功并返回唯一警告；
 - Provider 最近检测失败不阻止创建；
 - current catalog 与 latest ended 两分支进入同一最终提交路径；
 - active conflict 返回 `latestSnapshot`，不写 roster、Hand、event 或 snapshot；
@@ -844,7 +830,7 @@ Contracts 目标测试
 
 ```text
 创建 Contracts
--> Provider 门控与固定 warning
+-> Provider 门控
 -> current-catalog 纯首手计划
 -> Owner 锁与 current-catalog roster capability
 -> 单事务首手提交
@@ -871,7 +857,7 @@ Contracts 目标测试
 M3.2 只有同时满足以下条件才完成：
 
 - 创建请求严格区分 current catalog 与 latest ended，拒绝客户端用户座位、按钮和内部身份；
-- DeepSeek 缺失零副作用拒绝，Kimi 缺失成功并返回固定警告；
+- DeepSeek 缺失零副作用拒绝；
 - 6–9 人首手从规范化座位安全随机按钮，按钮不二次轮转；
 - 版本 0 checkpoint、版本 1 最终状态、Hand、阵容、事件和快照身份镜像完全一致；
 - 创建原子提交 Session、roster、空记忆、首手、`sessionCreated`、`handStarted` 与最终 snapshot；

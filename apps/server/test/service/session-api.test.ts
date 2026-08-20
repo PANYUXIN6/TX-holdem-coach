@@ -43,7 +43,6 @@ test('adapts injectable session ports without installing a production projector'
     kind: 'created' as const,
     response: {
       snapshot: snapshot(),
-      warnings: [],
     },
   }))
   const execute = vi.fn(async () => ({
@@ -184,7 +183,6 @@ function sessionRuntime(input: {
             kind: 'created',
             response: {
               snapshot: snapshot(),
-              warnings: [],
             },
           })),
       },

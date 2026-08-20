@@ -18,23 +18,23 @@
 
 新增下列严格公开 Provider Schema 和推导类型：
 
-- `ProviderIdSchema`：`deepseek | kimi`。
+- `ProviderIdSchema`：`deepseek`。
 - `ProviderCheckStatusSchema`：`notConfigured | notChecked | available | unavailable`。
 - `ProviderPublicErrorCodeSchema`：`provider_auth_error`、`provider_billing_unavailable`、`provider_network_error`、`provider_timeout`、`provider_rate_limited`、`provider_service_unavailable`、`provider_unknown_error`。
 - `ProviderHealthSummarySchema`：`configured`、`checkStatus`、可空 ISO `lastCheckedAt` 与可空 `errorCode`。
-- `ProviderSettingsResponseSchema`：`protocolVersion`、`deepSeek`（健康摘要加 `canCreateSession`）和 `kimi`（健康摘要加 `canFallback`）。
+- `ProviderSettingsResponseSchema`：`deepSeek`（健康摘要加 `canCreateSession`）。
 
 健康摘要状态不变量固定如下：未配置只能是 `configured = false`、`notConfigured`、两个可空字段皆为 `null`；已配置但未检测只能是 `configured = true`、`notChecked`、两个可空字段皆为 `null`；`available` 必须有检测时间且无错误码；`unavailable` 必须同时有检测时间和脱敏错误码。后两个状态先由共享 Schema 支持，M0.3 不产生它们。
 
-两个能力值只来自对应 Key 的配置状态：`deepSeek.canCreateSession === deepSeek.configured`，`kimi.canFallback === kimi.configured`。Provider 响应为严格对象，不能包含 Key、模型、路由、请求/响应正文或原始错误。
+创建能力只来自 DeepSeek Key 的配置状态：`deepSeek.canCreateSession === deepSeek.configured`。Provider 响应为严格对象，不能包含 Key、模型、Route Policy、请求/响应正文或原始错误。
 
 ## 3. 私有配置投影
 
-`ServerConfig` 仍是唯一持有 API Key 的对象。新增 `getProviderSettingsResponse(config)`：它根据两个 `has*ApiKey()` 结果组装 `ProviderSettingsResponseSchema`，再通过该 Schema 解析后返回。
+`ServerConfig` 仍是唯一持有 API Key 的对象。`getProviderSettingsResponse(config)` 根据 `hasDeepSeekApiKey()` 组装 `ProviderSettingsResponseSchema`，再通过该 Schema 解析后返回。
 
-Key 缺失时分别生成 `notConfigured` 与能力 `false`；Key 存在时生成 `notChecked` 与能力 `true`；两个 Provider 的 `lastCheckedAt`、`errorCode` 初始均为 `null`。该函数不联网、不缓存、不写入数据库。
+Key 缺失时生成 `notConfigured` 与能力 `false`；Key 存在时生成 `notChecked` 与能力 `true`；`lastCheckedAt`、`errorCode` 初始均为 `null`。该函数不联网、不缓存、不写入数据库。
 
-既有 `getServerCapabilities(config)` 保留兼容，但只能读取 `getProviderSettingsResponse(config)` 的已校验结果派生 `canCreateSession` 与中文警告，禁止再次直接判断 Key。这样不产生第二套能力判断逻辑，同时不会提前形成 HTTP 服务。
+`getProviderCreationPolicy(config)` 与 `getProviderSettingsResponse(config)` 都从同一 `ServerConfig` 派生，避免出现第二套能力判断逻辑，同时不会提前形成 HTTP 服务。
 
 ## 4. 私有扑克状态与人物目录
 
@@ -45,7 +45,7 @@ Key 缺失时分别生成 `notConfigured` 与能力 `false`；Key 存在时生�
 ## 5. 测试与验证
 
 - Contracts：验证 AI 座位边界、创建选择拒绝座位 `0`、公开快照的固定用户座位与重复座位拒绝；为 Provider 四种合法状态和各自非法字段组合建立 Schema 测试，并拒绝敏感额外字段。
-- Config：验证无 Key、仅 DeepSeek、仅 Kimi、双 Key 的初始投影，`getServerCapabilities()` 由同一投影派生，序列化结果不含标记 Key。
+- Config：验证 DeepSeek Key 缺失和存在时的初始投影与创建政策，序列化结果不含标记 Key。
 - Poker：在 `createPokerState()` 的公开入口验证用户换座与 AI 占用座位 `0` 均被拒绝。
 - Personas：对八项 V1 的完整公开投影做逐字段回归。
 

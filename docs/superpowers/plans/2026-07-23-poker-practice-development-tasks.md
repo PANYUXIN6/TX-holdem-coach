@@ -153,7 +153,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
    - 不用内存 Repository 假实现替代 PostgreSQL 行锁、唯一约束、UPSERT 和级联等关键行为。
 4. **服务/API 集成测试**
    - 通过 Hono 应用入口发请求。
-   - 使用可编程假模型适配器，不依赖 DeepSeek 或 Kimi 在线。
+   - 使用可编程假模型适配器，不依赖 DeepSeek 在线。
    - 只覆盖跨模块关键链路，不重复枚举纯引擎已经覆盖的每一种牌型和下注边界。
 
 默认 `pnpm run verify` 只运行离线测试，不读取数据库 URL、不连接 Supabase 或网络。临时 PostgreSQL 集成测试是显式任务；另可提供非生产 Supabase transaction-pooler smoke，验证 TLS、`6543` 和 `prepare: false`，但不得成为默认验证前置条件。
@@ -210,7 +210,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 - 定义通用标识、金额、扑克牌、动作、合法动作、命令、公开快照和统一错误响应 Schema。
 - 定义前端可见的预设人物摘要、创建场次人物选择和人物配置快照筛选 Schema；不把 Player Runtime 私有人物提示或完整模型配置暴露到共享协议。
-- 定义 `deepseek | kimi` Provider 标识、`notConfigured | notChecked | available | unavailable` 检测状态、脱敏错误码、健康摘要和设置响应 Schema。
+- 定义 `deepseek` Provider 标识、`notConfigured | notChecked | available | unavailable` 检测状态、脱敏错误码、健康摘要和设置响应 Schema。
 - 通用 `SeatNumberSchema` 保持 `0..8`；新增创建场次专用 `AiSeatNumberSchema = 1..8`。本地用户领域座位隐式固定为 `0`，创建请求不包含 `userSeatNumber`。
 - 固化八个唯一人物标识，以支持九人桌选择八个不同 AI。
 - 八个 `personaVersion = 1` 的全部公开字段以 [人物目录设计 §2](../specs/2026-07-24-persona-catalog-m0-design.md) 为规范事实源；任何公开字段变化必须提升版本，不能原地改写 V1。
@@ -240,10 +240,10 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 - 后端入口只监听本机地址。
 - dotenv 仅在服务端入口加载。
-- 使用 Zod 校验端口、后端私有 `DATABASE_URL`、可选存在的 DeepSeek Key 和 Kimi Key；`DATABASE_MIGRATION_URL` 不进入运行时 `ServerConfig`。
-- 使用共享 Provider Schema 从私有配置投影 `configured`、DeepSeek 开场资格和 Kimi 降级资格，不暴露 Key。Key 未配置时生成 `notConfigured`，已配置但尚未检测时生成 `notChecked`；两种状态的 `lastCheckedAt` 和 `errorCode` 均为 `null`。
-- 现有 `getServerCapabilities` 必须从同一 Provider 设置投影派生只读能力和警告，不得独立重复判断 DeepSeek/Kimi 配置。
-- Key 缺失不阻止查看页面和历史；DeepSeek Key 缺失只阻止创建场次，Kimi Key 缺失只产生降级不可用警告。
+- 使用 Zod 校验端口、后端私有 `DATABASE_URL` 和可选存在的 DeepSeek Key；`DATABASE_MIGRATION_URL` 不进入运行时 `ServerConfig`。
+- 使用共享 Provider Schema 从私有配置投影 `configured` 和 DeepSeek 开场资格，不暴露 Key。Key 未配置时生成 `notConfigured`，已配置但尚未检测时生成 `notChecked`；两种状态的 `lastCheckedAt` 和 `errorCode` 均为 `null`。
+- `getProviderSettingsResponse()` 与 `getProviderCreationPolicy()` 必须从同一 `ServerConfig` 派生，不得重复维护 DeepSeek 配置事实。
+- DeepSeek Key 缺失不阻止查看页面和历史，只阻止创建场次。
 - M0.3 不调用供应商网络、不保存检测结果，也不产生 `available/unavailable`；这些行为留给 M3.5。
 - 未通过配置校验时不启动；M0.3 当时不接数据库，连接与 Schema 兼容门控随后已由 M2.1 接入，服务启动仍不得自动执行迁移。
 - 提供中文、脱敏的启动错误。
@@ -251,10 +251,10 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 后端测试闭环：
 
-- 覆盖两个 Key 均缺失仍可启动只读功能、DeepSeek Key 缺失阻止创建场次、Kimi Key 缺失不阻止创建场次、非法配置和合法配置。
+- 覆盖 DeepSeek Key 缺失时仍可启动只读功能但阻止创建场次，以及非法配置和合法配置。
 - 使用标记测试密钥确认错误和序列化配置中不出现密钥。
 - 覆盖 Key 缺失对应 `notConfigured`、Key 存在对应 `notChecked`，并断言检测时间和错误码均为空、能力值只随配置变化。
-- 断言 `getServerCapabilities` 与共享 Provider 投影一致，且 M0.3 测试不会产生任何供应商网络调用。
+- 断言创建政策与共享 Provider 投影一致，且 M0.3 测试不会产生任何供应商网络调用。
 
 ### M0.4 建立后端测试工具箱
 
@@ -697,7 +697,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 产出：
 
 - 校验 5–8 个不同 `personaId` 和 `1..8` 内唯一 AI 座位；本地用户领域座位隐式固定为 `0`，拒绝客户端 `userSeatNumber` 和按钮字段。当前身份适配器固定为 `local-user`。
-- DeepSeek Key 缺失时阻止创建；Kimi Key 缺失时返回警告。
+- DeepSeek Key 缺失时阻止创建。
 - 从当前预设人物目录或上一场配置快照创建全新的 `session_agents` 和空记忆；沿用上一场时不升级人物版本，但原模型配置包必须仍通过当前 Active 准入。
 - 在事务前由服务端一次性生成 Session、用户 participant 和各 AI participant UUID；PokerSeat 的 `playerId` 与对应 `session_participants.id` 完全相同，AI participant ID 同时作为 `session_agents.participant_id`，Repository 不另行生成身份。
 - 将座位 `0` 与 AI 座位合并并按座位号规范化，调用 M1.9 `initializePokerTable()` 安全随机选择首手按钮；创建版本 `0` 的内存 `betweenHands` 内容和开手检查点，再调用 `startPokerHand()` 直接开始第一手，按钮不得再次轮转。
@@ -769,7 +769,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 - 实现健康、供应商设置、Agent 设置、只读预设人物目录、场次、命令、历史、统计和删除的概念 API。
 - 人物 API 只提供列表和详情读取，不提供创建、修改、复制或删除端点；目录严格返回共享人物最小摘要，不暴露模型标识、模型参数、路由、Prompt 或“模型配置摘要”。Provider 状态使用独立 Settings/Health API。
 - 在 M0.3 的 `notConfigured/notChecked` 静态投影之上，使用进程内缓存保存最近一次手动检测摘要并实现 `available/unavailable` 状态转换；不写入 PostgreSQL。服务重启后，已配置 Provider 回到 `notChecked`。
-- `GET /api/settings/providers` 只读取最近检测摘要，不发起网络；`POST /api/settings/providers/:provider/check` 才执行有界手动检测。检测失败返回 HTTP 200 的脱敏 `unavailable` 结果，不改变由 Key 配置决定的开场或降级资格。
+- `GET /api/settings/providers` 只读取最近检测摘要，不发起网络；`POST /api/settings/providers/:provider/check` 才执行有界手动检测。检测失败返回 HTTP 200 的脱敏 `unavailable` 结果，不改变由 Key 配置决定的开场资格。
 - 所有入口和响应经过共享 Zod Schema。
 - 错误返回稳定代码、中文说明、字段详情和必要的最新快照。
 - 不在错误中暴露 Key、私有牌堆或其他未公开底牌。
@@ -840,7 +840,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 - 模拟进程重建覆盖 `thinking` 替代、`paused` 保持、状态已变化不替代、ended/missing 跳过和 `readonlyDiagnostic` 零 Agent 五类结果。
 - 事务回滚时零事件发布、零 Worker 唤醒；提交后事件发布或唤醒提示失败不重跑恢复事务。
 - 复用 M4.7 验收旧 Worker、旧请求或旧 fencing token 的迟到结果不能提交；并发恢复后同一 `(sessionId, stateVersion, actorSeat)` 最多一个有效 AgentRun。
-- 复用 M4.3/M4.8 验收新运行由 Worker 领取后从 DeepSeek 创建第一次 Attempt，不继承旧供应商位置、纠错次数、attempt、输出或检查点，旧审计仍可通过 `supersedesRunId` 关联。
+- 复用 M4.3/M4.8 验收新运行由 Worker 领取后从 DeepSeek 创建第一次 Attempt，不继承旧纠错次数、attempt、输出或检查点，旧审计仍可通过 `supersedesRunId` 关联。
 
 ## 8. M4：Agent Foundation 与 Player Runtime
 
@@ -883,15 +883,15 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 产出：
 
 - Foundation 只机械校验 Runtime 已构建的 `ContextEnvelope`，不查询或追加业务数据。
-- DeepSeek、Kimi 通过共享 ModelGateway 适配，Player 与 Coach 使用各自版本化 Route Policy。
-- 只有欠费、网络失败、超时和明确 502/503/504 允许降级；同厂商内容纠错最多两次。
-- Player 单次尝试默认 15 秒、范围 5–30 秒；完整决策 deadline 默认 45 秒、范围 15–120 秒。初始、纠错和降级共享剩余时间，少于 5 秒不再启动尝试。
+- DeepSeek 通过共享 ModelGateway 适配，Player 与 Coach 使用各自版本化 Route Policy。
+- DeepSeek 基础设施失败返回稳定失败；内容纠错最多两次。
+- Player 单次尝试默认 15 秒、范围 5–30 秒；完整决策 deadline 默认 45 秒、范围 15–120 秒。初始请求和纠错共享剩余时间，少于 5 秒不再启动尝试。
 - 所有尝试受 Runtime 独立预算、超时、取消、脱敏和审计约束。
 
 后端测试闭环：
 
-- 覆盖供应商错误完整映射、语义相同 Context 降级、纠错耗尽、迟到和密钥泄露扫描。
-- 降级供应商不接收上一供应商错误输出或纠错历史。
+- 覆盖 DeepSeek 错误完整映射、纠错耗尽、迟到和密钥泄露扫描。
+- 纠错请求只接收原始 Context 与受控纠错提示，不泄露内部错误或隐藏上下文。
 
 ### M4.4 实现权威 Player 观察与三道信息防火墙
 
@@ -982,10 +982,10 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- 在首次写入 Player 协调私有事件前发布累积事件 V3：完整保留 V2，并为 `agentStarted`、`agentProviderFallback`、`agentRepairAttempted`、`agentPaused` 定义严格私有内容契约、当前 Codec、多版本读取注册和兼容测试；发布后所有新事件统一使用 V3。
+- 在首次写入 Player 协调私有事件前发布累积事件 V3：完整保留 V2，并为 `agentStarted`、`agentRepairAttempted`、`agentPaused` 定义严格私有内容契约、当前 Codec、多版本读取注册和兼容测试；发布后所有新事件统一使用 V3。
 - 最终失败使牌桌保持 `inHand` 并进入 `paused`，不自动 fold。
 - stale 后 SessionAgentCoordinator 重新读取权威状态；仍需 AI 时创建带 `supersedesRunId` 的新运行并重建决策包。
-- 服务重启取消旧 Player 运行并创建新运行，从 DeepSeek 开始；不复用旧 attempts 或路由检查点。
+- 服务重启取消旧 Player 运行并创建新运行；不复用旧 attempts 或执行检查点。
 - 当前状态已不需要 AI 时不创建替代运行。
 
 后端测试闭环：
@@ -1020,7 +1020,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 后端测试闭环：
 
-- 覆盖正常、降级、纠错、暂停、恢复、stale 接替和服务重启。
+- 覆盖正常、基础设施失败、纠错、暂停、恢复、stale 接替和服务重启。
 - Runtime、Prompt、模型、策略或 Context 版本变更通过相应 Eval 门禁。
 
 ## 9. M5：历史、统计与数据管理
@@ -1238,7 +1238,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 将新建流程分为“选择阵容”和“确认开场”两步。
 - 支持调整入座顺序和随机排座。
 - 确认页展示固定盲注 10/20、每席初始筹码 2,000、最终阵容和人物版本。
-- 显示 DeepSeek 必需配置和 Kimi 降级警告。
+- 显示 DeepSeek 必需配置和连接状态。
 - 创建场次后阵容锁定，成功响应直接携带原子开出的第一手 `inHand` 快照并进入牌桌，不再发送“开始第一手”命令。
 
 人工验收：
@@ -1287,7 +1287,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 产出：
 
 - AI 思考时高亮座位、标记右侧 AI 入口，并保持本手、AI、历史和调试视图可操作。
-- 降级和纠错显示为技术事件，不伪装成扑克动作。
+- 基础设施失败和纠错显示为技术事件，不伪装成扑克动作。
 - AI 状态页展示人物摘要、座位、人物版本和 `idle`、`thinking`、`paused`。
 - 暂停时冻结操作并提供错误摘要、查看调试信息、重新请求当前 AI 行动和“中止本手并结束场次”。
 - 中止入口只在 `active + inHand + paused` 出现；二次确认明确说明当前手不计历史/统计/Coach并回退开手前筹码。
@@ -1295,7 +1295,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 人工验收：
 
-- 正常、降级、纠错、暂停、重试和服务重启恢复状态均能清楚区分。
+- 正常、基础设施失败、纠错、暂停、重试和服务重启恢复状态均能清楚区分。
 - 页面不存在本地策略、人工替 AI 行动或跳过 AI 的入口。
 - 中止成功后使用更高版本的结束快照离开牌桌，普通历史中最后一手仍是中止前最近完成的手牌。
 
@@ -1336,7 +1336,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - 展示供应商非敏感摘要、Key 是否配置和连接检测。
 - Provider 查询不自动联网；手动检测使用本地 mutation 加载态，展示四态、可空检测时间和脱敏错误码。检测失败只作诊断，不把已配置能力错误地显示为关闭。
-- 编辑 Player 单次尝试超时（5–30 秒）和完整决策 deadline（15–120 秒，且不小于单次超时），并解释纠错/降级共享剩余总时间。
+- 编辑 Player 单次尝试超时（5–30 秒）和完整决策 deadline（15–120 秒，且不小于单次超时），并解释初始请求与纠错共享剩余总时间。
 - 只读展示数据目录。
 - 删除已结束场次和使用指定确认文字清空全部数据。
 
@@ -1450,7 +1450,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - `CoachReviewComposer` 确定性合并，`CoachReviewValidator` 校验决策完整性、事实引用、匹配状态和样本边界。
 - `CoachReviewComposer` 确定性生成本手决策优先级摘要：按街道分别统计四种 assessment；仅在 EV 方法可比较时指出本手最大损失决策；只有规则政策认定的高严重度、EV 不可用决策可以单列且不能称为最贵，禁止 LLM 排名。
 - `CoachReviewComposer` 按版本化 `TeachingProjectionPolicy` 默认展开一个核心决策、最多两个次要决策，其余决策压缩但仍可查看；默认只突出一条核心教训和一条自然语言练习建议，LLM 不参与核心决策排序。
-- Coach 通过 Foundation `ModelGateway` 使用独立 Route Policy；只复用底层客户端、超时、错误分类、脱敏和允许降级的基础设施规则。
+- Coach 通过 Foundation `ModelGateway` 使用独立 Route Policy；只复用底层客户端、超时、错误分类和脱敏规则。
 - 同厂商内容纠错最多两次，最终失败只影响复盘请求。
 
 后端测试闭环：
@@ -1460,7 +1460,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 验证 referenceOnly/heuristic、受支持低频混合动作和推测心理不会升级为客观错误；事后牌型比较、实际后续、返还和逐池结算与权威完成手一致。
 - 第二阶段尝试改写评价、替代路线或三层分析时被 Schema 拒绝。
 - 虚构底池、筹码、动作、频率、牌面或证据引用时进入纠错。
-- DeepSeek 成功、允许降级、禁止降级、纠错耗尽、迟到响应和最终失败均不修改扑克状态。
+- DeepSeek 成功、基础设施失败、纠错耗尽、迟到响应和最终失败均不修改扑克状态。
 - 不保存 API Key、供应商隐藏推理或 `reasoning_content`。
 
 ### M8.6 实现 Coach 生命周期、逐决策持久化与 API
@@ -1514,7 +1514,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 验证决策分析与事后解释的信息隔离、证据截止点和旧报告可复现。
 - 验证确定性标签与严重度不可被模型改写、无 EV 数据时保持 unavailable、策略版本升级不混用检查点。
 - 验证五级决策评价加 unrated 的条件、教学降噪投影、策略抽象来源和 GTO/教学基准文案边界。
-- 验证供应商降级、纠错、失败、重新生成和删除不会影响扑克状态或玩家 Agent。
+- 验证 DeepSeek 纠错、失败、重新生成和删除不会影响扑克状态或玩家 Agent。
 
 完成标准：
 
@@ -1539,7 +1539,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- 假模型脚本覆盖 DeepSeek 成功、允许降级、禁止降级、两次纠错、纠错期间降级、Kimi 失败暂停和人工重试。
+- 假模型脚本覆盖 DeepSeek 成功、基础设施失败、两次纠错、纠错耗尽暂停和人工重试。
 - 验证上下文连续、角色隔离、审计完整和敏感信息脱敏。
 - 在九人桌中验证八个 AI 的人物配置、观察和本场记忆互不串线。
 - 验证 Player 有独立保留槽位，Coach 长任务不能阻塞行动；所有 Player 尝试共享总 deadline。
@@ -1600,7 +1600,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - 按需求验收项建立“需求 → 测试”映射。
 - 删除只重复框架行为、没有业务断言或被更低层测试完全覆盖的用例。
-- 确认所有资金、状态版本、事件顺序、信息隔离、降级和删除边界至少有一层精确自动化验证。
+- 确认所有资金、状态版本、事件顺序、信息隔离、模型失败和删除边界至少有一层精确自动化验证。
 - 完整后端验证命令稳定通过，且不需要网络或真实模型 Key。
 
 ### M9.8 用户前端验收
@@ -1706,4 +1706,4 @@ M11 不属于 M0–M9 首版，也不是 M10 的完成条件。只有 M10 的长
 3. PRD、前端、后端、Agent Foundation、Player Runtime 和 Coach Runtime 六份上位文档中的验收标准都有明确实现和验证归属。
 4. 用户完成前端人工验收，页面信息和操作流程清楚。
 5. 没有加入首版明确不做的功能。
-6. 不依赖真实 DeepSeek/Kimi 在线状态即可完成自动化回归。
+6. 不依赖真实 DeepSeek 在线状态即可完成自动化回归。

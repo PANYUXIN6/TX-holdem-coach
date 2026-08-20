@@ -20,9 +20,9 @@ Player Runtime 必须保证：
 1. 不同角色的观察和记忆严格隔离。
 2. 模型只能从当前合法行动集合中选择。
 3. 非法响应绝不推进牌局。
-4. DeepSeek→Kimi 降级时角色状态连续。
+4. DeepSeek 失败时角色状态和权威牌局保持一致。
 5. 上下文大小不随场次手数线性增长。
-6. 每次请求、纠错、降级和暂停都可诊断。
+6. 每次请求、纠错、失败和暂停都可诊断。
 7. 模型只在经过 Spot 规范化、可见牌结构、当前与候选结果数学、策略、人物和对手证据加工的候选集合中选择。
 8. 任何隐藏信息在进入模型前经过三道信息防火墙。
 
@@ -67,7 +67,6 @@ AI 预设人物由后端只读、版本化目录提供，包含：
 - 结构化风格参数。
 - 自由文本策略说明。
 - DeepSeek 模型配置。
-- Kimi 模型配置。
 
 预设人物不保存本场记忆，不在 Player Runtime 中接受用户创建、修改或删除。
 
@@ -315,11 +314,11 @@ Player Runtime 先构建完整、仅供审计回放的 `DecisionAuditSnapshot`�
 
 ## 9. 供应商适配
 
-DeepSeek 和 Kimi 通过 Foundation 的统一 `ModelGateway` 接入。Player Runtime 使用自己的版本化 Route Policy；接口输入是由同一 `PlayerDecisionPacket` 封装的 `ContextEnvelope`，输出是厂商最终原始输出及调用元数据。
+DeepSeek 通过 Foundation 的统一 `ModelGateway` 接入。Player Runtime 使用自己的版本化 Route Policy；接口输入是由 `PlayerDecisionPacket` 封装的 `ContextEnvelope`，输出是厂商最终原始输出及调用元数据。
 
 服务端使用 Vercel AI SDK Core 实现适配层：
 
-- 依赖 `ai`、`@ai-sdk/deepseek` 和 `@ai-sdk/moonshotai`，分别接入 DeepSeek 与 Kimi，不使用前端聊天 UI。
+- 依赖 `ai` 和 `@ai-sdk/deepseek` 接入 DeepSeek，不使用前端聊天 UI。
 - 每次决策使用非流式 `generateText` 和 `Output.object({ schema: PlayerBoundedChoiceSchema })` 请求单个结构化对象。
 - `PlayerBoundedChoiceSchema` 使用 Zod 定义。AI SDK 的结构校验是第一道门，Player Runtime 随后仍执行独立的 Schema 复验、候选语义校验和状态版本校验。
 - 不启用模型工具调用、多步 Agent 循环、厂商会话线程或自动提供商切换。
@@ -339,46 +338,31 @@ DeepSeek 和 Kimi 通过 Foundation 的统一 `ModelGateway` 接入。Player Run
 - 读取完整牌局快照。
 - 修改 Agent 记忆。
 - 直接提交扑克行动。
-- 自行决定是否降级。
+- 自行改变 Route Policy、纠错预算或失败语义。
 
-## 10. DeepSeek→Kimi 路由
+## 10. DeepSeek 执行策略
 
-### 10.1 每个行动重新优先 DeepSeek
+### 10.1 每个行动独立执行
 
-每次 AI 行动都从 DeepSeek 开始。上一次行动使用 Kimi 不影响下一次行动的优先级。
+每次 AI 行动都创建独立的 DeepSeek 执行链。上一次行动的输出、错误或纠错历史不进入下一次行动。
 
-DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警告自动降级不可用；如果 DeepSeek 后续触发可降级错误，牌局直接暂停并记录 `provider_fallback_unavailable`。
+DeepSeek Key 缺失时禁止开场。运行过程中发生基础设施失败时，当前 Attempt 完成审计后返回稳定失败并暂停牌局。
 
-### 10.2 允许降级的原因
+### 10.2 基础设施失败
 
-以下错误允许使用同一语义的 `PlayerDecisionPacket` 降级到 Kimi：
+以下错误完成当前 Attempt 审计后终止本次执行：
 
 - 可识别的欠费、余额或额度不足。
 - DNS、连接建立、连接重置等网络失败。
 - 单次请求超过当前配置的超时时间。
-- 明确的 502、503 或 504。
+- 鉴权、限流、普通服务错误、明确的 502/503/504 或未知供应商错误。
 
-### 10.3 不允许降级的原因
+### 10.3 内容错误与本地错误
 
-以下情况不切换 Kimi：
-
-- DeepSeek 返回 JSON 或 Schema 错误。
-- DeepSeek 返回非法扑克动作或金额。
-- DeepSeek 返回合法但策略较差的行动。
-- DeepSeek API Key 缺失或鉴权配置错误。
-- 普通 500 或 429。
-- 本地观察构建、数据库或牌局状态错误。
-
-内容错误在 DeepSeek 内纠错；本地错误直接暂停并修复本地系统。
-
-### 10.4 Kimi 降级
-
-- Kimi 接收与 DeepSeek 语义相同的 `PlayerDecisionPacket`。
-- 不附加 DeepSeek 的原始请求历史、原始响应或隐藏推理。
-- Kimi 也执行最多两次内容纠错。
-- Kimi 网络、鉴权、内容纠错耗尽或本地校验失败时暂停牌局。
-
-如果 DeepSeek 的纠错请求发生欠费、传输失败、超时或 502/503/504，允许切换 Kimi。Kimi 从原始 `PlayerDecisionPacket` 开始一次全新决策，不接收 DeepSeek 的错误输出或纠错历史，并拥有自己的初始请求和最多两次内容纠错机会。DeepSeek 两次纠错均返回但内容仍非法时直接暂停，不切换 Kimi。
+- DeepSeek 返回 JSON、Schema、非法扑克动作或金额时，在同一执行链内最多纠错两次。
+- 合法但策略较差的行动按合法结果处理。
+- 本地观察构建、数据库或牌局状态错误直接暂停并修复本地系统。
+- 两次纠错仍未得到合法内容时返回稳定失败并暂停。
 
 ## 11. 校验
 
@@ -425,27 +409,22 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 3. 纠错请求包含原始结构化响应、错误列表和合法动作边界。
 4. 最多执行两次纠错。
 5. 任一次通过后立即停止纠错并返回合法决策。
-6. 两次纠错都失败后暂停，不因内容错误切换厂商。
-
-如果初始 DeepSeek 请求因可降级错误切换到 Kimi，Kimi 拥有自己独立的最多两次内容纠错额度。
-
-如果 DeepSeek 的某次纠错请求发生允许降级的供应商故障，则按第 10.4 节从原始上下文重新开始 Kimi 决策。此时降级原因是供应商不可用，而不是此前的内容错误。
+6. 两次纠错都失败后暂停。
 
 ## 13. 超时、迟到响应与取消
 
 - Player 使用独立于 Coach 的保留 Worker 槽位；首版 Player 和 Coach 各一个进程内槽位，Coach 不能占用 Player 槽位。
 - 单次供应商请求超时是持久化的 Player 设置，默认 15 秒，合法范围 5–30 秒。
 - 每个 Player AgentRun 固化完整决策 deadline，默认 45 秒，合法范围 15–120 秒且不得小于单次超时。
-- 初始请求、同厂商纠错和供应商降级共享该运行的剩余总时间。每个尝试的实际超时取单次设置与剩余时间的较小值；新尝试开始前剩余不足 5 秒时直接以 `player_deadline_exhausted` 暂停。
+- 初始请求和纠错共享该运行的剩余总时间。每个尝试的实际超时取单次设置与剩余时间的较小值；新尝试开始前剩余不足 5 秒时直接以 `player_deadline_exhausted` 暂停。
 - 每个尝试在开始时固化实际超时与剩余总时间；设置修改只影响之后创建的 Player 运行。
 - 超时后该请求尝试被关闭并标记为超时。
-- DeepSeek 超时触发 Kimi 降级。
-- Kimi 超时触发牌局暂停。
+- DeepSeek 超时触发稳定失败并暂停牌局。
 - 超时后迟到的响应只保存为过期结果，不得提交。
 - 页面刷新不直接取消服务端有效请求。
 - 服务重启时，`thinking` 状态的旧 Player AgentRun 标记为 `cancelled(process_restart)`，旧 `decisionRequestId`、租约、fencing token 和 attempts 全部失效，不在同一运行上续跑。
 - 权威状态仍为 `active + inHand`、仍轮到同一 AI 且不存在其他有效运行时，创建带 `supersedesRunId` 的新 AgentRun、新请求和新 attempts，从 DeepSeek 首次尝试重新开始。
-- 新运行沿用本场已经固化的人物、Runtime、Prompt、策略和路由版本，但不继承旧供应商位置、纠错计数、模型输出或临时检查点。权威状态已变化或不再需要 AI 行动时不创建替代运行。
+- 新运行沿用本场已经固化的人物、Runtime、Prompt、策略和 Route Policy 版本，但不继承旧纠错计数、模型输出或临时检查点。权威状态已变化或不再需要 AI 行动时不创建替代运行。
 - 已经 `paused` 的运行保持暂停。
 
 ## 14. 暂停与人工重试
@@ -492,7 +471,7 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 
 每条 `agent_attempt` 记录：
 
-- 尝试序号和类型：初始、纠错或降级。
+- 尝试序号和类型：初始或纠错。
 - 服务商和模型。
 - 脱敏请求。
 - 最终原始输出，不含隐藏推理。
@@ -507,7 +486,7 @@ DeepSeek Key 缺失时禁止开场。Kimi Key 缺失时允许开场但必须警�
 
 ## 16. 敏感信息
 
-- DeepSeek Key 和 Kimi Key 只从后端环境变量读取。
+- DeepSeek Key 只从后端环境变量读取。
 - 适配器不得把 Key 放进请求正文、错误对象或日志上下文。
 - 对 HTTP Header、URL 查询参数和供应商错误进行脱敏。
 - 调试 API 和 SSE 再次执行脱敏。
@@ -524,7 +503,6 @@ Player Runtime 使用稳定的内部错误类别：
 - `provider_auth_error`
 - `provider_rate_limited`
 - `provider_unknown_error`
-- `provider_fallback_unavailable`
 - `player_deadline_exhausted`
 - `response_parse_error`
 - `response_schema_error`
@@ -533,7 +511,7 @@ Player Runtime 使用稳定的内部错误类别：
 - `local_context_error`
 - `local_persistence_error`
 
-其中只有欠费、传输失败、超时和明确的 502/503/504 可以从 DeepSeek 降级到 Kimi。普通 500 和 429 默认暂停，不自动解释为欠费；只有供应商明确返回额度或余额不足语义时才归类为欠费。
+所有供应商基础设施错误都在当前 Attempt 审计完成后终止本次执行。只有供应商明确返回额度或余额不足语义时才归类为欠费，普通 500、429 和未知格式保持各自稳定分类。
 
 ## 18. 测试策略
 
@@ -576,32 +554,24 @@ Player Runtime 使用稳定的内部错误类别：
 - `fold`、`check`、`call` 或 `allIn` 夹带金额时进入纠错。
 - `bet` 或 `raise` 的合法金额已经存在于候选快照，通过后由 Player Runtime 归一化为标准扑克命令。
 
-### 18.4 路由
+### 18.4 DeepSeek 执行
 
 覆盖：
 
 - DeepSeek 正常成功。
-- DeepSeek 欠费降级到 Kimi。
-- DeepSeek 网络错误降级到 Kimi。
-- DeepSeek 超时降级到 Kimi。
-- DeepSeek 502/503/504 降级到 Kimi。
-- DeepSeek 普通 500 和 429 不降级。
+- DeepSeek 欠费、网络错误、超时和 502/503/504 返回稳定失败。
+- DeepSeek 普通 500、429、鉴权和未知错误返回对应稳定分类。
 - DeepSeek 内容错误只在 DeepSeek 纠错。
-- DeepSeek 纠错请求发生可降级供应商故障时，Kimi 从原始上下文重新决策。
-- DeepSeek 两次纠错均返回非法内容时不降级。
-- DeepSeek 合法差策略不降级。
-- DeepSeek 鉴权错误不降级。
+- DeepSeek 纠错请求发生基础设施故障时终止本次执行。
+- DeepSeek 两次纠错均返回非法内容时暂停。
+- DeepSeek 合法差策略按合法结果处理。
 - DeepSeek Key 缺失时禁止开场。
-- Kimi Key 缺失时警告，实际需要降级时暂停。
-- Kimi 正常成功。
-- Kimi 内容纠错成功。
-- Kimi 最终失败暂停。
-- 下一次行动重新优先 DeepSeek。
+- 下一次行动创建新的 DeepSeek 执行链。
 - 超时设置只影响之后开始的尝试，并记录每次实际超时值。
 
 ### 18.5 连续性
 
-验证 DeepSeek 和 Kimi 收到语义相同的：
+验证 DeepSeek 初始请求与纠错请求保持相同的：
 
 - 人物配置。
 - 当前观察。
@@ -609,7 +579,7 @@ Player Runtime 使用稳定的内部错误类别：
 - 有界记忆。
 - 状态版本。
 
-同时验证 Kimi 不接收 DeepSeek 的原始对话和隐藏内容。
+同时验证纠错请求只增加受控错误提示，不接收隐藏内容。
 
 ### 18.6 恢复与幂等
 
@@ -624,7 +594,7 @@ Player Runtime 使用稳定的内部错误类别：
 - 暂停前后扑克状态和筹码不变。
 - 同一 `(sessionId, stateVersion, actorSeat)` 不会同时存在两个有效 AgentRun。
 - 暂停中止后所有旧请求和迟到结果都被场次生命周期、有效请求标识和 fencing 屏障拒绝，不创建替代运行。
-- 初始请求、纠错和降级共享总 deadline，剩余不足 5 秒时不再创建尝试。
+- 初始请求和纠错共享总 deadline，剩余不足 5 秒时不再创建尝试。
 
 ### 18.7 敏感信息脱敏
 
@@ -663,10 +633,10 @@ Player Runtime 完成的最低标准：
 2. 每个行动只运行一个受约束的决策回合。
 3. 非法响应不会推进牌局。
 4. 内容错误严格遵守最多两次同厂商纠错。
-5. DeepSeek 只因确认的欠费、传输失败、配置超时或 502/503/504 降级。
-6. Kimi 获得完整但有界的同语义上下文。
-7. 下一次行动重新优先 DeepSeek。
-8. Kimi 最终失败后牌局稳定暂停。
+5. DeepSeek 基础设施失败在当前 Attempt 审计后稳定终止。
+6. DeepSeek 获得完整但有界的上下文。
+7. 下一次行动创建独立的 DeepSeek 执行链。
+8. 最终失败后牌局稳定暂停。
 9. 所有调用链可在调试抽屉中查看。
 10. API Key 不出现在任何持久化或用户可见数据中。
 11. 模型不承担 spot 规范化、牌力/听牌/outs、当前或候选结果数学、范围构造或对手样本判断。

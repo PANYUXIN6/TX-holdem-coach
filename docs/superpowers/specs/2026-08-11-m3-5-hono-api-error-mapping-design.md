@@ -309,9 +309,9 @@ interface ProviderHealthService {
 }
 ```
 
-服务初始化时复用 M0.3 静态投影：未配置为 `notConfigured`，已配置为 `notChecked`。缓存只保存最近一次 `available | unavailable` 摘要，不保存 Key、响应正文或异常。能力值每次仍从 `ServerConfig` 的 Key 是否配置计算，检测不能修改 `canCreateSession/canFallback`。
+服务初始化时复用 M0.3 静态投影：未配置为 `notConfigured`，已配置为 `notChecked`。缓存只保存最近一次 `available | unavailable` 摘要，不保存 Key、响应正文或异常。能力值每次仍从 `ServerConfig` 的 Key 是否配置计算，检测不能修改 `canCreateSession`。
 
-同一 Provider 同时只执行一个检测；并发 POST 共享同一个 in-flight Promise。DeepSeek 与 Kimi 可以并行。重启重新创建服务，因此已配置项自然回到 `notChecked`。
+DeepSeek 同时只执行一个检测；并发 POST 共享同一个 in-flight Promise。重启重新创建服务，因此已配置项自然回到 `notChecked`。
 
 ### 7.2 检测传输
 
@@ -319,7 +319,6 @@ interface ProviderHealthService {
 
 ```text
 DeepSeek -> authenticated GET https://api.deepseek.com/models
-Kimi     -> authenticated GET https://api.moonshot.ai/v1/models
 ```
 
 每次检测：
@@ -331,7 +330,7 @@ Kimi     -> authenticated GET https://api.moonshot.ai/v1/models
 - 目标模型不在列表中视为 `provider_service_unavailable`；
 - 响应内容只参与私有校验，随后丢弃。
 
-`/models` 检测证明认证端点与目标模型目录当前可达，不承诺一次真实生成一定成功；实际 Player 调用仍由 M4 路由、预算、纠错和降级处理。
+`/models` 检测证明认证端点与目标模型目录当前可达，不承诺一次真实生成一定成功；实际 Player 调用仍由 M4 Route Policy、预算、纠错和失败处理负责。
 
 ### 7.3 脱敏分类
 

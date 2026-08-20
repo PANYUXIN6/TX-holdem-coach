@@ -13,7 +13,7 @@ M2.3 建立三个边界：
 2. 为 Player 单次尝试超时和完整决策 deadline 建立永久载荷 Schema 与 PostgreSQL Repository。
 3. 为活动场次、历史场次、场次人物快照和原子阵容写入建立 Owner-scoped 基础 Repository。
 
-M2.3 不实现 HTTP、SSE、完整场次创建、命令账本、事件/快照事务、私有牌桌状态恢复、AgentRun、Prompt、ModelGateway、供应商调用、路由、降级、重试、人物偏离策略或 Runtime 状态机。M3.2 负责把阵容写入原语与扑克初始化、Hand、事件和权威快照组合成一次完整场次创建事务；M4 负责消费人物模型配置和 Player 设置。
+M2.3 不实现 HTTP、SSE、完整场次创建、命令账本、事件/快照事务、私有牌桌状态恢复、AgentRun、Prompt、ModelGateway、供应商调用、Route Policy、纠错、重试、人物偏离策略或 Runtime 状态机。M3.2 负责把阵容写入原语与扑克初始化、Hand、事件和权威快照组合成一次完整场次创建事务；M4 负责消费人物模型配置和 Player 设置。
 
 浏览器、Contracts、Supabase Data API、`anon` 和 `authenticated` 均不能读取私有人物配置或 `app_private` 表。人物配置、设置和持久化错误不得包含 API Key、数据库 URL、供应商响应、Prompt 或其他秘密。
 
@@ -58,7 +58,7 @@ M2.3 不实现 HTTP、SSE、完整场次创建、命令账本、事件/快照事
 | `config_payload` JSON 结构 | `configPayloadVersion` |
 | 记忆 JSON 结构 | `memoryPayloadVersion` |
 | Prompt 内容或组装方式 | `promptModuleVersion` |
-| 供应商顺序、降级条件或路由规则 | `routePolicyVersion` |
+| 模型选择与执行规则 | `routePolicyVersion` |
 | Runtime 流程或状态机 | `runtimeDefinitionVersion` |
 
 首发冻结后，同一载荷结构中的业务值变化不提升 Payload 结构版本。人物配置变化提升对应人物的 `personaVersion`；公共供应商默认值变化会改变八个人物的完整配置，因此八个人物都提升版本。Prompt、Route Policy 和 Runtime 可以独立演进，不需要为了纯 Prompt、路由或流程变化提升人物版本。
@@ -97,12 +97,6 @@ PublishedPersonaModelBundle initial branch = {
     maxOutputTokens: 256
     thinkingMode: "disabled"
   }
-  kimi: {
-    modelId: "kimi-k2.6"
-    temperature: 0.6
-    maxOutputTokens: 256
-    thinkingMode: "disabled"
-  }
 }
 ```
 
@@ -116,16 +110,10 @@ PublishedPersonaModelBundle initial branch = {
     maxOutputTokens: 256
     thinkingMode: "enabled"
   }
-  kimi: {
-    modelId: "kimi-k2.6"
-    temperature: 0.6
-    maxOutputTokens: 256
-    thinkingMode: "disabled"
-  }
 }
 ```
 
-首发前人物覆盖、参数变化或新模型直接覆盖这一个完整双供应商配置包和开发数据，不追加联合分支。首发冻结后若需要兼容真实历史数据，必须先设计完整配置包分派；不得只分别扩展 DeepSeek 和 Kimi 子 Schema 后允许未发布的笛卡尔积组合。若新模型需要不同字段，例如使用 `reasoningEffort` 而不支持 `thinkingMode`，届时发布新的 `configPayloadVersion`，不能改写已上线结构。
+首发前人物覆盖、参数变化或新模型直接覆盖这一个完整 DeepSeek 配置包和开发数据，不追加联合分支。首发冻结后若需要兼容真实历史数据，必须先设计完整配置包分派。若新模型需要不同字段，例如使用 `reasoningEffort` 而不支持 `thinkingMode`，届时发布新的 `configPayloadVersion`，不能改写已上线结构。
 
 供应商与项目能力边界可以独立记录为：
 
@@ -135,17 +123,12 @@ PublishedPersonaModelBundle initial branch = {
     temperature: provider range 0..2
     maxOutputTokens: provider maximum 384000
   }
-  kimi: {
-    maxOutputTokens: project current engineering ceiling 32768
-  }
 }
 ```
 
 这些范围只用于评审未来候选配置，不是 `PersonaConfigPayloadSchema` 当前接受的数值范围。当前实际接受的模型 ID、参数和思考模式只有完整配置包中的字面量。
 
-当前模型 ID 为 `deepseek-v4-flash` 和 `kimi-k2.6`。首发前可直接覆盖；首发冻结后，已持久配置包的保留或迁移规则由新的版本演进设计决定。
-
-Kimi 当前只采用非思考配置，只接受 `thinkingMode = "disabled"` 与 `temperature = 0.6`。官方兼容但项目尚未采用的思考组合 `thinkingMode = "enabled"` 与 `temperature = 1.0`，不能因为供应商客观支持便提前接受。
+当前模型 ID 为 `deepseek-v4-flash`。首发前可直接覆盖；首发冻结后，已持久配置包的保留或迁移规则由新的版本演进设计决定。
 
 ### 4.2 当前工程默认值
 
@@ -154,22 +137,15 @@ Kimi 当前只采用非思考配置，只接受 `thinkingMode = "disabled"` 与 
 | 供应商 | `modelId` | `temperature` | `maxOutputTokens` | `thinkingMode` |
 | --- | --- | ---: | ---: | --- |
 | DeepSeek | `deepseek-v4-flash` | `0.2` | `256` | `disabled` |
-| Kimi | `kimi-k2.6` | `0.6` | `256` | `disabled` |
 
-`256` 是当前唯一配置包中的项目工程值，不是供应商上限。DeepSeek 的 `0..2`、`384000` 和 Kimi 的项目当前工程上界 `32768` 均不代表 Schema 已接受这些范围内的任意值。K2.6 quickstart 只将 `32768` 描述为 `max_tokens` 默认值，没有声明为供应商最大值。
+`256` 是当前唯一配置包中的项目工程值，不是供应商上限。DeepSeek 的 `0..2` 和 `384000` 均不代表 Schema 已接受这些范围内的任意值。
 
-M4 适配器把内部 `maxOutputTokens` 映射为 DeepSeek `max_tokens` 和 Kimi `max_completion_tokens`。Kimi K2.6 quickstart 仍示例已弃用的 `max_tokens`，参数级事实以 Chat Completion Reference 明确给出的“`max_tokens` 已弃用，请使用 `max_completion_tokens`”为准。M4 适配器落地后、正式发布前，必须通过不属于默认 `verify` 的显式真实请求 smoke，验证选定站点的 `kimi-k2.6` 接受 `max_completion_tokens`；失败时不得静默回退或带着未验证映射发布，应先复核目标站点、SDK 与当时官方 Reference。
-
-Kimi 官方 K2.6 文档的“参数变动说明 / Parameters Differences in Request Body”把非思考温度固定为 `0.6`，并在“K2.6 禁用思考能力示例 / Disable Thinking Capability Example”注明无需设置温度。因此 M2.3 仍在快照保存有效配置 `temperature = 0.6`；M4 适配器必须验证该值，但不得把 `temperature` 字段发送给 Kimi。这是显式模型适配规则，不是依赖 SDK 默认值。
+M4 适配器把内部 `maxOutputTokens` 映射为 DeepSeek `max_tokens`。适配器落地后、正式发布前，必须通过不属于默认 `verify` 的显式真实请求 smoke 验证选定模型与参数；失败时不得静默改变模型或带着未验证映射发布，应先复核 SDK 与当时官方 Reference。
 
 模型事实来源：
 
 - [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
 - [DeepSeek Chat Completion](https://api-docs.deepseek.com/api/create-chat-completion/)
-- 国际站：[Kimi Model List](https://platform.kimi.ai/docs/models)、[Kimi Model Parameter Reference](https://platform.kimi.ai/docs/api/models-overview)、[Kimi K2.6 的 Parameters Differences in Request Body 与 Disable Thinking Capability Example](https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart)、[Kimi Chat Completion](https://platform.kimi.ai/docs/api/chat)
-- 大陆站：[Kimi K2.6 的“参数变动说明”与“K2.6 禁用思考能力示例”](https://platform.kimi.com/docs/guide/kimi-k2-6-quickstart)、[Kimi Chat Completion](https://platform.kimi.com/docs/api/chat)
-
-国际站示例使用 `api.moonshot.ai`，大陆站示例使用 `api.moonshot.cn`。两站在本设计中只用于交叉核对模型语义；M2.3 不选择 Provider 端点或账号体系。M4 必须明确选定其中一个部署目标，不能混用文档、端点或凭据。
 
 ### 4.3 当前人物策略说明
 
@@ -203,7 +179,7 @@ ActivePersonaCatalogEntrySchema
 └── PersonaConfigPayloadSchema + ActiveModelConfigurationSchema
 ```
 
-当前 Active 许可集合只有 §4.2 中由 DeepSeek 与 Kimi 两项共同组成的一个完整 `models` 配置包。Active 许可键从已经通过 Payload Schema 的完整配置包规范化生成；生产代码使用冻结的许可集合，且必须是当前合法集合的子集。改变 Active 许可集合必须经过代码变更；它不读取供应商实时模型列表，也不受瞬时健康检测结果影响。
+当前 Active 许可集合只有 §4.2 中的完整 DeepSeek `models` 配置包。Active 许可键从已经通过 Payload Schema 的完整配置包规范化生成；生产代码使用冻结的许可集合，且必须是当前合法集合的子集。改变 Active 许可集合必须经过代码变更；它不读取供应商实时模型列表，也不受瞬时健康检测结果影响。
 
 `createActiveModelConfigurationSchema(activeKeys)` 是唯一的 Active Schema 工厂，只接收只读许可键集合。生产代码以冻结常量创建一次 `ActiveModelConfigurationSchema`；退役测试以测试局部集合创建校验器，并从中临时排除当前真实合法的配置包。不得为测试向生产 Schema 加入虚假模型 ID，也不得为此建立通用依赖注入容器或运行时可修改策略。
 
@@ -231,7 +207,7 @@ bootstrap() 的 try
 - 非法 `personaVersion`、颜色、公开字段、风格值或策略说明；
 - 任意额外字段；
 - 非法模型 ID、模型参数、思考模式或不兼容参数组合；
-- API Key、Prompt、Provider 健康、供应商优先级、路由、降级或重试字段。
+- API Key、Prompt、Provider 健康、Route Policy、纠错或重试字段。
 
 任何静态导入路径都不得在模块求值阶段调用 `.parse()`、`loadAndValidatePersonaCatalog()` 或生成目录导出值，否则异常会逃逸 `bootstrap()` 的错误处理。`loadAndValidatePersonaCatalog()` 返回一个深冻结的 `PersonaCatalog` 对象，列出和按 `personaId` 读取是该对象的只读端口；不再导出模块求值时已经解析完成的目录常量。`bootstrap()` 保留该对象并把它作为依赖交给后续消费者，M2.3 不为此增加全局可变目录。
 
@@ -540,7 +516,7 @@ Active 准入失败发生在数据库事务之前。Repository 写入的任一�
 - 八个人物合法加载，公开投影与当前规范一致。
 - 重复/缺失 `personaId`、非法版本、颜色、风格、策略长度和额外字段失败。
 - 七个或九个人物的目录均被拒绝。
-- 非法模型 ID，以及供应商兼容但项目未发布的温度、输出上限和思考组合均失败，包括 DeepSeek `temperature = 1.7` / `thinkingMode = enabled` 与 Kimi `enabled + temperature 1.0`。
+- 非法模型 ID、额外供应商字段，以及供应商兼容但项目未发布的温度、输出上限和思考组合均失败，包括 DeepSeek `temperature = 1.7` / `thinkingMode = enabled`。
 - 默认配置在八个人物中完全展开，嵌套对象深冻结且不存在共享可修改引用。
 - 公开摘要不含策略、模型、Prompt、路由、Key 或 Provider 状态。
 - 规范 JSON 不受对象键插入顺序影响；内容、Payload 版本或人物字段变化会改变哈希。

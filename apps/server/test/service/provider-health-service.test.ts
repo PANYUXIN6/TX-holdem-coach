@@ -3,12 +3,11 @@ import { ServerConfig } from '../../src/config.js'
 import { createProviderHealthService } from '../../src/providers/provider-health-service.js'
 import { ProviderCheckFailure } from '../../src/providers/provider-error-classifier.js'
 
-function config(keys: { deepSeek?: string; kimi?: string } = {}) {
+function config(keys: { deepSeek?: string } = {}) {
   return new ServerConfig({
     port: 8787,
     databaseUrl: 'postgresql://runtime',
     ...(keys.deepSeek === undefined ? {} : { deepSeekApiKey: keys.deepSeek }),
-    ...(keys.kimi === undefined ? {} : { kimiApiKey: keys.kimi }),
   })
 }
 
@@ -55,7 +54,7 @@ describe('provider health service', () => {
       throw new Error('logging failed')
     })
     const service = createProviderHealthService({
-      config: config({ kimi: 'secret-key' }),
+      config: config({ deepSeek: 'secret-key' }),
       transport: {
         check: async () => {
           throw new ProviderCheckFailure('rateLimited')
@@ -65,16 +64,16 @@ describe('provider health service', () => {
       logCheck,
     })
 
-    const response = await service.check('kimi')
-    expect(response.kimi).toMatchObject({
+    const response = await service.check('deepseek')
+    expect(response.deepSeek).toMatchObject({
       configured: true,
       checkStatus: 'unavailable',
       errorCode: 'provider_rate_limited',
-      canFallback: true,
+      canCreateSession: true,
     })
     expect(logCheck).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: 'kimi',
+        provider: 'deepseek',
         errorCode: 'provider_rate_limited',
       }),
     )
@@ -106,32 +105,6 @@ describe('provider health service', () => {
         errorCode,
       },
     })
-  })
-
-  test('checks different providers concurrently without sharing their single-flight', async () => {
-    const releases = new Map<string, () => void>()
-    const check = vi.fn(
-      (provider: string) =>
-        new Promise<void>((resolve) => {
-          releases.set(provider, resolve)
-        }),
-    )
-    const service = createProviderHealthService({
-      config: config({ deepSeek: 'deepseek-key', kimi: 'kimi-key' }),
-      transport: { check },
-    })
-
-    const deepSeek = service.check('deepseek')
-    const kimi = service.check('kimi')
-    expect(check).toHaveBeenCalledTimes(2)
-    expect(check).toHaveBeenCalledWith('deepseek', 'deepseek-key')
-    expect(check).toHaveBeenCalledWith('kimi', 'kimi-key')
-    releases.get('deepseek')?.()
-    releases.get('kimi')?.()
-
-    const [deepSeekResult, kimiResult] = await Promise.all([deepSeek, kimi])
-    expect(deepSeekResult.deepSeek.checkStatus).toBe('available')
-    expect(kimiResult.kimi.checkStatus).toBe('available')
   })
 
   test('resets configured provider diagnostics when the service is recreated', async () => {

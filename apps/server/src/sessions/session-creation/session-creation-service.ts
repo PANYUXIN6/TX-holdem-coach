@@ -42,7 +42,6 @@ import type { CommittedSessionEventPublisher } from '../public-projection/commit
 
 export interface ProviderCreationPolicy {
   readonly deepSeekConfigured: boolean
-  readonly kimiConfigured: boolean
 }
 
 export class DeepSeekNotConfiguredError extends Error {
@@ -209,14 +208,6 @@ export function createSessionCreationService(input: {
       if (!providerPolicy.deepSeekConfigured) {
         throw new DeepSeekNotConfiguredError()
       }
-      const warnings = providerPolicy.kimiConfigured
-        ? []
-        : [
-            {
-              code: 'KIMI_FALLBACK_UNAVAILABLE' as const,
-              message: 'Kimi API Key 未配置，自动降级不可用。' as const,
-            },
-          ]
       const rosterSource = parsedRequest.data.rosterSource
       const selections =
         rosterSource.type === 'currentCatalog'
@@ -477,7 +468,6 @@ export function createSessionCreationService(input: {
           kind: 'created' as const,
           response: CreateSessionResponseSchema.parse({
             snapshot: finalSnapshot,
-            warnings,
           }),
           newlyPersistedEvents: Object.freeze(publicEvents) as readonly [
             SseEvent,

@@ -74,7 +74,7 @@ M4.2 完成时必须能证明：
 
 M4.2 不负责：
 
-- Context 构建、Provider SDK、ModelGateway、路由降级、有界纠错或真实 Attempt 执行；
+- Context 构建、Provider SDK、ModelGateway、Route Policy、有界纠错或真实 Attempt 执行；
 - Player 安全观察、Spot/手牌/策略预处理、Bounded Choice 或输出 Validator；
 - Player/Coach Commit Gate 的业务事务；
 - `player_decisions`、`agent_memory_revisions` 或 M8 最终 Coach 持久结构的首个业务 writer；
@@ -958,7 +958,7 @@ Player/Coach 的成功必须经过专属 Commit Gate 和业务事务。通用 Wo
 
 - Attempt start/finish 和 Capability append 必须携带 M4.2 authority；
 - Attempt timeout 只读取 Run Budget，不再读 `app_settings`；
-- 初始、纠错、降级共享 Run deadline 和累计 usage；
+- 初始请求和纠错共享 Run deadline 和累计 usage；
 - heartbeat abort signal 绑定 Provider 请求；旧 token 迟到响应不能更新 Attempt；
 - M4.3 提供真实 RuntimeExecutionPort，但不能自行绕过 Coordinator 创建 Run。
 

@@ -286,7 +286,7 @@ Player 与 Coach 均不得绕过该中枢直接读取活动 `PrivateTableState`�
 - `showdown`。
 - `complete`。
 
-Agent 暂停时扑克阶段仍为 `inHand`，当前行动者和街道不变，不生成伪造行动，也不递增扑克 `stateVersion`。思考、降级、纠错、暂停和重试只递增 `eventSeq`。合法 AI 行动提交后才递增 `stateVersion` 并把 `agentRunState` 设回 `idle`。
+Agent 暂停时扑克阶段仍为 `inHand`，当前行动者和街道不变，不生成伪造行动，也不递增扑克 `stateVersion`。思考、纠错、暂停和重试只递增 `eventSeq`。合法 AI 行动提交后才递增 `stateVersion` 并把 `agentRunState` 设回 `idle`。
 
 每次 `agentRunState` 或有效请求标识变化，都在同一 PostgreSQL 事务中锁定目标会话、更新 `sessions` 的协调字段并追加 `session_events`。由于扑克状态未变化，不重写私有扑克快照；事件的公开负载使用未变化的私有扑克状态与事务提交后的会话协调状态组合生成。
 
@@ -433,7 +433,7 @@ M1.7 的 `showdown/complete` 只表示行动、发牌和终止类型已经确定
 - 过期租约的旧 Worker 结果由 fencing token 和有效请求标识共同拒绝。
 - 原状态为 `thinking` 时，不在旧 AgentRun 上续跑。恢复事务将旧运行标记为 `cancelled`，原因为 `process_restart`，并使旧 `decisionRequestId` 与旧 attempts 全部失效。
 - 状态仍为 `active + inHand`、仍轮到同一 AI 且不存在其他有效运行时，创建带 `supersedesRunId` 的新 AgentRun 和新 `decisionRequestId`，从 DeepSeek 的首次尝试重新开始。
-- 新运行重新构建观察和决策包，继续使用本场已固化的人物、Runtime、Prompt、策略与路由版本；不继承旧供应商位置、纠错计数、模型输出或临时检查点。
+- 新运行重新构建观察和决策包，继续使用本场已固化的人物、Runtime、Prompt、策略与路由版本；不继承旧纠错计数、模型输出或临时检查点。
 - 状态已经变化或已经不需要 AI 行动时，只取消旧运行，不创建替代任务。
 - 原状态已经为 `paused` 时保持暂停，等待人工重试。
 
@@ -453,7 +453,6 @@ SSE 只发布已经持久化的状态和运行事件。
 - `userRebuy`。
 - `aiAutoRebuy`。
 - `agentStarted`。
-- `agentProviderFallback`。
 - `agentRepairAttempted`。
 - `agentPaused`。
 - `handAborted`。
@@ -478,7 +477,7 @@ SSE 只发布已经持久化的状态和运行事件。
 
 - 进行中的手牌包含按街道分组的公开行动序列，以及每步行动后的公开筹码和底池；不包含完整牌堆、burn card 或未公开底牌。
 - 两手之间仅保留最新正常 `completed` 手牌的公开结果摘要，至少包括获胜座位、可见牌型、逐池分配、未跟注投入返还和各座位筹码变化。`aborted` 手牌不生成结果摘要；直接获胜或已弃牌玩家的底牌仍按默认可见性规则隐藏。
-- Agent 运行摘要包含当前可安全展示的思考、降级、纠错或暂停信息；不包含原始模型输出、密钥、隐藏推理或敏感错误细节。
+- Agent 运行摘要包含当前可安全展示的思考、纠错或暂停信息；不包含原始模型输出、密钥、隐藏推理或敏感错误细节。
 
 共享契约在 M1.9 定义上述摘要的精确字段，并在 M3.6 将其映射到公开快照。任一 SSE 事件均附带该事件提交后固化的公开快照；补发时重放当时固化的公开负载，而重连校准再发送最新公开快照。
 
@@ -511,18 +510,18 @@ Agent 设置分别包含：
 
 Provider Settings/Health 使用 `packages/contracts` 中的严格公开协议：
 
-- `ProviderIdSchema`：`deepseek | kimi`。
+- `ProviderIdSchema`：`deepseek`。
 - `ProviderCheckStatusSchema`：`notConfigured | notChecked | available | unavailable`。
 - `ProviderPublicErrorCodeSchema`：`provider_auth_error | provider_billing_unavailable | provider_network_error | provider_timeout | provider_rate_limited | provider_service_unavailable | provider_unknown_error`。
 - `ProviderHealthSummarySchema`：`configured`、`checkStatus`、可空 ISO `lastCheckedAt` 和可空 `errorCode`。
-- `ProviderSettingsResponseSchema`：包含对外 `protocolVersion`；`deepSeek` 在健康摘要之外包含 `canCreateSession`，`kimi` 包含 `canFallback`。GET 与手动检测 POST 返回同一响应形状。
+- `ProviderSettingsResponseSchema`：`deepSeek` 在健康摘要之外包含 `canCreateSession`。GET 与手动检测 POST 返回同一响应形状。
 
 协议必须满足以下不变量：
 
 - 未配置时为 `configured = false`、`checkStatus = notConfigured`、能力值为 `false`，检测时间和错误码均为 `null`。
 - 已配置但从未检测时为 `notChecked`，检测时间和错误码均为 `null`。
 - `available` 必须有检测时间且错误码为 `null`；`unavailable` 必须同时有检测时间和脱敏错误码。
-- `deepSeek.canCreateSession` 当且仅当 DeepSeek Key 已配置；`kimi.canFallback` 当且仅当 Kimi Key 已配置。最近检测失败只提供诊断，不改变这两个能力值。
+- `deepSeek.canCreateSession` 当且仅当 DeepSeek Key 已配置。最近检测失败只提供诊断，不改变该能力值。
 
 `GET /api/settings/providers` 只返回进程内缓存的最近检测摘要，不产生供应商网络调用。检测摘要不写入 PostgreSQL；服务重启后，未配置 Provider 仍为 `notConfigured`，已配置 Provider 回到 `notChecked`。`POST /api/settings/providers/:provider/check` 才执行一次有界、脱敏的手动连接检测；供应商不可用属于成功完成的诊断，返回 HTTP 200 和更新后的 `unavailable` 摘要，而不是泄露原始错误。未配置时直接返回 `notConfigured`，不发起网络请求。前端的“检测中”由本地 mutation 状态表达，不增加持久化 `checking` 状态。
 
@@ -533,7 +532,7 @@ Provider Settings/Health 使用 `packages/contracts` 中的严格公开协议：
 - `GET /api/agent-personas`
 - `GET /api/agent-personas/:personaId`
 
-人物目录只读，不提供创建、修改、复制或删除端点。响应严格使用共享 `AgentPersonaSummary`：稳定的 `personaId`、`personaVersion`、名称、头像颜色、背景描述、教学摘要和五个风格刻度。自由文本策略、Prompt、模型标识、路由和模型参数只存在于服务端私有人物/Runtime 配置，不进入目录响应。DeepSeek 开场能力、Kimi 降级能力和连接检测只由 `/api/settings/providers` 及 Provider Health 接口返回。
+人物目录只读，不提供创建、修改、复制或删除端点。响应严格使用共享 `AgentPersonaSummary`：稳定的 `personaId`、`personaVersion`、名称、头像颜色、背景描述、教学摘要和五个风格刻度。自由文本策略、Prompt、模型标识、Route Policy 和模型参数只存在于服务端私有人物/Runtime 配置，不进入目录响应。DeepSeek 开场能力和连接检测只由 `/api/settings/providers` 及 Provider Health 接口返回。
 
 ### 13.3 场次与牌局
 
@@ -672,7 +671,7 @@ WHERE lifecycle_status = 'active';
 - 事件前后状态版本。
 - 时间戳。
 
-补码、AI 自动买入、开始下一手、结束场次、Player 思考、降级、纠错、暂停、中止手牌和未跟注返还都进入该表。`aiAutoRebuy` 使用可空 `handId = null` 并通过 `commandId` 关联触发它的“开始下一手”命令。Coach 运行和报告不写入该表，也不占用场次 `eventSeq`。原 `hand_events` 不再单独存在。
+补码、AI 自动买入、开始下一手、结束场次、Player 思考、纠错、暂停、中止手牌和未跟注返还都进入该表。`aiAutoRebuy` 使用可空 `handId = null` 并通过 `commandId` 关联触发它的“开始下一手”命令。Coach 运行和报告不写入该表，也不占用场次 `eventSeq`。原 `hand_events` 不再单独存在。
 
 当前手的已提交行动序列只以 `session_events` 中的 `actionCommitted` 为权威。`PrivateTableState` 不复制行动数组；历史时间线按 `eventSeq` 连接行动事件与 `hands.completedResult`。
 
@@ -810,8 +809,7 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - 状态版本冲突：返回最新快照。
 - 重复命令：返回原结果。
 - DeepSeek Key 缺失：阻止创建场次。
-- Kimi Key 缺失：允许创建场次但返回明确警告；需要降级时把 `agentRunState` 设为 `paused`。
-- Provider 手动检测失败：保存脱敏 `unavailable` 摘要并返回 HTTP 200，不改变由 Key 配置决定的开场或降级资格；检测基础设施自身无法完成持久化时才返回服务端错误。
+- Provider 手动检测失败：保存脱敏 `unavailable` 摘要并返回 HTTP 200，不改变由 Key 配置决定的开场资格；检测基础设施自身无法完成时才返回服务端错误。
 - 数据库事务失败：回滚并进入可诊断错误，不发布 SSE。
 - 数据库不可连接、迁移记录缺失或 schema 版本不兼容：启动兼容门控失败并阻止服务接受牌局命令；服务不得自动迁移或修复。
 - 玩家 Agent 最终失败：保持扑克状态不变并把 `agentRunState` 设为 `paused`。
@@ -894,10 +892,10 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 
 - 正常多手牌局。
 - 全下与边池。
-- Agent 纠错、降级、暂停和重试。
+- Agent 纠错、基础设施失败、暂停和重试。
 - 暂停中止、回退快照、普通历史排除和关联失败运行审计。
 - 默认历史投影、审计揭示、筛选、固定统计口径和数据删除。
-- Coach 正常生成、策略不支持、对手样本不足、两阶段信息隔离、纠错、降级、失败和重新生成。
+- Coach 正常生成、策略不支持、对手样本不足、两阶段信息隔离、纠错、失败和重新生成。
 - 每项统计使用固定事件夹具断言分子、分母和结果。
 
 真实厂商调用不作为自动化测试前置条件。
@@ -908,6 +906,6 @@ Coach 的供应商尝试和固定能力调用使用通用 `agent_attempts` 与 `
 - Coach 请求在独立异步生命周期中运行，不阻塞开始下一手、牌局命令或扑克 SSE。
 - 每个 `OwnerScope` 同一时间只允许一个活动场次；不同 Owner 的独立单人牌桌不共享状态或锁。
 - 进程内调度使用独立 Player/Coach 队列，首版各保留一个 Worker 槽位；Coach 不得占用 Player 槽位。
-- Player 初始请求、纠错和降级共享固化的完整决策 deadline；实际单次超时不得超过剩余时间，剩余不足 5 秒时不再创建尝试而进入暂停。
+- Player 初始请求和纠错共享固化的完整决策 deadline；实际单次超时不得超过剩余时间，剩余不足 5 秒时不再创建尝试而进入暂停。
 - 单个 Node.js/Hono 进程与一个 Supabase Postgres 项目足以满足首版；事务正确性仍由 PostgreSQL 行锁和约束保证，不依赖单进程假设。
 - 不引入消息队列、缓存服务、微服务或分布式锁。

@@ -167,9 +167,8 @@ CoachReviewValidator 复验事实引用、结构和完整性
 
 Player Runtime 与 Coach Runtime 只共享适合复用的 Foundation 基础设施：
 
-- DeepSeek、Kimi 的底层供应商客户端和非敏感模型配置读取。
+- DeepSeek 底层供应商客户端和非敏感模型配置读取。
 - 供应商错误归一化。
-- DeepSeek 到 Kimi 的基础设施故障降级规则。
 - 结构化输出、超时、脱敏和调用审计能力。
 
 两者不共享：
@@ -643,9 +642,9 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 
 ## 12. 供应商失败与校验
 
-- Coach 通过 Foundation `ModelGateway` 使用独立的版本化 Route Policy，可以复用底层 DeepSeek、Kimi 客户端、错误分类、脱敏和基础设施故障降级条件，但不能把 Coach 上下文包装成玩家 `PlayerDecisionPacket`。
+- Coach 通过 Foundation `ModelGateway` 使用独立的版本化 Route Policy，可以复用底层 DeepSeek 客户端、错误分类和脱敏能力，但不能把 Coach 上下文包装成玩家 `PlayerDecisionPacket`。
 - 内容结构或事实引用失败时，在同一供应商内最多纠错两次。
-- DeepSeek 发生允许降级的基础设施错误时，可以使用完全相同的证据上下文重新请求 Kimi。
+- DeepSeek 发生基础设施错误时，本次复盘进入稳定失败。
 - 最终失败将本次 `coachReviewId` 标记为 `failed`，保留调用链并允许用户手动重试。
 - 失败不得暂停活动场次、改变扑克阶段或生成替代扑克行动。
 - 迟到响应只记审计，不覆盖已完成报告；场次或运行已经删除时不能重新写入任何审计或业务记录。
@@ -739,7 +738,7 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 - referenceOnly/heuristic 不会单独触发 likelyMistake；受支持的低频混合动作不因频率低判错；无 EV 或版本化阈值时严重度 unavailable。
 - 决策等级能够区分最高频、受支持混合动作、低成本偏离、不支持动作、重大 EV 错误和无法评价；相同证据与政策版本结果可复现。
 - 教学投影默认只展开一个核心决策、最多两个次要决策，且不丢失完整逐决策报告。
-- 纠错和供应商降级不会改变牌局状态。
+- 纠错和供应商失败不会改变牌局状态。
 - 最终失败只影响 Coach 请求并允许手动重试。
 - 重新生成保留旧报告和版本。
 - 删除整场时同步删除 Coach 数据。

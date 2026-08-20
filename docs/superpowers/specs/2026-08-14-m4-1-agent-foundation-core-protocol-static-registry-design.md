@@ -84,7 +84,7 @@ M4.1 不负责：
 
 - AgentRun Repository、生命周期 writer、Coordinator、Worker、队列、租约、fencing、并发领取、取消或恢复；
 - Context Builder、扑克观察投影实现、记忆读取、策略查询、能力执行器实现或模型调用；
-- DeepSeek/Kimi 适配、Route Policy 运行、Attempt 创建、纠错、降级、Token 计数或成本计量；
+- DeepSeek 适配、Route Policy 运行、Attempt 创建、纠错、Token 计数或成本计量；
 - Player 候选生成、业务 Validator、`aiAction`、标准命令提交、暂停、重试、stale 或 `process_restart`；
 - Coach 分类、两阶段模型调用、报告持久化或复盘 API；
 - 启动扫描、Worker 生命周期、HTTP ready、SSE 发布或 M3.8 启动恢复；
@@ -437,7 +437,7 @@ interface RuntimeBudgetPolicy<TRuntime extends RuntimeType> {
 
 - Player 输入只允许既有严格设置中的 `attemptTimeoutSeconds`、`decisionDeadlineSeconds`，以及代码发布的模型/Token/Attempt/能力上限；
 - Player 固定 `minimumAttemptStartRemainingMs = 5_000`，完整 deadline 为 `maxWallClockMs`，单次设置映射为 `attemptTimeoutMs`；
-- 初始、纠错和降级共享一个 Run 快照，不为每个 Provider 重置预算；
+- 初始请求和纠错共享一个 Run 快照，不重置预算；
 - Coach 使用独立政策、独立 Owner/系统并发和成本上限，不能消费 Player 保留容量；
 - 首版 Player/Coach 各自的 `maxSystemConcurrentRuns` 至少保证一个独立槽位，但槽位领取和计数由 M4.2 实现；
 - 尚未冻结的 Token、Attempt 和 Coach 成本具体值只能位于代码发布的 Runtime 政策常量，不能来自 Prompt、请求或环境变量。首发前改变这些值直接覆盖唯一当前政策并重建开发数据；首发冻结后才递增 `policyVersion` 和 `runtimeDefinitionVersion`。
@@ -987,7 +987,7 @@ no-op Worker、永远成功 Gate、内存队列或测试 Context 会给 M3.8 制
 - 负数、非整数、unsafe integer、0 表示无限、Owner 并发大于系统并发均拒绝；
 - Attempt/Token/Capability/Cost/WallClock 各自耗尽；
 - 剩余不足 5 秒返回 `minimumAttemptWindow`；
-- 同一快照被 Player 初始、repair 和 fallback 共用，不能重置；
+- 同一快照被 Player 初始请求和 repair 共用，不能重置；
 - Player/Coach 快照和并发政策不同且不可变。
 
 ### 15.3 Capability

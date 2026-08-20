@@ -1,4 +1,5 @@
-import type { TransactionSql } from 'postgres'
+import { isDeepStrictEqual } from 'node:util'
+import type { JSONValue, TransactionSql } from 'postgres'
 import { SseEventSchema, type SseEvent } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
 import { type StoredPrivateEvent } from '../sessions/authoritative-state/private-event-codec.js'
@@ -16,7 +17,6 @@ import {
   SESSION_DIAGNOSTIC_CODES,
   type SessionDiagnosticCode,
 } from '../sessions/authoritative-state/recovery-decision.js'
-import { canonicalJson, type JsonValue } from '../personas/config.js'
 import {
   DatabaseOperationError,
   PersistenceDataCorruptionError,
@@ -31,20 +31,8 @@ const SafeNonnegativeIntegerSchema = z
   .int()
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER)
-const POSTGRES_TEXT_OID = 25
-const CanonicalUtcTimestampSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
-  .refine((value) => {
-    const milliseconds = Date.parse(value)
-    return (
-      Number.isFinite(milliseconds) &&
-      new Date(milliseconds).toISOString() === value
-    )
-  })
-const DatabaseUtcTimestampSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
+const CanonicalUtcTimestampSchema = z.iso.datetime({ precision: 3 })
+const DatabaseUtcTimestampSchema = z.iso.datetime({ precision: 6 })
 
 const LockedSessionRowSchema = z.strictObject({
   sessionId: z.uuid(),
@@ -174,13 +162,13 @@ function nullableUuidEquals(
     : normalizeUuid(left) === normalizeUuid(right)
 }
 
-function canonicalPublicState(event: SseEvent): string {
+function comparablePublicState(event: SseEvent): Record<string, unknown> {
   const snapshot = structuredClone(event.payload.snapshot) as unknown as Record<
     string,
     unknown
   >
   delete snapshot.eventSeq
-  return canonicalJson(snapshot as JsonValue)
+  return snapshot
 }
 
 function assertAvailableLockedSession(
@@ -368,7 +356,7 @@ function validateSessionMutationFor(
       : normalizeUuid(input.commandLedgerId),
   )
   const firstCommandLedgerId = commandLedgerIds[0]
-  const firstPublicState = canonicalPublicState(events[0]!.publicEvent)
+  const firstPublicState = comparablePublicState(events[0]!.publicEvent)
   const hasBothPlayerPointers =
     parsedBatch.data.activePlayerRunId !== null &&
     parsedBatch.data.activeDecisionRequestId !== null
@@ -428,7 +416,10 @@ function validateSessionMutationFor(
           input.handId,
           getPrivateEventHandId(privateEventDraft),
         ) ||
-        canonicalPublicState(publicEvent) !== firstPublicState,
+        !isDeepStrictEqual(
+          comparablePublicState(publicEvent),
+          firstPublicState,
+        ),
     )
   ) {
     throw new RepositoryInputValidationError()
@@ -495,9 +486,8 @@ async function persistSessionMutationFor(
   }
 
   if (snapshot !== null) {
-    const snapshotPayload = transaction.typed(
-      JSON.stringify(snapshot.payload),
-      POSTGRES_TEXT_OID,
+    const snapshotPayload = transaction.json(
+      snapshot.payload as unknown as JSONValue,
     )
     let snapshotRows: readonly { readonly sessionId: string }[]
     try {
@@ -512,7 +502,7 @@ async function persistSessionMutationFor(
           ${locked.sessionId}::uuid,
           ${metadata.owner.databaseOwnerId}::uuid,
           ${snapshot.payloadVersion},
-          ${snapshotPayload}::jsonb,
+          ${snapshotPayload},
           ${parsedBatch.data.mutationAt}::timestamptz
         )
         ON CONFLICT (session_id) DO UPDATE
@@ -548,10 +538,7 @@ async function persistSessionMutationFor(
     public_event_payload: publicEvent,
     created_at: input.createdAt,
   }))
-  const eventRowsJson = transaction.typed(
-    JSON.stringify(eventRows),
-    POSTGRES_TEXT_OID,
-  )
+  const eventRowsJson = transaction.json(eventRows as JSONValue)
   let insertedRows: readonly unknown[]
   try {
     insertedRows = await transaction`
@@ -584,7 +571,7 @@ async function persistSessionMutationFor(
         created_at
       FROM jsonb_populate_recordset(
         NULL::app_private.session_events,
-        ${eventRowsJson}::jsonb
+        ${eventRowsJson}
       )
       RETURNING id::text AS "eventId"
     `
@@ -699,10 +686,3 @@ export const productionSessionMutationRepository =
   createSessionMutationRepository({
     currentPrivateEventProtocol: productionCurrentPrivateEventProtocol,
   })
-
-export const lockSessionForMutation =
-  productionSessionMutationRepository.lockSessionForMutation
-export const validateSessionMutation =
-  productionSessionMutationRepository.validateSessionMutation
-export const persistSessionMutation =
-  productionSessionMutationRepository.persistSessionMutation

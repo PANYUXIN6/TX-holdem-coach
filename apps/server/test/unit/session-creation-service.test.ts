@@ -17,6 +17,7 @@ import {
 } from '../../src/persistence/errors.js'
 import type { SessionCreationRepository } from '../../src/persistence/session-creation-repository.js'
 import type { SessionMutationRepository } from '../../src/persistence/session-mutation-repository.js'
+import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 
 const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
 const sessionId = '22222222-2222-4222-8222-222222222222'
@@ -27,6 +28,10 @@ const eventIds = [
   '66666666-6666-4666-8666-666666666662',
 ] as const
 const createdAt = '2026-08-09T12:00:00.000Z'
+async function resolvedOwner() {
+  const sql = (() => Promise.resolve([{ databaseOwnerId }])) as unknown as Sql
+  return resolveOwnerScope(sql, { ownerId: 'local-user' })
+}
 
 function agentParticipantId(index: number): string {
   return `44444444-4444-4444-8444-${index.toString().padStart(12, '0')}`
@@ -50,7 +55,7 @@ function currentCatalogRequest() {
 function createSqlBoundary(additionalResponses: readonly unknown[] = []) {
   let ownerQueryCount = 0
   let beginCount = 0
-  const responses = [[{ databaseOwnerId }], ...additionalResponses]
+  const responses = [...additionalResponses]
   const transaction = (() => Promise.resolve([])) as unknown as TransactionSql
   const sql = ((template: TemplateStringsArray, ...parameters: unknown[]) => {
     const text = template.join('?')
@@ -322,12 +327,15 @@ function createDependencies(
 }
 
 describe('session creation service', () => {
+  const noopCommittedEventPublisher = { publish() {} }
+
   test('rejects missing DeepSeek before owner, identity, random, or transaction work', async () => {
     const dependencies = createDependencies()
     let identityCalls = 0
     let randomCalls = 0
     const service = createSessionCreationService({
       sql: dependencies.boundary.sql,
+      owner: await resolvedOwner(),
       catalog: loadAndValidatePersonaCatalog(),
       readProviderPolicy: () => ({
         deepSeekConfigured: false,
@@ -347,6 +355,7 @@ describe('session creation service', () => {
       creationRepository: dependencies.creationRepository,
       mutationRepository: dependencies.mutationRepository,
       handAuditWriter: dependencies.handAuditWriter,
+      committedEventPublisher: noopCommittedEventPublisher,
       snapshotProjectorBinding: {
         bindReadPort: () => ({}),
         projector: {
@@ -378,6 +387,7 @@ describe('session creation service', () => {
     let identityCalls = 0
     const service = createSessionCreationService({
       sql: dependencies.boundary.sql,
+      owner: await resolvedOwner(),
       catalog: loadAndValidatePersonaCatalog(),
       readProviderPolicy: () => ({
         deepSeekConfigured: true,
@@ -506,6 +516,7 @@ describe('session creation service', () => {
     })
     const service = createSessionCreationService({
       sql: dependencies.boundary.sql,
+      owner: await resolvedOwner(),
       catalog,
       readProviderPolicy: () => ({
         deepSeekConfigured: true,
@@ -526,6 +537,7 @@ describe('session creation service', () => {
       creationRepository: dependencies.creationRepository,
       mutationRepository: dependencies.mutationRepository,
       handAuditWriter: dependencies.handAuditWriter,
+      committedEventPublisher: noopCommittedEventPublisher,
       snapshotProjectorBinding: {
         bindReadPort: () => ({}),
         projector: {
@@ -566,6 +578,7 @@ describe('session creation service', () => {
     })
     const service = createSessionCreationService({
       sql: dependencies.boundary.sql,
+      owner: await resolvedOwner(),
       catalog: loadAndValidatePersonaCatalog(),
       readProviderPolicy: () => ({
         deepSeekConfigured: true,
@@ -579,6 +592,7 @@ describe('session creation service', () => {
       creationRepository: dependencies.creationRepository,
       mutationRepository: dependencies.mutationRepository,
       handAuditWriter: dependencies.handAuditWriter,
+      committedEventPublisher: noopCommittedEventPublisher,
       snapshotProjectorBinding: {
         bindReadPort: () => ({}),
         projector: { project: async () => projectSnapshot as never },
@@ -658,6 +672,7 @@ describe('session creation service', () => {
       })
       const service = createSessionCreationService({
         sql: dependencies.boundary.sql,
+        owner: await resolvedOwner(),
         catalog,
         readProviderPolicy: () => ({
           deepSeekConfigured: true,
@@ -678,6 +693,7 @@ describe('session creation service', () => {
         creationRepository: dependencies.creationRepository,
         mutationRepository: dependencies.mutationRepository,
         handAuditWriter: dependencies.handAuditWriter,
+        committedEventPublisher: noopCommittedEventPublisher,
         snapshotProjectorBinding: {
           bindReadPort: () => ({}),
           projector: { project: async () => projectSnapshot as never },
@@ -726,6 +742,7 @@ describe('session creation service', () => {
     }
     const service = createSessionCreationService({
       sql: dependencies.boundary.sql,
+      owner: await resolvedOwner(),
       catalog: loadAndValidatePersonaCatalog(),
       readProviderPolicy: () => ({
         deepSeekConfigured: true,
@@ -751,6 +768,7 @@ describe('session creation service', () => {
       creationRepository: dependencies.creationRepository,
       mutationRepository: dependencies.mutationRepository,
       handAuditWriter: dependencies.handAuditWriter,
+      committedEventPublisher: noopCommittedEventPublisher,
       snapshotProjectorBinding: {
         bindReadPort: () => ({}),
         projector: {

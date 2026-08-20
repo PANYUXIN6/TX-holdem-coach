@@ -1,15 +1,16 @@
 import type { ProviderId } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
 import { ProviderCheckFailure } from './provider-error-classifier.js'
+import { PERSONA_MODEL_BUNDLE_DEFAULTS } from '../personas/config.js'
 
 const MODEL_ENDPOINTS = {
   deepseek: {
     url: 'https://api.deepseek.com/models',
-    targetModelId: 'deepseek-v4-flash',
+    targetModelId: PERSONA_MODEL_BUNDLE_DEFAULTS.deepSeek.modelId,
   },
   kimi: {
     url: 'https://api.moonshot.ai/v1/models',
-    targetModelId: 'kimi-k2.6',
+    targetModelId: PERSONA_MODEL_BUNDLE_DEFAULTS.kimi.modelId,
   },
 } as const
 

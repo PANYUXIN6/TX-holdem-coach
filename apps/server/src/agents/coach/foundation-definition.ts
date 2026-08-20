@@ -1,8 +1,4 @@
-import {
-  createCapabilityDefinition,
-  createCapabilityManifest,
-  type CapabilityDefinition,
-} from '../foundation/capability-protocol.js'
+import { createCapabilityManifest } from '../foundation/capability-protocol.js'
 import {
   createExecutionBudget,
   createRuntimeBudgetPolicy,
@@ -12,19 +8,6 @@ import type {
   RuntimeComponentReference,
   RuntimeDefinitionBase,
 } from '../foundation/runtime-definition.js'
-import { createRuntimeStateMachineDefinition } from '../foundation/runtime-state-machine.js'
-
-export type CoachRuntimeState =
-  | 'decisionContextPending'
-  | 'evidencePending'
-  | 'decisionAnalysisPending'
-  | 'hindsightContextPending'
-  | 'hindsightAnalysisPending'
-  | 'reportValidationPending'
-  | 'commitPending'
-  | 'succeeded'
-  | 'cancelled'
-  | 'failed'
 
 const coachCommitGate = Object.freeze({
   runtimeType: 'coach' as const,
@@ -37,29 +20,6 @@ const coachCapabilityReferences = Object.freeze([
   { id: 'coach.lookup-strategy-baseline', version: 1 },
   { id: 'coach.get-opponent-evidence', version: 1 },
 ] as const satisfies readonly RuntimeComponentReference[])
-
-export const coachCapabilityDefinitions: readonly CapabilityDefinition<'coach'>[] =
-  Object.freeze(
-    coachCapabilityReferences.map((capability) =>
-      createCapabilityDefinition({
-        runtimeType: 'coach',
-        capability,
-        mode:
-          capability.id === 'coach.get-opponent-evidence'
-            ? 'readOnly'
-            : 'deterministicCompute',
-        inputSchema: {
-          id: `${capability.id}.input`,
-          version: 1,
-        },
-        outputSchema: {
-          id: `${capability.id}.output`,
-          version: 1,
-        },
-        timeoutMs: 2_000,
-      }),
-    ),
-  )
 
 export const coachRuntimeBudgetPolicy: RuntimeBudgetPolicy<'coach'> =
   createRuntimeBudgetPolicy({
@@ -96,85 +56,9 @@ const coachCapabilityManifest = createCapabilityManifest({
   maxCapabilityInvocations: 3,
 })
 
-const coachActiveStates = [
-  'decisionContextPending',
-  'evidencePending',
-  'decisionAnalysisPending',
-  'hindsightContextPending',
-  'hindsightAnalysisPending',
-  'reportValidationPending',
-  'commitPending',
-] as const
-
-export const coachRuntimeStateMachine = createRuntimeStateMachineDefinition<
-  'coach',
-  CoachRuntimeState
->({
-  runtimeType: 'coach',
-  stateMachineVersion: 1,
-  initialState: 'decisionContextPending',
-  states: [...coachActiveStates, 'succeeded', 'cancelled', 'failed'],
-  checkpointStates: [
-    'decisionAnalysisPending',
-    'hindsightContextPending',
-    'hindsightAnalysisPending',
-    'reportValidationPending',
-    'commitPending',
-  ],
-  terminalStates: ['succeeded', 'cancelled', 'failed'],
-  transitions: [
-    {
-      from: 'decisionContextPending',
-      event: 'decisionContextPrepared',
-      to: 'evidencePending',
-    },
-    {
-      from: 'evidencePending',
-      event: 'evidencePrepared',
-      to: 'decisionAnalysisPending',
-    },
-    {
-      from: 'decisionAnalysisPending',
-      event: 'decisionAnalysisCompleted',
-      to: 'hindsightContextPending',
-    },
-    {
-      from: 'decisionAnalysisPending',
-      event: 'repairRequested',
-      to: 'decisionAnalysisPending',
-    },
-    {
-      from: 'hindsightContextPending',
-      event: 'hindsightContextPrepared',
-      to: 'hindsightAnalysisPending',
-    },
-    {
-      from: 'hindsightAnalysisPending',
-      event: 'hindsightAnalysisCompleted',
-      to: 'reportValidationPending',
-    },
-    {
-      from: 'hindsightAnalysisPending',
-      event: 'repairRequested',
-      to: 'hindsightAnalysisPending',
-    },
-    {
-      from: 'reportValidationPending',
-      event: 'reportValid',
-      to: 'commitPending',
-    },
-    { from: 'commitPending', event: 'commitSucceeded', to: 'succeeded' },
-    ...coachActiveStates.flatMap((from) => [
-      { from, event: 'cancel', to: 'cancelled' as const },
-      { from, event: 'fail', to: 'failed' as const },
-    ]),
-  ],
-})
-
 export type CoachRuntimeDefinition = RuntimeDefinitionBase<
   'coach',
-  'decisionAnalysis' | 'hindsight',
-  CoachRuntimeState
+  'decisionAnalysis' | 'hindsight'
 >
 
 function deepFreeze<Value>(value: Value): Value {
@@ -201,7 +85,6 @@ export const coachRuntimeDefinition: CoachRuntimeDefinition = deepFreeze({
   outputSchema: { id: 'coach.output.review', version: 1 },
   validator: { id: 'coach.validator.review', version: 1 },
   commitGate: coachCommitGate,
-  recoveryPolicy: { id: 'coach.recovery.frozen-checkpoint', version: 1 },
-  stateMachine: coachRuntimeStateMachine,
+  recoveryPolicy: { id: 'coach.recovery.process-restart-cancel', version: 1 },
   modelToolPolicy: 'none',
 })

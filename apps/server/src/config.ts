@@ -74,12 +74,6 @@ export class ServerConfig {
   }
 }
 
-export interface ServerCapabilities {
-  readonly canUseReadOnlyFeatures: true
-  readonly canCreateSession: boolean
-  readonly warnings: readonly string[]
-}
-
 function createInitialProviderHealthSummary(configured: boolean) {
   return configured
     ? {
@@ -128,24 +122,6 @@ export function loadServerConfig(environment: NodeJS.ProcessEnv): ServerConfig {
     ...(deepSeekApiKey === undefined ? {} : { deepSeekApiKey }),
     ...(kimiApiKey === undefined ? {} : { kimiApiKey }),
   })
-}
-
-export function getServerCapabilities(
-  config: ServerConfig,
-): ServerCapabilities {
-  const providerSettings = getProviderSettingsResponse(config)
-  const canCreateSession = providerSettings.deepSeek.canCreateSession
-
-  return {
-    canUseReadOnlyFeatures: true,
-    canCreateSession,
-    warnings: [
-      ...(canCreateSession ? [] : ['DeepSeek API Key 未配置，无法创建场次。']),
-      ...(providerSettings.kimi.canFallback
-        ? []
-        : ['Kimi API Key 未配置，自动降级不可用。']),
-    ],
-  }
 }
 
 export function getProviderCreationPolicy(config: ServerConfig): {

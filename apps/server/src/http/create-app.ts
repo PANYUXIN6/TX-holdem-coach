@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { ErrorResponseSchema } from '@tx-holdem-coach/contracts'
 import { Hono, type Context } from 'hono'
+import { matchedRoutes, routePath } from 'hono/route'
 import type { PersonaCatalog } from '../personas/catalog.js'
 import type { ProviderHealthService } from '../providers/provider-health-service.js'
 import type { PlayerAgentSettingsService } from '../settings/player-agent-settings-service.js'
 import type { SessionDataDeletionService } from '../sessions/session-data-deletion-service.js'
-import type { CommittedSessionEventHub } from '../sessions/public-projection/committed-session-event-hub.js'
 import type { SessionEventStreamService } from '../sessions/public-projection/session-event-stream-service.js'
 import { registerAgentSettingsRoutes } from './agent-settings-routes.js'
 import type { ApiVariables } from './api-context.js'
@@ -28,9 +28,8 @@ export interface ApiRuntime {
   readonly playerAgentSettings: PlayerAgentSettingsService
   readonly personaCatalog: PersonaCatalog
   readonly deletion: SessionDataDeletionService
-  readonly sessionHttp?: SessionHttpPorts
-  readonly committedSessionEvents?: CommittedSessionEventHub
-  readonly sessionEvents?: SessionEventStreamService
+  readonly sessionHttp: SessionHttpPorts
+  readonly sessionEvents: SessionEventStreamService
 }
 
 export interface ApiAppOptions {
@@ -52,12 +51,17 @@ function routeLookupMethod(method: string): string {
   return method === 'HEAD' ? 'GET' : method
 }
 
-function isKnownRoute(
-  method: string,
-  path: string,
-  sessions: boolean,
-  sessionEvents = false,
-): boolean {
+function requestLogRoute(context: Context): string {
+  const activePath = routePath(context)
+  if (activePath !== '' && !activePath.includes('*')) return activePath
+
+  return (
+    matchedRoutes(context).find((route) => !route.path.includes('*'))?.path ??
+    'unmatched'
+  )
+}
+
+function isKnownRoute(method: string, path: string): boolean {
   method = routeLookupMethod(method)
   const fixed = new Set([
     'GET /api/health',
@@ -72,65 +76,15 @@ function isKnownRoute(
     return method === 'POST'
   }
   if (/^\/api\/agent-personas\/[^/]+$/.test(path)) return method === 'GET'
-  if (sessions && path === '/api/sessions/active') return method === 'GET'
-  if (sessionEvents && /^\/api\/sessions\/[^/]+\/events$/.test(path)) {
+  if (path === '/api/sessions/active') return method === 'GET'
+  if (/^\/api\/sessions\/[^/]+\/events$/.test(path)) {
     return method === 'GET'
   }
   if (/^\/api\/sessions\/[^/]+$/.test(path)) {
-    return method === 'DELETE' || (sessions && method === 'GET')
+    return method === 'DELETE' || method === 'GET'
   }
-  if (!sessions) return false
   if (path === '/api/sessions') return method === 'POST'
   return method === 'POST' && /^\/api\/sessions\/[^/]+\/commands$/.test(path)
-}
-
-function requestRouteTemplate(
-  method: string,
-  path: string,
-  sessions: boolean,
-  sessionEvents = false,
-): string | null {
-  method = routeLookupMethod(method)
-  const fixed = new Map([
-    ['GET /api/health', '/api/health'],
-    ['GET /api/settings/providers', '/api/settings/providers'],
-    ['GET /api/settings/agent', '/api/settings/agent'],
-    ['PATCH /api/settings/agent', '/api/settings/agent'],
-    ['GET /api/agent-personas', '/api/agent-personas'],
-    ['DELETE /api/data', '/api/data'],
-  ])
-  const fixedTemplate = fixed.get(`${method} ${path}`)
-  if (fixedTemplate !== undefined) return fixedTemplate
-  if (
-    method === 'POST' &&
-    /^\/api\/settings\/providers\/[^/]+\/check$/.test(path)
-  ) {
-    return '/api/settings/providers/:provider/check'
-  }
-  if (method === 'GET' && /^\/api\/agent-personas\/[^/]+$/.test(path)) {
-    return '/api/agent-personas/:personaId'
-  }
-  if (sessions && method === 'GET' && path === '/api/sessions/active') {
-    return '/api/sessions/active'
-  }
-  if (
-    sessionEvents &&
-    method === 'GET' &&
-    /^\/api\/sessions\/[^/]+\/events$/.test(path)
-  ) {
-    return '/api/sessions/:sessionId/events'
-  }
-  if (/^\/api\/sessions\/[^/]+$/.test(path)) {
-    if (method === 'DELETE' || (sessions && method === 'GET')) {
-      return '/api/sessions/:sessionId'
-    }
-  }
-  if (!sessions) return null
-  if (method === 'POST' && path === '/api/sessions') return '/api/sessions'
-  if (method === 'POST' && /^\/api\/sessions\/[^/]+\/commands$/.test(path)) {
-    return '/api/sessions/:sessionId/commands'
-  }
-  return null
 }
 
 function appendVaryOrigin(response: Response): void {
@@ -190,16 +144,10 @@ export function createApp(
       }
     }
     try {
-      const route = requestRouteTemplate(
-        context.req.method.toUpperCase(),
-        new URL(context.req.url).pathname,
-        runtime.sessionHttp !== undefined,
-        runtime.sessionEvents !== undefined,
-      )
       options.logRequest?.({
         requestId: context.get('requestId'),
         method: context.req.method,
-        route: route ?? 'unmatched',
+        route: requestLogRoute(context),
         status: context.res.status,
         ...(errorCode === undefined ? {} : { errorCode }),
         durationMs: Date.now() - startedAt,
@@ -276,8 +224,6 @@ export function createApp(
       !isKnownRoute(
         requestedMethod.toUpperCase(),
         new URL(context.req.url).pathname,
-        runtime.sessionHttp !== undefined,
-        runtime.sessionEvents !== undefined,
       )
     ) {
       throw new HttpBoundaryError(404, 'ROUTE_NOT_FOUND', '接口不存在。')
@@ -300,12 +246,8 @@ export function createApp(
   registerAgentSettingsRoutes(app, runtime.playerAgentSettings)
   registerPersonaRoutes(app, runtime.personaCatalog)
   registerDataRoutes(app, runtime.deletion)
-  if (runtime.sessionHttp !== undefined) {
-    registerSessionRoutes(app, runtime.sessionHttp)
-  }
-  if (runtime.sessionEvents !== undefined) {
-    registerSessionEventRoutes(app, runtime.sessionEvents)
-  }
+  registerSessionRoutes(app, runtime.sessionHttp)
+  registerSessionEventRoutes(app, runtime.sessionEvents)
 
   app.notFound((context) =>
     context.json(

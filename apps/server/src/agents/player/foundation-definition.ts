@@ -1,9 +1,5 @@
 import { z } from 'zod'
-import {
-  createCapabilityDefinition,
-  createCapabilityManifest,
-  type CapabilityDefinition,
-} from '../foundation/capability-protocol.js'
+import { createCapabilityManifest } from '../foundation/capability-protocol.js'
 import {
   createExecutionBudget,
   createRuntimeBudgetPolicy,
@@ -14,19 +10,6 @@ import type {
   RuntimeComponentReference,
   RuntimeDefinitionBase,
 } from '../foundation/runtime-definition.js'
-import { createRuntimeStateMachineDefinition } from '../foundation/runtime-state-machine.js'
-
-export type PlayerRuntimeState =
-  | 'contextPending'
-  | 'preprocessing'
-  | 'modelPending'
-  | 'outputValidation'
-  | 'commitPending'
-  | 'succeeded'
-  | 'paused'
-  | 'stale'
-  | 'cancelled'
-  | 'failed'
 
 const playerCommitGate = Object.freeze({
   runtimeType: 'player' as const,
@@ -40,29 +23,6 @@ const playerCapabilityReferences = Object.freeze([
   { id: 'player.project-strategy', version: 1 },
   { id: 'player.project-opponent-features', version: 1 },
 ] as const satisfies readonly RuntimeComponentReference[])
-
-export const playerCapabilityDefinitions: readonly CapabilityDefinition<'player'>[] =
-  Object.freeze(
-    playerCapabilityReferences.map((capability) =>
-      createCapabilityDefinition({
-        runtimeType: 'player',
-        capability,
-        mode:
-          capability.id === 'player.read-session-memory'
-            ? 'readOnly'
-            : 'deterministicCompute',
-        inputSchema: {
-          id: `${capability.id}.input`,
-          version: 1,
-        },
-        outputSchema: {
-          id: `${capability.id}.output`,
-          version: 1,
-        },
-        timeoutMs: 2_000,
-      }),
-    ),
-  )
 
 const PlayerBudgetInputSchema = z
   .strictObject({
@@ -116,64 +76,9 @@ const playerCapabilityManifest = createCapabilityManifest({
   maxCapabilityInvocations: 4,
 })
 
-const playerActiveStates = [
-  'contextPending',
-  'preprocessing',
-  'modelPending',
-  'outputValidation',
-  'commitPending',
-] as const
-
-export const playerRuntimeStateMachine = createRuntimeStateMachineDefinition<
-  'player',
-  PlayerRuntimeState
->({
-  runtimeType: 'player',
-  stateMachineVersion: 1,
-  initialState: 'contextPending',
-  states: [
-    ...playerActiveStates,
-    'succeeded',
-    'paused',
-    'stale',
-    'cancelled',
-    'failed',
-  ],
-  checkpointStates: [
-    'contextPending',
-    'modelPending',
-    'outputValidation',
-    'commitPending',
-  ],
-  terminalStates: ['succeeded', 'paused', 'stale', 'cancelled', 'failed'],
-  transitions: [
-    { from: 'contextPending', event: 'contextPrepared', to: 'preprocessing' },
-    {
-      from: 'preprocessing',
-      event: 'preprocessingCompleted',
-      to: 'modelPending',
-    },
-    { from: 'modelPending', event: 'modelCompleted', to: 'outputValidation' },
-    { from: 'outputValidation', event: 'outputValid', to: 'commitPending' },
-    {
-      from: 'outputValidation',
-      event: 'repairRequested',
-      to: 'modelPending',
-    },
-    { from: 'commitPending', event: 'commitSucceeded', to: 'succeeded' },
-    ...playerActiveStates.flatMap((from) => [
-      { from, event: 'pause', to: 'paused' as const },
-      { from, event: 'markStale', to: 'stale' as const },
-      { from, event: 'cancel', to: 'cancelled' as const },
-      { from, event: 'fail', to: 'failed' as const },
-    ]),
-  ],
-})
-
 export type PlayerRuntimeDefinition = RuntimeDefinitionBase<
   'player',
-  'decision',
-  PlayerRuntimeState
+  'decision'
 >
 
 function deepFreeze<Value>(value: Value): Value {
@@ -204,6 +109,5 @@ export const playerRuntimeDefinition: PlayerRuntimeDefinition = deepFreeze({
     id: 'player.recovery.process-restart-cancel',
     version: 1,
   },
-  stateMachine: playerRuntimeStateMachine,
   modelToolPolicy: 'none',
 })

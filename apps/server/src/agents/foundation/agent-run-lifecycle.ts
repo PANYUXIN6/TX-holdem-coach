@@ -15,7 +15,6 @@ export type AgentRunTransitionFailure =
   | 'agent_run_transition_rejected'
   | 'agent_run_fencing_rejected'
   | 'agent_run_already_terminal'
-  | 'agent_run_checkpoint_rejected'
 
 export class AgentRunTransitionError extends Error {
   public constructor(public readonly failure: AgentRunTransitionFailure) {

@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { createApp, type ApiRuntime } from '../../src/app.js'
+import { createApp, type ApiRuntime } from '../../src/http/create-app.js'
 import { getProviderSettingsResponse, ServerConfig } from '../../src/config.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import {
@@ -46,7 +46,14 @@ test('adapts injectable session ports without installing a production projector'
       warnings: [],
     },
   }))
-  const execute = vi.fn(async () => ({ kind: 'processing' as const }))
+  const execute = vi.fn(async () => ({
+    kind: 'rejected' as const,
+    origin: 'unregistered' as const,
+    response: {
+      code: 'STATE_VERSION_CONFLICT' as const,
+      message: '场次状态已变化。',
+    },
+  }))
   const runtime = {
     health: { read: async () => ({}) },
     providerHealth: {
@@ -100,7 +107,7 @@ test('adapts injectable session ports without installing a production projector'
     expect.objectContaining({ route: '/api/sessions/active' }),
   )
 
-  const processing = await app.request(
+  const rejected = await app.request(
     `${baseUrl}/api/sessions/${sessionId}/commands`,
     {
       method: 'POST',
@@ -116,8 +123,7 @@ test('adapts injectable session ports without installing a production projector'
       }),
     },
   )
-  expect(processing.status).toBe(409)
-  expect(processing.headers.get('retry-after')).toBe('1')
+  expect(rejected.status).toBe(409)
 
   const mismatch = await app.request(
     `${baseUrl}/api/sessions/${otherSessionId}/commands`,
@@ -136,28 +142,6 @@ test('adapts injectable session ports without installing a production projector'
     },
   )
   expect(mismatch.status).toBe(400)
-  expect(execute).toHaveBeenCalledOnce()
-
-  const retryAgent = await app.request(
-    `${baseUrl}/api/sessions/${sessionId}/commands`,
-    {
-      method: 'POST',
-      headers: { Origin: origin, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        command: {
-          sessionId,
-          commandId: '5907e1bc-26d9-403e-9bcb-e18a7bedf10a',
-          expectedStateVersion: 1,
-          type: 'retryAgent',
-          payload: {},
-        },
-      }),
-    },
-  )
-  expect(retryAgent.status).toBe(409)
-  await expect(retryAgent.json()).resolves.toMatchObject({
-    code: 'COMMAND_NOT_ALLOWED_IN_PHASE',
-  })
   expect(execute).toHaveBeenCalledOnce()
 })
 

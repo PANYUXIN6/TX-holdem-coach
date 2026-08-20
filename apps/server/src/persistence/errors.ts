@@ -21,12 +21,6 @@ export type PayloadKind =
   | 'agentRunConfiguration'
   | 'agentExecutionBudget'
   | 'agentAttempt'
-  | 'agentRunCheckpoint'
-  | 'agentRunResult'
-  | 'capabilityInvocationPayload'
-  | 'playerDecisionPacket'
-  | 'playerCandidateSet'
-  | 'playerValidatorResult'
 
 export class UnknownPayloadVersionError extends Error {
   public constructor(public readonly payloadKind: PayloadKind) {
@@ -49,7 +43,6 @@ export type DataCorruptionKind =
   | 'invalidAgentRunAudit'
   | 'invalidAgentAttemptAudit'
   | 'invalidCapabilityInvocationAudit'
-  | 'invalidRuntimeAuditExtension'
 
 export class PersistenceDataCorruptionError extends Error {
   public constructor(public readonly corruption: DataCorruptionKind) {

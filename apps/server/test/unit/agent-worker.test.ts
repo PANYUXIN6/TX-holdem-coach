@@ -1,371 +1,39 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
-  AGENT_WORKER_MAX_CONSECUTIVE_DATABASE_ERRORS,
+  AGENT_WORKER_STOP_GRACE_MS,
   createAgentWorker,
 } from '../../src/agents/foundation/agent-worker.js'
 import type { LeasedAgentRun } from '../../src/agents/foundation/agent-run-types.js'
 import type { AgentRunWorkerControl } from '../../src/agents/foundation/agent-worker-ports.js'
 import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
-import { coachRuntimeDefinition } from '../../src/agents/coach/foundation-definition.js'
-import { playerRuntimeDefinition } from '../../src/agents/player/foundation-definition.js'
-import { DatabaseOperationError } from '../../src/persistence/errors.js'
 
-function leased(runtimeType: 'player' | 'coach'): LeasedAgentRun {
+function leasedCoachRun(): LeasedAgentRun<'coach'> {
   const runId = randomUUID()
-  const leaseOwner = `worker-test:${runtimeType}:0`
-  const definition =
-    runtimeType === 'player' ? playerRuntimeDefinition : coachRuntimeDefinition
-  const budget =
-    runtimeType === 'player'
-      ? playerRuntimeDefinition.budgetPolicy.createSnapshot({
-          runtimeType: 'player',
-          attemptTimeoutSeconds: 15,
-          decisionDeadlineSeconds: 45,
-        })
-      : coachRuntimeDefinition.budgetPolicy.createSnapshot({
-          runtimeType: 'coach',
-        })
   return {
-    ownerId: 'local-user',
     runId,
-    runtimeType,
-    sessionId: randomUUID(),
-    handId: randomUUID(),
-    triggerType: 'test_run',
-    lifecycle: 'leased',
-    idempotencyKey: `test/${runId}`,
-    parentRunId: null,
-    replacementRunId: null,
-    leaseOwner,
-    leaseExpiresAt: '2099-01-01T00:00:00.000000Z',
+    runtimeType: 'coach',
+    leaseOwner: `${randomUUID()}:coach:0`,
     fencingToken: 1,
-    deadlineAt: '2099-01-01T00:00:00.000000Z',
-    runtimeDefinitionVersion: 1,
-    terminationReason: null,
-    runConfiguration: {
-      runtime: runtimeType,
-      runtimeDefinitionVersion: 1,
-      contextSchemaVersion: 1,
-      promptModules: [],
-      capabilityManifest: {
-        id: `${runtimeType}.capability-manifest`,
-        version: 1,
-      },
-      capabilities: [],
-      routePolicy: definition.routePolicy,
-      outputSchema: definition.outputSchema,
-      validator: definition.validator,
-      commitGate: definition.commitGate,
-      recoveryPolicy: definition.recoveryPolicy,
-      dataDependencies: [],
-    },
-    budget,
-    checkpointPayloadVersion: null,
-    checkpointPayload: null,
-    resultPayloadVersion: null,
-    resultPayload: null,
-    createdAt: '2026-08-17T00:00:00.000000Z',
-    startedAt: null,
-    completedAt: null,
-    updatedAt: '2026-08-17T00:00:00.000000Z',
-    participantId: runtimeType === 'player' ? randomUUID() : null,
-    sourceStateVersion: runtimeType === 'player' ? 1 : null,
-    decisionRequestId: runtimeType === 'player' ? randomUUID() : null,
-  } as LeasedAgentRun
+  } as LeasedAgentRun<'coach'>
 }
 
-async function eventually(assertion: () => void): Promise<void> {
-  const deadline = Date.now() + 500
-  for (;;) {
-    try {
-      assertion()
-      return
-    } catch (error) {
-      if (Date.now() >= deadline) throw error
-      await new Promise((resolve) => setTimeout(resolve, 5))
-    }
-  }
-}
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('agent worker', () => {
-  test('starts explicit isolated lanes and never converts executor resolution into completion', async () => {
-    const runs = { player: leased('player'), coach: leased('coach') }
-    const claims = { player: 0, coach: 0 }
-    const dispositions: string[] = []
-    const control: AgentRunWorkerControl = {
-      async claimNext({ runtimeType }) {
-        claims[runtimeType] += 1
-        if (claims[runtimeType] > 1) return { kind: 'none', diagnostics: [] }
-        const run = runs[runtimeType]
-        return {
-          kind: 'claimed',
-          run,
-          authority: issueRuntimeCommitAuthority({
-            runtimeType,
-            runId: run.runId,
-            leaseOwner: run.leaseOwner,
-            fencingToken: run.fencingToken,
-          }),
-        }
-      },
-      async markRunning(authority) {
-        return { ...runs[authority.runtimeType], lifecycle: 'running' }
-      },
-      async renewLease(authority) {
-        return runs[authority.runtimeType]
-      },
-      async inspectSettlement() {
-        return 'activeUnsettled'
-      },
-      classifyExecutionSettlement() {
-        return 'runtimeSettlementRequired'
-      },
-    }
-    const executed: Runtime[] = []
-    type Runtime = 'player' | 'coach'
-    const worker = createAgentWorker({
-      control,
-      playerExecutor: {
-        runtimeType: 'player',
-        async execute() {
-          executed.push('player')
-        },
-      },
-      coachExecutor: {
-        runtimeType: 'coach',
-        async execute() {
-          executed.push('coach')
-        },
-      },
-      timing: { heartbeatMs: 10, pollMs: 10, stopGraceMs: 20 },
-      onDisposition: ({ disposition }) => dispositions.push(disposition),
-    })
-
-    expect(claims).toEqual({ player: 0, coach: 0 })
-    await worker.start()
-    await eventually(() => {
-      expect(executed.sort()).toEqual(['coach', 'player'])
-      expect(dispositions).toEqual([
-        'runtimeSettlementRequired',
-        'runtimeSettlementRequired',
-      ])
-    })
-    await expect(worker.start()).rejects.toMatchObject({
-      failure: 'worker_already_started',
-    })
-    await worker.stop()
-    await worker.stop()
-    await expect(
-      Promise.race([
-        worker.fatal.then(() => 'fatal' as const),
-        new Promise<'pending'>((resolve) =>
-          setTimeout(() => resolve('pending'), 20),
-        ),
-      ]),
-    ).resolves.toBe('pending')
-  })
-
-  test('resolves one stable lane fatal after the supervised database error threshold', async () => {
-    const claims = { player: 0, coach: 0 }
-    const control: AgentRunWorkerControl = {
-      async claimNext({ runtimeType }) {
-        claims[runtimeType] += 1
-        if (runtimeType === 'player') throw new DatabaseOperationError()
-        return { kind: 'none', diagnostics: [] }
-      },
-      async markRunning() {
-        throw new Error('unreachable')
-      },
-      async renewLease() {
-        throw new Error('unreachable')
-      },
-      async inspectSettlement() {
-        return 'authorityLost'
-      },
-      classifyExecutionSettlement() {
-        return 'authorityLost'
-      },
-    }
-    const worker = createAgentWorker({
-      control,
-      playerExecutor: {
-        runtimeType: 'player',
-        async execute() {},
-      },
-      coachExecutor: {
-        runtimeType: 'coach',
-        async execute() {},
-      },
-      timing: { heartbeatMs: 1, pollMs: 1, stopGraceMs: 5 },
-    })
-
-    await worker.start()
-    await expect(worker.fatal).resolves.toEqual({
-      category: 'playerWorkerTerminatedUnexpectedly',
-    })
-    expect(claims.player).toBe(AGENT_WORKER_MAX_CONSECUTIVE_DATABASE_ERRORS)
-    await worker.stop()
-  })
-
-  test('does not resolve stop before an executor and its settlement inspection exit', async () => {
-    const run = leased('coach')
-    let releaseExecution!: () => void
-    const execution = new Promise<void>((resolve) => {
-      releaseExecution = resolve
-    })
-    let inspected = false
-    let stopSettled = false
-    let coachClaimed = false
-    const control: AgentRunWorkerControl = {
-      async claimNext({ runtimeType }) {
-        if (runtimeType === 'player' || coachClaimed) {
-          return { kind: 'none', diagnostics: [] }
-        }
-        coachClaimed = true
-        return {
-          kind: 'claimed',
-          run,
-          authority: issueRuntimeCommitAuthority({
-            runtimeType: 'coach',
-            runId: run.runId,
-            leaseOwner: run.leaseOwner,
-            fencingToken: run.fencingToken,
-          }),
-        }
-      },
-      async markRunning() {
-        return { ...run, lifecycle: 'running' }
-      },
-      async renewLease() {
-        return run
-      },
-      async inspectSettlement() {
-        inspected = true
-        return 'activeUnsettled'
-      },
-      classifyExecutionSettlement() {
-        return 'runtimeSettlementRequired'
-      },
-    }
-    const worker = createAgentWorker({
-      control,
-      playerExecutor: { runtimeType: 'player', async execute() {} },
-      coachExecutor: {
-        runtimeType: 'coach',
-        async execute() {
-          await execution
-        },
-      },
-      timing: { heartbeatMs: 5, pollMs: 5, stopGraceMs: 10 },
-    })
-
-    await worker.start()
-    await eventually(() => expect(coachClaimed).toBe(true))
-    const stopping = worker.stop().then(() => {
-      stopSettled = true
-    })
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(stopSettled).toBe(false)
-    expect(inspected).toBe(false)
-
-    releaseExecution()
-    await stopping
-    expect(inspected).toBe(true)
-  })
-
-  test('does not start an executor when stop is requested while markRunning is pending', async () => {
-    const run = leased('coach')
-    let releaseMarkRunning!: () => void
-    const markRunningGate = new Promise<void>((resolve) => {
-      releaseMarkRunning = resolve
-    })
-    let reportMarkRunning!: () => void
-    const markRunningStarted = new Promise<void>((resolve) => {
-      reportMarkRunning = resolve
-    })
-    let coachClaimed = false
-    let executions = 0
-    const control: AgentRunWorkerControl = {
-      async claimNext({ runtimeType }) {
-        if (runtimeType === 'player' || coachClaimed) {
-          return { kind: 'none', diagnostics: [] }
-        }
-        coachClaimed = true
-        return {
-          kind: 'claimed',
-          run,
-          authority: issueRuntimeCommitAuthority({
-            runtimeType: 'coach',
-            runId: run.runId,
-            leaseOwner: run.leaseOwner,
-            fencingToken: run.fencingToken,
-          }),
-        }
-      },
-      async markRunning() {
-        reportMarkRunning()
-        await markRunningGate
-        return { ...run, lifecycle: 'running' }
-      },
-      async renewLease() {
-        return run
-      },
-      async inspectSettlement() {
-        return 'activeUnsettled'
-      },
-      classifyExecutionSettlement() {
-        return 'runtimeSettlementRequired'
-      },
-    }
-    const worker = createAgentWorker({
-      control,
-      playerExecutor: { runtimeType: 'player', async execute() {} },
-      coachExecutor: {
-        runtimeType: 'coach',
-        async execute() {
-          executions += 1
-        },
-      },
-      timing: { heartbeatMs: 5, pollMs: 5, stopGraceMs: 5 },
-    })
-
-    await worker.start()
-    await markRunningStarted
-    const stopping = worker.stop()
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    releaseMarkRunning()
-    await stopping
-
-    expect(executions).toBe(0)
-    await expect(
-      Promise.race([
-        worker.fatal.then(() => 'fatal' as const),
-        new Promise<'pending'>((resolve) =>
-          setTimeout(() => resolve('pending'), 10),
-        ),
-      ]),
-    ).resolves.toBe('pending')
-  })
-
-  test('supervises a heartbeat failure immediately and aborts a pending executor', async () => {
-    const run = leased('coach')
-    let releaseExecution!: () => void
-    const executionGate = new Promise<void>((resolve) => {
-      releaseExecution = resolve
-    })
-    let reportExecutionStarted!: () => void
-    const executionStarted = new Promise<void>((resolve) => {
-      reportExecutionStarted = resolve
-    })
-    let coachClaimed = false
+  test('stop 的宽限期是真实上界，即使 executor 忽略 abort 也会返回', async () => {
+    vi.useFakeTimers()
+    const run = leasedCoachRun()
+    let claimed = false
     let executorSignal: AbortSignal | undefined
     const control: AgentRunWorkerControl = {
       async claimNext({ runtimeType }) {
-        if (runtimeType === 'player' || coachClaimed) {
+        if (runtimeType === 'player' || claimed) {
           return { kind: 'none', diagnostics: [] }
         }
-        coachClaimed = true
+        claimed = true
         return {
           kind: 'claimed',
           run,
@@ -381,7 +49,146 @@ describe('agent worker', () => {
         return { ...run, lifecycle: 'running' }
       },
       async renewLease() {
-        throw new Error('heartbeat failed')
+        return run
+      },
+      async inspectSettlement() {
+        return 'activeUnsettled'
+      },
+      classifyExecutionSettlement() {
+        return 'runtimeSettlementRequired'
+      },
+    }
+    const worker = createAgentWorker({
+      control,
+      playerExecutor: { runtimeType: 'player', async execute() {} },
+      coachExecutor: {
+        runtimeType: 'coach',
+        execute(_run, signal) {
+          executorSignal = signal
+          return new Promise(() => undefined)
+        },
+      },
+    })
+
+    await worker.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(executorSignal).toBeDefined()
+
+    let stopped = false
+    const stopping = worker.stop().then(() => {
+      stopped = true
+    })
+    expect(executorSignal?.aborted).toBe(true)
+    await vi.advanceTimersByTimeAsync(AGENT_WORKER_STOP_GRACE_MS - 1)
+    expect(stopped).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    await stopping
+    expect(stopped).toBe(true)
+  })
+
+  test.each(['resolved', 'rejected'] as const)(
+    'stop 返回后 executor 才 %s 时不再访问控制端口且不遗留 heartbeat timer',
+    async (executorOutcome) => {
+      vi.useFakeTimers()
+      const run = leasedCoachRun()
+      let claimed = false
+      let releaseExecution!: () => void
+      const execution = new Promise<void>((resolve, reject) => {
+        releaseExecution = () => {
+          if (executorOutcome === 'resolved') resolve()
+          else reject(new Error('executor failed after stop'))
+        }
+      })
+      const inspectSettlement = vi.fn(async () => 'activeUnsettled' as const)
+      const classifyExecutionSettlement = vi.fn(
+        () => 'runtimeSettlementRequired' as const,
+      )
+      const onDisposition = vi.fn()
+      const control: AgentRunWorkerControl = {
+        async claimNext({ runtimeType }) {
+          if (runtimeType === 'player' || claimed) {
+            return { kind: 'none', diagnostics: [] }
+          }
+          claimed = true
+          return {
+            kind: 'claimed',
+            run,
+            authority: issueRuntimeCommitAuthority({
+              runtimeType: 'coach',
+              runId: run.runId,
+              leaseOwner: run.leaseOwner,
+              fencingToken: run.fencingToken,
+            }),
+          }
+        },
+        async markRunning() {
+          return { ...run, lifecycle: 'running' }
+        },
+        async renewLease() {
+          return run
+        },
+        inspectSettlement,
+        classifyExecutionSettlement,
+      }
+      const worker = createAgentWorker({
+        control,
+        playerExecutor: { runtimeType: 'player', async execute() {} },
+        coachExecutor: {
+          runtimeType: 'coach',
+          async execute() {
+            await execution
+          },
+        },
+        onDisposition,
+      })
+
+      await worker.start()
+      await vi.advanceTimersByTimeAsync(0)
+      const stopping = worker.stop()
+      await vi.advanceTimersByTimeAsync(AGENT_WORKER_STOP_GRACE_MS)
+      await stopping
+      expect(vi.getTimerCount()).toBe(0)
+
+      releaseExecution()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(inspectSettlement).not.toHaveBeenCalled()
+      expect(classifyExecutionSettlement).not.toHaveBeenCalled()
+      expect(onDisposition).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+    },
+  )
+
+  test('合作 executor 在 abort 后退出时可提前完成停机', async () => {
+    vi.useFakeTimers()
+    const run = leasedCoachRun()
+    let claimed = false
+    let executionStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      executionStarted = resolve
+    })
+    const control: AgentRunWorkerControl = {
+      async claimNext({ runtimeType }) {
+        if (runtimeType === 'player' || claimed) {
+          return { kind: 'none', diagnostics: [] }
+        }
+        claimed = true
+        return {
+          kind: 'claimed',
+          run,
+          authority: issueRuntimeCommitAuthority({
+            runtimeType: 'coach',
+            runId: run.runId,
+            leaseOwner: run.leaseOwner,
+            fencingToken: run.fencingToken,
+          }),
+        }
+      },
+      async markRunning() {
+        return { ...run, lifecycle: 'running' }
+      },
+      async renewLease() {
+        return run
       },
       async inspectSettlement() {
         return 'activeUnsettled'
@@ -396,28 +203,85 @@ describe('agent worker', () => {
       coachExecutor: {
         runtimeType: 'coach',
         async execute(_run, signal) {
-          executorSignal = signal
-          reportExecutionStarted()
-          await executionGate
+          executionStarted()
+          await new Promise<void>((resolve) =>
+            signal.addEventListener('abort', () => resolve(), { once: true }),
+          )
         },
       },
-      timing: { heartbeatMs: 1, pollMs: 5, stopGraceMs: 5 },
     })
 
     await worker.start()
-    await executionStarted
-    await expect(
-      Promise.race([
-        worker.fatal,
-        new Promise<'timeout'>((resolve) =>
-          setTimeout(() => resolve('timeout'), 100),
-        ),
-      ]),
-    ).resolves.toEqual({ category: 'coachWorkerTerminatedUnexpectedly' })
-    expect(executorSignal?.aborted).toBe(true)
-
-    const stopping = worker.stop()
-    releaseExecution()
-    await stopping
+    await started
+    await expect(worker.stop()).resolves.toBeUndefined()
+    expect(vi.getTimerCount()).toBe(0)
   })
+
+  test.each(['resolved', 'rejected'] as const)(
+    'executor %s 后复验持久化终态且不触发 lane fatal',
+    async (executorOutcome) => {
+      const run = leasedCoachRun()
+      let claimed = false
+      const authority = issueRuntimeCommitAuthority({
+        runtimeType: 'coach',
+        runId: run.runId,
+        leaseOwner: run.leaseOwner,
+        fencingToken: run.fencingToken,
+      })
+      const inspectSettlement = vi.fn(async () => 'activeUnsettled' as const)
+      const classifyExecutionSettlement = vi.fn(
+        () => 'runtimeSettlementRequired' as const,
+      )
+      const control: AgentRunWorkerControl = {
+        async claimNext({ runtimeType }) {
+          if (runtimeType === 'player' || claimed) {
+            return { kind: 'none', diagnostics: [] }
+          }
+          claimed = true
+          return { kind: 'claimed', run, authority }
+        },
+        async markRunning() {
+          return { ...run, lifecycle: 'running' }
+        },
+        async renewLease() {
+          return run
+        },
+        inspectSettlement,
+        classifyExecutionSettlement,
+      }
+      let reportDisposition!: (value: string) => void
+      const dispositionReported = new Promise<string>((resolve) => {
+        reportDisposition = resolve
+      })
+      const worker = createAgentWorker({
+        control,
+        playerExecutor: { runtimeType: 'player', async execute() {} },
+        coachExecutor: {
+          runtimeType: 'coach',
+          async execute() {
+            if (executorOutcome === 'rejected') {
+              throw new Error('executor failed')
+            }
+          },
+        },
+        onDisposition: ({ disposition }) => reportDisposition(disposition),
+      })
+
+      await worker.start()
+      await expect(
+        Promise.race([
+          dispositionReported,
+          worker.fatal.then(({ category }) => `fatal:${category}`),
+        ]),
+      ).resolves.toBe('runtimeSettlementRequired')
+      expect(inspectSettlement).toHaveBeenCalledOnce()
+      expect(inspectSettlement).toHaveBeenCalledWith(authority)
+      expect(classifyExecutionSettlement).toHaveBeenCalledWith({
+        runtimeType: 'coach',
+        executorOutcome,
+        persisted: 'activeUnsettled',
+      })
+      await worker.stop()
+    },
+  )
 })

@@ -1,5 +1,5 @@
 export type RuntimeRegistryConfigurationFailure =
-  'invalidDefinition' | 'crossRuntimeReference' | 'invalidStateMachine'
+  'invalidDefinition' | 'crossRuntimeReference'
 
 export class RuntimeRegistryConfigurationError extends Error {
   public constructor(
@@ -26,11 +26,6 @@ export type FoundationProtocolFailure =
   | 'capabilityNotDeclared'
   | 'capabilityRuntimeMismatch'
   | 'commitGateNotExecutableAsCapability'
-  | 'contextEnvelopeInvalid'
-  | 'contextBudgetExceeded'
-  | 'contextSensitiveContentRejected'
-  | 'runtimeTransitionRejected'
-  | 'runtimeCheckpointRejected'
 
 export class FoundationProtocolError extends Error {
   public constructor(public readonly failure: FoundationProtocolFailure) {

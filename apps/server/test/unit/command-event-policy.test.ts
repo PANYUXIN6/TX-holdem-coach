@@ -251,46 +251,6 @@ describe('command event policy', () => {
     ).toBe(false)
   })
 
-  test('rejects aiAction until the M4.7 verifier is installed', () => {
-    const beforePoker = createTestBettingPokerState()
-    const accounting = beforePoker.seats.map((seat) => ({
-      seatNumber: seat.seatNumber,
-      cumulativeBuyIn: 2_000,
-    }))
-    const before = privateState(7, beforePoker, accounting)
-    const action = { type: 'fold' as const }
-    const applied = applyPokerAction(beforePoker, {
-      actorSeatNumber: 3,
-      action,
-    })
-    const input = {
-      command: {
-        sessionId,
-        commandId,
-        expectedStateVersion: 7,
-        type: 'aiAction' as const,
-        payload: {
-          decisionRequestId: '40000000-0000-4000-8000-000000000001',
-          handId,
-          actorSeatNumber: 3,
-          candidateActionId: 'candidate-1',
-          action,
-        },
-      },
-      sessionBefore: activeIdleSession,
-      stateEffectKind: 'stateChanged' as const,
-      stateBefore: before,
-      stateAfter: privateState(8, applied.state, accounting),
-      lifecycleAfter: 'active' as const,
-      currentHandIdAfter: handId,
-      playerCoordinationAfter: idlePlayerCoordination,
-      events: applied.eventDrafts,
-      relationPlan: Object.freeze({ handId }),
-    }
-
-    expect(isCommandMutationConsistent(input)).toBe(false)
-  })
-
   test('accepts a mirrored startNextHand and rejects plan or event tampering', () => {
     const beforePoker = createTestPokerState({
       seats: createTestPokerState().seats.map((seat) =>

@@ -1,4 +1,4 @@
-import type { Sql, TransactionSql } from 'postgres'
+import type { TransactionSql } from 'postgres'
 import { z } from 'zod'
 import { SESSION_DIAGNOSTIC_CODES } from '../sessions/authoritative-state/recovery-decision.js'
 import {
@@ -8,12 +8,12 @@ import {
 import {
   ActiveModelConfigurationSchema,
   AgentMemoryPayloadSchema,
-  canonicalJson,
   createConfigSnapshotKey,
   MEMORY_PAYLOAD_VERSION,
   PERSONA_CONFIG_PAYLOAD_VERSION,
   PersonaConfigPayloadSchema,
 } from '../personas/config.js'
+import { canonicalJson } from '../persisted-json.js'
 import {
   ActiveSessionConflictError,
   DatabaseOperationError,
@@ -33,8 +33,6 @@ import {
   type SessionRosterAgentInput,
   type StableIdentityGraph,
 } from '../sessions/roster-preparation.js'
-
-const POSTGRES_TEXT_OID = 25
 
 const LockedOwnerRowSchema = z.strictObject({
   databaseOwnerId: z.uuid().transform((value) => value.toLowerCase()),
@@ -254,14 +252,8 @@ async function insertSessionRosterSnapshot(
     memory_payload_version: agent.initialMemory.revisionPayloadVersion,
     memory_payload: agent.initialMemory.revisionPayload,
   }))
-  const agentRowsJson = transaction.typed(
-    JSON.stringify(agentRows),
-    POSTGRES_TEXT_OID,
-  )
-  const memoryRowsJson = transaction.typed(
-    JSON.stringify(memoryRows),
-    POSTGRES_TEXT_OID,
-  )
+  const agentRowsJson = transaction.json(agentRows)
+  const memoryRowsJson = transaction.json(memoryRows)
 
   try {
     await transaction`
@@ -331,7 +323,7 @@ async function insertSessionRosterSnapshot(
         memory_payload
       FROM jsonb_populate_recordset(
         NULL::app_private.session_agents,
-        ${agentRowsJson}::jsonb
+        ${agentRowsJson}
       )
     `
     await transaction`
@@ -352,7 +344,7 @@ async function insertSessionRosterSnapshot(
         memory_payload
       FROM jsonb_populate_recordset(
         NULL::app_private.agent_memory_revisions,
-        ${memoryRowsJson}::jsonb
+        ${memoryRowsJson}
       )
     `
   } catch (error) {
@@ -717,7 +709,7 @@ export function createSessionCreationRepository(): SessionCreationRepository {
         throw new RosterSourceChangedError()
       }
       const snapshots = await readSessionAgentSnapshots(
-        transaction as unknown as Sql,
+        transaction,
         metadata.owner,
         parsedPreflight.data.sourceSessionId,
       )

@@ -10,7 +10,6 @@ import type {
   AgentRunWorkerControl,
   AgentWorkerFatal,
   AgentWorkerLifecyclePort,
-  PlayerWorkerLifecyclePort,
   RuntimeExecutionPort,
 } from './agent-worker-ports.js'
 import type { RuntimeCommitAuthority } from './runtime-ports.js'
@@ -20,18 +19,6 @@ export const AGENT_RUN_HEARTBEAT_MS = 5_000
 export const AGENT_WORKER_POLL_MS = 1_000
 export const AGENT_WORKER_STOP_GRACE_MS = 10_000
 export const AGENT_WORKER_MAX_CONSECUTIVE_DATABASE_ERRORS = 5
-
-const ProcessInstanceIdSchema = z
-  .string()
-  .min(1)
-  .max(200)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
-
-interface WorkerTiming {
-  readonly heartbeatMs: number
-  readonly pollMs: number
-  readonly stopGraceMs: number
-}
 
 interface LaneSignal {
   readonly wait: (milliseconds: number) => Promise<void>
@@ -63,8 +50,42 @@ function createLaneSignal(): LaneSignal {
   }
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+function waitForHeartbeatInterval(
+  milliseconds: number,
+  execution: Promise<void>,
+  forceStopSignal: AbortSignal,
+): Promise<void> {
+  if (forceStopSignal.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    let finished = false
+    const finish = (): void => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      forceStopSignal.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, milliseconds)
+    forceStopSignal.addEventListener('abort', finish, { once: true })
+    void execution.then(finish)
+  })
+}
+
+function waitForCompletionOrTimeout(
+  completion: Promise<unknown>,
+  milliseconds: number,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let finished = false
+    const finish = (): void => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(finish, milliseconds)
+    void completion.then(finish, finish)
+  })
 }
 
 function isRecoverableLaneError(error: unknown): boolean {
@@ -75,16 +96,12 @@ function isRecoverableLaneError(error: unknown): boolean {
   )
 }
 
-export interface AgentWorker extends AgentWorkerLifecyclePort {
-  readonly playerLifecycle: PlayerWorkerLifecyclePort
-}
+export interface AgentWorker extends AgentWorkerLifecyclePort {}
 
 export function createAgentWorker(input: {
   readonly control: AgentRunWorkerControl
   readonly playerExecutor: RuntimeExecutionPort<'player'>
   readonly coachExecutor: RuntimeExecutionPort<'coach'>
-  readonly processInstanceId?: string
-  readonly timing?: Partial<WorkerTiming>
   readonly onDisposition?: (input: {
     readonly runtimeType: RuntimeType
     readonly runId: string
@@ -92,34 +109,20 @@ export function createAgentWorker(input: {
       'terminal' | 'authorityLost' | 'runtimeSettlementRequired'
   }) => void
 }): AgentWorker {
-  const processInstanceId = ProcessInstanceIdSchema.safeParse(
-    input.processInstanceId ?? randomUUID(),
-  )
   if (
-    !processInstanceId.success ||
     input.playerExecutor.runtimeType !== 'player' ||
     input.coachExecutor.runtimeType !== 'coach'
   ) {
     throw new AgentWorkerError('worker_start_failed')
   }
-  const timing = Object.freeze({
-    heartbeatMs: input.timing?.heartbeatMs ?? AGENT_RUN_HEARTBEAT_MS,
-    pollMs: input.timing?.pollMs ?? AGENT_WORKER_POLL_MS,
-    stopGraceMs: input.timing?.stopGraceMs ?? AGENT_WORKER_STOP_GRACE_MS,
-  })
-  if (
-    Object.values(timing).some(
-      (value) => !Number.isSafeInteger(value) || value <= 0,
-    )
-  ) {
-    throw new AgentWorkerError('worker_start_failed')
-  }
+  const processInstanceId = randomUUID()
 
   let state: 'stopped' | 'starting' | 'running' | 'stopping' | 'fatal' =
     'stopped'
   let hasStarted = false
   let stopPromise: Promise<void> | null = null
   let forceStop = false
+  const forceStopController = new AbortController()
   let fatalSettled = false
   let resolveFatal!: (fatal: AgentWorkerFatal) => void
   const fatal = new Promise<AgentWorkerFatal>((resolve) => {
@@ -155,7 +158,11 @@ export function createAgentWorker(input: {
     execution: Promise<void>,
   ): Promise<void> {
     while (!executionSettled() && !forceStop) {
-      await Promise.race([delay(timing.heartbeatMs), execution])
+      await waitForHeartbeatInterval(
+        AGENT_RUN_HEARTBEAT_MS,
+        execution,
+        forceStopController.signal,
+      )
       if (executionSettled() || forceStop) return
       try {
         await input.control.renewLease(authority)
@@ -218,7 +225,9 @@ export function createAgentWorker(input: {
       delete activeControllers[runtimeType]
     }
     if (heartbeatResult.kind === 'rejected') throw heartbeatResult.error
+    if (hasForcedStopCompleted()) return
     const persisted = await input.control.inspectSettlement(claimed.authority)
+    if (hasForcedStopCompleted()) return
     const disposition = input.control.classifyExecutionSettlement({
       runtimeType,
       executorOutcome,
@@ -228,7 +237,7 @@ export function createAgentWorker(input: {
   }
 
   async function lane(runtimeType: RuntimeType): Promise<void> {
-    const leaseOwner = `${processInstanceId.data}:${runtimeType}:0`
+    const leaseOwner = `${processInstanceId}:${runtimeType}:0`
     let consecutiveDatabaseErrors = 0
     while (state === 'running' || state === 'stopping') {
       if (state === 'stopping') return
@@ -239,7 +248,7 @@ export function createAgentWorker(input: {
         })
         if (claimed.kind === 'none') {
           consecutiveDatabaseErrors = 0
-          await signals[runtimeType].wait(timing.pollMs)
+          await signals[runtimeType].wait(AGENT_WORKER_POLL_MS)
           continue
         }
         await executeClaimed(runtimeType, claimed)
@@ -262,8 +271,9 @@ export function createAgentWorker(input: {
           }
           await signals[runtimeType].wait(
             Math.min(
-              timing.pollMs * Math.max(consecutiveDatabaseErrors, 1),
-              timing.pollMs * AGENT_WORKER_MAX_CONSECUTIVE_DATABASE_ERRORS,
+              AGENT_WORKER_POLL_MS * Math.max(consecutiveDatabaseErrors, 1),
+              AGENT_WORKER_POLL_MS *
+                AGENT_WORKER_MAX_CONSECUTIVE_DATABASE_ERRORS,
             ),
           )
           continue
@@ -281,6 +291,10 @@ export function createAgentWorker(input: {
 
   function hasStopBeenRequested(): boolean {
     return state === 'stopping' || state === 'stopped'
+  }
+
+  function hasForcedStopCompleted(): boolean {
+    return forceStop || state === 'stopped'
   }
 
   const worker: AgentWorker = {
@@ -319,23 +333,18 @@ export function createAgentWorker(input: {
         activeControllers.coach?.abort()
         signals.player.notify()
         signals.coach.notify()
-        await Promise.race([
-          Promise.allSettled(lanePromises).then(() => undefined),
-          delay(timing.stopGraceMs),
-        ])
+        await waitForCompletionOrTimeout(
+          Promise.allSettled(lanePromises),
+          AGENT_WORKER_STOP_GRACE_MS,
+        )
         forceStop = true
+        forceStopController.abort()
         signals.player.notify()
         signals.coach.notify()
-        await Promise.allSettled(lanePromises)
         state = 'stopped'
       })()
       return stopPromise
     },
-    playerLifecycle: Object.freeze({
-      wake(runIds: readonly string[]) {
-        worker.wake('player', runIds)
-      },
-    }),
   }
   return Object.freeze(worker)
 }

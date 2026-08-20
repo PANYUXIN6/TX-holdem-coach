@@ -1,7 +1,7 @@
 import type { SseEvent } from '@tx-holdem-coach/contracts'
 import type { Sql } from 'postgres'
 import { expect } from 'vitest'
-import { createApp } from '../../src/app.js'
+import { createApp } from '../../src/http/create-app.js'
 import { createApiRuntime } from '../../src/bootstrap.js'
 import { ServerConfig } from '../../src/config.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'

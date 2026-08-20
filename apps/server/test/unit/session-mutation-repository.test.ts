@@ -3,9 +3,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { createHandStartedEventDraft } from '../../src/poker/hand-result.js'
 import {
   createSessionMutationRepository,
-  lockSessionForMutation,
-  persistSessionMutation,
-  validateSessionMutation,
+  productionSessionMutationRepository,
   type SessionMutationEventInput,
 } from '../../src/persistence/session-mutation-repository.js'
 import {
@@ -23,6 +21,11 @@ import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
 const sessionId = '22222222-2222-4222-8222-222222222222'
 const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
+const {
+  lockSessionForMutation,
+  persistSessionMutation,
+  validateSessionMutation,
+} = productionSessionMutationRepository
 const eventId = '33333333-3333-4333-8333-333333333333'
 const secondEventId = '33333333-3333-4333-8333-333333333334'
 const handId = '44444444-4444-4444-8444-444444444444'
@@ -47,7 +50,6 @@ function createTransactionMock(responses: readonly unknown[]): TransactionSql {
   }) as unknown as TransactionSql
   Object.assign(transaction, {
     json: (value: unknown) => value,
-    typed: (value: string) => JSON.parse(value) as unknown,
   })
   return transaction
 }
@@ -69,7 +71,6 @@ function createTrackedTransaction(responses: readonly unknown[]) {
   }) as unknown as TransactionSql
   Object.assign(transaction, {
     json: (value: unknown) => value,
-    typed: (value: string) => JSON.parse(value) as unknown,
   })
   return {
     transaction,

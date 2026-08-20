@@ -23,15 +23,6 @@ import {
   encodeAttemptAudit,
   readCurrentAttemptAudit,
 } from '../../src/agents/audit/attempt-audit-codec.js'
-import {
-  EMPTY_COACH_RUNTIME_AUDIT,
-  EMPTY_PLAYER_RUNTIME_AUDIT,
-  type AgentAuditDecoderBundle,
-  type CoachRuntimeAuditShape,
-  type PlayerRuntimeAuditDecodeInput,
-  type PlayerRuntimeAuditShape,
-  type RuntimeAuditExtensionDecoder,
-} from '../../src/agents/audit/runtime-audit-extension-decoder.js'
 
 describe('agent audit primitives', () => {
   test('accepts only canonical audit references, stable codes and normalized SHA-256 digests', () => {
@@ -355,49 +346,5 @@ describe('current attempt audit', () => {
     expect(readCurrentAttemptAudit('failed', 1, {})).toEqual({
       kind: 'invalidPayload',
     })
-  })
-})
-
-describe('runtime audit extension decoder contracts', () => {
-  test('publishes exact frozen empty extensions and fixed player/coach decoder slots', () => {
-    type PlayerAudit = PlayerRuntimeAuditShape<
-      { readonly checkpoint: true },
-      { readonly result: true },
-      { readonly decision: true }
-    >
-    type CoachAudit = CoachRuntimeAuditShape<
-      { readonly checkpoint: true },
-      { readonly result: true }
-    >
-    const playerDecoder: RuntimeAuditExtensionDecoder<
-      'player',
-      PlayerRuntimeAuditDecodeInput,
-      PlayerAudit
-    > = {
-      runtime: 'player',
-      decode: () => ({ checkpoint: null, result: null, decision: null }),
-    }
-    const bundle = {
-      player: playerDecoder,
-    } satisfies AgentAuditDecoderBundle<PlayerAudit, CoachAudit>
-
-    expect(EMPTY_PLAYER_RUNTIME_AUDIT).toEqual({
-      checkpoint: null,
-      result: null,
-      decision: null,
-    })
-    expect(EMPTY_COACH_RUNTIME_AUDIT).toEqual({
-      checkpoint: null,
-      result: null,
-    })
-    expect(Object.keys(EMPTY_PLAYER_RUNTIME_AUDIT)).toEqual([
-      'checkpoint',
-      'result',
-      'decision',
-    ])
-    expect(Object.isFrozen(EMPTY_PLAYER_RUNTIME_AUDIT)).toBe(true)
-    expect(Object.isFrozen(EMPTY_COACH_RUNTIME_AUDIT)).toBe(true)
-    expect(Object.keys(bundle)).toEqual(['player'])
-    expect('register' in bundle).toBe(false)
   })
 })

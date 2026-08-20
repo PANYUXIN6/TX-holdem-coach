@@ -44,10 +44,6 @@ interface PersistedAgentRunBase<TRuntime extends RuntimeType> {
   readonly terminationReason: string | null
   readonly runConfiguration: RunConfigurationAudit
   readonly budget: ExecutionBudgetAudit
-  readonly checkpointPayloadVersion: number | null
-  readonly checkpointPayload: Readonly<Record<string, unknown>> | null
-  readonly resultPayloadVersion: number | null
-  readonly resultPayload: Readonly<Record<string, unknown>> | null
   readonly createdAt: string
   readonly startedAt: string | null
   readonly completedAt: string | null
@@ -126,8 +122,6 @@ export interface AgentRunFinalizationInput {
   readonly authority: import('./runtime-ports.js').RuntimeCommitAuthority
   readonly lifecycle: TerminalAgentRunLifecycle
   readonly terminationReason: string | null
-  readonly resultPayloadVersion: number | null
-  readonly resultPayload: Readonly<Record<string, unknown>> | null
   readonly completedAt: string
 }
 

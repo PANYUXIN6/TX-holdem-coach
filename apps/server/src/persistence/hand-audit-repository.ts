@@ -1,4 +1,4 @@
-import type { TransactionSql } from 'postgres'
+import type { JSONValue, TransactionSql } from 'postgres'
 import { z } from 'zod'
 import type { CompletedHandResult } from '../poker/hand-result.js'
 import {
@@ -26,17 +26,7 @@ import {
 } from './errors.js'
 import { isResolvedOwnerScope, type ResolvedOwnerScope } from './owner-scope.js'
 
-const POSTGRES_TEXT_OID = 25
-const CanonicalUtcTimestampSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
-  .refine((value) => {
-    const milliseconds = Date.parse(value)
-    return (
-      Number.isFinite(milliseconds) &&
-      new Date(milliseconds).toISOString() === value
-    )
-  })
+const CanonicalUtcTimestampSchema = z.iso.datetime({ precision: 3 })
 const StableAuditCodeSchema = z
   .string()
   .min(1)
@@ -70,9 +60,7 @@ const InsertedHandRowSchema = z.strictObject({
   handId: z.uuid(),
   handNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 })
-const DatabaseUtcTimestampSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
+const DatabaseUtcTimestampSchema = z.iso.datetime({ precision: 6 })
 const HandAuditRowSchema = z.strictObject({
   handId: z.uuid(),
   sessionId: z.uuid(),
@@ -441,10 +429,7 @@ export async function insertInProgressHandAudit(
   }
   const checkpoint = decodeCheckpointForWrite(parsed.data.checkpoint)
   const facts = checkpoint.payload.checkpoint.startedHand
-  const payload = transaction.typed(
-    JSON.stringify(checkpoint.payload),
-    POSTGRES_TEXT_OID,
-  )
+  const payload = transaction.json(checkpoint.payload as unknown as JSONValue)
 
   let rows: readonly unknown[]
   try {
@@ -469,7 +454,7 @@ export async function insertInProgressHandAudit(
         ${facts.handNumber}::bigint,
         'inProgress',
         ${checkpoint.payloadVersion},
-        ${payload}::jsonb,
+        ${payload},
         ${facts.buttonSeatNumber},
         ${facts.participantSeatNumbers}::integer[],
         ${parsed.data.startedAt}::timestamptz,
@@ -518,9 +503,8 @@ export async function completeHandAudit(
     parsed.data.handId,
   )
   assertCompletionMirrors(locked.checkpoint, result)
-  const payload = transaction.typed(
-    JSON.stringify(completedResult.payload),
-    POSTGRES_TEXT_OID,
+  const payload = transaction.json(
+    completedResult.payload as unknown as JSONValue,
   )
 
   let rows: readonly unknown[]
@@ -529,7 +513,7 @@ export async function completeHandAudit(
       UPDATE app_private.hands
       SET status = 'completed',
           completed_result_payload_version = ${completedResult.payloadVersion},
-          completed_result_payload = ${payload}::jsonb,
+          completed_result_payload = ${payload},
           completed_at = ${parsed.data.completedAt}::timestamptz,
           updated_at = ${parsed.data.completedAt}::timestamptz
       WHERE id = ${parsed.data.handId}::uuid

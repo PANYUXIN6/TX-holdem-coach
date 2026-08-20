@@ -13,8 +13,6 @@ export type HandCategory =
   | 'fourOfAKind'
   | 'straightFlush'
 
-export type HandComparison = 'win' | 'lose' | 'tie'
-
 export interface HandEvaluation {
   readonly category: HandCategory
   readonly comparisonGrade: readonly [
@@ -31,10 +29,6 @@ export interface HandEvaluation {
 
 export interface HandEvaluator {
   evaluate(cards: readonly Card[]): HandEvaluation
-  compare(
-    leftCards: readonly Card[],
-    rightCards: readonly Card[],
-  ): HandComparison
 }
 
 interface PokerSolverCard {
@@ -50,7 +44,6 @@ interface PokerSolverHand {
 
 interface PokerSolverHandConstructor {
   solve(cards: readonly string[], game: 'standard'): PokerSolverHand
-  winners(hands: readonly PokerSolverHand[]): readonly PokerSolverHand[]
 }
 
 interface PokerSolverModule {
@@ -321,30 +314,6 @@ function evaluate(cards: readonly Card[]): HandEvaluation {
   }
 }
 
-function compare(
-  leftCards: readonly Card[],
-  rightCards: readonly Card[],
-): HandComparison {
-  const leftHand = solveCards(leftCards).solvedHand
-  const rightHand = solveCards(rightCards).solvedHand
-  const winners = Hand.winners([leftHand, rightHand])
-
-  if (winners.length === 2) {
-    return 'tie'
-  }
-
-  if (winners[0] === leftHand) {
-    return 'win'
-  }
-
-  if (winners[0] === rightHand) {
-    return 'lose'
-  }
-
-  throw new Error('牌型评估器未返回可识别的比较结果。')
-}
-
 export const handEvaluator: HandEvaluator = Object.freeze({
   evaluate,
-  compare,
 })

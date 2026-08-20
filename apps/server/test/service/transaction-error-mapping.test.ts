@@ -1,8 +1,7 @@
 import type { Sql } from 'postgres'
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test } from 'vitest'
 import { DatabaseOperationError } from '../../src/persistence/errors.js'
 import type { ResolvedOwnerScope } from '../../src/persistence/owner-scope.js'
-import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { createPlayerAgentSettingsService } from '../../src/settings/player-agent-settings-service.js'
 import { createSessionDataDeletionService } from '../../src/sessions/session-data-deletion-service.js'
 import { runDatabaseTransaction } from '../../src/persistence/database-transaction.js'
@@ -54,66 +53,5 @@ describe('transaction failure mapping', () => {
         confirmation: '永久清空全部数据',
       }),
     ).rejects.toBeInstanceOf(DatabaseOperationError)
-  })
-
-  test('keeps a committed deletion successful when interrupts and logging throw', async () => {
-    const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
-    const sessionId = '2a0dc0dd-843a-4e53-a62e-e5ac22f90a3e'
-    const runIds = [
-      '3e4e4ced-ce4b-46cc-a778-7560ab89c22e',
-      '7c63940e-696c-4476-a128-c9d1e6f6eb36',
-    ] as const
-    const ownerSql = ((
-      _template: TemplateStringsArray,
-      ..._parameters: unknown[]
-    ) => Promise.resolve([{ databaseOwnerId }])) as unknown as Sql
-    const resolvedOwner = await resolveOwnerScope(ownerSql, {
-      ownerId: 'local-user',
-    })
-    const responses = [
-      [{ sessionId, lifecycleStatus: 'ended' }],
-      runIds.map((agentRunId, index) => ({
-        agentRunId,
-        runtime: index === 0 ? ('player' as const) : ('coach' as const),
-      })),
-      runIds.map((agentRunId) => ({ agentRunId })),
-      [{ sessionId }],
-      [{ sessionId }],
-    ]
-    const transaction = ((
-      _template: TemplateStringsArray,
-      ..._parameters: unknown[]
-    ) => Promise.resolve(responses.shift())) as unknown as Sql
-    const sql = Object.assign(transaction, {
-      begin: (operation: (value: never) => Promise<unknown>) =>
-        operation(transaction as never),
-    }) as unknown as Sql
-    const interrupt = vi.fn((run: { agentRunId: string }) => {
-      if (run.agentRunId === runIds[0]) {
-        throw new Error('synchronous interrupt failure')
-      }
-      return Promise.reject(new Error('asynchronous interrupt failure'))
-    })
-    const logInterruptFailure = vi.fn(() => {
-      throw new Error('logging sink failure')
-    })
-    const service = createSessionDataDeletionService({
-      sql,
-      owner: resolvedOwner,
-      interrupt: { interrupt },
-      logInterruptFailure,
-      now: () => '2026-08-11T00:00:00.000Z',
-    })
-
-    await expect(
-      service.deleteEndedSession(sessionId, {
-        confirmation: '永久删除本场',
-      }),
-    ).resolves.toEqual({
-      deletedSessionId: sessionId,
-      invalidatedRunCount: 2,
-    })
-    expect(interrupt).toHaveBeenCalledTimes(2)
-    expect(logInterruptFailure).toHaveBeenCalledWith(2)
   })
 })

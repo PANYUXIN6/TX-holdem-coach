@@ -9,7 +9,7 @@ import { parsePlayerActionRelationPlan } from './player-action-handler.js'
 import { parseRebuyRelationPlan } from './rebuy-handler.js'
 import { parseStartNextHandRelationPlan } from './start-next-hand-handler.js'
 
-export function isEventSequenceAllowedForCommand(
+function isEventSequenceAllowedForCommand(
   commandType: LedgerCommand['type'],
   events: readonly PrivateEvent[],
 ): boolean {
@@ -32,9 +32,6 @@ export function isEventSequenceAllowedForCommand(
         events.at(-1)?.type === 'handStarted' &&
         events.slice(0, -1).every((event) => event.type === 'aiAutoRebuy')
       )
-    case 'aiAction':
-    case 'retryAgent':
-      return false
     case 'rebuy':
       return events.length === 1 && events[0]?.type === 'userRebuy'
     case 'endSession':
@@ -634,9 +631,5 @@ export function isCommandMutationConsistent(
       return endSessionMirrors(input)
     case 'playerAction':
       return playerActionMirrors(input)
-    case 'aiAction':
-      return false
-    case 'retryAgent':
-      return false
   }
 }

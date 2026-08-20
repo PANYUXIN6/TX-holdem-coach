@@ -66,7 +66,7 @@ function transactionReturning(response: readonly unknown[]): TransactionSql {
   const transaction = (() =>
     Promise.resolve(response)) as unknown as TransactionSql
   Object.assign(transaction, {
-    typed: (value: string) => JSON.parse(value) as unknown,
+    json: (value: unknown) => value,
   })
   return transaction
 }

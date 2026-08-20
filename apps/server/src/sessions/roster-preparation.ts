@@ -17,12 +17,7 @@ import {
   RepositoryInputValidationError,
   ResourceNotFoundError,
 } from '../persistence/errors.js'
-import {
-  isResolvedOwnerScope,
-  resolveOwnerScope,
-  type OwnerScope,
-  type ResolvedOwnerScope,
-} from '../persistence/owner-scope.js'
+import { type ResolvedOwnerScope } from '../persistence/owner-scope.js'
 import {
   findLatestEndedSessionForRosterReuse,
   readSessionAgentSnapshots,
@@ -232,11 +227,8 @@ export function prepareCurrentCatalogRoster(
 
 export async function prepareLatestEndedRosterPreflight(
   sql: Sql,
-  ownerScope: OwnerScope | ResolvedOwnerScope,
+  owner: ResolvedOwnerScope,
 ): Promise<LatestEndedRosterPreflight> {
-  const owner = isResolvedOwnerScope(ownerScope)
-    ? ownerScope
-    : await resolveOwnerScope(sql, ownerScope)
   const latestEndedSession = await findLatestEndedSessionForRosterReuse(
     sql,
     owner,

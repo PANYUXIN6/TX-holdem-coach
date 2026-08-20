@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { SseEventSchema, type SseEvent } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
+import { canonicalJson, type JsonValue } from '../../persisted-json.js'
 
 const SafeIntegerSchema = z
   .number()
@@ -54,20 +55,9 @@ export function decodeStoredPublicEvent(
   return { kind: 'decoded', event: event.data }
 }
 
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(',')}]`
-  }
-  return `{${Object.entries(value)
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
-    .join(',')}}`
-}
-
 export function hashStoredPublicEventPage(events: readonly SseEvent[]): string {
   return createHash('sha256')
     .update('public-event-page-v1\n')
-    .update(canonicalJson(events))
+    .update(canonicalJson(events as JsonValue))
     .digest('hex')
 }

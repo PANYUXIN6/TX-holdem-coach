@@ -8,7 +8,7 @@ import type { LedgerCommand } from '../../persistence/command-ledger-repository.
 import type { PrivateTableState } from '../authoritative-state/private-table-state.js'
 import { isRebuyAmountAllowed } from './rebuy-handler.js'
 
-export interface CommandNotAllowedInPhaseRejection {
+interface CommandNotAllowedInPhaseRejection {
   readonly kind: 'commandNotAllowedInPhase'
   readonly phase: 'betweenHands' | 'inHand'
 }

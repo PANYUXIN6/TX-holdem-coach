@@ -29,7 +29,6 @@ import {
 } from '../../src/sessions/authoritative-state/private-event.js'
 import { currentPrivateEventReader } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import {
-  currentSnapshotReader,
   decodeCurrentSnapshot,
   encodeSnapshot,
 } from '../../src/sessions/authoritative-state/snapshot-codec.js'
@@ -293,15 +292,10 @@ export function createM33Executor(input: {
     sql: input.sql,
     owner: input.owner,
     handlers: createSessionCommandHandlerMap({
-      enabledCommandTypes: ['playerAction'],
       bindings: [createPlayerActionHandlerBinding({ owner: input.owner })],
     }),
     mutationRepository,
     recoveryRepository,
-    recoveryRegistries: {
-      snapshot: currentSnapshotReader,
-      privateEvent: currentPrivateEventReader,
-    },
     snapshotProjectorBinding: {
       bindReadPort: () => Object.freeze({}),
       projector: {
@@ -312,6 +306,7 @@ export function createM33Executor(input: {
     },
     now: () => COMMAND_AT,
     nextEventId: randomUUID,
+    committedEventPublisher: { publish: () => undefined },
   })
 }
 

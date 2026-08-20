@@ -3,8 +3,6 @@ import { encodeExecutionBudgetAudit } from '../../src/agents/audit/execution-bud
 import { encodeRunConfigurationAudit } from '../../src/agents/audit/run-configuration-audit-codec.js'
 import type { ResolvedOwnerScope } from '../../src/persistence/owner-scope.js'
 
-const POSTGRES_TEXT_OID = 25
-
 interface AgentRunFixtureBase {
   readonly agentRunId: string
   readonly sessionId: string
@@ -42,14 +40,8 @@ export async function insertAgentRunFixture(
 ): Promise<void> {
   const configuration = encodeRunConfigurationAudit(input.runConfiguration)
   const budget = encodeExecutionBudgetAudit(input.budget)
-  const configurationPayload = transaction.typed(
-    JSON.stringify(configuration.payload),
-    POSTGRES_TEXT_OID,
-  )
-  const budgetPayload = transaction.typed(
-    JSON.stringify(budget.payload),
-    POSTGRES_TEXT_OID,
-  )
+  const configurationPayload = transaction.json(configuration.payload)
+  const budgetPayload = transaction.json(budget.payload)
 
   await transaction`
     INSERT INTO app_private.agent_runs (
@@ -60,8 +52,6 @@ export async function insertAgentRunFixture(
       runtime_definition_version, termination_reason,
       run_config_payload_version, run_config_payload,
       budget_payload_version, budget_payload,
-      checkpoint_payload_version, checkpoint_payload,
-      result_payload_version, result_payload,
       created_at, started_at, completed_at, updated_at
     ) VALUES (
       ${input.agentRunId}::uuid, ${owner.databaseOwnerId}::uuid,
@@ -71,9 +61,9 @@ export async function insertAgentRunFixture(
       ${input.decisionRequestId}::uuid, ${input.parentRunId}::uuid, NULL,
       NULL, NULL, 0, ${input.deadlineAt}::timestamptz,
       ${input.runtimeDefinitionVersion}, NULL,
-      ${configuration.payloadVersion}, ${configurationPayload}::jsonb,
-      ${budget.payloadVersion}, ${budgetPayload}::jsonb,
-      NULL, NULL, NULL, NULL, ${input.createdAt}::timestamptz,
+      ${configuration.payloadVersion}, ${configurationPayload},
+      ${budget.payloadVersion}, ${budgetPayload},
+      ${input.createdAt}::timestamptz,
       NULL, NULL, ${input.createdAt}::timestamptz
     )
   `

@@ -1,6 +1,7 @@
-import { getPrivateEventHandId, type PrivateEvent } from './private-event.js'
-import type { PersistedJsonReader } from '../../persisted-json.js'
+import { getPrivateEventHandId } from './private-event.js'
 import type { PrivateTableState } from './private-table-state.js'
+import { currentPrivateEventReader } from './private-event-codec.js'
+import { currentSnapshotReader } from './snapshot-codec.js'
 
 export const SESSION_DIAGNOSTIC_CODES = [
   'eventSequenceInvalid',
@@ -43,11 +44,6 @@ export interface SessionRecoveryFacts {
   readonly snapshotRow: StoredSnapshotRow | null
   readonly inProgressHandIds: readonly string[]
   readonly eventRows: readonly StoredPrivateEventRow[]
-}
-
-export interface RecoveryRegistries {
-  readonly snapshot: PersistedJsonReader<PrivateTableState>
-  readonly privateEvent: PersistedJsonReader<PrivateEvent>
 }
 
 export type RecoveryDecision =
@@ -168,15 +164,6 @@ function hasValidHandRelationship(
   )
 }
 
-export function isSessionDiagnosticCode(
-  value: unknown,
-): value is SessionDiagnosticCode {
-  return (
-    typeof value === 'string' &&
-    (SESSION_DIAGNOSTIC_CODES as readonly string[]).includes(value)
-  )
-}
-
 export function getSessionDiagnosticSummary(
   code: SessionDiagnosticCode,
 ): string {
@@ -185,7 +172,6 @@ export function getSessionDiagnosticSummary(
 
 export function decideSessionRecovery(
   facts: SessionRecoveryFacts,
-  registries: RecoveryRegistries,
 ): RecoveryDecision {
   const eventRows = [...facts.eventRows].sort(
     (left, right) => left.eventSeq - right.eventSeq,
@@ -195,7 +181,7 @@ export function decideSessionRecovery(
   }
 
   for (const row of eventRows) {
-    const result = registries.privateEvent.read(
+    const result = currentPrivateEventReader.read(
       row.rowPayloadVersion,
       row.payload,
     )
@@ -229,7 +215,7 @@ export function decideSessionRecovery(
   if (facts.snapshotRow === null) {
     return diagnostic('snapshotMissing')
   }
-  const snapshotResult = registries.snapshot.read(
+  const snapshotResult = currentSnapshotReader.read(
     facts.snapshotRow.rowPayloadVersion,
     facts.snapshotRow.payload,
   )

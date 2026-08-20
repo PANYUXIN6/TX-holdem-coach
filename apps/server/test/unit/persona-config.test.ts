@@ -7,13 +7,12 @@ import {
 } from '../../src/personas/catalog.js'
 import {
   ActiveModelConfigurationSchema,
-  canonicalJson,
   createActiveModelConfigurationSchema,
   createConfigSnapshotKey,
-  PERSONA_CONFIG_PERSONA_IDS,
   PERSONA_CONFIG_PAYLOAD_VERSION,
   PersonaConfigPayloadSchema,
 } from '../../src/personas/config.js'
+import { canonicalJson } from '../../src/persisted-json.js'
 
 function cloneDefinitions(): Record<string, unknown>[] {
   return structuredClone(PERSONA_CATALOG_DEFINITIONS) as unknown as Record<
@@ -23,20 +22,6 @@ function cloneDefinitions(): Record<string, unknown>[] {
 }
 
 describe('private persona configuration', () => {
-  test('freezes the current persona id vocabulary locally', () => {
-    expect(PERSONA_CONFIG_PERSONA_IDS).toEqual([
-      'nit_fish',
-      'lag_rec',
-      'tag_pro',
-      'short_shark',
-      'calling_station',
-      'deep_maniac',
-      'small_ball_reg',
-      'trap_specialist',
-    ])
-    expect(Object.isFrozen(PERSONA_CONFIG_PERSONA_IDS)).toBe(true)
-  })
-
   test('loads complete, deeply frozen and independently expanded entries', () => {
     const catalog = loadAndValidatePersonaCatalog()
     const entries = catalog.list()

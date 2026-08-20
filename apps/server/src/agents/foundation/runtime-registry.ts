@@ -11,7 +11,6 @@ import {
   RuntimeRegistryConfigurationError,
   RuntimeResolutionError,
 } from './errors.js'
-import { createRuntimeStateMachineDefinition } from './runtime-state-machine.js'
 import { isRuntimeBudgetPolicy } from './execution-budget.js'
 
 export interface RuntimeRegistry<
@@ -24,7 +23,6 @@ export interface RuntimeRegistry<
     runtimeType: TRuntime,
     runtimeDefinitionVersion: number,
   ): TDefinitions[TRuntime]
-  listCurrent(): readonly [TDefinitions['player'], TDefinitions['coach']]
 }
 
 function cloneValue<Value>(value: Value): Value {
@@ -100,7 +98,6 @@ function validateDefinition(definition: AnyRuntimeDefinition): void {
     !RuntimeDefinitionVersionSchema.safeParse(
       definition.budgetPolicy.policyVersion,
     ).success ||
-    definition.stateMachine.runtimeType !== definition.runtimeType ||
     definition.modelToolPolicy !== 'none'
   ) {
     throw new RuntimeRegistryConfigurationError('invalidDefinition')
@@ -113,11 +110,6 @@ function validateDefinition(definition: AnyRuntimeDefinition): void {
     ) {
       throw new RuntimeRegistryConfigurationError('crossRuntimeReference')
     }
-  }
-  try {
-    createRuntimeStateMachineDefinition(definition.stateMachine)
-  } catch {
-    throw new RuntimeRegistryConfigurationError('invalidStateMachine')
   }
 }
 
@@ -180,11 +172,6 @@ export function createRuntimeRegistry<
   const registry: RuntimeRegistry<TDefinitions> = {
     resolveCurrent,
     resolveExact,
-    listCurrent: () =>
-      Object.freeze([definitions.player, definitions.coach]) as readonly [
-        TDefinitions['player'],
-        TDefinitions['coach'],
-      ],
   }
   return Object.freeze(registry)
 }

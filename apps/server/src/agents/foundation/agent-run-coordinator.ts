@@ -134,11 +134,11 @@ function snapshotRunConfiguration(
 }
 
 async function publishBestEffort(
-  eventPort: AgentRunEventPort | undefined,
+  eventPort: AgentRunEventPort,
   events: readonly PersistedAgentRunEvent[],
   onDeliveryError: ((error: unknown) => void | Promise<void>) | undefined,
 ): Promise<void> {
-  if (eventPort === undefined || events.length === 0) return
+  if (events.length === 0) return
   try {
     await eventPort.publish(events)
   } catch (error) {
@@ -153,17 +153,14 @@ async function publishBestEffort(
 export interface AgentRunCoordinator {
   createOrReuse(
     transaction: TransactionSql,
-    owner: ResolvedOwnerScope,
     input: AgentRunCreationInput,
   ): Promise<AgentRunCreationResult>
   cancel(
     transaction: TransactionSql,
-    owner: ResolvedOwnerScope,
     input: AgentRunCancellationInput,
   ): Promise<AgentRunTerminalResult>
   finalize(
     transaction: TransactionSql,
-    owner: ResolvedOwnerScope,
     input: AgentRunFinalizationInput,
   ): Promise<AgentRunTerminalResult>
   readonly workerControl: AgentRunWorkerControl
@@ -174,11 +171,8 @@ export function createAgentRunCoordinator(input: {
   readonly owner: ResolvedOwnerScope
   readonly registry?: RuntimeRegistry
   readonly repository?: AgentRunLifecycleRepository
-  readonly eventPort?: AgentRunEventPort
+  readonly eventPort: AgentRunEventPort
   readonly onEventDeliveryError?: (error: unknown) => void | Promise<void>
-  readonly isRecoveryCheckpointCompatible?: (
-    run: PersistedAgentRun<'coach'>,
-  ) => boolean
 }): AgentRunCoordinator {
   const { sql, owner } = input
   if (typeof sql !== 'function' || !isResolvedOwnerScope(owner)) {
@@ -189,15 +183,10 @@ export function createAgentRunCoordinator(input: {
 
   async function createOrReuse(
     transaction: TransactionSql,
-    creationOwner: ResolvedOwnerScope,
     creationInput: AgentRunCreationInput,
   ): Promise<AgentRunCreationResult> {
     const parsed = CreationInputSchema.safeParse(creationInput)
-    if (
-      typeof transaction !== 'function' ||
-      !isResolvedOwnerScope(creationOwner) ||
-      !parsed.success
-    ) {
+    if (typeof transaction !== 'function' || !parsed.success) {
       throw new AgentRunCreationError('invalid_agent_run_input')
     }
     let definition
@@ -209,10 +198,10 @@ export function createAgentRunCoordinator(input: {
     let budget
     try {
       if (parsed.data.runtimeType === 'player') {
-        await lockPlayerTimeoutSettings(transaction, creationOwner)
+        await lockPlayerTimeoutSettings(transaction, owner)
         const settings = await readResolvedPlayerTimeoutSettings(
           transaction,
-          creationOwner,
+          owner,
         )
         const playerDefinition = registry.resolveCurrent('player')
         budget = playerDefinition.budgetPolicy.createSnapshot({
@@ -249,7 +238,7 @@ export function createAgentRunCoordinator(input: {
     const deadlineAt = new Date(
       createdMilliseconds + budget.maxWallClockMs,
     ).toISOString()
-    const result = await repository.createOrReuse(transaction, creationOwner, {
+    const result = await repository.createOrReuse(transaction, owner, {
       agentRunId: parsed.data.agentRunId,
       runtimeType: parsed.data.runtimeType,
       sessionId: parsed.data.sessionId,
@@ -318,17 +307,7 @@ export function createAgentRunCoordinator(input: {
     }
     if (
       candidate.lifecycle !== 'queued' &&
-      candidate.runtimeType === 'player' &&
       candidate.leaseOwner !== requestedLeaseOwner
-    ) {
-      return { kind: 'rejected', diagnostic: 'agent_run_recovery_rejected' }
-    }
-    if (
-      candidate.lifecycle !== 'queued' &&
-      candidate.runtimeType === 'coach' &&
-      candidate.checkpointPayload !== null &&
-      (input.isRecoveryCheckpointCompatible === undefined ||
-        !input.isRecoveryCheckpointCompatible(candidate))
     ) {
       return { kind: 'rejected', diagnostic: 'agent_run_recovery_rejected' }
     }
@@ -337,16 +316,51 @@ export function createAgentRunCoordinator(input: {
 
   const workerControl: AgentRunWorkerControl = {
     async claimNext(claimInput): Promise<AgentRunClaimResult> {
+      const committedEffects: PersistedAgentRunEffect[] = []
       const transactionResult = await runDatabaseTransaction(
         sql,
         async (transaction) => {
+          const recoverableRunIds = new Set<string>()
           const claimed = await repository.claimNext(
             transaction,
             owner,
             claimInput,
-            (candidate) =>
-              validateClaimCandidate(candidate, claimInput.leaseOwner),
+            (candidate) => {
+              const decision = validateClaimCandidate(
+                candidate,
+                claimInput.leaseOwner,
+              )
+              if (
+                decision.kind === 'rejected' &&
+                decision.diagnostic === 'agent_run_recovery_rejected' &&
+                candidate.runtimeType === 'coach'
+              ) {
+                recoverableRunIds.add(candidate.runId)
+              }
+              return decision
+            },
           )
+          for (const runId of recoverableRunIds) {
+            let cancelResult
+            try {
+              cancelResult = await repository.cancel(transaction, owner, {
+                runId,
+                reason: 'process_restart',
+                completedAt: new Date().toISOString(),
+              })
+            } catch (error) {
+              if (
+                !(error instanceof AgentRunTransitionError) ||
+                error.failure !== 'agent_run_already_terminal'
+              ) {
+                throw error
+              }
+              continue
+            }
+            if (cancelResult.changed) {
+              committedEffects.push(createEffect(cancelResult.run, 'cancelled'))
+            }
+          }
           if (claimed.kind === 'none') return claimed
           const run = claimed.value.run
           let authority
@@ -363,13 +377,17 @@ export function createAgentRunCoordinator(input: {
           return deepFreeze({ kind: 'claimed' as const, run, authority })
         },
       )
-      if (transactionResult.kind === 'claimed') {
-        await publishBestEffort(
-          input.eventPort,
-          [createEffect(transactionResult.run, 'leased').event],
-          input.onEventDeliveryError,
-        )
-      }
+      const publishedEffects = [
+        ...committedEffects.map((effect) => effect.event),
+        ...(transactionResult.kind === 'claimed'
+          ? [createEffect(transactionResult.run, 'leased').event]
+          : []),
+      ]
+      await publishBestEffort(
+        input.eventPort,
+        publishedEffects,
+        input.onEventDeliveryError,
+      )
       return transactionResult
     },
 
@@ -404,10 +422,10 @@ export function createAgentRunCoordinator(input: {
 
   const coordinator: AgentRunCoordinator = {
     createOrReuse,
-    async cancel(transaction, cancellationOwner, cancellationInput) {
+    async cancel(transaction, cancellationInput) {
       const result = await repository.cancel(
         transaction,
-        cancellationOwner,
+        owner,
         cancellationInput,
       )
       return deepFreeze({
@@ -417,10 +435,10 @@ export function createAgentRunCoordinator(input: {
           : [],
       })
     },
-    async finalize(transaction, finalizationOwner, finalizationInput) {
+    async finalize(transaction, finalizationInput) {
       const result = await repository.finalize(
         transaction,
-        finalizationOwner,
+        owner,
         finalizationInput,
       )
       return deepFreeze({

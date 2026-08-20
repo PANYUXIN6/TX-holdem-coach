@@ -13,17 +13,6 @@ import {
   type RuntimeType,
 } from './runtime-definition.js'
 
-export type CapabilityMode = 'readOnly' | 'deterministicCompute'
-
-export interface CapabilityDefinition<TRuntime extends RuntimeType> {
-  readonly runtimeType: TRuntime
-  readonly capability: RuntimeComponentReference
-  readonly mode: CapabilityMode
-  readonly inputSchema: RuntimeComponentReference
-  readonly outputSchema: RuntimeComponentReference
-  readonly timeoutMs: number
-}
-
 export interface CapabilityGrant<TRuntime extends RuntimeType> {
   readonly runtimeType: TRuntime
   readonly capability: RuntimeComponentReference
@@ -35,20 +24,6 @@ export interface CapabilityManifest<TRuntime extends RuntimeType> {
   readonly manifestVersion: number
   readonly grants: readonly CapabilityGrant<TRuntime>[]
 }
-
-export interface CapabilityInvocationIntent<TRuntime extends RuntimeType> {
-  readonly runtimeType: TRuntime
-  readonly capability: RuntimeComponentReference
-}
-
-const CapabilityDefinitionSchema = z.strictObject({
-  runtimeType: RuntimeTypeSchema,
-  capability: RuntimeComponentReferenceSchema,
-  mode: z.enum(['readOnly', 'deterministicCompute']),
-  inputSchema: RuntimeComponentReferenceSchema,
-  outputSchema: RuntimeComponentReferenceSchema,
-  timeoutMs: PositiveSafeIntegerSchema,
-})
 
 const CapabilityManifestSchema = z.strictObject({
   runtimeType: RuntimeTypeSchema,
@@ -73,16 +48,6 @@ function hasRuntimeNamespace(
   return reference.id.startsWith(`${runtimeType}.`)
 }
 
-function hasRuntimeOrFoundationNamespace(
-  runtimeType: RuntimeType,
-  reference: RuntimeComponentReference,
-): boolean {
-  return (
-    hasRuntimeNamespace(runtimeType, reference) ||
-    reference.id.startsWith('foundation.')
-  )
-}
-
 function isCommitGateId(runtimeType: RuntimeType, id: string): boolean {
   return id.startsWith(`${runtimeType}.commit-`)
 }
@@ -93,29 +58,6 @@ function deepFreeze<Value>(value: Value): Value {
     Object.freeze(value)
   }
   return value
-}
-
-export function createCapabilityDefinition<TRuntime extends RuntimeType>(
-  input: CapabilityDefinition<TRuntime>,
-): CapabilityDefinition<TRuntime> {
-  const parsed = CapabilityDefinitionSchema.safeParse(input)
-  if (
-    !parsed.success ||
-    !hasRuntimeNamespace(parsed.data.runtimeType, parsed.data.capability) ||
-    !hasRuntimeOrFoundationNamespace(
-      parsed.data.runtimeType,
-      parsed.data.inputSchema,
-    ) ||
-    !hasRuntimeOrFoundationNamespace(
-      parsed.data.runtimeType,
-      parsed.data.outputSchema,
-    )
-  ) {
-    throw new FoundationProtocolError('capabilityRuntimeMismatch')
-  }
-  return deepFreeze(
-    structuredClone(parsed.data),
-  ) as CapabilityDefinition<TRuntime>
 }
 
 export function createCapabilityManifest<TRuntime extends RuntimeType>(input: {
@@ -157,62 +99,4 @@ export function createCapabilityManifest<TRuntime extends RuntimeType>(input: {
   return deepFreeze(
     structuredClone(parsed.data),
   ) as unknown as CapabilityManifest<TRuntime>
-}
-
-export function authorizeCapabilityInvocation<
-  TRuntime extends RuntimeType,
->(input: {
-  readonly intent: CapabilityInvocationIntent<TRuntime>
-  readonly manifest: CapabilityManifest<TRuntime>
-  readonly definitions: readonly CapabilityDefinition<TRuntime>[]
-  readonly commitGate: RuntimeCommitGateReference<TRuntime>
-  readonly stateDeclaredCapabilities: readonly RuntimeComponentReference[]
-  readonly invocationCount: number
-}): CapabilityDefinition<TRuntime> {
-  if (isCommitGateId(input.intent.runtimeType, input.intent.capability.id)) {
-    throw new FoundationProtocolError('commitGateNotExecutableAsCapability')
-  }
-  if (
-    input.intent.runtimeType !== input.manifest.runtimeType ||
-    input.intent.runtimeType !== input.commitGate.runtimeType
-  ) {
-    throw new FoundationProtocolError('capabilityRuntimeMismatch')
-  }
-  const intentKey = referenceKey(input.intent.capability)
-  if (
-    !input.stateDeclaredCapabilities.some(
-      (reference) => referenceKey(reference) === intentKey,
-    )
-  ) {
-    throw new FoundationProtocolError('capabilityNotDeclared')
-  }
-  const grant = input.manifest.grants.find(
-    ({ capability }) => referenceKey(capability) === intentKey,
-  )
-  if (grant === undefined) {
-    throw new FoundationProtocolError('capabilityNotDeclared')
-  }
-  if (
-    input.intent.runtimeType !== grant.runtimeType ||
-    !hasRuntimeNamespace(input.intent.runtimeType, input.intent.capability)
-  ) {
-    throw new FoundationProtocolError('capabilityRuntimeMismatch')
-  }
-  if (
-    !Number.isSafeInteger(input.invocationCount) ||
-    input.invocationCount < 0 ||
-    input.invocationCount >= grant.maxInvocations
-  ) {
-    throw new FoundationProtocolError('executionBudgetExhausted')
-  }
-  const definition = input.definitions.find(
-    ({ capability }) => referenceKey(capability) === intentKey,
-  )
-  if (definition === undefined) {
-    throw new FoundationProtocolError('capabilityNotDeclared')
-  }
-  if (definition.runtimeType !== input.intent.runtimeType) {
-    throw new FoundationProtocolError('capabilityRuntimeMismatch')
-  }
-  return definition
 }

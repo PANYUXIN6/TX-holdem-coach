@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { serve } from '@hono/node-server'
-import { createApp, type ApiRuntime } from './app.js'
+import { createApp, type ApiRuntime } from './http/create-app.js'
 import {
   loadServerConfig,
   ServerConfigurationError,
@@ -25,8 +25,6 @@ import { productionSessionMutationRepository } from './persistence/session-mutat
 import { productionSessionRecoveryRepository } from './persistence/session-recovery-repository.js'
 import { insertInProgressHandAudit } from './persistence/hand-audit-repository.js'
 import { createPublicProjectionFactsRepository } from './persistence/public-projection-repository.js'
-import { currentSnapshotReader } from './sessions/authoritative-state/snapshot-codec.js'
-import { currentPrivateEventReader } from './sessions/authoritative-state/private-event-codec.js'
 import { SECURE_RANDOM_SOURCE } from './poker/random-source.js'
 import { createSessionCreationIdentityGraph } from './sessions/session-creation/session-creation-consistency.js'
 import { createSessionCreationService } from './sessions/session-creation/session-creation-service.js'
@@ -80,6 +78,7 @@ export async function createApiRuntime(
     )
   const creation = createSessionCreationService({
     sql: database.sql,
+    owner,
     catalog: personaCatalog,
     readProviderPolicy: () => getProviderCreationPolicy(config),
     createIdentityGraph: (seatNumbers) =>
@@ -98,12 +97,6 @@ export async function createApiRuntime(
     logPublishFailure,
   })
   const handlers = createSessionCommandHandlerMap({
-    enabledCommandTypes: [
-      'playerAction',
-      'rebuy',
-      'startNextHand',
-      'endSession',
-    ],
     bindings: [
       createPlayerActionHandlerBinding({ owner }),
       createRebuyHandlerBinding(),
@@ -121,10 +114,6 @@ export async function createApiRuntime(
     handlers,
     mutationRepository,
     recoveryRepository,
-    recoveryRegistries: {
-      snapshot: currentSnapshotReader,
-      privateEvent: currentPrivateEventReader,
-    },
     snapshotProjectorBinding: projectionBindings.command,
     now: () => new Date().toISOString(),
     nextEventId: randomUUID,
@@ -154,7 +143,6 @@ export async function createApiRuntime(
     personaCatalog,
     deletion: createSessionDataDeletionService({ sql: database.sql, owner }),
     sessionHttp: { creation, query, commands },
-    committedSessionEvents,
     sessionEvents,
   })
 }

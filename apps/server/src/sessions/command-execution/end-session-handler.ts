@@ -64,7 +64,7 @@ const AbortHandPlanInputSchema = z.strictObject({
   checkpoint: z.unknown(),
 })
 
-export class EndSessionHandlerInvariantError extends Error {
+class EndSessionHandlerInvariantError extends Error {
   public constructor() {
     super('结束场次 Handler 不变量被破坏。')
     this.name = 'EndSessionHandlerInvariantError'

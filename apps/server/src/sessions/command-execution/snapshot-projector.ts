@@ -13,7 +13,7 @@ export interface SnapshotProjectionInput<ReadPort = unknown> {
   readonly reads: ReadPort
 }
 
-export interface SnapshotProjector<ReadPort = unknown> {
+interface SnapshotProjector<ReadPort = unknown> {
   project(
     input: SnapshotProjectionInput<ReadPort>,
   ): Promise<PublicSessionSnapshot>

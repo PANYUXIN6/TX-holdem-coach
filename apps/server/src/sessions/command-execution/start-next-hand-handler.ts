@@ -45,7 +45,7 @@ const StartNextHandPlanInputSchema = z.strictObject({
   checkpoint: z.unknown(),
 })
 
-export class StartNextHandHandlerInvariantError extends Error {
+class StartNextHandHandlerInvariantError extends Error {
   public constructor() {
     super('下一手 Handler 不变量被破坏。')
     this.name = 'StartNextHandHandlerInvariantError'

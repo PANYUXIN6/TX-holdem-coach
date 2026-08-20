@@ -3,8 +3,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { createHandStartedEventDraft } from '../../src/poker/hand-result.js'
 import {
   createSessionRecoveryRepository,
-  recoverSessionForMutation,
-  retryReadonlySessionRecovery,
+  productionSessionRecoveryRepository,
 } from '../../src/persistence/session-recovery-repository.js'
 import {
   createSessionMutationRepository,
@@ -19,27 +18,18 @@ import {
   SessionMutationTransitionError,
 } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
-import {
-  currentPrivateEventReader,
-  encodeCurrentPrivateEvent,
-} from '../../src/sessions/authoritative-state/private-event-codec.js'
+import { encodeCurrentPrivateEvent } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-state/current-private-event-protocol.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
-import {
-  currentSnapshotReader,
-  encodeSnapshot,
-} from '../../src/sessions/authoritative-state/snapshot-codec.js'
+import { encodeSnapshot } from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
+const { recoverSessionForMutation, retryReadonlySessionRecovery } =
+  productionSessionRecoveryRepository
 const sessionId = '22222222-2222-4222-8222-222222222222'
 const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
 const handId = '44444444-4444-4444-8444-444444444444'
 const recoveryAt = '2026-08-04T09:00:00.000Z'
-const registries = {
-  snapshot: currentSnapshotReader,
-  privateEvent: currentPrivateEventReader,
-}
-
 function createTransactionMock(responses: readonly unknown[]) {
   const pending = [...responses]
   let sqlCallCount = 0
@@ -55,7 +45,6 @@ function createTransactionMock(responses: readonly unknown[]) {
   }) as unknown as TransactionSql
   Object.assign(transaction, {
     json: (value: unknown) => value,
-    typed: (value: string) => JSON.parse(value) as unknown,
   })
   return { transaction, getSqlCallCount: () => sqlCallCount }
 }
@@ -170,7 +159,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).rejects.toBe(originalError)
     expect(repository.sessionMutationRepository).toBe(
@@ -199,7 +187,6 @@ describe('session recovery repository', () => {
       await resolvedOwner(),
       sessionId,
       recoveryAt,
-      registries,
     )
     if (result.kind !== 'ready') throw new Error('Expected ready recovery.')
 
@@ -226,7 +213,6 @@ describe('session recovery repository', () => {
       await resolvedOwner(),
       sessionId,
       recoveryAt,
-      registries,
     )
 
     expect(result).toMatchObject({
@@ -248,7 +234,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         '2026-08-04T09:00:00Z',
-        registries,
       ),
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
     expect(tracked.getSqlCallCount()).toBe(0)
@@ -272,7 +257,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).resolves.toEqual({
       kind: 'readonlyDiagnostic',
@@ -300,7 +284,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).resolves.toMatchObject({
       kind: 'ready',
@@ -330,7 +313,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).rejects.toBeInstanceOf(SessionRecoveryTransitionError)
     expect(tracked.getSqlCallCount()).toBe(5)
@@ -352,7 +334,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).resolves.toEqual({
       kind: 'readonlyDiagnostic',
@@ -374,7 +355,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).rejects.toBeInstanceOf(DatabaseOperationError)
     expect(tracked.getSqlCallCount()).toBe(2)
@@ -402,7 +382,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).resolves.toEqual({
       kind: 'readonlyDiagnostic',
@@ -436,7 +415,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).resolves.toMatchObject({
       kind: 'ready',
@@ -476,7 +454,6 @@ describe('session recovery repository', () => {
       await resolvedOwner(),
       sessionId,
       recoveryAt,
-      registries,
     )
 
     expect(result).toMatchObject({
@@ -520,7 +497,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).rejects.toBeInstanceOf(ActiveSessionConflictError)
     expect(tracked.getSqlCallCount()).toBe(5)
@@ -545,7 +521,6 @@ describe('session recovery repository', () => {
       await resolvedOwner(),
       sessionId,
       recoveryAt,
-      registries,
     )
 
     expect(result.kind).toBe('ended')
@@ -561,7 +536,6 @@ describe('session recovery repository', () => {
         await resolvedOwner(),
         sessionId,
         recoveryAt,
-        registries,
       ),
     ).rejects.toBeInstanceOf(SessionRecoveryTransitionError)
     expect(isRepositoryDomainError(new SessionRecoveryTransitionError())).toBe(

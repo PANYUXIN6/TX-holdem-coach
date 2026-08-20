@@ -3,7 +3,7 @@
 - 适用版本：首发前唯一开发 baseline
 - 数据库：Supabase Postgres
 - Schema：`app_private`
-- 表数量：14
+- 表数量：13
 - 事实来源：`apps/server/src/db/schema.ts`、`apps/server/src/db/migrations/0000_baseline.sql`
 
 ## 1. 这套 Schema 解决什么问题
@@ -12,7 +12,7 @@ M2.2 建立的是服务端私有持久化边界，负责保存：
 
 - 场次归属、场次状态和参赛阵容；
 - 手牌结果、命令幂等账本、事件流和权威快照；
-- Player/Coach Agent 的运行、尝试、能力调用和 Player 决策审计；
+- Player/Coach Agent 的运行、尝试和能力调用；
 - 不包含秘密的用户设置。
 
 所有表都位于非公开的 `app_private` Schema。浏览器、Supabase Data API、`anon`、`authenticated`、Contracts 和 Agent 领域对象都不能直接访问这些表，只能由后端 Repository 和服务层访问。
@@ -62,7 +62,6 @@ erDiagram
   sessions ||--o{ agent_runs : executes
   agent_runs ||--o{ agent_attempts : retries
   agent_runs ||--o{ agent_capability_invocations : invokes
-  agent_runs ||--o| player_decisions : yields
 ```
 
 ## 3. 归属、场次和阵容
@@ -226,7 +225,7 @@ erDiagram
 
 | 字段 | 类型与约束 | 含义 |
 | --- | --- | --- |
-| `id` | `uuid`，PK | 命令账本内部行 ID，供事件和 Player Decision 关联。 |
+| `id` | `uuid`，PK | 命令账本内部行 ID，供场次事件关联。 |
 | `session_id` | `uuid`，非空，FK → `sessions.id` | 命令所属场次。 |
 | `owner_id` | `uuid`，非空，复合 FK → `sessions` | 命令所属 Owner。 |
 | `command_id` | `uuid`，非空 | 客户端或上游生成的幂等命令 ID；在同一场次内唯一。 |
@@ -244,7 +243,7 @@ erDiagram
 **关键规则**：
 
 - `(session_id, command_id)` 是后续 UPSERT 的幂等边界。
-- 事件范围必须两个字段同时为空或同时存在。
+- `processing` 不可作为可见结果；`completed` 必须携带非空事件范围，且末事件序号与响应快照一致；`failed` 不携带事件范围，但必须携带与 `final_state_version` 一致的 `latestSnapshot`。
 
 ### 4.3 `session_events`
 
@@ -295,7 +294,7 @@ erDiagram
 
 ### 5.1 `agent_runs`
 
-**作用**：统一记录 Player 和 Coach 两种 Runtime 的一次受限执行，负责幂等、租约、并发围栏、截止时间、恢复检查点和最终结果。
+**作用**：统一记录 Player 和 Coach 两种 Runtime 的一次受限执行，负责幂等、租约、并发围栏和生命周期。
 
 **一行代表**：一次 Player 决策运行或一次 Coach 手牌复盘运行。
 
@@ -324,10 +323,6 @@ erDiagram
 | `run_config_payload` | `jsonb` 对象，非空 | 本次运行冻结的配置，不包含秘密。 |
 | `budget_payload_version` | `integer`，非空，正整数 | 预算载荷版本。 |
 | `budget_payload` | `jsonb` 对象，非空 | 本次运行的 token、成本、时间或能力调用预算。 |
-| `checkpoint_payload_version` | `integer`，可空，正整数 | 可恢复检查点载荷版本。 |
-| `checkpoint_payload` | `jsonb` 对象，可空 | 执行过程中的恢复检查点；尚未生成时为空。 |
-| `result_payload_version` | `integer`，可空，正整数 | 最终结果载荷版本。 |
-| `result_payload` | `jsonb` 对象，可空 | Run 的最终结果或终态摘要；尚未结束或无结果时为空。 |
 | `created_at` | `timestamptz`，非空，默认当前时间 | Run 创建时间。 |
 | `started_at` | `timestamptz`，可空 | Worker 实际开始执行时间。 |
 | `completed_at` | `timestamptz`，可空 | Run 进入终态的时间。 |
@@ -396,51 +391,13 @@ erDiagram
 | `budget_cost` | `bigint`，非空，默认 `0` | 此调用消耗的抽象预算单位。 |
 | `duration_ms` | `bigint`，可空 | 调用耗时，单位毫秒。 |
 | `error_category` | `text`，可空 | 脱敏后的错误分类。 |
-| `invocation_payload_version` | `integer`，可空，正整数 | 调用详情载荷版本。 |
-| `invocation_payload` | `jsonb` 对象，可空 | 脱敏后的输入、输出和授权/校验详情。 |
 | `started_at` | `timestamptz`，非空 | 调用开始时间。 |
 | `completed_at` | `timestamptz`，可空 | 调用结束时间。 |
 | `created_at` | `timestamptz`，非空，默认当前时间 | 审计行创建时间。 |
 
-## 6. Player 决策与 Coach 复盘
+## 6. 应用设置
 
-### 6.1 `player_decisions`
-
-**作用**：冻结 Player Run 产生的一份决策，记录决策点身份、使用的记忆版本、候选集、Validator 结果和最终提交状态。
-
-**一行代表**：一个 Player Agent Run 的唯一决策产物。
-
-| 字段 | 类型与约束 | 含义 |
-| --- | --- | --- |
-| `id` | `uuid`，PK | Player Decision ID。 |
-| `agent_run_id` | `uuid`，非空，UQ，复合 FK → `agent_runs` | 产生该决策的 Player Run；一条 Run 至多一份决策。 |
-| `owner_id` | `uuid`，非空，复合 FK | 所属 Owner。 |
-| `session_id` | `uuid`，非空，复合 FK | 所属场次。 |
-| `hand_id` | `uuid`，非空，复合 FK | 决策发生的手牌。 |
-| `participant_id` | `uuid`，非空，复合 FK → `session_agents` | 做出决策的 AI Participant/Session Agent。 |
-| `source_state_version` | `bigint`，非空 | 决策所依据的权威状态版本，必须与 Run 完全一致。 |
-| `decision_request_id` | `uuid`，非空 | 决策请求 ID，必须与 Run 完全一致。 |
-| `memory_revision` | `bigint`，非空，复合 FK → `agent_memory_revisions` | 做决策时实际读取的 Agent 记忆修订号。 |
-| `runtime` | `text`，非空，默认 `player`，固定值 | 复合外键中的类型判别列，确保只能关联 Player Run。 |
-| `submission_status` | `text`，非空 | 提交状态：`pending`、`committed`、`rejected` 或 `stale`。 |
-| `command_ledger_id` | `uuid`，可空，复合 FK → `command_ledger` | 若决策已转成扑克命令，记录对应命令账本行。 |
-| `decision_packet_payload_version` | `integer`，非空，正整数 | 决策包载荷版本。 |
-| `decision_packet_payload` | `jsonb` 对象，非空 | 冻结的决策输入、可见上下文和模型选择等决策包。 |
-| `candidate_set_payload_version` | `integer`，非空，正整数 | 候选集合载荷版本。 |
-| `candidate_set_payload` | `jsonb` 对象，非空 | Runtime 生成并允许模型选择的有界候选动作集合。 |
-| `validator_result_payload_version` | `integer`，非空，正整数 | Validator 结果载荷版本。 |
-| `validator_result_payload` | `jsonb` 对象，非空 | 对候选/最终决策进行合法性和提交前验证的冻结结果。 |
-| `created_at` | `timestamptz`，非空，默认当前时间 | 决策产物创建时间。 |
-| `submitted_at` | `timestamptz`，可空 | 决策实际提交到扑克命令事务的时间。 |
-
-**关键规则**：
-
-- 复合外键一次性保证 Run、Owner、Session、Hand、Agent、来源版本、请求 ID 和 Runtime 全部一致。
-- `command_ledger_id` 为空不代表失败，也可能是尚未提交、已拒绝或已过期。
-
-## 7. 应用设置
-
-### 7.1 `app_settings`
+### 6.1 `app_settings`
 
 **作用**：保存某个 Owner 的非秘密、稳定键名应用设置。
 

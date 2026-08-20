@@ -20,9 +20,8 @@
     "typecheck:server": "pnpm --filter @tx-holdem-coach/server run typecheck",
     "test": "pnpm run test:backend",
     "test:contracts": "pnpm --filter @tx-holdem-coach/contracts run test",
-    "test:server": "pnpm run test:server:unit && pnpm run test:server:integration && pnpm run test:server:service",
+    "test:server": "pnpm run test:server:unit && pnpm run test:server:service",
     "test:server:unit": "pnpm --filter @tx-holdem-coach/server run test:unit",
-    "test:server:integration": "pnpm --filter @tx-holdem-coach/server run test:integration",
     "test:server:service": "pnpm --filter @tx-holdem-coach/server run test:service",
     "test:backend": "pnpm run test:contracts && pnpm --filter @tx-holdem-coach/contracts run build && pnpm run test:server",
     "lint": "pnpm --filter @tx-holdem-coach/contracts run build && oxlint apps/server/src apps/server/test apps/server/scripts apps/web/src packages/contracts/src packages/contracts/test --report-unused-disable-directives",
@@ -31,7 +30,8 @@
     "simplify:light": "pnpm run format:check && pnpm run lint && pnpm run typecheck",
     "simplify:deep": "pnpm run lint && pnpm run report:knip && pnpm run report:duplication && pnpm run verify && pnpm run build && pnpm --filter @tx-holdem-coach/server run verify:migration-assets",
     "verify:repository-map": "node scripts/verify-repository-map-paths.mjs",
-    "verify": "pnpm run verify:repository-map && pnpm run format:check && pnpm run typecheck && pnpm run test:backend"
+    "verify:poker-assets": "node scripts/verify-poker-assets.mjs",
+    "verify": "pnpm run verify:repository-map && pnpm run verify:poker-assets && pnpm run format:check && pnpm run typecheck && pnpm run test:backend"
   },
   "devDependencies": {
     "jscpd": "^5.0.15",

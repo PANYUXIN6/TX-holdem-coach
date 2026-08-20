@@ -22,7 +22,6 @@ const BUSINESS_TABLES = [
   'command_ledger',
   'hands',
   'owners',
-  'player_decisions',
   'session_agents',
   'session_events',
   'session_participants',
@@ -1046,8 +1045,6 @@ async function assertPlayerCoordination(
         UPDATE app_private.agent_runs
         SET lifecycle = 'completed',
             started_at = COALESCE(started_at, now()),
-            result_payload_version = 1,
-            result_payload = '{}'::jsonb,
             completed_at = now()
         WHERE id = ${secondRunId}
       `
@@ -1066,8 +1063,6 @@ async function assertPlayerCoordination(
       UPDATE app_private.agent_runs
       SET lifecycle = 'completed',
           started_at = COALESCE(started_at, now()),
-          result_payload_version = 1,
-          result_payload = '{}'::jsonb,
           completed_at = now()
       WHERE id = ${secondRunId}
     `
@@ -1095,86 +1090,6 @@ async function assertPlayerCoordination(
       }),
     ),
   ).rejects.toThrow()
-
-  await expect(
-    sql`
-      INSERT INTO app_private.player_decisions (
-        id,
-        agent_run_id,
-        owner_id,
-        session_id,
-        hand_id,
-        participant_id,
-        source_state_version,
-        decision_request_id,
-        memory_revision,
-        submission_status,
-        decision_packet_payload_version,
-        decision_packet_payload,
-        candidate_set_payload_version,
-        candidate_set_payload,
-        validator_result_payload_version,
-        validator_result_payload
-      )
-      VALUES (
-        ${fixtureId(4_400)},
-        ${firstRunId},
-        ${fixtureOwnerId()},
-        ${graph.sessionId},
-        ${handId},
-        ${graph.agentParticipantIds[1]!},
-        7,
-        ${firstRequestId},
-        0,
-        'stale',
-        1,
-        '{}'::jsonb,
-        1,
-        '{}'::jsonb,
-        1,
-        '{}'::jsonb
-      )
-    `,
-  ).rejects.toThrow()
-
-  await sql`
-    INSERT INTO app_private.player_decisions (
-      id,
-      agent_run_id,
-      owner_id,
-      session_id,
-      hand_id,
-      participant_id,
-      source_state_version,
-      decision_request_id,
-      memory_revision,
-      submission_status,
-      decision_packet_payload_version,
-      decision_packet_payload,
-      candidate_set_payload_version,
-      candidate_set_payload,
-      validator_result_payload_version,
-      validator_result_payload
-    )
-    VALUES (
-      ${fixtureId(4_401)},
-      ${firstRunId},
-      ${fixtureOwnerId()},
-      ${graph.sessionId},
-      ${handId},
-      ${participantId},
-      7,
-      ${firstRequestId},
-      0,
-      'stale',
-      1,
-      '{}'::jsonb,
-      1,
-      '{}'::jsonb,
-      1,
-      '{}'::jsonb
-    )
-  `
 
   await expect(
     sql.begin((tx) =>
@@ -1423,8 +1338,6 @@ async function assertAgentAuditAndCommandConstraints(sql: Sql): Promise<void> {
       output_hash,
       budget_cost,
       duration_ms,
-      invocation_payload_version,
-      invocation_payload,
       started_at,
       completed_at
     )
@@ -1444,8 +1357,6 @@ async function assertAgentAuditAndCommandConstraints(sql: Sql): Promise<void> {
       ${CONFIG_SNAPSHOT_KEY},
       1,
       1,
-      1,
-      '{}'::jsonb,
       now(),
       now()
     )

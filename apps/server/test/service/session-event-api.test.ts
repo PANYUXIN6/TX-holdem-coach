@@ -1,6 +1,6 @@
 import type { SseEvent } from '@tx-holdem-coach/contracts'
 import { describe, expect, test, vi } from 'vitest'
-import { createApp, type ApiRuntime } from '../../src/app.js'
+import { createApp, type ApiRuntime } from '../../src/http/create-app.js'
 import { getProviderSettingsResponse, ServerConfig } from '../../src/config.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import type { OpenSessionEventStream } from '../../src/sessions/public-projection/session-event-connection.js'

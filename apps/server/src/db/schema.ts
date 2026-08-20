@@ -646,10 +646,6 @@ export const agentRuns = appPrivateSchema.table(
     runConfigPayload: objectPayload('run_config_payload').notNull(),
     budgetPayloadVersion: integer('budget_payload_version').notNull(),
     budgetPayload: objectPayload('budget_payload').notNull(),
-    checkpointPayloadVersion: integer('checkpoint_payload_version'),
-    checkpointPayload: objectPayload('checkpoint_payload'),
-    resultPayloadVersion: integer('result_payload_version'),
-    resultPayload: objectPayload('result_payload'),
     createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
     startedAt: zonedTimestamp('started_at'),
     completedAt: zonedTimestamp('completed_at'),
@@ -689,16 +685,6 @@ export const agentRuns = appPrivateSchema.table(
       table.sessionId,
       table.ownerId,
       table.decisionRequestId,
-    ),
-    unique('agent_runs_player_decision_identity_unique').on(
-      table.id,
-      table.ownerId,
-      table.sessionId,
-      table.handId,
-      table.participantId,
-      table.sourceStateVersion,
-      table.decisionRequestId,
-      table.runtime,
     ),
     unique('agent_runs_id_owner_session_unique').on(
       table.id,
@@ -789,27 +775,23 @@ export const agentRuns = appPrivateSchema.table(
         AND ${table.startedAt} IS NULL
         AND ${table.completedAt} IS NULL
         AND ${table.terminationReason} IS NULL
-        AND ${table.resultPayloadVersion} IS NULL
       ) OR (
         ${table.lifecycle} = 'leased'
         AND ${table.leaseOwner} IS NOT NULL
         AND ${table.completedAt} IS NULL
         AND ${table.terminationReason} IS NULL
-        AND ${table.resultPayloadVersion} IS NULL
       ) OR (
         ${table.lifecycle} = 'running'
         AND ${table.leaseOwner} IS NOT NULL
         AND ${table.startedAt} IS NOT NULL
         AND ${table.completedAt} IS NULL
         AND ${table.terminationReason} IS NULL
-        AND ${table.resultPayloadVersion} IS NULL
       ) OR (
         ${table.lifecycle} = 'completed'
         AND ${table.leaseOwner} IS NULL
         AND ${table.startedAt} IS NOT NULL
         AND ${table.completedAt} IS NOT NULL
         AND ${table.terminationReason} IS NULL
-        AND ${table.resultPayloadVersion} IS NOT NULL
       ) OR (
         ${table.lifecycle} = 'failed'
         AND ${table.leaseOwner} IS NULL
@@ -820,7 +802,6 @@ export const agentRuns = appPrivateSchema.table(
         AND ${table.leaseOwner} IS NULL
         AND ${table.completedAt} IS NOT NULL
         AND ${table.terminationReason} IS NOT NULL
-        AND ${table.resultPayloadVersion} IS NULL
       )`,
     ),
     check(
@@ -844,30 +825,6 @@ export const agentRuns = appPrivateSchema.table(
         AND jsonb_typeof(${table.runConfigPayload}) = 'object'
         AND ${table.budgetPayloadVersion} > 0
         AND jsonb_typeof(${table.budgetPayload}) = 'object'`,
-    ),
-    check(
-      'agent_runs_checkpoint_payload_check',
-      sql`(
-        ${table.checkpointPayloadVersion} IS NULL
-        AND ${table.checkpointPayload} IS NULL
-      ) OR (
-        ${table.checkpointPayloadVersion} IS NOT NULL
-        AND ${table.checkpointPayload} IS NOT NULL
-        AND ${table.checkpointPayloadVersion} > 0
-        AND jsonb_typeof(${table.checkpointPayload}) = 'object'
-      )`,
-    ),
-    check(
-      'agent_runs_result_payload_check',
-      sql`(
-        ${table.resultPayloadVersion} IS NULL
-        AND ${table.resultPayload} IS NULL
-      ) OR (
-        ${table.resultPayloadVersion} IS NOT NULL
-        AND ${table.resultPayload} IS NOT NULL
-        AND ${table.resultPayloadVersion} > 0
-        AND jsonb_typeof(${table.resultPayload}) = 'object'
-      )`,
     ),
   ],
 )
@@ -968,8 +925,6 @@ export const agentCapabilityInvocations = appPrivateSchema.table(
     budgetCost: safeBigint('budget_cost').notNull().default(0),
     durationMs: safeBigint('duration_ms'),
     errorCategory: text('error_category'),
-    invocationPayloadVersion: integer('invocation_payload_version'),
-    invocationPayload: objectPayload('invocation_payload'),
     startedAt: zonedTimestamp('started_at').notNull(),
     completedAt: zonedTimestamp('completed_at'),
     createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
@@ -1021,133 +976,6 @@ export const agentCapabilityInvocations = appPrivateSchema.table(
           ${table.durationMs} IS NULL
           OR ${table.durationMs} BETWEEN 0 AND 9007199254740991
         )`,
-    ),
-    check(
-      'agent_capability_invocations_payload_check',
-      sql`(
-        ${table.invocationPayloadVersion} IS NULL
-        AND ${table.invocationPayload} IS NULL
-      ) OR (
-        ${table.invocationPayloadVersion} IS NOT NULL
-        AND ${table.invocationPayload} IS NOT NULL
-        AND ${table.invocationPayloadVersion} > 0
-        AND jsonb_typeof(${table.invocationPayload}) = 'object'
-      )`,
-    ),
-  ],
-)
-
-export const playerDecisions = appPrivateSchema.table(
-  'player_decisions',
-  {
-    id: uuid('id').primaryKey(),
-    agentRunId: uuid('agent_run_id').notNull(),
-    ownerId: uuid('owner_id').notNull(),
-    sessionId: uuid('session_id').notNull(),
-    handId: uuid('hand_id').notNull(),
-    participantId: uuid('participant_id').notNull(),
-    sourceStateVersion: safeBigint('source_state_version').notNull(),
-    decisionRequestId: uuid('decision_request_id').notNull(),
-    memoryRevision: safeBigint('memory_revision').notNull(),
-    runtime: text('runtime').notNull().default('player'),
-    submissionStatus: text('submission_status').notNull(),
-    commandLedgerId: uuid('command_ledger_id'),
-    decisionPacketPayloadVersion: integer(
-      'decision_packet_payload_version',
-    ).notNull(),
-    decisionPacketPayload: objectPayload('decision_packet_payload').notNull(),
-    candidateSetPayloadVersion: integer(
-      'candidate_set_payload_version',
-    ).notNull(),
-    candidateSetPayload: objectPayload('candidate_set_payload').notNull(),
-    validatorResultPayloadVersion: integer(
-      'validator_result_payload_version',
-    ).notNull(),
-    validatorResultPayload: objectPayload('validator_result_payload').notNull(),
-    createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
-    submittedAt: zonedTimestamp('submitted_at'),
-  },
-  (table) => [
-    foreignKey({
-      name: 'player_decisions_run_identity_fk',
-      columns: [
-        table.agentRunId,
-        table.ownerId,
-        table.sessionId,
-        table.handId,
-        table.participantId,
-        table.sourceStateVersion,
-        table.decisionRequestId,
-        table.runtime,
-      ],
-      foreignColumns: [
-        agentRuns.id,
-        agentRuns.ownerId,
-        agentRuns.sessionId,
-        agentRuns.handId,
-        agentRuns.participantId,
-        agentRuns.sourceStateVersion,
-        agentRuns.decisionRequestId,
-        agentRuns.runtime,
-      ],
-    }).onDelete('cascade'),
-    foreignKey({
-      name: 'player_decisions_agent_scope_fk',
-      columns: [table.participantId, table.sessionId, table.ownerId],
-      foreignColumns: [
-        sessionAgents.participantId,
-        sessionAgents.sessionId,
-        sessionAgents.ownerId,
-      ],
-    }).onDelete('cascade'),
-    foreignKey({
-      name: 'player_decisions_memory_revision_fk',
-      columns: [
-        table.participantId,
-        table.sessionId,
-        table.ownerId,
-        table.memoryRevision,
-      ],
-      foreignColumns: [
-        agentMemoryRevisions.participantId,
-        agentMemoryRevisions.sessionId,
-        agentMemoryRevisions.ownerId,
-        agentMemoryRevisions.revision,
-      ],
-    }),
-    foreignKey({
-      name: 'player_decisions_command_scope_fk',
-      columns: [table.commandLedgerId, table.sessionId, table.ownerId],
-      foreignColumns: [
-        commandLedger.id,
-        commandLedger.sessionId,
-        commandLedger.ownerId,
-      ],
-    }),
-    unique('player_decisions_agent_run_unique').on(table.agentRunId),
-    index('player_decisions_hand_participant_version_idx').on(
-      table.handId,
-      table.participantId,
-      table.sourceStateVersion,
-    ),
-    check('player_decisions_runtime_check', sql`${table.runtime} = 'player'`),
-    check(
-      'player_decisions_submission_status_check',
-      sql`${table.submissionStatus} IN ('pending', 'committed', 'rejected', 'stale')`,
-    ),
-    check(
-      'player_decisions_safe_values_check',
-      sql`${table.sourceStateVersion} BETWEEN 0 AND 9007199254740991
-        AND ${table.memoryRevision} BETWEEN 0 AND 9007199254740991`,
-    ),
-    check(
-      'player_decisions_payloads_check',
-      sql`${table.decisionPacketPayloadVersion} > 0
-        AND jsonb_typeof(${table.decisionPacketPayload}) = 'object'
-        AND ${table.candidateSetPayloadVersion} > 0
-        AND jsonb_typeof(${table.candidateSetPayload}) = 'object'
-        AND ${table.validatorResultPayloadVersion} > 0
-        AND jsonb_typeof(${table.validatorResultPayload}) = 'object'`,
     ),
   ],
 )

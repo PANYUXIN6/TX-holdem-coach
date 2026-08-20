@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
+import { AgentPersonaIdSchema } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
+import { canonicalJson } from '../persisted-json.js'
 
 export const PERSONA_CONFIG_PAYLOAD_VERSION = 1
 export const MEMORY_PAYLOAD_VERSION = 1
@@ -38,18 +40,6 @@ export const PERSONA_MODEL_BUNDLE_DEFAULTS = {
   },
 } as const satisfies PublishedPersonaModelBundle
 
-export const PERSONA_CONFIG_PERSONA_IDS = Object.freeze([
-  'nit_fish',
-  'lag_rec',
-  'tag_pro',
-  'short_shark',
-  'calling_station',
-  'deep_maniac',
-  'small_ball_reg',
-  'trap_specialist',
-] as const)
-
-const PersonaConfigPayloadPersonaIdSchema = z.enum(PERSONA_CONFIG_PERSONA_IDS)
 const PersonaConfigPayloadStyleSchema = z.strictObject({
   tightness: z.number().int().min(0).max(100),
   aggression: z.number().int().min(0).max(100),
@@ -59,7 +49,7 @@ const PersonaConfigPayloadStyleSchema = z.strictObject({
 })
 
 export const PersonaConfigPayloadSchema = z.strictObject({
-  personaId: PersonaConfigPayloadPersonaIdSchema,
+  personaId: AgentPersonaIdSchema,
   personaVersion: z.literal(1),
   name: z.string().trim().min(1),
   avatarColor: z.string().regex(/^#[0-9A-F]{6}$/),
@@ -74,71 +64,6 @@ export type PersonaConfigPayload = z.infer<typeof PersonaConfigPayloadSchema>
 
 export const AgentMemoryPayloadSchema = z.strictObject({})
 export type AgentMemoryPayload = z.infer<typeof AgentMemoryPayloadSchema>
-
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue }
-
-function compareUnicodeCodePoints(left: string, right: string): number {
-  const leftCodePoints = Array.from(left, (value) => value.codePointAt(0) ?? 0)
-  const rightCodePoints = Array.from(
-    right,
-    (value) => value.codePointAt(0) ?? 0,
-  )
-  const length = Math.min(leftCodePoints.length, rightCodePoints.length)
-
-  for (let index = 0; index < length; index += 1) {
-    const difference =
-      (leftCodePoints[index] ?? 0) - (rightCodePoints[index] ?? 0)
-    if (difference !== 0) {
-      return difference
-    }
-  }
-
-  return leftCodePoints.length - rightCodePoints.length
-}
-
-export function canonicalJson(value: JsonValue): string {
-  if (
-    value === null ||
-    typeof value === 'boolean' ||
-    typeof value === 'string'
-  ) {
-    return JSON.stringify(value)
-  }
-
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) {
-      throw new TypeError('规范 JSON 不接受非有限数字。')
-    }
-    return JSON.stringify(value)
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`
-  }
-
-  if (typeof value !== 'object') {
-    throw new TypeError('规范 JSON 只接受 JSON 值。')
-  }
-
-  const objectValue = value as { readonly [key: string]: JsonValue }
-  const entries = Object.keys(objectValue)
-    .sort(compareUnicodeCodePoints)
-    .map((key) => {
-      const entry = objectValue[key]
-      if (entry === undefined) {
-        throw new TypeError('规范 JSON 不接受 undefined。')
-      }
-      return `${JSON.stringify(key)}:${canonicalJson(entry)}`
-    })
-
-  return `{${entries.join(',')}}`
-}
 
 export function createConfigSnapshotKey(
   configPayloadVersion: number,

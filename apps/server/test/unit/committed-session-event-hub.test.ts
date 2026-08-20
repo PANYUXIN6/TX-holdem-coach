@@ -84,6 +84,22 @@ describe('committed session event hub', () => {
     expect(onListenerError).toHaveBeenCalledTimes(1)
   })
 
+  test('诊断回调抛错时仍继续交付健康监听器和后续事件', () => {
+    const hub = createCommittedSessionEventHub({
+      onListenerError: () => {
+        throw new Error('diagnostic sink failure')
+      },
+    })
+    const healthy = vi.fn()
+    hub.subscribe(sessionId, () => {
+      throw new Error('private listener failure')
+    })
+    hub.subscribe(sessionId, healthy)
+
+    expect(() => hub.publish([event(7), event(8)])).not.toThrow()
+    expect(healthy).toHaveBeenCalledTimes(2)
+  })
+
   test('递归冻结事件，前一个监听器不能污染后续交付', () => {
     const hub = createCommittedSessionEventHub()
     let mutationRejected = false

@@ -23,12 +23,10 @@ import {
   CommandPayloadConflictError,
   DatabaseOperationError,
   HandAuditTransitionError,
-  OwnerScopeResolutionError,
   PersistenceDataCorruptionError,
   RepositoryInputValidationError,
   ResourceNotFoundError,
   SessionDeletionTransitionError,
-  UnknownPayloadVersionError,
 } from '../../src/persistence/errors.js'
 import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
 import { createAgentFoundationAuditRepository as createRawAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
@@ -38,11 +36,7 @@ import {
   insertInProgressHandAudit,
   readHandAudit,
 } from '../../src/persistence/hand-audit-repository.js'
-import {
-  productionSessionRecoveryRepository,
-  recoverSessionForMutation,
-  retryReadonlySessionRecovery,
-} from '../../src/persistence/session-recovery-repository.js'
+import { productionSessionRecoveryRepository } from '../../src/persistence/session-recovery-repository.js'
 import {
   completeCommand,
   failCommand,
@@ -51,8 +45,6 @@ import {
   type CommandRegistrationResult,
 } from '../../src/persistence/command-ledger-repository.js'
 import {
-  lockSessionForMutation,
-  persistSessionMutation,
   productionSessionMutationRepository,
   type SessionMutationBatch,
 } from '../../src/persistence/session-mutation-repository.js'
@@ -62,14 +54,10 @@ import {
   deleteEndedSessionData,
 } from '../../src/persistence/session-deletion-repository.js'
 import {
-  readPlayerTimeoutSettings,
-  writePlayerTimeoutSettings,
+  patchPlayerTimeoutSettings,
+  readResolvedPlayerTimeoutSettings,
 } from '../../src/persistence/player-settings-repository.js'
-import {
-  getSessionById,
-  listHistoricalSessions,
-  readSessionAgentSnapshots,
-} from '../../src/persistence/session-repository.js'
+import { readSessionAgentSnapshots } from '../../src/persistence/session-repository.js'
 import { assertRosterSnapshotsUseActiveModels } from '../../src/sessions/roster-preparation.js'
 import {
   insertSessionRosterSnapshot,
@@ -77,18 +65,12 @@ import {
   prepareLatestEndedRosterSnapshotForReuse,
 } from '../helpers/session-roster-fixture.js'
 import { insertAgentRunFixture } from '../helpers/agent-run-fixture.js'
-import {
-  currentPrivateEventReader,
-  encodeCurrentPrivateEvent,
-} from '../../src/sessions/authoritative-state/private-event-codec.js'
+import { encodeCurrentPrivateEvent } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import {
   createPrivateTableState,
   type PrivateTableState,
 } from '../../src/sessions/authoritative-state/private-table-state.js'
-import {
-  currentSnapshotReader,
-  encodeSnapshot,
-} from '../../src/sessions/authoritative-state/snapshot-codec.js'
+import { encodeSnapshot } from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createSessionCommandHandlerMap } from '../../src/sessions/command-execution/command-handler-map.js'
 import { createSessionCommandExecutor } from '../../src/sessions/command-execution/session-command-executor.js'
 import type { PreparedMutationCapability } from '../../src/sessions/command-execution/command-handler.js'
@@ -105,6 +87,10 @@ import {
   serializeJsonbFixture,
 } from './database-test-runtime.js'
 
+const { recoverSessionForMutation, retryReadonlySessionRecovery } =
+  productionSessionRecoveryRepository
+const { lockSessionForMutation, persistSessionMutation } =
+  productionSessionMutationRepository
 const ownerScope = { ownerId: 'local-user' } as const
 
 async function ensureLegacyAuditAuthority(
@@ -175,10 +161,8 @@ async function ensureLegacyAuditAuthority(
   })
 }
 
-function createAgentFoundationAuditRepository(
-  options: Parameters<typeof createRawAgentFoundationAuditRepository>[0],
-) {
-  const repository = createRawAgentFoundationAuditRepository(options)
+function createAgentFoundationAuditRepository() {
+  const repository = createRawAgentFoundationAuditRepository()
   return {
     ...repository,
     async startAgentAttemptAudit(
@@ -302,7 +286,7 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
 
     const snapshots = await readSessionAgentSnapshots(
       query,
-      ownerScope,
+      roster.owner,
       roster.sessionId,
     )
     expect(snapshots).toHaveLength(5)
@@ -327,7 +311,7 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
       loadAndValidatePersonaCatalog(changedDefinitions).list()[0]?.name,
     ).toBe('changed source definition')
     await expect(
-      readSessionAgentSnapshots(query, ownerScope, roster.sessionId),
+      readSessionAgentSnapshots(query, roster.owner, roster.sessionId),
     ).resolves.toEqual(snapshots)
 
     const memoryRows = await query<
@@ -371,58 +355,6 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
     ).toBe(true)
 
     await query`
-      DELETE FROM app_private.app_settings
-      WHERE owner_id = ${roster.owner.databaseOwnerId}::uuid
-        AND setting_key = 'player-timeouts'
-    `
-    await expect(readPlayerTimeoutSettings(query, ownerScope)).resolves.toEqual(
-      {
-        attemptTimeoutSeconds: 15,
-        decisionDeadlineSeconds: 45,
-      },
-    )
-
-    await writePlayerTimeoutSettings(query, ownerScope, {
-      attemptTimeoutSeconds: 10,
-      decisionDeadlineSeconds: 30,
-    })
-    const firstSettingRow = await query<{ readonly id: string }[]>`
-      SELECT id::text AS id
-      FROM app_private.app_settings
-      WHERE owner_id = ${roster.owner.databaseOwnerId}::uuid
-        AND setting_key = 'player-timeouts'
-    `
-    await writePlayerTimeoutSettings(query, ownerScope, {
-      attemptTimeoutSeconds: 20,
-      decisionDeadlineSeconds: 60,
-    })
-    const secondSettingRow = await query<{ readonly id: string }[]>`
-      SELECT id::text AS id
-      FROM app_private.app_settings
-      WHERE owner_id = ${roster.owner.databaseOwnerId}::uuid
-        AND setting_key = 'player-timeouts'
-    `
-    expect(secondSettingRow[0]?.id).toBe(firstSettingRow[0]?.id)
-    await expect(readPlayerTimeoutSettings(query, ownerScope)).resolves.toEqual(
-      {
-        attemptTimeoutSeconds: 20,
-        decisionDeadlineSeconds: 60,
-      },
-    )
-    await query`
-      UPDATE app_private.app_settings
-      SET setting_payload = ${serializeJsonbFixture({
-        attemptTimeoutSeconds: 30,
-        decisionDeadlineSeconds: 15,
-      })}::text::jsonb
-      WHERE owner_id = ${roster.owner.databaseOwnerId}::uuid
-        AND setting_key = 'player-timeouts'
-    `
-    await expect(
-      readPlayerTimeoutSettings(query, ownerScope),
-    ).rejects.toMatchObject({ corruption: 'invalidPayload' })
-
-    await query`
       UPDATE app_private.session_agents
       SET display_name = 'tampered'
       WHERE participant_id = ${roster.agents[0]?.agentParticipantId ?? ''}::uuid
@@ -430,7 +362,7 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
         AND owner_id = ${roster.owner.databaseOwnerId}::uuid
     `
     await expect(
-      readSessionAgentSnapshots(query, ownerScope, roster.sessionId),
+      readSessionAgentSnapshots(query, roster.owner, roster.sessionId),
     ).rejects.toMatchObject({ corruption: 'mirrorMismatch' })
     await query`
       UPDATE app_private.session_agents
@@ -441,7 +373,7 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
         AND owner_id = ${roster.owner.databaseOwnerId}::uuid
     `
     await expect(
-      readSessionAgentSnapshots(query, ownerScope, roster.sessionId),
+      readSessionAgentSnapshots(query, roster.owner, roster.sessionId),
     ).rejects.toMatchObject({ corruption: 'snapshotKeyMismatch' })
   })
 
@@ -454,6 +386,7 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
 }
 
 async function assertRosterCorruptionClassification(sql: Sql): Promise<void> {
+  const owner = await resolveOwnerScope(sql, ownerScope)
   await inRollbackTransaction(sql, async (transaction, query) => {
     const ownerRows = await query<{ readonly id: string }[]>`
       SELECT id::text AS id
@@ -473,7 +406,7 @@ async function assertRosterCorruptionClassification(sql: Sql): Promise<void> {
       )
     `
     await expect(
-      readSessionAgentSnapshots(query, ownerScope, emptySessionId),
+      readSessionAgentSnapshots(query, owner, emptySessionId),
     ).rejects.toMatchObject({ corruption: 'invalidRoster' })
 
     const roster = await createRosterInput(query)
@@ -483,7 +416,7 @@ async function assertRosterCorruptionClassification(sql: Sql): Promise<void> {
       WHERE participant_id = ${roster.agents[0]?.agentParticipantId ?? ''}::uuid
     `
     await expect(
-      readSessionAgentSnapshots(query, ownerScope, roster.sessionId),
+      readSessionAgentSnapshots(query, owner, roster.sessionId),
     ).rejects.toMatchObject({ corruption: 'invalidRoster' })
   })
 
@@ -498,7 +431,7 @@ async function assertRosterCorruptionClassification(sql: Sql): Promise<void> {
     `
 
     await expect(
-      readSessionAgentSnapshots(query, ownerScope, roster.sessionId),
+      readSessionAgentSnapshots(query, owner, roster.sessionId),
     ).rejects.toMatchObject({ corruption: 'invalidRoster' })
   })
 }
@@ -550,16 +483,6 @@ async function assertMissingOwnerBoundaries(sql: Sql): Promise<void> {
       WHERE id = ${ownerId}::uuid
     `
 
-    await expect(
-      readPlayerTimeoutSettings(query, ownerScope),
-    ).rejects.toBeInstanceOf(OwnerScopeResolutionError)
-    await expect(
-      writePlayerTimeoutSettings(query, ownerScope, {
-        attemptTimeoutSeconds: 10,
-        decisionDeadlineSeconds: 30,
-      }),
-    ).rejects.toBeInstanceOf(OwnerScopeResolutionError)
-
     const afterRows = await query<{ readonly count: number }[]>`
       SELECT count(*)::int AS count
       FROM app_private.app_settings
@@ -597,167 +520,12 @@ async function assertAtomicConflictRollback(sql: Sql): Promise<void> {
   expect(rows[0]?.count).toBe(0)
 }
 
-async function assertHistoricalPaginationAndOwnerIsolation(
-  sql: Sql,
-): Promise<void> {
-  await inRollbackTransaction(sql, async (_transaction, query) => {
-    const localOwnerRows = await query<{ readonly id: string }[]>`
-      SELECT id::text AS id
-      FROM app_private.owners
-      WHERE identity_key = 'local-user'
-    `
-    const localOwnerId = localOwnerRows[0]?.id
-    expect(localOwnerId).toBeDefined()
-
-    const firstId = 'ffffffff-ffff-4fff-bfff-ffffffffffff'
-    const secondId = 'eeeeeeee-eeee-4eee-beee-eeeeeeeeeeee'
-    const thirdId = 'dddddddd-dddd-4ddd-bddd-dddddddddddd'
-    await query`
-      INSERT INTO app_private.sessions (
-        id, owner_id, lifecycle_status, ended_at, updated_at
-      ) VALUES
-        (${firstId}::uuid, ${localOwnerId ?? ''}::uuid, 'ended', '2099-01-01T00:00:00Z', '2099-01-01T00:00:00.123456Z'),
-        (${secondId}::uuid, ${localOwnerId ?? ''}::uuid, 'ended', '2099-01-01T00:00:00Z', '2099-01-01T00:00:00.123456Z'),
-        (${thirdId}::uuid, ${localOwnerId ?? ''}::uuid, 'ended', '2099-01-01T00:00:00Z', '2099-01-01T00:00:00.123455Z')
-    `
-
-    const firstPage = await listHistoricalSessions(query, ownerScope, {
-      limit: 1,
-    })
-    expect(firstPage.sessions[0]?.id).toBe(firstId)
-    expect(firstPage.nextCursor?.updatedAt).toBe('2099-01-01T00:00:00.123456Z')
-    const secondPage = await listHistoricalSessions(query, ownerScope, {
-      limit: 1,
-      cursor: firstPage.nextCursor ?? {
-        id: firstId,
-        updatedAt: '2099-01-01T00:00:00.123456Z',
-      },
-    })
-    expect(secondPage.sessions[0]?.id).toBe(secondId)
-    const thirdPage = await listHistoricalSessions(query, ownerScope, {
-      limit: 1,
-      cursor: secondPage.nextCursor ?? {
-        id: secondId,
-        updatedAt: '2099-01-01T00:00:00.123456Z',
-      },
-    })
-    expect(thirdPage.sessions[0]?.id).toBe(thirdId)
-
-    const otherOwnerId = randomUUID()
-    const otherSessionId = randomUUID()
-    await query`
-      INSERT INTO app_private.owners (id, identity_key)
-      VALUES (${otherOwnerId}::uuid, ${`test-m2-3:${otherOwnerId}`})
-    `
-    await query`
-      INSERT INTO app_private.sessions (
-        id, owner_id, lifecycle_status, ended_at, updated_at
-      ) VALUES (
-        ${otherSessionId}::uuid,
-        ${otherOwnerId}::uuid,
-        'ended',
-        clock_timestamp(),
-        clock_timestamp()
-      )
-    `
-    await expect(
-      getSessionById(query, ownerScope, otherSessionId),
-    ).resolves.toBeNull()
-    await expect(
-      readSessionAgentSnapshots(query, ownerScope, otherSessionId),
-    ).rejects.toBeInstanceOf(ResourceNotFoundError)
-    const ownerHistory = await listHistoricalSessions(query, ownerScope, {
-      limit: 100,
-    })
-    expect(
-      ownerHistory.sessions.some((session) => session.id === otherSessionId),
-    ).toBe(false)
-
-    for (const limit of [0, 101, 1.5]) {
-      await expect(
-        listHistoricalSessions(query, ownerScope, { limit }),
-      ).rejects.toBeInstanceOf(RepositoryInputValidationError)
-    }
-    await expect(
-      listHistoricalSessions(query, ownerScope, {
-        limit: 1,
-        cursor: {
-          id: firstId,
-          updatedAt: 'not-a-database-timestamp',
-        },
-      }),
-    ).rejects.toBeInstanceOf(RepositoryInputValidationError)
-  })
-}
-
-async function assertHistoricalRefreshConvergesAfterUpdate(
-  sql: Sql,
-): Promise<void> {
-  const createdSessionIds: string[] = []
-  const insertEndedSession = async (updatedAt: string): Promise<string> => {
-    let sessionId = ''
-    await sql.begin(async (transaction) => {
-      const query = transaction as unknown as Sql
-      const roster = await createRosterInput(query)
-      sessionId = roster.sessionId
-      await insertSessionRosterSnapshot(transaction, roster)
-      await transaction`
-        UPDATE app_private.sessions
-        SET lifecycle_status = 'ended',
-            ended_at = ${updatedAt}::text::timestamptz,
-            updated_at = ${updatedAt}::text::timestamptz
-        WHERE id = ${sessionId}::uuid
-          AND owner_id = ${roster.owner.databaseOwnerId}::uuid
-      `
-    })
-    createdSessionIds.push(sessionId)
-    return sessionId
-  }
-
-  try {
-    const initiallyFirstId = await insertEndedSession(
-      '9999-12-31T23:59:59.000002Z',
-    )
-    const movedId = await insertEndedSession('9999-12-31T23:59:59.000001Z')
-    const firstPage = await listHistoricalSessions(sql, ownerScope, {
-      limit: 1,
-    })
-    expect(firstPage.sessions[0]?.id).toBe(initiallyFirstId)
-    expect(firstPage.nextCursor).not.toBeNull()
-
-    await sql`
-      UPDATE app_private.sessions
-      SET updated_at = '9999-12-31T23:59:59.000003Z'::timestamptz
-      WHERE id = ${movedId}::uuid
-    `
-
-    const staleContinuation = await listHistoricalSessions(sql, ownerScope, {
-      limit: 1,
-      cursor: firstPage.nextCursor ?? undefined,
-    })
-    expect(
-      staleContinuation.sessions.some((session) => session.id === movedId),
-    ).toBe(false)
-
-    const refreshedFirstPage = await listHistoricalSessions(sql, ownerScope, {
-      limit: 1,
-    })
-    expect(refreshedFirstPage.sessions[0]?.id).toBe(movedId)
-  } finally {
-    for (const sessionId of createdSessionIds) {
-      await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
-    }
-  }
-}
-
 export async function assertM23Repositories(sql: Sql): Promise<void> {
   await assertRosterAndSettings(sql)
   await assertRosterCorruptionClassification(sql)
   await assertAtomicConflictRollback(sql)
   await assertEveryRosterWriteStageRollsBack(sql)
   await assertMissingOwnerBoundaries(sql)
-  await assertHistoricalPaginationAndOwnerIsolation(sql)
-  await assertHistoricalRefreshConvergesAfterUpdate(sql)
 }
 
 function createCommandSnapshot(sessionId: string, stateVersion = 1) {
@@ -856,25 +624,6 @@ function commandInputs(sessionId: string) {
       type: 'endSession' as const,
       payload: {},
     },
-    {
-      ...base,
-      commandId: randomUUID(),
-      type: 'retryAgent' as const,
-      payload: {},
-    },
-    {
-      ...base,
-      sessionId: sessionId.toUpperCase(),
-      commandId: randomUUID().toUpperCase(),
-      type: 'aiAction' as const,
-      payload: {
-        decisionRequestId: randomUUID().toUpperCase(),
-        handId: randomUUID().toUpperCase(),
-        actorSeatNumber: 2,
-        candidateActionId: 'candidate_2',
-        action: { type: 'raise' as const, targetStreetCommitment: 120 },
-      },
-    },
   ]
 }
 
@@ -902,6 +651,7 @@ async function assertCommandLedgerLifecycle(sql: Sql): Promise<void> {
           : {
               code: 'expected_failure',
               message: '预期失败。',
+              latestSnapshot: createCommandSnapshot(input.sessionId),
             }
       if ('snapshot' in expectedResponse) {
         await completeCommand(transaction, acquired, expectedResponse, {
@@ -917,21 +667,7 @@ async function assertCommandLedgerLifecycle(sql: Sql): Promise<void> {
         FROM app_private.command_ledger
         WHERE id = ${acquired.ledgerId}::uuid
       `
-      const replayInput =
-        input.type === 'aiAction'
-          ? {
-              ...input,
-              sessionId: input.sessionId.toLowerCase(),
-              commandId: input.commandId.toLowerCase(),
-              payload: {
-                ...input.payload,
-                decisionRequestId:
-                  input.payload.decisionRequestId.toLowerCase(),
-                handId: input.payload.handId.toLowerCase(),
-              },
-            }
-          : input
-      const replayPrepared = prepareCommandRegistration(replayInput)
+      const replayPrepared = prepareCommandRegistration(input)
       expect(replayPrepared.canonicalPayloadDigest).toBe(
         prepared.canonicalPayloadDigest,
       )
@@ -952,7 +688,7 @@ async function assertCommandLedgerLifecycle(sql: Sql): Promise<void> {
       sessionId,
       commandId: randomUUID(),
       expectedStateVersion: 0,
-      type: 'retryAgent' as const,
+      type: 'endSession' as const,
       payload: {},
     }
     const first = await registerCommand(
@@ -960,13 +696,14 @@ async function assertCommandLedgerLifecycle(sql: Sql): Promise<void> {
       owner,
       prepareCommandRegistration(processingInput),
     )
-    const second = await registerCommand(
-      transaction,
-      owner,
-      prepareCommandRegistration(processingInput),
-    )
     expect(first.status).toBe('acquired')
-    expect(second).toEqual({ status: 'processing' })
+    await expect(
+      registerCommand(
+        transaction,
+        owner,
+        prepareCommandRegistration(processingInput),
+      ),
+    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
 
     const conflicting = {
       ...inputs[0],
@@ -1041,7 +778,7 @@ async function assertCommandLedgerRollbacks(sql: Sql): Promise<void> {
       {
         snapshot: createCommandSnapshot(rolledBackSessionId),
       },
-      null,
+      { firstEventSeq: 1, lastEventSeq: 1 },
     )
   })
 
@@ -1070,24 +807,26 @@ async function assertCommandLedgerRollbacks(sql: Sql): Promise<void> {
       return result
     })
     await sql.begin(async (transaction) => {
-      const replay = await registerCommand(
-        transaction,
-        owner,
-        prepareCommandRegistration({
-          sessionId: processingSessionId,
-          commandId: acquired.commandId,
-          expectedStateVersion: 0,
-          type: 'endSession',
-          payload: {},
-        }),
-      )
-      expect(replay).toEqual({ status: 'processing' })
+      await expect(
+        registerCommand(
+          transaction,
+          owner,
+          prepareCommandRegistration({
+            sessionId: processingSessionId,
+            commandId: acquired.commandId,
+            expectedStateVersion: 0,
+            type: 'endSession',
+            payload: {},
+          }),
+        ),
+      ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
 
       const forged = { ...acquired } as typeof acquired
       await expect(
         failCommand(transaction, forged, {
           code: 'expected_failure',
           message: '预期失败。',
+          latestSnapshot: createCommandSnapshot(processingSessionId),
         }),
       ).rejects.toBeInstanceOf(RepositoryInputValidationError)
       const rows = await transaction<{ readonly status: string }[]>`
@@ -1115,7 +854,7 @@ async function assertCandidateLedgerIdCollisions(sql: Sql): Promise<void> {
       sessionId,
       commandId: randomUUID(),
       expectedStateVersion: 0,
-      type: 'retryAgent' as const,
+      type: 'endSession' as const,
       payload: {},
     }
     const sameKey = prepareCommandRegistration(sameKeyInput)
@@ -1135,7 +874,7 @@ async function assertCandidateLedgerIdCollisions(sql: Sql): Promise<void> {
     await sql.begin(async (transaction) => {
       await expect(
         registerCommand(transaction, owner, sameKey),
-      ).resolves.toEqual({ status: 'processing' })
+      ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
     })
     await sql`
       DELETE FROM app_private.command_ledger
@@ -1256,7 +995,10 @@ async function assertConcurrentCommandReplay(
       const response = {
         snapshot: createCommandSnapshot(sessionId),
       }
-      await completeCommand(transaction, first, response, null)
+      await completeCommand(transaction, first, response, {
+        firstEventSeq: 1,
+        lastEventSeq: 1,
+      })
       const updatedRows = await transaction<{ readonly updatedAt: string }[]>`
         SELECT updated_at::text AS "updatedAt"
         FROM app_private.command_ledger
@@ -2069,11 +1811,6 @@ export async function assertM25SessionMutationRepository(
   await assertConcurrentSessionMutations(sql, runtimeUrl)
 }
 
-const recoveryRegistries = {
-  snapshot: currentSnapshotReader,
-  privateEvent: currentPrivateEventReader,
-}
-
 async function insertRecoverableSession(
   sql: Sql,
   sessionId: string,
@@ -2144,7 +1881,6 @@ async function assertRecoveryRepairAndCapability(
         owner,
         sessionId,
         '2026-08-04T10:01:00.000Z',
-        recoveryRegistries,
       )
       expect(recovered).toMatchObject({
         kind: 'ready',
@@ -2213,7 +1949,6 @@ async function assertRecoveryDiagnosticAndRetry(sql: Sql): Promise<void> {
           owner,
           sessionId,
           '2026-08-04T10:03:00.000Z',
-          recoveryRegistries,
         ),
       ),
     ).resolves.toMatchObject({
@@ -2266,7 +2001,6 @@ async function assertRecoveryDiagnosticAndRetry(sql: Sql): Promise<void> {
           owner,
           sessionId,
           '2026-08-04T10:04:00.000Z',
-          recoveryRegistries,
         ),
       ),
     ).resolves.toMatchObject({
@@ -2280,7 +2014,6 @@ async function assertRecoveryDiagnosticAndRetry(sql: Sql): Promise<void> {
           owner,
           sessionId,
           '2026-08-04T10:05:00.000Z',
-          recoveryRegistries,
         ),
       ),
     ).resolves.toMatchObject({ kind: 'ready', lifecycleStatus: 'active' })
@@ -2335,7 +2068,6 @@ async function assertRecoveryDiagnosticCase(
           owner,
           sessionId,
           '2026-08-04T10:05:30.000Z',
-          recoveryRegistries,
         ),
       ),
     ).resolves.toMatchObject({
@@ -2458,7 +2190,6 @@ async function assertEndedDiagnosticRetry(sql: Sql): Promise<void> {
         owner,
         sessionId,
         '2026-08-04T10:08:00.000Z',
-        recoveryRegistries,
       ),
     )
     expect(result).toMatchObject({ kind: 'ended', pointerRepair: null })
@@ -2510,7 +2241,6 @@ async function assertRecoveryOwnerIsolation(sql: Sql): Promise<void> {
         owner,
         otherSessionId,
         '2026-08-04T10:08:00.000Z',
-        recoveryRegistries,
       ),
     ).rejects.toBeInstanceOf(ResourceNotFoundError)
   })
@@ -2541,7 +2271,6 @@ async function assertRecoveryActiveConflictRollback(sql: Sql): Promise<void> {
           owner,
           sessionId,
           '2026-08-04T10:07:00.000Z',
-          recoveryRegistries,
         ),
       ),
     ).rejects.toBeInstanceOf(ActiveSessionConflictError)
@@ -2594,7 +2323,6 @@ async function assertConcurrentRecoveryAfterMutation(
         owner,
         sessionId,
         '2026-08-04T10:08:00.000Z',
-        recoveryRegistries,
       )
       if (firstRecovery.kind !== 'ready') {
         throw new Error('Expected first active recovery.')
@@ -2613,7 +2341,6 @@ async function assertConcurrentRecoveryAfterMutation(
           owner,
           sessionId,
           '2026-08-04T10:09:00.000Z',
-          recoveryRegistries,
         )
       })
       await waitForTransactionBlock(
@@ -3410,7 +3137,7 @@ async function assertM27HandAbortRoundTripAndRollback(sql: Sql): Promise<void> {
     const playerOwner = await insertCommittedM27Session(sql, playerSessionId)
     const playerAgents = await readSessionAgentSnapshots(
       sql,
-      ownerScope,
+      playerOwner,
       playerSessionId,
     )
     const actor = playerAgents[0]
@@ -3418,10 +3145,6 @@ async function assertM27HandAbortRoundTripAndRollback(sql: Sql): Promise<void> {
       throw new Error('M2.7 Player 中止 fixture 缺少 Agent。')
     }
     const playerFixture = createM27HandAuditFixture(playerHandId)
-    const repository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
-
     await sql.begin(async (transaction) => {
       const locked = await lockSessionForMutation(
         transaction,
@@ -3480,61 +3203,6 @@ async function assertM27HandAbortRoundTripAndRollback(sql: Sql): Promise<void> {
       status: 'aborted',
       failedAgentRunId: playerRunId,
       checkpoint: playerFixture.checkpoint,
-    })
-
-    await sql`
-      INSERT INTO app_private.player_decisions (
-        id,
-        agent_run_id,
-        owner_id,
-        session_id,
-        hand_id,
-        participant_id,
-        source_state_version,
-        decision_request_id,
-        memory_revision,
-        runtime,
-        submission_status,
-        decision_packet_payload_version,
-        decision_packet_payload,
-        candidate_set_payload_version,
-        candidate_set_payload,
-        validator_result_payload_version,
-        validator_result_payload,
-        created_at
-      ) VALUES (
-        ${randomUUID()}::uuid,
-        ${playerRunId}::uuid,
-        ${playerOwner.databaseOwnerId}::uuid,
-        ${playerSessionId}::uuid,
-        ${playerHandId}::uuid,
-        ${actor.participantId}::uuid,
-        1,
-        ${decisionRequestId}::uuid,
-        0,
-        'player',
-        'pending',
-        701,
-        '{}'::jsonb,
-        702,
-        '{}'::jsonb,
-        703,
-        '{}'::jsonb,
-        '2026-08-04T13:00:21.000Z'::timestamptz
-      )
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(
-          transaction,
-          playerOwner,
-          playerSessionId,
-          playerRunId,
-        ),
-      ),
-    ).rejects.toMatchObject({
-      name: UnknownPayloadVersionError.name,
-      payloadKind: 'playerDecisionPacket',
     })
 
     await sql`DELETE FROM app_private.sessions WHERE id = ${playerSessionId}::uuid`
@@ -3822,9 +3490,7 @@ async function insertCommittedM27CoachRun(
   agentRunId: string,
 ) {
   const owner = await insertCommittedM27CompletedHand(sql, sessionId, handId)
-  const repository = createAgentFoundationAuditRepository({
-    runtimeAuditDecoders: {},
-  })
+  const repository = createAgentFoundationAuditRepository()
   await sql.begin((transaction) =>
     insertAgentRunFixture(
       transaction,
@@ -3833,626 +3499,6 @@ async function insertCommittedM27CoachRun(
     ),
   )
   return { owner, repository }
-}
-
-async function finishM27CompletedAttempt(
-  sql: Sql,
-  context: {
-    readonly sessionId: string
-    readonly agentRunId: string
-    readonly attemptId: string
-    readonly sequence: number
-    readonly repository: ReturnType<typeof createAgentFoundationAuditRepository>
-    readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
-  },
-): Promise<void> {
-  await sql.begin((transaction) =>
-    context.repository.finishAgentAttemptAudit(transaction, context.owner, {
-      sessionId: context.sessionId,
-      agentRunId: context.agentRunId,
-      attemptId: context.attemptId,
-      lifecycle: 'completed',
-      accepted: true,
-      stale: false,
-      interrupted: false,
-      inputTokens: 100 + context.sequence,
-      outputTokens: 20 + context.sequence,
-      costMicrounits: 800 + context.sequence,
-      durationMs: 1_250 + context.sequence,
-      errorCode: null,
-      responseProjectionHash: (context.sequence % 2 === 0 ? '8' : '9').repeat(
-        64,
-      ),
-      validationStatus: 'valid',
-      completedAt: new Date(
-        Date.parse('2026-08-04T13:00:05.000Z') + context.sequence * 1_000,
-      ).toISOString(),
-    }),
-  )
-}
-
-async function assertM27AgentPublicAggregateRoundTrip(sql: Sql): Promise<void> {
-  const sessionId = randomUUID()
-  const handId = randomUUID()
-  const agentRunId = randomUUID()
-
-  try {
-    const { owner, repository } = await insertCommittedM27CoachRun(
-      sql,
-      sessionId,
-      handId,
-      agentRunId,
-    )
-    const attemptZero = await sql.begin((transaction) =>
-      repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 0),
-      ),
-    )
-    const invocationZero = await sql.begin((transaction) =>
-      repository.appendCapabilityInvocationAudit(
-        transaction,
-        owner,
-        createM27InvocationInput(sessionId, agentRunId, 0),
-      ),
-    )
-    const attemptOne = await sql.begin((transaction) =>
-      repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 1),
-      ),
-    )
-    const invocationOne = await sql.begin((transaction) =>
-      repository.appendCapabilityInvocationAudit(
-        transaction,
-        owner,
-        createM27InvocationInput(sessionId, agentRunId, 1),
-      ),
-    )
-    const invocationWithoutOutput = await sql.begin((transaction) =>
-      repository.appendCapabilityInvocationAudit(transaction, owner, {
-        ...createM27InvocationInput(sessionId, agentRunId, 2),
-        outputSchemaVersion: null,
-        outputHash: null,
-      }),
-    )
-    const unauthorizedInvocation = await sql.begin((transaction) =>
-      repository.appendCapabilityInvocationAudit(transaction, owner, {
-        ...createM27InvocationInput(sessionId, agentRunId, 3),
-        authorized: false,
-        outputSchemaVersion: null,
-        outputHash: null,
-        errorCode: 'capability_not_authorized',
-      }),
-    )
-    const failedInvocation = await sql.begin((transaction) =>
-      repository.appendCapabilityInvocationAudit(transaction, owner, {
-        ...createM27InvocationInput(sessionId, agentRunId, 4),
-        outputSchemaVersion: null,
-        outputHash: null,
-        errorCode: 'capability_failed',
-      }),
-    )
-    await finishM27CompletedAttempt(sql, {
-      sessionId,
-      agentRunId,
-      attemptId: attemptOne.attemptId,
-      sequence: 1,
-      repository,
-      owner,
-    })
-    await finishM27CompletedAttempt(sql, {
-      sessionId,
-      agentRunId,
-      attemptId: attemptZero.attemptId,
-      sequence: 0,
-      repository,
-      owner,
-    })
-    const failedAttempt = await sql.begin((transaction) =>
-      repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 2),
-      ),
-    )
-    await sql.begin((transaction) =>
-      repository.finishAgentAttemptAudit(transaction, owner, {
-        sessionId,
-        agentRunId,
-        attemptId: failedAttempt.attemptId,
-        lifecycle: 'failed',
-        accepted: false,
-        stale: false,
-        interrupted: false,
-        inputTokens: 102,
-        outputTokens: 22,
-        costMicrounits: 802,
-        durationMs: 1_252,
-        errorCode: 'provider_failed',
-        responseProjectionHash: null,
-        validationStatus: 'invalid',
-        completedAt: '2026-08-04T13:00:07.000Z',
-      }),
-    )
-    const cancelledAttempt = await sql.begin((transaction) =>
-      repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 3),
-      ),
-    )
-    await sql.begin((transaction) =>
-      repository.finishAgentAttemptAudit(transaction, owner, {
-        sessionId,
-        agentRunId,
-        attemptId: cancelledAttempt.attemptId,
-        lifecycle: 'cancelled',
-        accepted: false,
-        stale: false,
-        interrupted: true,
-        inputTokens: 103,
-        outputTokens: 23,
-        costMicrounits: 803,
-        durationMs: 1_253,
-        errorCode: 'run_cancelled',
-        responseProjectionHash: null,
-        validationStatus: 'notRun',
-        completedAt: '2026-08-04T13:00:08.000Z',
-      }),
-    )
-    const staleAttempt = await sql.begin((transaction) =>
-      repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 4),
-      ),
-    )
-    await sql.begin((transaction) =>
-      repository.finishAgentAttemptAudit(transaction, owner, {
-        sessionId,
-        agentRunId,
-        attemptId: staleAttempt.attemptId,
-        lifecycle: 'stale',
-        accepted: false,
-        stale: true,
-        interrupted: false,
-        inputTokens: 104,
-        outputTokens: 24,
-        costMicrounits: 804,
-        durationMs: 1_254,
-        errorCode: null,
-        responseProjectionHash: '7'.repeat(64),
-        validationStatus: 'valid',
-        completedAt: '2026-08-04T13:00:09.000Z',
-      }),
-    )
-
-    const audit = await sql.begin((transaction) =>
-      repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-    )
-    expect(audit).toMatchObject({
-      ownerId: 'local-user',
-      agentRunId,
-      sessionId,
-      handId,
-      runtime: 'coach',
-      lifecycle: 'running',
-      participantId: null,
-      sourceStateVersion: null,
-      decisionRequestId: null,
-      runConfiguration: createM27RunConfiguration('coach'),
-      budget: createM27ExecutionBudget(),
-      attempts: [
-        {
-          attemptId: attemptZero.attemptId,
-          attemptNumber: 0,
-          lifecycle: 'completed',
-        },
-        {
-          attemptId: attemptOne.attemptId,
-          attemptNumber: 1,
-          lifecycle: 'completed',
-        },
-        {
-          attemptId: failedAttempt.attemptId,
-          attemptNumber: 2,
-          lifecycle: 'failed',
-          errorCode: 'provider_failed',
-        },
-        {
-          attemptId: cancelledAttempt.attemptId,
-          attemptNumber: 3,
-          lifecycle: 'cancelled',
-          inputTokens: 103,
-          outputTokens: 23,
-          costMicrounits: 803,
-        },
-        {
-          attemptId: staleAttempt.attemptId,
-          attemptNumber: 4,
-          lifecycle: 'stale',
-          validationStatus: 'valid',
-        },
-      ],
-      invocations: [
-        {
-          invocationId: invocationZero.invocationId,
-          invocationNumber: 0,
-        },
-        {
-          invocationId: invocationOne.invocationId,
-          invocationNumber: 1,
-        },
-        {
-          invocationId: invocationWithoutOutput.invocationId,
-          invocationNumber: 2,
-          outputSchemaVersion: null,
-          outputHash: null,
-          errorCode: null,
-        },
-        {
-          invocationId: unauthorizedInvocation.invocationId,
-          invocationNumber: 3,
-          authorized: false,
-          errorCode: 'capability_not_authorized',
-        },
-        {
-          invocationId: failedInvocation.invocationId,
-          invocationNumber: 4,
-          authorized: true,
-          errorCode: 'capability_failed',
-        },
-      ],
-      runtimeAudit: {
-        checkpoint: null,
-        result: null,
-      },
-    })
-    expect(audit.attempts).toHaveLength(5)
-    expect(audit.invocations).toHaveLength(5)
-    expect(new Set(audit.attempts.map(({ attemptId }) => attemptId)).size).toBe(
-      5,
-    )
-    expect(
-      new Set(audit.invocations.map(({ invocationId }) => invocationId)).size,
-    ).toBe(5)
-    expect(Object.isFrozen(audit)).toBe(true)
-    expect(Object.isFrozen(audit.attempts)).toBe(true)
-    expect(Object.isFrozen(audit.invocations)).toBe(true)
-
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(
-          transaction,
-          owner,
-          randomUUID(),
-          agentRunId,
-        ),
-      ),
-    ).rejects.toBeInstanceOf(ResourceNotFoundError)
-    await expect(
-      sql.begin((transaction) =>
-        repository.startAgentAttemptAudit(transaction, owner, {
-          ...createM27AttemptInput(sessionId, randomUUID(), 2),
-          sessionId,
-        }),
-      ),
-    ).rejects.toBeInstanceOf(ResourceNotFoundError)
-  } finally {
-    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
-  }
-}
-
-async function assertM27AgentRestartReadback(
-  sql: Sql,
-  runtimeUrl: string,
-): Promise<void> {
-  const sessionId = randomUUID()
-  const handId = randomUUID()
-  const agentRunId = randomUUID()
-  let writerSql: Sql | undefined = createDatabaseTestSqlForRole(
-    runtimeUrl,
-    'm27-agent-writer',
-  )
-  let readerSql: Sql | undefined
-
-  try {
-    const { owner, repository } = await insertCommittedM27CoachRun(
-      writerSql,
-      sessionId,
-      handId,
-      agentRunId,
-    )
-    const attempt = await writerSql.begin((transaction) =>
-      repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 0),
-      ),
-    )
-    await finishM27CompletedAttempt(writerSql, {
-      sessionId,
-      agentRunId,
-      attemptId: attempt.attemptId,
-      sequence: 0,
-      repository,
-      owner,
-    })
-    const startedAttempt = await writerSql.begin((transaction) =>
-      repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 1),
-      ),
-    )
-    const invocation = await writerSql.begin((transaction) =>
-      repository.appendCapabilityInvocationAudit(
-        transaction,
-        owner,
-        createM27InvocationInput(sessionId, agentRunId, 0),
-      ),
-    )
-    await writerSql.end({ timeout: 0 })
-    writerSql = undefined
-
-    readerSql = createDatabaseTestSqlForRole(runtimeUrl, 'm27-agent-reader')
-    const readerOwner = await resolveOwnerScope(readerSql, ownerScope)
-    const readerRepository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
-    const [handAudit, runAudit] = await readerSql.begin(async (transaction) => {
-      const hand = await readHandAudit(
-        transaction,
-        readerOwner,
-        sessionId,
-        handId,
-      )
-      const run = await readerRepository.readAgentRunAudit(
-        transaction,
-        readerOwner,
-        sessionId,
-        agentRunId,
-      )
-      return [hand, run] as const
-    })
-    expect(handAudit).toMatchObject({
-      sessionId,
-      handId,
-      status: 'completed',
-    })
-    expect(runAudit).toMatchObject({
-      sessionId,
-      handId,
-      agentRunId,
-      lifecycle: 'running',
-      attempts: [
-        {
-          attemptId: attempt.attemptId,
-          attemptNumber: 0,
-          lifecycle: 'completed',
-        },
-        {
-          attemptId: startedAttempt.attemptId,
-          attemptNumber: 1,
-          lifecycle: 'started',
-          completedAt: null,
-        },
-      ],
-      invocations: [
-        {
-          invocationId: invocation.invocationId,
-          invocationNumber: 0,
-        },
-      ],
-    })
-  } finally {
-    await writerSql?.end({ timeout: 0 })
-    await readerSql?.end({ timeout: 0 })
-    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
-  }
-}
-
-async function assertM27AgentUnknownAndCorruptRows(sql: Sql): Promise<void> {
-  const sessionId = randomUUID()
-  const handId = randomUUID()
-  const agentRunId = randomUUID()
-
-  try {
-    const { owner, repository } = await insertCommittedM27CoachRun(
-      sql,
-      sessionId,
-      handId,
-      agentRunId,
-    )
-    const attempt = await sql.begin((transaction) =>
-      repository.startAgentAttemptAudit(
-        transaction,
-        owner,
-        createM27AttemptInput(sessionId, agentRunId, 0),
-      ),
-    )
-    const invocation = await sql.begin((transaction) =>
-      repository.appendCapabilityInvocationAudit(
-        transaction,
-        owner,
-        createM27InvocationInput(sessionId, agentRunId, 0),
-      ),
-    )
-    const originalRows = await sql<
-      {
-        readonly runConfigurationPayload: JSONValue
-        readonly budgetPayload: JSONValue
-        readonly attemptPayload: JSONValue
-      }[]
-    >`
-      SELECT
-        run.run_config_payload AS "runConfigurationPayload",
-        run.budget_payload AS "budgetPayload",
-        attempt.attempt_payload AS "attemptPayload"
-      FROM app_private.agent_runs AS run
-      JOIN app_private.agent_attempts AS attempt
-        ON attempt.agent_run_id = run.id
-      WHERE run.id = ${agentRunId}::uuid
-        AND attempt.id = ${attempt.attemptId}::uuid
-    `
-    const original = originalRows[0]
-    if (original === undefined) {
-      throw new Error('M2.7 异常读取 fixture 缺少原始载荷。')
-    }
-
-    await sql`
-      UPDATE app_private.agent_runs
-      SET run_config_payload_version = 999
-      WHERE id = ${agentRunId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toMatchObject({
-      name: UnknownPayloadVersionError.name,
-      payloadKind: 'agentRunConfiguration',
-    })
-
-    await sql`
-      UPDATE app_private.agent_runs
-      SET run_config_payload_version = 1,
-          run_config_payload = '{}'::jsonb
-      WHERE id = ${agentRunId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
-
-    await sql`
-      UPDATE app_private.agent_runs
-      SET run_config_payload = ${serializeJsonbFixture(original.runConfigurationPayload)}::text::jsonb,
-          budget_payload_version = 999
-      WHERE id = ${agentRunId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toMatchObject({
-      name: UnknownPayloadVersionError.name,
-      payloadKind: 'agentExecutionBudget',
-    })
-
-    await sql`
-      UPDATE app_private.agent_runs
-      SET budget_payload_version = 1,
-          budget_payload = '{}'::jsonb
-      WHERE id = ${agentRunId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
-
-    await sql`
-      UPDATE app_private.agent_runs
-      SET budget_payload = ${serializeJsonbFixture(original.budgetPayload)}::text::jsonb,
-          checkpoint_payload_version = 777,
-          checkpoint_payload = '{}'::jsonb
-      WHERE id = ${agentRunId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toMatchObject({
-      name: UnknownPayloadVersionError.name,
-      payloadKind: 'agentRunCheckpoint',
-    })
-
-    await sql`
-      UPDATE app_private.agent_runs
-      SET checkpoint_payload_version = NULL,
-          checkpoint_payload = NULL
-      WHERE id = ${agentRunId}::uuid
-    `
-    await sql`
-      UPDATE app_private.agent_runs
-      SET lifecycle = 'failed',
-          lease_owner = NULL,
-          lease_expires_at = NULL,
-          completed_at = clock_timestamp(),
-          termination_reason = 'test_failed',
-          result_payload_version = 778,
-          result_payload = '{}'::jsonb
-      WHERE id = ${agentRunId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toMatchObject({
-      name: UnknownPayloadVersionError.name,
-      payloadKind: 'agentRunResult',
-    })
-
-    await sql`
-      UPDATE app_private.agent_runs
-      SET result_payload_version = NULL,
-          result_payload = NULL
-      WHERE id = ${agentRunId}::uuid
-    `
-    await sql`
-      UPDATE app_private.agent_capability_invocations
-      SET invocation_payload_version = 888,
-          invocation_payload = '{}'::jsonb
-      WHERE id = ${invocation.invocationId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toMatchObject({
-      name: UnknownPayloadVersionError.name,
-      payloadKind: 'capabilityInvocationPayload',
-    })
-
-    await sql`
-      UPDATE app_private.agent_capability_invocations
-      SET invocation_payload_version = NULL,
-          invocation_payload = NULL
-      WHERE id = ${invocation.invocationId}::uuid
-    `
-    await sql`
-      UPDATE app_private.agent_attempts
-      SET attempt_payload_version = 999
-      WHERE id = ${attempt.attemptId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toMatchObject({
-      name: UnknownPayloadVersionError.name,
-      payloadKind: 'agentAttempt',
-    })
-
-    await sql`
-      UPDATE app_private.agent_attempts
-      SET attempt_payload_version = 1,
-          attempt_payload = '{}'::jsonb
-      WHERE id = ${attempt.attemptId}::uuid
-    `
-    await expect(
-      sql.begin((transaction) =>
-        repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-      ),
-    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
-  } finally {
-    await sql`DELETE FROM app_private.sessions WHERE id = ${sessionId}::uuid`
-  }
 }
 
 async function assertM27AgentSequenceConcurrency(
@@ -4553,16 +3599,6 @@ async function assertM27AgentSequenceConcurrency(
     await expect(secondInvocation).resolves.toMatchObject({
       invocationNumber: 0,
     })
-
-    const audit = await sql.begin((transaction) =>
-      repository.readAgentRunAudit(transaction, owner, sessionId, agentRunId),
-    )
-    expect(audit.attempts.map(({ attemptNumber }) => attemptNumber)).toEqual([
-      0, 1,
-    ])
-    expect(
-      audit.invocations.map(({ invocationNumber }) => invocationNumber),
-    ).toEqual([0])
   } finally {
     await secondAttempt?.catch(() => undefined)
     await secondInvocation?.catch(() => undefined)
@@ -4615,9 +3651,6 @@ export async function assertM27HandAgentAuditRepositories(
   await assertM27HandRestartReadback(sql, runtimeUrl)
   await assertM27HandSecretBoundaries(sql)
   await assertM27HandAbortRoundTripAndRollback(sql)
-  await assertM27AgentPublicAggregateRoundTrip(sql)
-  await assertM27AgentRestartReadback(sql, runtimeUrl)
-  await assertM27AgentUnknownAndCorruptRows(sql)
   await assertM27AgentSequenceConcurrency(sql, runtimeUrl)
   await assertNoOpenDatabaseTestTransactions(sql)
 }
@@ -4634,7 +3667,6 @@ const M28_SESSION_SCOPED_TABLES = Object.freeze([
   'agent_runs',
   'agent_attempts',
   'agent_capability_invocations',
-  'player_decisions',
 ] as const)
 
 async function insertM28RosterSession(sql: Sql, sessionId: string) {
@@ -4796,9 +3828,7 @@ async function insertM28CascadeFixture(
   const playerRunId = randomUUID()
   const coachRunId = randomUUID()
   const decisionRequestId = randomUUID()
-  const auditRepository = createAgentFoundationAuditRepository({
-    runtimeAuditDecoders: {},
-  })
+  const auditRepository = createAgentFoundationAuditRepository()
   await sql.begin(async (transaction) => {
     await insertAgentRunFixture(
       transaction,
@@ -4856,26 +3886,6 @@ async function insertM28CascadeFixture(
     )
   })
 
-  await sql.begin(async (transaction) => {
-    await transaction`
-      INSERT INTO app_private.player_decisions (
-        id, agent_run_id, owner_id, session_id, hand_id, participant_id,
-        source_state_version, decision_request_id, memory_revision,
-        runtime, submission_status, command_ledger_id,
-        decision_packet_payload_version, decision_packet_payload,
-        candidate_set_payload_version, candidate_set_payload,
-        validator_result_payload_version, validator_result_payload
-      ) VALUES (
-        ${randomUUID()}::uuid, ${playerRunId}::uuid,
-        ${roster.owner.databaseOwnerId}::uuid, ${sessionId}::uuid,
-        ${handId}::uuid, ${firstAgent.agentParticipantId}::uuid,
-        1, ${decisionRequestId}::uuid, 0,
-        'player', 'pending', ${command.ledgerId}::uuid,
-        1, '{}'::jsonb, 1, '{}'::jsonb, 1, '{}'::jsonb
-      )
-    `
-  })
-
   await sql`
     UPDATE app_private.session_snapshots
     SET private_table_state_payload_version = 999,
@@ -4908,8 +3918,7 @@ async function readM28SessionScopedCounts(
       (SELECT count(*)::int FROM app_private.session_snapshots WHERE session_id = ${sessionId}::uuid) AS "session_snapshots",
       (SELECT count(*)::int FROM app_private.agent_runs WHERE session_id = ${sessionId}::uuid) AS "agent_runs",
       (SELECT count(*)::int FROM app_private.agent_attempts WHERE session_id = ${sessionId}::uuid) AS "agent_attempts",
-      (SELECT count(*)::int FROM app_private.agent_capability_invocations WHERE session_id = ${sessionId}::uuid) AS "agent_capability_invocations",
-      (SELECT count(*)::int FROM app_private.player_decisions WHERE session_id = ${sessionId}::uuid) AS "player_decisions"
+      (SELECT count(*)::int FROM app_private.agent_capability_invocations WHERE session_id = ${sessionId}::uuid) AS "agent_capability_invocations"
   `
   const counts = rows[0]
   if (counts === undefined) {
@@ -5090,8 +4099,10 @@ export async function assertM28ClearAndPreservedRoots(sql: Sql): Promise<void> {
       otherOwnerId,
       otherOwnerSessionId,
     )
-    await writePlayerTimeoutSettings(sql, ownerScope, settings)
-    const beforeSettings = await readPlayerTimeoutSettings(sql, ownerScope)
+    await sql.begin((transaction) =>
+      patchPlayerTimeoutSettings(transaction, owner, settings),
+    )
+    const beforeSettings = await readResolvedPlayerTimeoutSettings(sql, owner)
 
     await expect(
       sql.begin((transaction) =>
@@ -5101,7 +4112,7 @@ export async function assertM28ClearAndPreservedRoots(sql: Sql): Promise<void> {
       ),
     ).resolves.toEqual({ deletedSessionCount: 3, invalidatedRuns: [] })
 
-    const afterSettings = await readPlayerTimeoutSettings(sql, ownerScope)
+    const afterSettings = await readResolvedPlayerTimeoutSettings(sql, owner)
     expect(afterSettings).toEqual(beforeSettings)
     const preservedRows = await sql<
       {
@@ -5359,9 +4370,7 @@ async function runM28MinimalCommitGate(
 
   const updatedRows = await transaction<{ readonly agentRunId: string }[]>`
     UPDATE app_private.agent_runs
-    SET checkpoint_payload_version = 1,
-        checkpoint_payload = '{"minimalGateCommitted":true}'::jsonb,
-        updated_at = clock_timestamp()
+    SET updated_at = clock_timestamp()
     WHERE id = ${fixture.agentRunId}::uuid
       AND owner_id = ${fixture.owner.databaseOwnerId}::uuid
       AND session_id = ${fixture.sessionId}::uuid
@@ -5710,7 +4719,11 @@ async function insertM28HistoricalEndedSession(
     `
     return roster
   })
-  const snapshots = await readSessionAgentSnapshots(sql, ownerScope, sessionId)
+  const snapshots = await readSessionAgentSnapshots(
+    sql,
+    prepared.owner,
+    sessionId,
+  )
   const historicalConfigSnapshotKey = snapshots[0]?.configSnapshotKey
   if (historicalConfigSnapshotKey === undefined) {
     throw new Error('M2.8 历史阵容 fixture 缺少配置 Key。')
@@ -6144,7 +5157,6 @@ function createM31Executor(input: {
     sql: input.sql,
     owner: input.owner,
     handlers: createSessionCommandHandlerMap({
-      enabledCommandTypes: [input.commandType],
       bindings: [
         {
           commandType: input.commandType,
@@ -6178,12 +5190,12 @@ function createM31Executor(input: {
     }),
     mutationRepository: productionSessionMutationRepository,
     recoveryRepository: productionSessionRecoveryRepository,
-    recoveryRegistries,
     snapshotProjectorBinding: createM31SnapshotProjectorBinding(
       input.sessionId,
     ),
     now: () => input.commandAt,
     nextEventId: () => input.eventId,
+    committedEventPublisher: { publish: () => undefined },
   })
 }
 

@@ -240,7 +240,6 @@ describe('handEvaluator.evaluate', () => {
         sixHighEvaluation.comparisonGrade,
       ),
     ).toBeLessThan(0)
-    expect(handEvaluator.compare(wheel, sixHigh)).toBe('lose')
   })
 
   test('reports a royal flush as a straight flush with a specific Chinese name', () => {
@@ -300,86 +299,6 @@ describe('handEvaluator.evaluate', () => {
   })
 })
 
-describe('handEvaluator.compare', () => {
-  test('uses multiple kicker levels to compare the same pair', () => {
-    const stronger = [
-      card('A', 'spades'),
-      card('A', 'hearts'),
-      card('K', 'diamonds'),
-      card('Q', 'clubs'),
-      card('J', 'spades'),
-      card('4', 'hearts'),
-      card('2', 'diamonds'),
-    ]
-    const weaker = [
-      card('A', 'diamonds'),
-      card('A', 'clubs'),
-      card('K', 'spades'),
-      card('Q', 'hearts'),
-      card('T', 'diamonds'),
-      card('4', 'clubs'),
-      card('2', 'spades'),
-    ]
-    const strongerEvaluation = handEvaluator.evaluate(stronger)
-    const weakerEvaluation = handEvaluator.evaluate(weaker)
-
-    expect(handEvaluator.compare(stronger, weaker)).toBe('win')
-    expect(handEvaluator.compare(weaker, stronger)).toBe('lose')
-    expect(
-      compareGrades(
-        strongerEvaluation.comparisonGrade,
-        weakerEvaluation.comparisonGrade,
-      ),
-    ).toBeGreaterThan(0)
-  })
-
-  test('returns a tie when both players use the five-card board', () => {
-    const board = [
-      card('A', 'spades'),
-      card('K', 'hearts'),
-      card('Q', 'diamonds'),
-      card('J', 'clubs'),
-      card('T', 'spades'),
-    ]
-    const left = [card('2', 'clubs'), card('3', 'clubs'), ...board]
-    const right = [card('8', 'hearts'), card('9', 'hearts'), ...board]
-
-    expect(handEvaluator.compare(left, right)).toBe('tie')
-    expect(handEvaluator.evaluate(left).comparisonGrade).toEqual(
-      handEvaluator.evaluate(right).comparisonGrade,
-    )
-  })
-
-  test('uses the single kicker to compare four of a kind', () => {
-    const sharedQuads = [
-      card('A', 'spades'),
-      card('A', 'hearts'),
-      card('A', 'diamonds'),
-      card('A', 'clubs'),
-    ]
-    const stronger = [
-      ...sharedQuads,
-      card('K', 'spades'),
-      card('4', 'hearts'),
-      card('2', 'diamonds'),
-    ]
-    const weaker = [
-      ...sharedQuads,
-      card('Q', 'spades'),
-      card('4', 'diamonds'),
-      card('2', 'clubs'),
-    ]
-
-    expect(handEvaluator.compare(stronger, weaker)).toBe('win')
-    expect(
-      compareGrades(
-        handEvaluator.evaluate(stronger).comparisonGrade,
-        handEvaluator.evaluate(weaker).comparisonGrade,
-      ),
-    ).toBeGreaterThan(0)
-  })
-})
-
 describe('handEvaluator input boundaries', () => {
   const validCards = [
     card('A', 'spades'),
@@ -426,32 +345,14 @@ describe('handEvaluator input boundaries', () => {
         { rank: '1', suit: 'clubs' } as unknown as Card,
       ]),
     ).toThrow()
-    expect(() =>
-      handEvaluator.compare(validCards, [
-        ...validCards.slice(0, 4),
-        card('A', 'spades'),
-      ]),
-    ).toThrow('牌型输入不得包含重复牌。')
   })
 
-  test('does not mutate evaluate or compare inputs', () => {
+  test('does not mutate evaluate inputs', () => {
     const left = [...validCards, card('4', 'hearts'), card('2', 'diamonds')]
-    const right = [
-      card('A', 'hearts'),
-      card('K', 'diamonds'),
-      card('Q', 'clubs'),
-      card('J', 'spades'),
-      card('8', 'hearts'),
-      card('4', 'diamonds'),
-      card('2', 'clubs'),
-    ]
     const leftBefore = structuredClone(left)
-    const rightBefore = structuredClone(right)
 
     handEvaluator.evaluate(left)
-    handEvaluator.compare(left, right)
 
     expect(left).toEqual(leftBefore)
-    expect(right).toEqual(rightBefore)
   })
 })

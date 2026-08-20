@@ -12,8 +12,6 @@ import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { ResourceNotFoundError } from '../../src/persistence/errors.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
-import { currentSnapshotReader } from '../../src/sessions/authoritative-state/snapshot-codec.js'
-import { currentPrivateEventReader } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { currentPrivateEventProtocol } from '../../src/sessions/authoritative-state/current-private-event-protocol.js'
 import type { PrepareCommandResult } from '../../src/sessions/command-execution/command-handler.js'
 import { createGuardedPort } from '../../src/sessions/command-execution/command-handler.js'
@@ -173,15 +171,10 @@ async function createExecutionFixture(input: {
     sql,
     owner,
     handlers: createSessionCommandHandlerMap({
-      enabledCommandTypes: [input.commandType],
       bindings: [binding as never],
     }),
     mutationRepository: mutationRepository as never,
     recoveryRepository: recoveryRepository as never,
-    recoveryRegistries: {
-      snapshot: currentSnapshotReader,
-      privateEvent: currentPrivateEventReader,
-    },
     commandLedgerRepository: {
       registerCommand: registerCommand as never,
       readExistingCommandResult: readExistingCommandResult as never,
@@ -194,12 +187,12 @@ async function createExecutionFixture(input: {
     },
     now: () => '2026-08-05T10:00:00.000Z',
     nextEventId: () => eventId,
+    committedEventPublisher: {
+      publish: input.publish ?? (() => undefined),
+    },
     ...(input.logPointerRepair === undefined
       ? {}
       : { logPointerRepair: input.logPointerRepair }),
-    ...(input.publish === undefined
-      ? {}
-      : { committedEventPublisher: { publish: input.publish } }),
   }
   const executor = createSessionCommandExecutor(executorInput)
   return {
@@ -228,7 +221,6 @@ describe('session command execution', () => {
   test('constructs an immutable handler map with an exact enabled command set', () => {
     const binding = testBinding()
     const handlers = createSessionCommandHandlerMap({
-      enabledCommandTypes: ['endSession'],
       bindings: [binding],
     })
 
@@ -252,13 +244,6 @@ describe('session command execution', () => {
     expect(() => handlers.get('rebuy')).toThrow(SessionCommandCompositionError)
     expect(() =>
       createSessionCommandHandlerMap({
-        enabledCommandTypes: ['endSession'],
-        bindings: [],
-      }),
-    ).toThrow(SessionCommandCompositionError)
-    expect(() =>
-      createSessionCommandHandlerMap({
-        enabledCommandTypes: ['endSession'],
         bindings: [binding, binding],
       }),
     ).toThrow(SessionCommandCompositionError)
@@ -285,7 +270,6 @@ describe('session command execution', () => {
 
     const handler = new StatefulHandler()
     const handlers = createSessionCommandHandlerMap({
-      enabledCommandTypes: ['endSession'],
       bindings: [
         {
           commandType: 'endSession',
@@ -463,7 +447,6 @@ describe('session command execution', () => {
     const bindWritePort = vi.fn(() => Object.freeze({}))
     const binding = { ...testBinding(), bindWritePort }
     const handlers = createSessionCommandHandlerMap({
-      enabledCommandTypes: ['endSession'],
       bindings: [binding],
     })
     const failCommand = vi.fn(async () => {})
@@ -519,10 +502,6 @@ describe('session command execution', () => {
       handlers,
       mutationRepository: mutationRepository as never,
       recoveryRepository: recoveryRepository as never,
-      recoveryRegistries: {
-        snapshot: currentSnapshotReader,
-        privateEvent: currentPrivateEventReader,
-      },
       commandLedgerRepository: {
         registerCommand: vi.fn(async (_tx, _owner, prepared) => ({
           status: 'acquired' as const,
@@ -542,6 +521,7 @@ describe('session command execution', () => {
       },
       now: () => '2026-08-05T10:00:00.000Z',
       nextEventId: () => '55555555-5555-4555-8555-555555555555',
+      committedEventPublisher: { publish: () => undefined },
     })
 
     await expect(

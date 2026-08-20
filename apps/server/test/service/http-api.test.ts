@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
-import { createApp, type ApiRuntime } from '../../src/app.js'
+import { createApp, type ApiRuntime } from '../../src/http/create-app.js'
 import { getProviderSettingsResponse, ServerConfig } from '../../src/config.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import { createProviderCheckTransport } from '../../src/providers/provider-check-transport.js'
@@ -8,6 +8,33 @@ import { createProviderHealthService } from '../../src/providers/provider-health
 const origin = 'http://localhost:5173'
 const baseUrl = 'http://127.0.0.1:8787'
 const sessionId = '2a0dc0dd-843a-4e53-a62e-e5ac22f90a3e'
+
+const unavailableSessionHttp = {
+  creation: {
+    async create() {
+      throw new Error('unavailable')
+    },
+  },
+  query: {
+    async findActive() {
+      return null
+    },
+    async getById() {
+      return null
+    },
+  },
+  commands: {
+    async execute() {
+      throw new Error('unavailable')
+    },
+  },
+} as never
+
+const unavailableSessionEvents = {
+  async open() {
+    throw new Error('unavailable')
+  },
+} as never
 
 function runtime() {
   const providerResponse = getProviderSettingsResponse(
@@ -52,6 +79,8 @@ function runtime() {
           invalidatedRunCount: 0,
         }),
       },
+      sessionHttp: unavailableSessionHttp,
+      sessionEvents: unavailableSessionEvents,
     } satisfies ApiRuntime,
     update,
     deleteEndedSession,
@@ -300,7 +329,7 @@ describe('M3.5 HTTP API', () => {
     )
     expect(logRequest).toHaveBeenCalledWith(
       expect.objectContaining({
-        route: 'unmatched',
+        route: '/api/sessions/active',
       }),
     )
     expect(logRequest).toHaveBeenCalledWith(

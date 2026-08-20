@@ -7,9 +7,9 @@ import {
   dealRiver,
   dealTurn,
   runoutRemainingBoard,
-  SECURE_RANDOM_SOURCE,
   shuffleStandardDeck,
 } from '../../src/poker/dealing.js'
+import { SECURE_RANDOM_SOURCE } from '../../src/poker/random-source.js'
 import { createPokerTableState } from '../../src/poker/state.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 
@@ -46,7 +46,6 @@ describe('shuffleStandardDeck', () => {
     expect(STANDARD_DECK[0]).toMatchObject({
       rank: '2',
       suit: 'clubs',
-      code: 'club_2',
     })
   })
 })
@@ -213,17 +212,10 @@ describe('dealing input boundaries', () => {
     }
   })
 
-  test('rejects resource cards, duplicate decks, and does not mutate caller input', () => {
+  test('rejects malformed and duplicate decks without mutating caller input', () => {
     const shuffledDeck = standardPureDeck()
     const beforeDealing = structuredClone(shuffledDeck)
 
-    expect(() =>
-      dealPreflop({
-        shuffledDeck: STANDARD_DECK,
-        buttonSeatNumber: 0,
-        participantSeatNumbers: [0, 1, 2, 3, 4, 5],
-      }),
-    ).toThrow()
     expect(() =>
       dealPreflop({
         shuffledDeck: [

@@ -127,6 +127,37 @@ describe('session event connection', () => {
     expect(diagnostics).toHaveBeenCalledWith({ category: 'sse_queue_overflow' })
   })
 
+  test('cleans up the subscription even when overflow diagnostics throw', () => {
+    const hub = createCommittedSessionEventHub()
+    const unsubscribe = vi.fn()
+    const pending = createPendingSessionEventConnection({
+      sessionId,
+      repository: {
+        readHead: async () => null,
+        readBootstrap: async () => null,
+        readReplayPage: async () => null,
+      },
+      subscribe: (listener) => {
+        const unsubscribeFromHub = hub.subscribe(sessionId, listener)
+        return () => {
+          unsubscribeFromHub()
+          unsubscribe()
+        }
+      },
+      diagnose: () => {
+        throw new Error('diagnostic sink failure')
+      },
+    })
+
+    expect(() => {
+      for (let eventSeq = 1; eventSeq <= 65; eventSeq += 1) {
+        hub.publish([event(eventSeq)])
+      }
+    }).not.toThrow()
+    expect(pending.overflowed).toBe(true)
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
   test('does not start the next page read until the current page is drained', async () => {
     const hub = createCommittedSessionEventHub()
     const events = [event(1), event(2)]

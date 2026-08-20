@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres'
+import type { Sql, TransactionSql } from 'postgres'
 import { z } from 'zod'
 import {
   createConfigSnapshotKey,
@@ -14,12 +14,7 @@ import {
   ResourceNotFoundError,
   UnknownPayloadVersionError,
 } from './errors.js'
-import {
-  isResolvedOwnerScope,
-  resolveOwnerScope,
-  type OwnerScope,
-  type ResolvedOwnerScope,
-} from './owner-scope.js'
+import { isResolvedOwnerScope, type ResolvedOwnerScope } from './owner-scope.js'
 
 const UuidSchema = z.string().uuid()
 const SessionLifecycleStatusSchema = z.enum([
@@ -28,57 +23,9 @@ const SessionLifecycleStatusSchema = z.enum([
   'readonlyDiagnostic',
 ])
 
-const microsecondTimestampPattern =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{6})Z$/
+const DatabaseTimestampSchema = z.iso.datetime({ precision: 6 })
 
-function isValidMicrosecondTimestamp(value: string): boolean {
-  const match = microsecondTimestampPattern.exec(value)
-  if (match === null) {
-    return false
-  }
-
-  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number)
-  if (
-    year === undefined ||
-    year < 1 ||
-    month === undefined ||
-    month < 1 ||
-    month > 12 ||
-    day === undefined ||
-    day < 1 ||
-    hour === undefined ||
-    hour > 23 ||
-    minute === undefined ||
-    minute > 59 ||
-    second === undefined ||
-    second > 59
-  ) {
-    return false
-  }
-
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate()
-  return day <= daysInMonth
-}
-
-export const HistoricalSessionCursorSchema = z.strictObject({
-  updatedAt: z.string().refine(isValidMicrosecondTimestamp),
-  id: UuidSchema,
-})
-
-export type HistoricalSessionCursor = Readonly<
-  z.infer<typeof HistoricalSessionCursorSchema>
->
-
-export const HistoricalSessionPageRequestSchema = z.strictObject({
-  limit: z.number().int().min(1).max(100),
-  cursor: HistoricalSessionCursorSchema.optional(),
-})
-
-export type HistoricalSessionPageRequest = z.infer<
-  typeof HistoricalSessionPageRequestSchema
->
-
-export interface SessionRecord {
+interface SessionRecord {
   readonly id: string
   readonly lifecycleStatus: 'active' | 'ended' | 'readonlyDiagnostic'
   readonly stateVersion: number
@@ -92,11 +39,6 @@ export interface SessionRecord {
   readonly updatedAt: string
 }
 
-export interface HistoricalSessionPage {
-  readonly sessions: readonly SessionRecord[]
-  readonly nextCursor: HistoricalSessionCursor | null
-}
-
 const SessionRecordSchema = z.strictObject({
   id: UuidSchema,
   lifecycleStatus: SessionLifecycleStatusSchema,
@@ -106,21 +48,10 @@ const SessionRecordSchema = z.strictObject({
   agentRunState: z.enum(['idle', 'thinking', 'paused']),
   activePlayerRunId: UuidSchema.nullable(),
   activeDecisionRequestId: UuidSchema.nullable(),
-  createdAt: z.string().refine(isValidMicrosecondTimestamp),
-  endedAt: z.string().refine(isValidMicrosecondTimestamp).nullable(),
-  updatedAt: z.string().refine(isValidMicrosecondTimestamp),
+  createdAt: DatabaseTimestampSchema,
+  endedAt: DatabaseTimestampSchema.nullable(),
+  updatedAt: DatabaseTimestampSchema,
 })
-
-type OwnerScopeInput = OwnerScope | ResolvedOwnerScope
-
-async function getResolvedOwner(
-  sql: Sql,
-  ownerScope: OwnerScopeInput,
-): Promise<ResolvedOwnerScope> {
-  return isResolvedOwnerScope(ownerScope)
-    ? ownerScope
-    : resolveOwnerScope(sql, ownerScope)
-}
 
 function parseSessionRecord(row: unknown): SessionRecord {
   const result = SessionRecordSchema.safeParse(row)
@@ -160,53 +91,11 @@ function createSessionRecordProjection(sql: Sql) {
   `
 }
 
-export async function findActiveSession(
-  sql: Sql,
-  ownerScope: OwnerScopeInput,
-): Promise<SessionRecord | null> {
-  const owner = await getResolvedOwner(sql, ownerScope)
-  const projection = createSessionRecordProjection(sql)
-  const rows = await querySessionRecords(sql`
-    SELECT ${projection}
-    FROM app_private.sessions
-    WHERE owner_id = ${owner.databaseOwnerId}::uuid
-      AND lifecycle_status = 'active'
-    LIMIT 2
-  `)
-
-  if (rows.length > 1) {
-    throw new PersistenceDataCorruptionError('invalidRoster')
-  }
-  return rows[0] ?? null
-}
-
-export async function getSessionById(
-  sql: Sql,
-  ownerScope: OwnerScopeInput,
-  sessionId: string,
-): Promise<SessionRecord | null> {
-  const parsedSessionId = UuidSchema.safeParse(sessionId)
-  if (!parsedSessionId.success) {
-    throw new RepositoryInputValidationError()
-  }
-  const owner = await getResolvedOwner(sql, ownerScope)
-  const projection = createSessionRecordProjection(sql)
-  const rows = await querySessionRecords(sql`
-    SELECT ${projection}
-    FROM app_private.sessions
-    WHERE owner_id = ${owner.databaseOwnerId}::uuid
-      AND id = ${parsedSessionId.data}::uuid
-    LIMIT 1
-  `)
-
-  return rows[0] ?? null
-}
-
 export async function findLatestEndedSessionForRosterReuse(
   sql: Sql,
-  ownerScope: OwnerScopeInput,
+  owner: ResolvedOwnerScope,
 ): Promise<SessionRecord | null> {
-  const owner = await getResolvedOwner(sql, ownerScope)
+  if (!isResolvedOwnerScope(owner)) throw new RepositoryInputValidationError()
   const projection = createSessionRecordProjection(sql)
   const rows = await querySessionRecords(sql`
     SELECT ${projection}
@@ -218,52 +107,6 @@ export async function findLatestEndedSessionForRosterReuse(
   `)
 
   return rows[0] ?? null
-}
-
-export async function listHistoricalSessions(
-  sql: Sql,
-  ownerScope: OwnerScopeInput,
-  request: HistoricalSessionPageRequest,
-): Promise<HistoricalSessionPage> {
-  const parsedRequest = HistoricalSessionPageRequestSchema.safeParse(request)
-  if (!parsedRequest.success) {
-    throw new RepositoryInputValidationError()
-  }
-  const owner = await getResolvedOwner(sql, ownerScope)
-  const rowLimit = parsedRequest.data.limit + 1
-  const cursor = parsedRequest.data.cursor
-  const projection = createSessionRecordProjection(sql)
-  const query =
-    cursor === undefined
-      ? sql`
-          SELECT ${projection}
-          FROM app_private.sessions
-          WHERE owner_id = ${owner.databaseOwnerId}::uuid
-            AND lifecycle_status IN ('ended', 'readonlyDiagnostic')
-          ORDER BY updated_at DESC, id DESC
-          LIMIT ${rowLimit}
-        `
-      : sql`
-          SELECT ${projection}
-          FROM app_private.sessions
-          WHERE owner_id = ${owner.databaseOwnerId}::uuid
-            AND lifecycle_status IN ('ended', 'readonlyDiagnostic')
-            AND (
-              updated_at < ${cursor.updatedAt}::text::timestamptz
-              OR (updated_at = ${cursor.updatedAt}::text::timestamptz AND id < ${cursor.id}::uuid)
-            )
-          ORDER BY updated_at DESC, id DESC
-          LIMIT ${rowLimit}
-        `
-  const records = await querySessionRecords(query)
-  const pageRecords = records.slice(0, parsedRequest.data.limit)
-  const lastRecord = pageRecords.at(-1)
-  const nextCursor =
-    records.length > parsedRequest.data.limit && lastRecord !== undefined
-      ? deepFreeze({ updatedAt: lastRecord.updatedAt, id: lastRecord.id })
-      : null
-
-  return deepFreeze({ sessions: pageRecords, nextCursor })
 }
 
 interface SessionAgentSnapshotRow {
@@ -352,15 +195,14 @@ function parseSessionAgentSnapshot(
 }
 
 export async function readSessionAgentSnapshots(
-  sql: Sql,
-  ownerScope: OwnerScopeInput,
+  sql: Sql | TransactionSql,
+  owner: ResolvedOwnerScope,
   sessionId: string,
 ): Promise<readonly SessionAgentSnapshot[]> {
   const parsedSessionId = UuidSchema.safeParse(sessionId)
-  if (!parsedSessionId.success) {
+  if (!isResolvedOwnerScope(owner) || !parsedSessionId.success) {
     throw new RepositoryInputValidationError()
   }
-  const owner = await getResolvedOwner(sql, ownerScope)
   let rows: readonly SessionAgentSnapshotRow[]
   try {
     rows = await sql<SessionAgentSnapshotRow[]>`

@@ -1,9 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { createHandStartedEventDraft } from '../../src/poker/hand-result.js'
-import {
-  currentPrivateEventReader,
-  encodeCurrentPrivateEvent,
-} from '../../src/sessions/authoritative-state/private-event-codec.js'
+import { encodeCurrentPrivateEvent } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
   decideSessionRecovery,
@@ -11,10 +8,7 @@ import {
   SESSION_DIAGNOSTIC_CODES,
   type SessionRecoveryFacts,
 } from '../../src/sessions/authoritative-state/recovery-decision.js'
-import {
-  currentSnapshotReader,
-  encodeSnapshot,
-} from '../../src/sessions/authoritative-state/snapshot-codec.js'
+import { encodeSnapshot } from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createTestPokerState } from '../poker/create-test-poker-state.js'
 import { createTestBettingPokerState } from '../poker/create-test-poker-state.js'
 
@@ -109,10 +103,7 @@ function factsWith(
 }
 
 function decide(facts: SessionRecoveryFacts) {
-  return decideSessionRecovery(facts, {
-    snapshot: currentSnapshotReader,
-    privateEvent: currentPrivateEventReader,
-  })
+  return decideSessionRecovery(facts)
 }
 
 function inHandSnapshotRow() {

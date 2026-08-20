@@ -12,10 +12,7 @@ import {
   type ClaimNextRepositoryResult,
 } from '../../src/persistence/agent-run-lifecycle-repository.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
-import {
-  patchPlayerTimeoutSettings,
-  writePlayerTimeoutSettings,
-} from '../../src/persistence/player-settings-repository.js'
+import { patchPlayerTimeoutSettings } from '../../src/persistence/player-settings-repository.js'
 import {
   INITIAL_AGENT_MEMORY,
   insertSessionRosterSnapshot,
@@ -30,6 +27,8 @@ import {
   readTransactionBackendPid,
 } from './database-test-runtime.js'
 import { insertCommittedM27CompletedHand } from './database-repository-assertions.js'
+
+const noopEventPort = { publish: async () => undefined }
 
 function coachCreationInput(
   runId: string,
@@ -121,10 +120,15 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
   const workerOwner = await resolveOwnerScope(workerSql, {
     ownerId: 'local-user',
   })
-  const coordinator = createAgentRunCoordinator({ sql, owner })
+  const coordinator = createAgentRunCoordinator({
+    sql,
+    owner,
+    eventPort: noopEventPort,
+  })
   const workerCoordinator = createAgentRunCoordinator({
     sql: workerSql,
     owner: workerOwner,
+    eventPort: noopEventPort,
   })
   const actor = identity.agentParticipants[0]
   if (actor === undefined) throw new Error('M4.2 Player fixture 缺少 AI。')
@@ -148,10 +152,11 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
   let creation: Promise<unknown> | undefined
 
   try {
-    await writePlayerTimeoutSettings(
-      sql,
-      { ownerId: 'local-user' },
-      { attemptTimeoutSeconds: 5, decisionDeadlineSeconds: 15 },
+    await sql.begin((transaction) =>
+      patchPlayerTimeoutSettings(transaction, owner, {
+        attemptTimeoutSeconds: 5,
+        decisionDeadlineSeconds: 15,
+      }),
     )
     settingsWrite = settingsSql.begin(async (transaction) => {
       await patchPlayerTimeoutSettings(transaction, owner, {
@@ -166,7 +171,6 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
       reportCreatorPid(await readTransactionBackendPid(transaction))
       const result = await workerCoordinator.createOrReuse(
         transaction,
-        workerOwner,
         playerCreationInput({
           runId: firstRunId,
           sessionId: identity.sessionId,
@@ -204,7 +208,6 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
       sql.begin((transaction) =>
         coordinator.createOrReuse(
           transaction,
-          owner,
           playerCreationInput({
             runId: randomUUID(),
             sessionId: identity.sessionId,
@@ -243,7 +246,7 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
     })
 
     await sql.begin(async (transaction) => {
-      await coordinator.cancel(transaction, owner, {
+      await coordinator.cancel(transaction, {
         runId: firstRunId,
         reason: 'process_restart',
         completedAt: new Date().toISOString(),
@@ -258,7 +261,7 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
     })
     await expect(
       sql.begin((transaction) =>
-        coordinator.cancel(transaction, owner, {
+        coordinator.cancel(transaction, {
           runId: firstRunId,
           reason: 'process_restart',
           completedAt: new Date().toISOString(),
@@ -271,7 +274,7 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
     })
     await expect(
       sql.begin((transaction) =>
-        coordinator.cancel(transaction, owner, {
+        coordinator.cancel(transaction, {
           runId: firstRunId,
           reason: 'user_cancelled',
           completedAt: new Date().toISOString(),
@@ -281,10 +284,11 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
       name: AgentRunTransitionError.name,
       failure: 'agent_run_already_terminal',
     })
-    await writePlayerTimeoutSettings(
-      sql,
-      { ownerId: 'local-user' },
-      { attemptTimeoutSeconds: 5, decisionDeadlineSeconds: 15 },
+    await sql.begin((transaction) =>
+      patchPlayerTimeoutSettings(transaction, owner, {
+        attemptTimeoutSeconds: 5,
+        decisionDeadlineSeconds: 15,
+      }),
     )
     const secondRunId = randomUUID()
     const secondDecisionRequestId = randomUUID()
@@ -292,7 +296,6 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
     const secondCreated = await sql.begin(async (transaction) => {
       const result = await coordinator.createOrReuse(
         transaction,
-        owner,
         playerCreationInput({
           runId: secondRunId,
           sessionId: identity.sessionId,
@@ -366,15 +369,19 @@ async function assertM42RuntimeCapacityIsolation(
     if (participant === undefined) {
       throw new Error('M4.2 capacity fixture 缺少 AI。')
     }
-    const coordinator = createAgentRunCoordinator({ sql, owner })
+    const coordinator = createAgentRunCoordinator({
+      sql,
+      owner,
+      eventPort: noopEventPort,
+    })
     const secondCoordinator = createAgentRunCoordinator({
       sql: secondSql,
       owner: secondOwner,
+      eventPort: noopEventPort,
     })
     await sql.begin(async (transaction) => {
       await coordinator.createOrReuse(
         transaction,
-        owner,
         playerCreationInput({
           runId: playerRunId,
           sessionId,
@@ -397,7 +404,6 @@ async function assertM42RuntimeCapacityIsolation(
       await sql.begin((transaction) =>
         coordinator.createOrReuse(
           transaction,
-          owner,
           coachCreationInput(
             coachRunId,
             sessionId,
@@ -538,15 +544,16 @@ async function assertM42SystemCapacityAcrossOwnersAndBudgets(
     const firstCoordinator = createAgentRunCoordinator({
       sql,
       owner: firstOwner,
+      eventPort: noopEventPort,
     })
     const secondCoordinator = createAgentRunCoordinator({
       sql: secondSql,
       owner: secondOwner,
+      eventPort: noopEventPort,
     })
     const firstCreated = await sql.begin((transaction) =>
       firstCoordinator.createOrReuse(
         transaction,
-        firstOwner,
         coachCreationInput(
           firstRunId,
           firstSessionId,
@@ -558,7 +565,6 @@ async function assertM42SystemCapacityAcrossOwnersAndBudgets(
     const secondCreated = await secondSql.begin((transaction) =>
       secondCoordinator.createOrReuse(
         transaction,
-        secondOwner,
         coachCreationInput(
           secondRunId,
           secondSessionId,
@@ -608,14 +614,14 @@ async function assertM42SystemCapacityAcrossOwnersAndBudgets(
     })
 
     await sql.begin((transaction) =>
-      firstCoordinator.cancel(transaction, firstOwner, {
+      firstCoordinator.cancel(transaction, {
         runId: firstRunId,
         reason: 'user_cancelled',
         completedAt: new Date().toISOString(),
       }),
     )
     await secondSql.begin((transaction) =>
-      secondCoordinator.cancel(transaction, secondOwner, {
+      secondCoordinator.cancel(transaction, {
         runId: secondRunId,
         reason: 'user_cancelled',
         completedAt: new Date().toISOString(),
@@ -624,7 +630,6 @@ async function assertM42SystemCapacityAcrossOwnersAndBudgets(
     await sql.begin((transaction) =>
       firstCoordinator.createOrReuse(
         transaction,
-        firstOwner,
         coachCreationInput(
           concurrentFirstRunId,
           firstSessionId,
@@ -636,7 +641,6 @@ async function assertM42SystemCapacityAcrossOwnersAndBudgets(
     await secondSql.begin((transaction) =>
       secondCoordinator.createOrReuse(
         transaction,
-        secondOwner,
         coachCreationInput(
           concurrentSecondRunId,
           secondSessionId,
@@ -720,11 +724,13 @@ async function assertM42SystemCapacityAcrossOwnersAndBudgets(
       sql: firstClaimSql,
       owner: firstOwner,
       repository: firstRepository,
+      eventPort: noopEventPort,
     })
     const concurrentSecondCoordinator = createAgentRunCoordinator({
       sql: secondSql,
       owner: secondOwner,
       repository: secondRepository,
+      eventPort: noopEventPort,
     })
     firstConcurrentClaim = concurrentFirstCoordinator.workerControl.claimNext({
       runtimeType: 'coach',
@@ -800,15 +806,19 @@ async function assertM42TerminalRace(
     const secondOwner = await resolveOwnerScope(secondSql, {
       ownerId: 'local-user',
     })
-    const coordinator = createAgentRunCoordinator({ sql, owner })
+    const coordinator = createAgentRunCoordinator({
+      sql,
+      owner,
+      eventPort: noopEventPort,
+    })
     const secondCoordinator = createAgentRunCoordinator({
       sql: secondSql,
       owner: secondOwner,
+      eventPort: noopEventPort,
     })
     await sql.begin((transaction) =>
       coordinator.createOrReuse(
         transaction,
-        owner,
         coachCreationInput(runId, sessionId, handId, new Date().toISOString()),
       ),
     )
@@ -823,18 +833,16 @@ async function assertM42TerminalRace(
     const completedAt = new Date().toISOString()
     const results = await Promise.allSettled([
       sql.begin((transaction) =>
-        coordinator.finalize(transaction, owner, {
+        coordinator.finalize(transaction, {
           runId,
           authority: claimed.authority,
           lifecycle: 'completed',
           terminationReason: null,
-          resultPayloadVersion: 1,
-          resultPayload: { report: 'ok' },
           completedAt,
         }),
       ),
       secondSql.begin((transaction) =>
-        secondCoordinator.cancel(transaction, secondOwner, {
+        secondCoordinator.cancel(transaction, {
           runId,
           reason: 'user_cancelled',
           completedAt,
@@ -869,20 +877,17 @@ export async function assertM42AgentRunLifecycle(
       ownerId: 'local-user',
     })
     const lifecycleRepository = createAgentRunLifecycleRepository()
-    const recoveryCheckpoint = { state: 'decision_analysis' }
     const coordinator = createAgentRunCoordinator({
       sql,
       owner,
       repository: lifecycleRepository,
-      isRecoveryCheckpointCompatible: (run) =>
-        run.checkpointPayload?.state === recoveryCheckpoint.state,
+      eventPort: noopEventPort,
     })
     const secondCoordinator = createAgentRunCoordinator({
       sql: secondSql,
       owner: secondOwner,
       repository: lifecycleRepository,
-      isRecoveryCheckpointCompatible: (run) =>
-        run.checkpointPayload?.state === recoveryCheckpoint.state,
+      eventPort: noopEventPort,
     })
     const createdAt = new Date().toISOString()
     const creationInput = coachCreationInput(
@@ -893,14 +898,10 @@ export async function assertM42AgentRunLifecycle(
     )
     const creationResults = await Promise.all([
       sql.begin((transaction) =>
-        coordinator.createOrReuse(transaction, owner, creationInput),
+        coordinator.createOrReuse(transaction, creationInput),
       ),
       secondSql.begin((transaction) =>
-        secondCoordinator.createOrReuse(
-          transaction,
-          secondOwner,
-          creationInput,
-        ),
+        secondCoordinator.createOrReuse(transaction, creationInput),
       ),
     ])
     const created = creationResults.find((result) => result.kind === 'created')
@@ -967,9 +968,7 @@ export async function assertM42AgentRunLifecycle(
       Date.parse(firstClaim.run.leaseExpiresAt),
     )
 
-    const auditRepository = createAgentFoundationAuditRepository({
-      runtimeAuditDecoders: {},
-    })
+    const auditRepository = createAgentFoundationAuditRepository()
     const firstAttempt = await sql.begin((transaction) =>
       auditRepository.startAgentAttemptAudit(
         transaction,
@@ -980,15 +979,6 @@ export async function assertM42AgentRunLifecycle(
     )
     expect(firstAttempt.attemptNumber).toBe(0)
 
-    await sql.begin((transaction) =>
-      lifecycleRepository.writeCheckpoint(
-        transaction,
-        owner,
-        firstClaim.authority,
-        { payloadVersion: 1, payload: recoveryCheckpoint },
-      ),
-    )
-
     await sql`
       UPDATE app_private.agent_runs
       SET lease_expires_at = updated_at + interval '1 millisecond'
@@ -998,11 +988,29 @@ export async function assertM42AgentRunLifecycle(
       runtimeType: 'coach',
       leaseOwner: 'm42-replacement:coach:0',
     })
-    expect(replacementClaim.kind).toBe('claimed')
-    if (replacementClaim.kind !== 'claimed') {
-      throw new Error('M4.2 Coach 过期租约未被接管。')
+    expect(replacementClaim).toMatchObject({
+      kind: 'none',
+      diagnostics: expect.arrayContaining(['agent_run_recovery_rejected']),
+    })
+    const rejectedRunRows = await sql<
+      {
+        readonly runId: string
+        readonly lifecycle: string
+        readonly terminationReason: string | null
+      }[]
+    >`
+      SELECT id::text AS "runId", lifecycle, termination_reason AS "terminationReason"
+      FROM app_private.agent_runs
+      WHERE id = ${runId}::uuid
+    `
+    expect(rejectedRunRows[0]).toMatchObject({
+      runId,
+      lifecycle: 'cancelled',
+      terminationReason: 'process_restart',
+    })
+    if (replacementClaim.kind !== 'none') {
+      throw new Error('M4.2 Coach 过期租约未被拒绝。')
     }
-    expect(replacementClaim.run).toMatchObject({ runId, fencingToken: 2 })
     await expect(
       sql.begin((transaction) =>
         auditRepository.startAgentAttemptAudit(
@@ -1019,18 +1027,16 @@ export async function assertM42AgentRunLifecycle(
     const staleRows = await sql<
       {
         readonly lifecycle: string
-        readonly fencingToken: number
         readonly payloadVersion: number
         readonly payload: unknown
       }[]
     >`
-      SELECT lifecycle, fencing_token::float8 AS "fencingToken",
-             attempt_payload_version AS "payloadVersion",
+      SELECT lifecycle, attempt_payload_version AS "payloadVersion",
              attempt_payload AS "payload"
       FROM app_private.agent_attempts
       WHERE id = ${firstAttempt.attemptId}::uuid
     `
-    expect(staleRows[0]).toMatchObject({ lifecycle: 'stale', fencingToken: 1 })
+    expect(staleRows[0]).toMatchObject({ lifecycle: 'cancelled' })
     const staleAttempt = readCurrentAttemptAudit(
       staleRows[0]?.lifecycle,
       staleRows[0]?.payloadVersion,
@@ -1039,41 +1045,21 @@ export async function assertM42AgentRunLifecycle(
     expect(staleAttempt).toMatchObject({
       kind: 'decoded',
       value: {
-        lifecycle: 'stale',
+        lifecycle: 'cancelled',
         responseProjectionHash: null,
         validationStatus: 'notRun',
       },
     })
 
-    await coordinator.workerControl.markRunning(replacementClaim.authority)
-    const finalizationInput = {
-      runId,
-      authority: replacementClaim.authority,
-      lifecycle: 'failed',
-      terminationReason: 'runtime_failed',
-      resultPayloadVersion: 1,
-      resultPayload: { partial: true },
-      completedAt: new Date().toISOString(),
-    } as const
-    const finalized = await sql.begin((transaction) =>
-      coordinator.finalize(transaction, owner, finalizationInput),
-    )
-    expect(finalized.changed).toBe(true)
     await expect(
       sql.begin((transaction) =>
-        coordinator.finalize(transaction, owner, finalizationInput),
-      ),
-    ).resolves.toMatchObject({
-      changed: false,
-      committedEffects: [],
-      run: { lifecycle: 'failed', terminationReason: 'runtime_failed' },
-    })
-    await expect(
-      sql.begin((transaction) =>
-        coordinator.finalize(transaction, owner, {
-          ...finalizationInput,
-          terminationReason: 'different_failure',
-        }),
+        coordinator.finalize(transaction, {
+          runId,
+          authority: firstClaim.authority,
+          lifecycle: 'failed',
+          terminationReason: 'runtime_failed',
+          completedAt: new Date().toISOString(),
+        } as const),
       ),
     ).rejects.toMatchObject({
       name: AgentRunTransitionError.name,
@@ -1088,7 +1074,6 @@ export async function assertM42AgentRunLifecycle(
       await sql.begin((transaction) =>
         coordinator.createOrReuse(
           transaction,
-          owner,
           coachCreationInput(
             candidateRunId,
             sessionId,

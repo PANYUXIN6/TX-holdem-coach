@@ -20,19 +20,14 @@ import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 
 const sessionId = '22222222-2222-4222-8222-222222222222'
 const commandId = '33333333-3333-4333-8333-333333333333'
-const handId = '44444444-4444-4444-8444-444444444444'
-const decisionRequestId = '55555555-5555-4555-8555-555555555555'
 const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
 const uppercaseIds = {
   sessionId: 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',
   commandId: 'BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB',
-  decisionRequestId: 'CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC',
-  handId: 'DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD',
 } as const
 
 function command(
-  type:
-    'playerAction' | 'startNextHand' | 'rebuy' | 'endSession' | 'retryAgent',
+  type: 'playerAction' | 'startNextHand' | 'rebuy' | 'endSession',
 ) {
   const payload =
     type === 'playerAction'
@@ -41,22 +36,6 @@ function command(
         ? { amount: 2_000 }
         : {}
   return { sessionId, commandId, expectedStateVersion: 12, type, payload }
-}
-
-function aiActionCommand() {
-  return {
-    sessionId,
-    commandId,
-    expectedStateVersion: 12,
-    type: 'aiAction' as const,
-    payload: {
-      decisionRequestId,
-      handId,
-      actorSeatNumber: 2,
-      candidateActionId: 'candidate_2',
-      action: { type: 'raise' as const, targetStreetCommitment: 120 },
-    },
-  }
 }
 
 function createTransactionMock(responses: readonly unknown[]): TransactionSql {
@@ -75,7 +54,6 @@ function createTransactionMock(responses: readonly unknown[]): TransactionSql {
   }) as unknown as TransactionSql
   Object.assign(transaction, {
     json: (value: unknown) => value,
-    typed: (value: string) => JSON.parse(value) as unknown,
   })
   return transaction
 }
@@ -100,7 +78,6 @@ function createTrackedTransaction(responses: readonly unknown[]) {
   }) as unknown as TransactionSql
   Object.assign(transaction, {
     json: (value: unknown) => value,
-    typed: (value: string) => JSON.parse(value) as unknown,
   })
   return {
     transaction,
@@ -146,11 +123,15 @@ function commandResponse(stateVersion = 13, eventSeq = 20) {
   }
 }
 
-function errorResponse(withSnapshot = true) {
+function eventRange() {
+  return { firstEventSeq: 19, lastEventSeq: 20 }
+}
+
+function errorResponse() {
   return {
     code: 'state_conflict',
     message: '场次状态已变化。',
-    ...(withSnapshot ? { latestSnapshot: snapshot() } : {}),
+    latestSnapshot: snapshot(),
   }
 }
 
@@ -181,15 +162,11 @@ describe('command ledger repository', () => {
       { rows: [], expected: { status: 'notFound' } },
       {
         rows: (prepared: ReturnType<typeof prepareCommandRegistration>) => [
-          ledgerRow(prepared),
-        ],
-        expected: { status: 'processing' },
-      },
-      {
-        rows: (prepared: ReturnType<typeof prepareCommandRegistration>) => [
           ledgerRow(prepared, {
             processingStatus: 'completed',
             finalStateVersion: 13,
+            firstEventSeq: 19,
+            lastEventSeq: 20,
             responsePayloadVersion: 1,
             responsePayload: commandResponse(),
             hasCompletedAt: true,
@@ -201,13 +178,13 @@ describe('command ledger repository', () => {
         rows: (prepared: ReturnType<typeof prepareCommandRegistration>) => [
           ledgerRow(prepared, {
             processingStatus: 'failed',
-            finalStateVersion: null,
+            finalStateVersion: 13,
             responsePayloadVersion: 1,
-            responsePayload: errorResponse(false),
+            responsePayload: errorResponse(),
             hasCompletedAt: true,
           }),
         ],
-        expected: { status: 'failed', response: errorResponse(false) },
+        expected: { status: 'failed', response: errorResponse() },
       },
     ] as const
 
@@ -223,13 +200,23 @@ describe('command ledger repository', () => {
     }
   })
 
-  test('prepares all public commands and the private aiAction as frozen commands', () => {
+  test('rejects a visible processing row as persistence corruption', async () => {
+    const prepared = prepareCommandRegistration(command('endSession'))
+    await expect(
+      readExistingCommandResult(
+        createTransactionMock([[ledgerRow(prepared)]]),
+        await resolvedOwner(),
+        prepared,
+      ),
+    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
+  })
+
+  test('prepares all commands as frozen commands', () => {
     for (const type of [
       'playerAction',
       'startNextHand',
       'rebuy',
       'endSession',
-      'retryAgent',
     ] as const) {
       const prepared = prepareCommandRegistration(command(type))
       expect(prepared.command.type).toBe(type)
@@ -240,13 +227,6 @@ describe('command ledger repository', () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       )
     }
-
-    const preparedAiAction = prepareCommandRegistration(aiActionCommand())
-    expect(preparedAiAction.command).toEqual(aiActionCommand())
-    if (preparedAiAction.command.type !== 'aiAction') {
-      throw new Error('Expected an aiAction command.')
-    }
-    expect(Object.isFrozen(preparedAiAction.command.payload.action)).toBe(true)
   })
 
   test('uses the fixed canonical SHA-256 golden vector', () => {
@@ -258,16 +238,10 @@ describe('command ledger repository', () => {
   })
 
   test('keeps the digest stable when input object keys use a different order', () => {
-    const original = aiActionCommand()
+    const original = command('rebuy')
     const reordered = {
       type: original.type,
-      payload: {
-        action: original.payload.action,
-        candidateActionId: original.payload.candidateActionId,
-        actorSeatNumber: original.payload.actorSeatNumber,
-        handId: original.payload.handId,
-        decisionRequestId: original.payload.decisionRequestId,
-      },
+      payload: original.payload,
       expectedStateVersion: original.expectedStateVersion,
       commandId: original.commandId,
       sessionId: original.sessionId,
@@ -279,60 +253,20 @@ describe('command ledger repository', () => {
   })
 
   test('hashes every semantic field but excludes ledger location keys', () => {
-    const baseAiAction = aiActionCommand()
-    const differentDecisionRequestId = '77777777-7777-4777-8777-777777777777'
-    const differentHandId = '88888888-8888-4888-8888-888888888888'
     const digest = (input: unknown) =>
       prepareCommandRegistration(input).canonicalPayloadDigest
     const pairs: readonly (readonly [unknown, unknown])[] = [
-      [command('endSession'), command('retryAgent')],
+      [command('endSession'), command('startNextHand')],
       [
         command('endSession'),
         { ...command('endSession'), expectedStateVersion: 13 },
       ],
       [command('rebuy'), { ...command('rebuy'), payload: { amount: 2_001 } }],
       [
-        baseAiAction,
+        command('playerAction'),
         {
-          ...baseAiAction,
-          payload: {
-            ...baseAiAction.payload,
-            decisionRequestId: differentDecisionRequestId,
-          },
-        },
-      ],
-      [
-        baseAiAction,
-        {
-          ...baseAiAction,
-          payload: { ...baseAiAction.payload, handId: differentHandId },
-        },
-      ],
-      [
-        baseAiAction,
-        {
-          ...baseAiAction,
-          payload: { ...baseAiAction.payload, actorSeatNumber: 3 },
-        },
-      ],
-      [
-        baseAiAction,
-        {
-          ...baseAiAction,
-          payload: {
-            ...baseAiAction.payload,
-            candidateActionId: 'candidate_3',
-          },
-        },
-      ],
-      [
-        baseAiAction,
-        {
-          ...baseAiAction,
-          payload: {
-            ...baseAiAction.payload,
-            action: { type: 'call' as const },
-          },
+          ...command('playerAction'),
+          payload: { action: { type: 'fold' as const } },
         },
       ],
     ]
@@ -349,26 +283,16 @@ describe('command ledger repository', () => {
     )
   })
 
-  test('validates then normalizes all four command UUID fields before hashing', () => {
+  test('validates then normalizes command UUID fields before hashing', () => {
     const uppercase = {
-      ...aiActionCommand(),
+      ...command('endSession'),
       sessionId: uppercaseIds.sessionId,
       commandId: uppercaseIds.commandId,
-      payload: {
-        ...aiActionCommand().payload,
-        decisionRequestId: uppercaseIds.decisionRequestId,
-        handId: uppercaseIds.handId,
-      },
     }
     const lowercase = {
       ...uppercase,
       sessionId: uppercase.sessionId.toLowerCase(),
       commandId: uppercase.commandId.toLowerCase(),
-      payload: {
-        ...uppercase.payload,
-        decisionRequestId: uppercase.payload.decisionRequestId.toLowerCase(),
-        handId: uppercase.payload.handId.toLowerCase(),
-      },
     }
 
     const preparedUppercase = prepareCommandRegistration(uppercase)
@@ -379,43 +303,19 @@ describe('command ledger repository', () => {
     )
   })
 
-  test('rejects each invalid UUID field and enforces candidate id length after trim', () => {
-    const validAiAction = aiActionCommand()
+  test('rejects invalid UUID fields and unsafe versions', () => {
     for (const invalid of [
       { ...command('endSession'), sessionId: 'not-a-uuid' },
       { ...command('endSession'), commandId: 'not-a-uuid' },
       {
-        ...validAiAction,
-        payload: { ...validAiAction.payload, decisionRequestId: 'not-a-uuid' },
-      },
-      {
-        ...validAiAction,
-        payload: { ...validAiAction.payload, handId: 'not-a-uuid' },
-      },
-      {
-        ...validAiAction,
-        payload: {
-          ...validAiAction.payload,
-          candidateActionId: 'x'.repeat(129),
-        },
+        ...command('endSession'),
+        expectedStateVersion: Number.MAX_SAFE_INTEGER + 1,
       },
     ]) {
       expect(() => prepareCommandRegistration(invalid)).toThrow(
         RepositoryInputValidationError,
       )
     }
-
-    const boundary = prepareCommandRegistration({
-      ...validAiAction,
-      payload: {
-        ...validAiAction.payload,
-        candidateActionId: `  ${'x'.repeat(128)}  `,
-      },
-    })
-    if (boundary.command.type !== 'aiAction') {
-      throw new Error('Expected an aiAction command.')
-    }
-    expect(boundary.command.payload.candidateActionId).toHaveLength(128)
   })
 
   test('replays the original uppercase response using normalized UUID equality', async () => {
@@ -441,6 +341,7 @@ describe('command ledger repository', () => {
             commandId: uppercaseIds.commandId.toLowerCase(),
             processingStatus: 'completed',
             finalStateVersion: response.snapshot.stateVersion,
+            ...eventRange(),
             responsePayloadVersion: 1,
             responsePayload: response,
             hasCompletedAt: true,
@@ -454,19 +355,11 @@ describe('command ledger repository', () => {
     expect(result).toEqual({ status: 'completed', response })
   })
 
-  test('rejects unknown fields, invalid aiAction facts, and unsafe versions', () => {
+  test('rejects unknown fields and unsafe versions', () => {
     for (const invalid of [
       { ...command('endSession'), unexpected: true },
       {
-        ...aiActionCommand(),
-        payload: { ...aiActionCommand().payload, candidateActionId: '   ' },
-      },
-      {
-        ...aiActionCommand(),
-        payload: { ...aiActionCommand().payload, actorSeatNumber: 0 },
-      },
-      {
-        ...command('retryAgent'),
+        ...command('endSession'),
         expectedStateVersion: Number.MAX_SAFE_INTEGER + 1,
       },
     ]) {
@@ -581,7 +474,7 @@ describe('command ledger repository', () => {
     expect(Object.isFrozen(result.response.snapshot)).toBe(true)
   })
 
-  test('returns processing without a second capability for a same-transaction repeat', async () => {
+  test('rejects a same-transaction repeat that exposes processing', async () => {
     const first = prepareCommandRegistration(command('endSession'))
     const firstResult = await registerCommand(
       createTransactionMock([[{ ledgerId: first.ledgerId }]]),
@@ -589,62 +482,45 @@ describe('command ledger repository', () => {
       first,
     )
     const second = prepareCommandRegistration(command('endSession'))
-    const secondResult = await registerCommand(
-      createTransactionMock([[], [ledgerRow(second)]]),
+    expect(firstResult.status).toBe('acquired')
+    await expect(
+      registerCommand(
+        createTransactionMock([[], [ledgerRow(second)]]),
+        await resolvedOwner(),
+        second,
+      ),
+    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
+  })
+
+  test('replays failed responses with their latest snapshot', async () => {
+    const prepared = prepareCommandRegistration(command('endSession'))
+    const response = errorResponse()
+    const result = await registerCommand(
+      createTransactionMock([
+        [],
+        [
+          ledgerRow(prepared, {
+            processingStatus: 'failed',
+            finalStateVersion: 13,
+            responsePayloadVersion: 1,
+            responsePayload: response,
+            hasCompletedAt: true,
+          }),
+        ],
+      ]),
       await resolvedOwner(),
-      second,
+      prepared,
     )
 
-    expect(firstResult.status).toBe('acquired')
-    expect(secondResult).toEqual({ status: 'processing' })
+    expect(result).toEqual({ status: 'failed', response })
+    expect(Object.isFrozen(result)).toBe(true)
   })
 
-  test('replays failed responses with and without a latest snapshot', async () => {
-    for (const withSnapshot of [true, false]) {
-      const prepared = prepareCommandRegistration(command('endSession'))
-      const response = errorResponse(withSnapshot)
-      const result = await registerCommand(
-        createTransactionMock([
-          [],
-          [
-            ledgerRow(prepared, {
-              processingStatus: 'failed',
-              finalStateVersion: withSnapshot ? 13 : null,
-              responsePayloadVersion: 1,
-              responsePayload: response,
-              hasCompletedAt: true,
-            }),
-          ],
-        ]),
-        await resolvedOwner(),
-        prepared,
-      )
-
-      expect(result).toEqual({ status: 'failed', response })
-      expect(Object.isFrozen(result)).toBe(true)
-    }
-  })
-
-  test('accepts every valid processing, completed, and failed field matrix', async () => {
+  test('accepts the reachable completed and failed field matrix', async () => {
     const owner = await resolvedOwner()
     const completedResponse = commandResponse()
-    const failedWithSnapshot = errorResponse(true)
-    const failedWithoutSnapshot = errorResponse(false)
+    const failedResponse = errorResponse()
     const cases = [
-      {
-        overrides: {},
-        expected: { status: 'processing' },
-      },
-      {
-        overrides: {
-          processingStatus: 'completed',
-          finalStateVersion: 13,
-          responsePayloadVersion: 1,
-          responsePayload: completedResponse,
-          hasCompletedAt: true,
-        },
-        expected: { status: 'completed', response: completedResponse },
-      },
       {
         overrides: {
           processingStatus: 'completed',
@@ -660,22 +536,12 @@ describe('command ledger repository', () => {
       {
         overrides: {
           processingStatus: 'failed',
-          finalStateVersion: null,
-          responsePayloadVersion: 1,
-          responsePayload: failedWithoutSnapshot,
-          hasCompletedAt: true,
-        },
-        expected: { status: 'failed', response: failedWithoutSnapshot },
-      },
-      {
-        overrides: {
-          processingStatus: 'failed',
           finalStateVersion: 13,
           responsePayloadVersion: 1,
-          responsePayload: failedWithSnapshot,
+          responsePayload: failedResponse,
           hasCompletedAt: true,
         },
-        expected: { status: 'failed', response: failedWithSnapshot },
+        expected: { status: 'failed', response: failedResponse },
       },
     ]
 
@@ -694,7 +560,10 @@ describe('command ledger repository', () => {
   test('rejects every invalid terminal field matrix as persistence corruption', async () => {
     const owner = await resolvedOwner()
     const completed = commandResponse()
-    const failed = errorResponse(false)
+    const failedWithoutSnapshot = {
+      code: 'state_conflict',
+      message: '场次状态已变化。',
+    }
     const invalidOverrides: readonly Readonly<Record<string, unknown>>[] = [
       { finalStateVersion: 1 },
       { firstEventSeq: 1 },
@@ -711,6 +580,8 @@ describe('command ledger repository', () => {
       {
         processingStatus: 'completed',
         finalStateVersion: 13,
+        firstEventSeq: 19,
+        lastEventSeq: 20,
         responsePayloadVersion: null,
         responsePayload: null,
         hasCompletedAt: true,
@@ -736,13 +607,17 @@ describe('command ledger repository', () => {
       {
         processingStatus: 'completed',
         finalStateVersion: 13,
+        firstEventSeq: 19,
+        lastEventSeq: 20,
         responsePayloadVersion: 1,
-        responsePayload: failed,
+        responsePayload: failedWithoutSnapshot,
         hasCompletedAt: true,
       },
       {
         processingStatus: 'completed',
         finalStateVersion: 13,
+        firstEventSeq: 19,
+        lastEventSeq: 20,
         responsePayloadVersion: 1,
         responsePayload: completed,
         hasCompletedAt: false,
@@ -753,21 +628,21 @@ describe('command ledger repository', () => {
         firstEventSeq: 1,
         lastEventSeq: 1,
         responsePayloadVersion: 1,
-        responsePayload: failed,
+        responsePayload: errorResponse(),
         hasCompletedAt: true,
       },
       {
         processingStatus: 'failed',
         finalStateVersion: 13,
         responsePayloadVersion: 1,
-        responsePayload: failed,
+        responsePayload: failedWithoutSnapshot,
         hasCompletedAt: true,
       },
       {
         processingStatus: 'failed',
         finalStateVersion: null,
         responsePayloadVersion: 1,
-        responsePayload: errorResponse(true),
+        responsePayload: errorResponse(),
         hasCompletedAt: true,
       },
       {
@@ -781,7 +656,7 @@ describe('command ledger repository', () => {
         processingStatus: 'failed',
         finalStateVersion: null,
         responsePayloadVersion: 1,
-        responsePayload: failed,
+        responsePayload: failedWithoutSnapshot,
         hasCompletedAt: false,
       },
     ]
@@ -867,6 +742,7 @@ describe('command ledger repository', () => {
             ledgerRow(unknownVersion, {
               processingStatus: 'completed',
               finalStateVersion: 13,
+              ...eventRange(),
               responsePayloadVersion: 2,
               responsePayload: commandResponse(),
               hasCompletedAt: true,
@@ -885,6 +761,7 @@ describe('command ledger repository', () => {
       {
         processingStatus: 'completed',
         finalStateVersion: 12,
+        ...eventRange(),
         responsePayloadVersion: 1,
         responsePayload: commandResponse(),
         hasCompletedAt: true,
@@ -893,12 +770,13 @@ describe('command ledger repository', () => {
         processingStatus: 'failed',
         finalStateVersion: null,
         responsePayloadVersion: 1,
-        responsePayload: errorResponse(true),
+        responsePayload: errorResponse(),
         hasCompletedAt: true,
       },
       {
         processingStatus: 'completed',
         finalStateVersion: Number.MAX_SAFE_INTEGER + 1,
+        ...eventRange(),
         responsePayloadVersion: 1,
         responsePayload: commandResponse(Number.MAX_SAFE_INTEGER + 1),
         hasCompletedAt: true,
@@ -908,7 +786,7 @@ describe('command ledger repository', () => {
         finalStateVersion: 13,
         responsePayloadVersion: 1,
         responsePayload: {
-          ...errorResponse(false),
+          ...errorResponse(),
           latestSnapshot: snapshot(Number.MAX_SAFE_INTEGER + 1),
         },
         hasCompletedAt: true,
@@ -946,7 +824,7 @@ describe('command ledger repository', () => {
         tracked.transaction,
         acquired,
         commandResponse(Number.MAX_SAFE_INTEGER + 1),
-        null,
+        eventRange(),
       ),
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
     expect(tracked.getCallCount()).toBe(1)
@@ -976,7 +854,7 @@ describe('command ledger repository', () => {
       throw new Error('Expected an acquired registration.')
     }
     const invalid = {
-      ...errorResponse(false),
+      ...errorResponse(),
       latestSnapshot: snapshot(Number.MAX_SAFE_INTEGER + 1),
     }
 
@@ -986,7 +864,7 @@ describe('command ledger repository', () => {
     expect(tracked.getCallCount()).toBe(1)
     await expect(
       failCommand(tracked.transaction, acquired, {
-        ...errorResponse(false),
+        ...errorResponse(),
         latestSnapshot: {
           ...snapshot(),
           sessionId: '77777777-7777-4777-8777-777777777777',
@@ -995,12 +873,10 @@ describe('command ledger repository', () => {
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
     expect(tracked.getCallCount()).toBe(1)
     await expect(
-      failCommand(tracked.transaction, acquired, errorResponse(false)),
+      failCommand(tracked.transaction, acquired, errorResponse()),
     ).resolves.toBeUndefined()
     expect(tracked.getCallCount()).toBe(2)
-    expect(tracked.getParameterLists().flat()).toContainEqual(
-      errorResponse(false),
-    )
+    expect(tracked.getParameterLists().flat()).toContainEqual(errorResponse())
   })
 
   test('rejects cross-session responses and invalid event ranges before SQL', async () => {
@@ -1013,7 +889,7 @@ describe('command ledger repository', () => {
             sessionId: '77777777-7777-4777-8777-777777777777',
           },
         },
-        null,
+        eventRange(),
       ],
       [commandResponse(), { firstEventSeq: 21, lastEventSeq: 20 }],
       [commandResponse(), { firstEventSeq: 19, lastEventSeq: 21 }],
@@ -1062,7 +938,7 @@ describe('command ledger repository', () => {
         transaction,
         acquired,
         commandResponse(),
-        null,
+        eventRange(),
       )
       if (terminalRows instanceof Error) {
         await expect(firstAttempt).rejects.toBeInstanceOf(
@@ -1077,7 +953,7 @@ describe('command ledger repository', () => {
         failCommand(
           createTransactionMock([[{ ledgerId: acquired.ledgerId }]]),
           acquired,
-          errorResponse(false),
+          errorResponse(),
         ),
       ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
     }
@@ -1103,18 +979,18 @@ describe('command ledger repository', () => {
       completedTransaction,
       completed,
       commandResponse(),
-      null,
+      eventRange(),
     )
     await expect(
       completeCommand(
         createTransactionMock([]),
         completed,
         commandResponse(),
-        null,
+        eventRange(),
       ),
     ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
     await expect(
-      failCommand(createTransactionMock([]), completed, errorResponse(false)),
+      failCommand(createTransactionMock([]), completed, errorResponse()),
     ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
 
     const failedPrepared = prepareCommandRegistration(command('endSession'))
@@ -1130,16 +1006,16 @@ describe('command ledger repository', () => {
     if (failed.status !== 'acquired') {
       throw new Error('Expected an acquired registration.')
     }
-    await failCommand(failedTransaction, failed, errorResponse(false))
+    await failCommand(failedTransaction, failed, errorResponse())
     await expect(
-      failCommand(createTransactionMock([]), failed, errorResponse(false)),
+      failCommand(createTransactionMock([]), failed, errorResponse()),
     ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
     await expect(
       completeCommand(
         createTransactionMock([]),
         failed,
         commandResponse(),
-        null,
+        eventRange(),
       ),
     ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
   })
@@ -1161,11 +1037,21 @@ describe('command ledger repository', () => {
     }
 
     await expect(
-      completeCommand(other.transaction, acquired, commandResponse(), null),
+      completeCommand(
+        other.transaction,
+        acquired,
+        commandResponse(),
+        eventRange(),
+      ),
     ).rejects.toBeInstanceOf(CommandLedgerTransitionError)
     expect(other.getCallCount()).toBe(0)
     await expect(
-      completeCommand(original.transaction, acquired, commandResponse(), null),
+      completeCommand(
+        original.transaction,
+        acquired,
+        commandResponse(),
+        eventRange(),
+      ),
     ).resolves.toBeUndefined()
     expect(original.getCallCount()).toBe(2)
   })
@@ -1187,15 +1073,15 @@ describe('command ledger repository', () => {
     const forged = { ...acquired } as typeof acquired
 
     await expect(
-      completeCommand(transaction.transaction, forged, {}, null),
+      completeCommand(transaction.transaction, forged, {}, eventRange()),
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
     expect(transaction.getCallCount()).toBe(1)
     await expect(
-      failCommand(transaction.transaction, forged, {}),
+      failCommand(transaction.transaction, forged, errorResponse()),
     ).rejects.toBeInstanceOf(RepositoryInputValidationError)
     expect(transaction.getCallCount()).toBe(1)
     await expect(
-      failCommand(transaction.transaction, acquired, errorResponse(false)),
+      failCommand(transaction.transaction, acquired, errorResponse()),
     ).resolves.toBeUndefined()
   })
 })

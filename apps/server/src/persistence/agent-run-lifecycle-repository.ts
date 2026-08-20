@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util'
 import type { TransactionSql } from 'postgres'
 import { z } from 'zod'
 import {
@@ -40,7 +39,6 @@ import {
 } from './errors.js'
 import { isResolvedOwnerScope, type ResolvedOwnerScope } from './owner-scope.js'
 
-const POSTGRES_TEXT_OID = 25
 export const AGENT_RUN_LEASE_MS = 15_000
 export const AGENT_WORKER_CLAIM_BATCH_SIZE = 16
 const RUNTIME_ADVISORY_KEYS: Readonly<Record<RuntimeType, number>> =
@@ -56,12 +54,8 @@ const LifecycleSchema = z.enum([
   'cancelled',
   'stale',
 ])
-const DatabaseTimestampSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
-const CanonicalTimestampSchema = z
-  .string()
-  .datetime({ offset: false, precision: 3 })
+const DatabaseTimestampSchema = z.iso.datetime({ precision: 6 })
+const CanonicalTimestampSchema = z.iso.datetime({ precision: 3 })
 const SafeIntegerSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const PositiveIntegerSchema = z.number().int().positive().max(2_147_483_647)
 const LeaseOwnerSchema = z
@@ -74,8 +68,6 @@ const StableCodeSchema = z
   .min(1)
   .max(64)
   .regex(/^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/)
-const JsonObjectSchema = z.record(z.string(), z.unknown())
-
 const RunRowSchema = z.strictObject({
   runId: z.uuid(),
   databaseOwnerId: z.uuid(),
@@ -100,10 +92,6 @@ const RunRowSchema = z.strictObject({
   runConfigPayload: z.unknown(),
   budgetPayloadVersion: z.unknown(),
   budgetPayload: z.unknown(),
-  checkpointPayloadVersion: z.unknown().nullable(),
-  checkpointPayload: z.unknown().nullable(),
-  resultPayloadVersion: z.unknown().nullable(),
-  resultPayload: z.unknown().nullable(),
   createdAt: DatabaseTimestampSchema,
   startedAt: DatabaseTimestampSchema.nullable(),
   completedAt: DatabaseTimestampSchema.nullable(),
@@ -146,7 +134,6 @@ export type ClaimCandidateDecision =
 
 export interface ClaimedAgentRun {
   readonly run: LeasedAgentRun
-  readonly eventKind: 'leased'
 }
 
 export type ClaimNextRepositoryResult =
@@ -196,15 +183,6 @@ export interface AgentRunLifecycleRepository {
     owner: ResolvedOwnerScope,
     input: AgentRunFinalizationInput,
   ): Promise<{ readonly run: PersistedAgentRun; readonly changed: boolean }>
-  writeCheckpoint(
-    transaction: TransactionSql,
-    owner: ResolvedOwnerScope,
-    authority: RuntimeCommitAuthority,
-    input: {
-      readonly payloadVersion: number
-      readonly payload: Readonly<Record<string, unknown>>
-    },
-  ): Promise<LeasedAgentRun>
 }
 
 function deepFreeze<Value>(value: Value): Value {
@@ -242,10 +220,6 @@ function selectRunColumns(alias = 'run'): string {
     ${alias}.run_config_payload AS "runConfigPayload",
     ${alias}.budget_payload_version AS "budgetPayloadVersion",
     ${alias}.budget_payload AS "budgetPayload",
-    ${alias}.checkpoint_payload_version AS "checkpointPayloadVersion",
-    ${alias}.checkpoint_payload AS "checkpointPayload",
-    ${alias}.result_payload_version AS "resultPayloadVersion",
-    ${alias}.result_payload AS "resultPayload",
     to_char(${alias}.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt",
     CASE WHEN ${alias}.started_at IS NULL THEN NULL ELSE
       to_char(${alias}.started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
@@ -294,27 +268,10 @@ function decodeRow(
   ) {
     return { kind: 'invalid' }
   }
-  const checkpointVersion =
-    row.checkpointPayloadVersion === null
-      ? null
-      : PositiveIntegerSchema.safeParse(row.checkpointPayloadVersion)
-  const resultVersion =
-    row.resultPayloadVersion === null
-      ? null
-      : PositiveIntegerSchema.safeParse(row.resultPayloadVersion)
   if (
     configuration.value.runtime !== row.runtimeType ||
     configuration.value.runtimeDefinitionVersion !==
-      row.runtimeDefinitionVersion ||
-    (row.checkpointPayloadVersion === null) !==
-      (row.checkpointPayload === null) ||
-    (row.resultPayloadVersion === null) !== (row.resultPayload === null) ||
-    (checkpointVersion !== null && !checkpointVersion.success) ||
-    (resultVersion !== null && !resultVersion.success) ||
-    (row.checkpointPayload !== null &&
-      !JsonObjectSchema.safeParse(row.checkpointPayload).success) ||
-    (row.resultPayload !== null &&
-      !JsonObjectSchema.safeParse(row.resultPayload).success)
+      row.runtimeDefinitionVersion
   ) {
     return { kind: 'invalid' }
   }
@@ -337,15 +294,6 @@ function decodeRow(
     terminationReason: row.terminationReason,
     runConfiguration: configuration.value,
     budget: budget.value,
-    checkpointPayloadVersion:
-      checkpointVersion === null ? null : checkpointVersion.data,
-    checkpointPayload:
-      row.checkpointPayload === null
-        ? null
-        : deepFreeze({ ...row.checkpointPayload }),
-    resultPayloadVersion: resultVersion === null ? null : resultVersion.data,
-    resultPayload:
-      row.resultPayload === null ? null : deepFreeze({ ...row.resultPayload }),
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
@@ -476,10 +424,7 @@ async function terminateStartedAttempts(
       responseProjectionHash: null,
       validationStatus: 'notRun',
     })
-    const payload = transaction.typed(
-      JSON.stringify(terminal.payload),
-      POSTGRES_TEXT_OID,
-    )
+    const payload = transaction.json(terminal.payload)
     let updatedRows: readonly unknown[]
     try {
       updatedRows = await transaction`
@@ -488,7 +433,7 @@ async function terminateStartedAttempts(
             stale = ${input.lifecycle === 'stale'}, interrupted = true,
             error_category = ${input.errorCategory},
             attempt_payload_version = ${terminal.payloadVersion},
-            attempt_payload = ${payload}::jsonb,
+            attempt_payload = ${payload},
             completed_at = ${input.completedAt}::timestamptz
         WHERE id = ${row.attemptId}::uuid
           AND agent_run_id = ${input.runId}::uuid
@@ -649,14 +594,8 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
       ) {
         throw new AgentRunCreationError('runtime_snapshot_unavailable')
       }
-      const configurationPayload = transaction.typed(
-        JSON.stringify(configuration.payload),
-        POSTGRES_TEXT_OID,
-      )
-      const budgetPayload = transaction.typed(
-        JSON.stringify(budget.payload),
-        POSTGRES_TEXT_OID,
-      )
+      const configurationPayload = transaction.json(configuration.payload)
+      const budgetPayload = transaction.json(budget.payload)
       let inserted: readonly unknown[]
       try {
         inserted = await transaction`
@@ -668,8 +607,6 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
             runtime_definition_version, termination_reason,
             run_config_payload_version, run_config_payload,
             budget_payload_version, budget_payload,
-            checkpoint_payload_version, checkpoint_payload,
-            result_payload_version, result_payload,
             created_at, started_at, completed_at, updated_at
           ) VALUES (
             ${value.agentRunId}::uuid, ${owner.databaseOwnerId}::uuid,
@@ -679,9 +616,9 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
             ${value.decisionRequestId}::uuid, ${value.parentRunId}::uuid, NULL,
             NULL, NULL, 0, ${value.deadlineAt}::timestamptz,
             ${value.runtimeDefinitionVersion}, NULL,
-            ${configuration.payloadVersion}, ${configurationPayload}::jsonb,
-            ${budget.payloadVersion}, ${budgetPayload}::jsonb,
-            NULL, NULL, NULL, NULL, ${value.createdAt}::timestamptz,
+            ${configuration.payloadVersion}, ${configurationPayload},
+            ${budget.payloadVersion}, ${budgetPayload},
+            ${value.createdAt}::timestamptz,
             NULL, NULL, ${value.createdAt}::timestamptz
           )
           ON CONFLICT DO NOTHING
@@ -1012,7 +949,6 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
             kind: 'claimed' as const,
             value: Object.freeze({
               run: claimed as LeasedAgentRun,
-              eventKind: 'leased' as const,
             }),
           })
         }
@@ -1162,7 +1098,6 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
           `UPDATE app_private.agent_runs AS run
            SET lifecycle = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,
                termination_reason = $1, completed_at = $2::timestamptz,
-               result_payload_version = NULL, result_payload = NULL,
                updated_at = $2::timestamptz
            WHERE run.id = $3::uuid AND run.owner_id = $4::uuid
              AND run.lifecycle IN ('queued', 'leased', 'running')
@@ -1194,8 +1129,6 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
           authority: z.unknown(),
           lifecycle: z.enum(['completed', 'failed', 'cancelled', 'stale']),
           terminationReason: StableCodeSchema.nullable(),
-          resultPayloadVersion: PositiveIntegerSchema.nullable(),
-          resultPayload: JsonObjectSchema.nullable(),
           completedAt: CanonicalTimestampSchema,
         })
         .safeParse(input)
@@ -1203,18 +1136,9 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
         throw new RepositoryInputValidationError()
       }
       const lifecycle = parsed.data.lifecycle as TerminalAgentRunLifecycle
-      const hasResult =
-        parsed.data.resultPayloadVersion !== null &&
-        parsed.data.resultPayload !== null
-      const hasMismatchedResultPair =
-        (parsed.data.resultPayloadVersion === null) !==
-        (parsed.data.resultPayload === null)
       if (
-        hasMismatchedResultPair ||
-        (lifecycle === 'completed' && !hasResult) ||
         (lifecycle === 'completed') !==
           (parsed.data.terminationReason === null) ||
-        ((lifecycle === 'cancelled' || lifecycle === 'stale') && hasResult) ||
         (lifecycle !== 'completed' && parsed.data.terminationReason === null)
       ) {
         throw new RepositoryInputValidationError()
@@ -1236,8 +1160,6 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
           locked.runtimeType === input.authority.runtimeType &&
           locked.fencingToken === input.authority.fencingToken &&
           locked.terminationReason === parsed.data.terminationReason &&
-          locked.resultPayloadVersion === parsed.data.resultPayloadVersion &&
-          isDeepStrictEqual(locked.resultPayload, parsed.data.resultPayload) &&
           locked.completedAt !== null &&
           Date.parse(locked.completedAt) === Date.parse(parsed.data.completedAt)
         if (isMatchingRetry) {
@@ -1245,32 +1167,22 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
         }
         throw new AgentRunTransitionError('agent_run_already_terminal')
       }
-      const resultPayload =
-        parsed.data.resultPayload === null
-          ? null
-          : transaction.typed(
-              JSON.stringify(parsed.data.resultPayload),
-              POSTGRES_TEXT_OID,
-            )
       let rows: readonly unknown[]
       try {
         rows = await transaction.unsafe(
           `UPDATE app_private.agent_runs AS run
            SET lifecycle = $1, lease_owner = NULL, lease_expires_at = NULL,
                termination_reason = $2, completed_at = $3::timestamptz,
-               result_payload_version = $4,
-               result_payload = $5::jsonb, updated_at = $3::timestamptz
-           WHERE run.id = $6::uuid AND run.owner_id = $7::uuid
-             AND run.runtime = $8 AND run.lifecycle IN ('leased', 'running')
-             AND run.lease_owner = $9 AND run.fencing_token = $10::bigint
+               updated_at = $3::timestamptz
+           WHERE run.id = $4::uuid AND run.owner_id = $5::uuid
+             AND run.runtime = $6 AND run.lifecycle IN ('leased', 'running')
+             AND run.lease_owner = $7 AND run.fencing_token = $8::bigint
              AND run.lease_expires_at > clock_timestamp()
            RETURNING ${RUN_COLUMNS}`,
           [
             lifecycle,
             parsed.data.terminationReason,
             parsed.data.completedAt,
-            parsed.data.resultPayloadVersion,
-            resultPayload,
             parsed.data.runId,
             owner.databaseOwnerId,
             input.authority.runtimeType,
@@ -1288,54 +1200,6 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
         run: requireDecodedRow(rows[0], owner),
         changed: true,
       })
-    },
-
-    async writeCheckpoint(transaction, owner, authority, input) {
-      assertRepositoryInput(transaction, owner)
-      const parsed = z
-        .strictObject({
-          payloadVersion: PositiveIntegerSchema,
-          payload: JsonObjectSchema,
-        })
-        .safeParse(input)
-      if (
-        !parsed.success ||
-        !isRuntimeCommitAuthority(authority, authority.runtimeType)
-      ) {
-        throw new AgentRunTransitionError('agent_run_checkpoint_rejected')
-      }
-      const payload = transaction.typed(
-        JSON.stringify(parsed.data.payload),
-        POSTGRES_TEXT_OID,
-      )
-      let rows: readonly unknown[]
-      try {
-        rows = await transaction.unsafe(
-          `UPDATE app_private.agent_runs AS run
-           SET checkpoint_payload_version = $1, checkpoint_payload = $2::jsonb,
-               updated_at = clock_timestamp()
-           WHERE run.id = $3::uuid AND run.owner_id = $4::uuid
-             AND run.runtime = $5 AND run.lifecycle = 'running'
-             AND run.lease_owner = $6 AND run.fencing_token = $7::bigint
-             AND run.lease_expires_at > clock_timestamp()
-           RETURNING ${RUN_COLUMNS}`,
-          [
-            parsed.data.payloadVersion,
-            payload,
-            authority.runId,
-            owner.databaseOwnerId,
-            authority.runtimeType,
-            authority.leaseOwner,
-            authority.fencingToken,
-          ],
-        )
-      } catch {
-        throw new DatabaseOperationError()
-      }
-      if (rows.length !== 1) {
-        throw new AgentRunTransitionError('agent_run_fencing_rejected')
-      }
-      return requireDecodedRow(rows[0], owner) as LeasedAgentRun
     },
   }
   return Object.freeze(repository)

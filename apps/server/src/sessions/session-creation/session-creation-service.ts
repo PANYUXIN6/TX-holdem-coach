@@ -20,10 +20,7 @@ import {
   RosterSourceChangedError,
 } from '../../persistence/errors.js'
 import { runDatabaseTransaction } from '../../persistence/database-transaction.js'
-import {
-  resolveOwnerScope,
-  type ResolvedOwnerScope,
-} from '../../persistence/owner-scope.js'
+import type { ResolvedOwnerScope } from '../../persistence/owner-scope.js'
 import type { SessionCreationRepository } from '../../persistence/session-creation-repository.js'
 import type { SessionMutationRepository } from '../../persistence/session-mutation-repository.js'
 import { getPrivateEventHandId } from '../authoritative-state/private-event.js'
@@ -121,6 +118,7 @@ export interface HandAuditCreationWriter {
 
 export function createSessionCreationService(input: {
   readonly sql: Sql
+  readonly owner: ResolvedOwnerScope
   readonly catalog: PersonaCatalog
   readonly readProviderPolicy: () => ProviderCreationPolicy
   readonly createIdentityGraph: (
@@ -133,7 +131,7 @@ export function createSessionCreationService(input: {
   readonly handAuditWriter: HandAuditCreationWriter
   readonly snapshotProjectorBinding: SessionCreationSnapshotProjectorBinding
   readonly activeSessionSnapshotReaderBinding: ActiveSessionSnapshotReaderBinding
-  readonly committedEventPublisher?: CommittedSessionEventPublisher
+  readonly committedEventPublisher: CommittedSessionEventPublisher
   readonly logPublishFailure?: (input: {
     readonly eventCount: number
     readonly firstEventSeq: number
@@ -142,6 +140,7 @@ export function createSessionCreationService(input: {
 }): SessionCreationService {
   const {
     sql,
+    owner,
     catalog,
     readProviderPolicy,
     createIdentityGraph,
@@ -218,7 +217,6 @@ export function createSessionCreationService(input: {
               message: 'Kimi API Key 未配置，自动降级不可用。' as const,
             },
           ]
-      const owner = await resolveOwnerScope(sql, { ownerId: 'local-user' })
       const rosterSource = parsedRequest.data.rosterSource
       const selections =
         rosterSource.type === 'currentCatalog'
@@ -487,7 +485,7 @@ export function createSessionCreationService(input: {
           ],
         })
       })
-      if (result.kind === 'created' && committedEventPublisher !== undefined) {
+      if (result.kind === 'created') {
         try {
           committedEventPublisher.publish(result.newlyPersistedEvents)
         } catch {

@@ -33,16 +33,7 @@ export interface ClearOwnerSessionDataInput {
   readonly deletedAt: string
 }
 
-const CanonicalUtcTimestampSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
-  .refine((value) => {
-    const milliseconds = Date.parse(value)
-    return (
-      Number.isFinite(milliseconds) &&
-      new Date(milliseconds).toISOString() === value
-    )
-  })
+const CanonicalUtcTimestampSchema = z.iso.datetime({ precision: 3 })
 
 const DeleteEndedSessionDataInputSchema = z.strictObject({
   sessionId: z.uuid().transform((value) => value.toLowerCase()),

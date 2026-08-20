@@ -18,7 +18,6 @@ import {
   HealthResponseSchema,
   LegalActionSchema,
   LegalActionsSchema,
-  PersonaSnapshotFilterSchema,
   PokerActionSchema,
   PokerPhaseSchema,
   PublicCompletedHandSummarySchema,
@@ -780,7 +779,7 @@ describe('共享外部协议', () => {
     ).toBe(false)
   })
 
-  it('可解析公开人物摘要、创建选择和快照筛选条件', () => {
+  it('可解析公开人物摘要和创建选择', () => {
     expect(
       AgentPersonaSummarySchema.safeParse(agentPersonaSummary).success,
     ).toBe(true)
@@ -794,23 +793,8 @@ describe('共享外部协议', () => {
       ]).success,
     ).toBe(true)
     expect(
-      PersonaSnapshotFilterSchema.safeParse({
-        personaId: 'tag_pro',
-        personaVersion: 1,
-      }).success,
-    ).toBe(true)
-    expect(
-      PersonaSnapshotFilterSchema.safeParse({ personaId: 'tag_pro' }).success,
-    ).toBe(true)
-    expect(
       AgentPersonaSummarySchema.safeParse({
         ...agentPersonaSummary,
-        personaVersion: 2,
-      }).success,
-    ).toBe(false)
-    expect(
-      PersonaSnapshotFilterSchema.safeParse({
-        personaId: 'tag_pro',
         personaVersion: 2,
       }).success,
     ).toBe(false)

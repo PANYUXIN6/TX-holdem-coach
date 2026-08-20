@@ -331,18 +331,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "invocation_payload_version": {
-          "name": "invocation_payload_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "invocation_payload": {
-          "name": "invocation_payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "started_at": {
           "name": "started_at",
           "type": "timestamp with time zone",
@@ -429,10 +417,6 @@
         "agent_capability_invocations_safe_values_check": {
           "name": "agent_capability_invocations_safe_values_check",
           "value": "\"app_private\".\"agent_capability_invocations\".\"budget_cost\" BETWEEN 0 AND 9007199254740991\n        AND (\n          \"app_private\".\"agent_capability_invocations\".\"duration_ms\" IS NULL\n          OR \"app_private\".\"agent_capability_invocations\".\"duration_ms\" BETWEEN 0 AND 9007199254740991\n        )"
-        },
-        "agent_capability_invocations_payload_check": {
-          "name": "agent_capability_invocations_payload_check",
-          "value": "(\n        \"app_private\".\"agent_capability_invocations\".\"invocation_payload_version\" IS NULL\n        AND \"app_private\".\"agent_capability_invocations\".\"invocation_payload\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_capability_invocations\".\"invocation_payload_version\" IS NOT NULL\n        AND \"app_private\".\"agent_capability_invocations\".\"invocation_payload\" IS NOT NULL\n        AND \"app_private\".\"agent_capability_invocations\".\"invocation_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"agent_capability_invocations\".\"invocation_payload\") = 'object'\n      )"
         }
       },
       "isRLSEnabled": false
@@ -682,30 +666,6 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true
-        },
-        "checkpoint_payload_version": {
-          "name": "checkpoint_payload_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "checkpoint_payload": {
-          "name": "checkpoint_payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "result_payload_version": {
-          "name": "result_payload_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "result_payload": {
-          "name": "result_payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -965,20 +925,6 @@
           "nullsNotDistinct": false,
           "columns": ["id", "session_id", "owner_id", "decision_request_id"]
         },
-        "agent_runs_player_decision_identity_unique": {
-          "name": "agent_runs_player_decision_identity_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "id",
-            "owner_id",
-            "session_id",
-            "hand_id",
-            "participant_id",
-            "source_state_version",
-            "decision_request_id",
-            "runtime"
-          ]
-        },
         "agent_runs_id_owner_session_unique": {
           "name": "agent_runs_id_owner_session_unique",
           "nullsNotDistinct": false,
@@ -1017,7 +963,7 @@
         },
         "agent_runs_lifecycle_fields_check": {
           "name": "agent_runs_lifecycle_fields_check",
-          "value": "(\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'queued'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'leased'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'running'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'completed'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NOT NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'failed'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NOT NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" IN ('cancelled', 'stale')\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n      )"
+          "value": "(\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'queued'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'leased'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'running'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'completed'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"started_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" = 'failed'\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NOT NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"lifecycle\" IN ('cancelled', 'stale')\n        AND \"app_private\".\"agent_runs\".\"lease_owner\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"completed_at\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"termination_reason\" IS NOT NULL\n      )"
         },
         "agent_runs_timestamp_order_check": {
           "name": "agent_runs_timestamp_order_check",
@@ -1026,14 +972,6 @@
         "agent_runs_required_payloads_check": {
           "name": "agent_runs_required_payloads_check",
           "value": "\"app_private\".\"agent_runs\".\"run_config_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"agent_runs\".\"run_config_payload\") = 'object'\n        AND \"app_private\".\"agent_runs\".\"budget_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"agent_runs\".\"budget_payload\") = 'object'"
-        },
-        "agent_runs_checkpoint_payload_check": {
-          "name": "agent_runs_checkpoint_payload_check",
-          "value": "(\n        \"app_private\".\"agent_runs\".\"checkpoint_payload_version\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"checkpoint_payload\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"checkpoint_payload_version\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"checkpoint_payload\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"checkpoint_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"agent_runs\".\"checkpoint_payload\") = 'object'\n      )"
-        },
-        "agent_runs_result_payload_check": {
-          "name": "agent_runs_result_payload_check",
-          "value": "(\n        \"app_private\".\"agent_runs\".\"result_payload_version\" IS NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload\" IS NULL\n      ) OR (\n        \"app_private\".\"agent_runs\".\"result_payload_version\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload\" IS NOT NULL\n        AND \"app_private\".\"agent_runs\".\"result_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"agent_runs\".\"result_payload\") = 'object'\n      )"
         }
       },
       "isRLSEnabled": false
@@ -1553,256 +1491,6 @@
         "owners_identity_key_not_blank": {
           "name": "owners_identity_key_not_blank",
           "value": "length(btrim(\"app_private\".\"owners\".\"identity_key\")) > 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "app_private.player_decisions": {
-      "name": "player_decisions",
-      "schema": "app_private",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "agent_run_id": {
-          "name": "agent_run_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "owner_id": {
-          "name": "owner_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "hand_id": {
-          "name": "hand_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "participant_id": {
-          "name": "participant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_state_version": {
-          "name": "source_state_version",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "decision_request_id": {
-          "name": "decision_request_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "memory_revision": {
-          "name": "memory_revision",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "runtime": {
-          "name": "runtime",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'player'"
-        },
-        "submission_status": {
-          "name": "submission_status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "command_ledger_id": {
-          "name": "command_ledger_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decision_packet_payload_version": {
-          "name": "decision_packet_payload_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "decision_packet_payload": {
-          "name": "decision_packet_payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "candidate_set_payload_version": {
-          "name": "candidate_set_payload_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "candidate_set_payload": {
-          "name": "candidate_set_payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "validator_result_payload_version": {
-          "name": "validator_result_payload_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "validator_result_payload": {
-          "name": "validator_result_payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "submitted_at": {
-          "name": "submitted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "player_decisions_hand_participant_version_idx": {
-          "name": "player_decisions_hand_participant_version_idx",
-          "columns": [
-            {
-              "expression": "hand_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "participant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "source_state_version",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "player_decisions_run_identity_fk": {
-          "name": "player_decisions_run_identity_fk",
-          "tableFrom": "player_decisions",
-          "tableTo": "agent_runs",
-          "schemaTo": "app_private",
-          "columnsFrom": [
-            "agent_run_id",
-            "owner_id",
-            "session_id",
-            "hand_id",
-            "participant_id",
-            "source_state_version",
-            "decision_request_id",
-            "runtime"
-          ],
-          "columnsTo": [
-            "id",
-            "owner_id",
-            "session_id",
-            "hand_id",
-            "participant_id",
-            "source_state_version",
-            "decision_request_id",
-            "runtime"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "player_decisions_agent_scope_fk": {
-          "name": "player_decisions_agent_scope_fk",
-          "tableFrom": "player_decisions",
-          "tableTo": "session_agents",
-          "schemaTo": "app_private",
-          "columnsFrom": ["participant_id", "session_id", "owner_id"],
-          "columnsTo": ["participant_id", "session_id", "owner_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "player_decisions_memory_revision_fk": {
-          "name": "player_decisions_memory_revision_fk",
-          "tableFrom": "player_decisions",
-          "tableTo": "agent_memory_revisions",
-          "schemaTo": "app_private",
-          "columnsFrom": [
-            "participant_id",
-            "session_id",
-            "owner_id",
-            "memory_revision"
-          ],
-          "columnsTo": ["participant_id", "session_id", "owner_id", "revision"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "player_decisions_command_scope_fk": {
-          "name": "player_decisions_command_scope_fk",
-          "tableFrom": "player_decisions",
-          "tableTo": "command_ledger",
-          "schemaTo": "app_private",
-          "columnsFrom": ["command_ledger_id", "session_id", "owner_id"],
-          "columnsTo": ["id", "session_id", "owner_id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "player_decisions_agent_run_unique": {
-          "name": "player_decisions_agent_run_unique",
-          "nullsNotDistinct": false,
-          "columns": ["agent_run_id"]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "player_decisions_runtime_check": {
-          "name": "player_decisions_runtime_check",
-          "value": "\"app_private\".\"player_decisions\".\"runtime\" = 'player'"
-        },
-        "player_decisions_submission_status_check": {
-          "name": "player_decisions_submission_status_check",
-          "value": "\"app_private\".\"player_decisions\".\"submission_status\" IN ('pending', 'committed', 'rejected', 'stale')"
-        },
-        "player_decisions_safe_values_check": {
-          "name": "player_decisions_safe_values_check",
-          "value": "\"app_private\".\"player_decisions\".\"source_state_version\" BETWEEN 0 AND 9007199254740991\n        AND \"app_private\".\"player_decisions\".\"memory_revision\" BETWEEN 0 AND 9007199254740991"
-        },
-        "player_decisions_payloads_check": {
-          "name": "player_decisions_payloads_check",
-          "value": "\"app_private\".\"player_decisions\".\"decision_packet_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"player_decisions\".\"decision_packet_payload\") = 'object'\n        AND \"app_private\".\"player_decisions\".\"candidate_set_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"player_decisions\".\"candidate_set_payload\") = 'object'\n        AND \"app_private\".\"player_decisions\".\"validator_result_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"player_decisions\".\"validator_result_payload\") = 'object'"
         }
       },
       "isRLSEnabled": false

@@ -2,7 +2,6 @@ import type { TransactionSql } from 'postgres'
 import { z } from 'zod'
 import {
   decideSessionRecovery,
-  type RecoveryRegistries,
   type SessionDiagnosticCode,
   type SessionRecoveryFacts,
 } from '../sessions/authoritative-state/recovery-decision.js'
@@ -27,16 +26,7 @@ const SafeNonnegativeIntegerSchema = z
   .int()
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER)
-const CanonicalUtcTimestampSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
-  .refine((value) => {
-    const milliseconds = Date.parse(value)
-    return (
-      Number.isFinite(milliseconds) &&
-      new Date(milliseconds).toISOString() === value
-    )
-  })
+const CanonicalUtcTimestampSchema = z.iso.datetime({ precision: 3 })
 
 const SnapshotRowSchema = z.strictObject({
   rowPayloadVersion: z.number(),
@@ -123,17 +113,12 @@ function validateInputs(
   owner: ResolvedOwnerScope,
   sessionId: string,
   recoveryAt: string,
-  registries: RecoveryRegistries,
 ): void {
   if (
     typeof transaction !== 'function' ||
     !isResolvedOwnerScope(owner) ||
     !z.uuid().safeParse(sessionId).success ||
-    !CanonicalUtcTimestampSchema.safeParse(recoveryAt).success ||
-    typeof registries !== 'object' ||
-    registries === null ||
-    typeof registries.snapshot?.read !== 'function' ||
-    typeof registries.privateEvent?.read !== 'function'
+    !CanonicalUtcTimestampSchema.safeParse(recoveryAt).success
   ) {
     throw new RepositoryInputValidationError()
   }
@@ -352,9 +337,8 @@ async function recover(
   owner: ResolvedOwnerScope,
   sessionId: string,
   recoveryAt: string,
-  registries: RecoveryRegistries,
 ): Promise<SessionRecoveryTransactionResult> {
-  validateInputs(transaction, owner, sessionId, recoveryAt, registries)
+  validateInputs(transaction, owner, sessionId, recoveryAt)
   const locked = await sessionMutationRepository.lockSessionForMutation(
     transaction,
     owner,
@@ -373,7 +357,7 @@ async function recover(
   }
 
   const facts = await readRecoveryFacts(transaction, locked, owner)
-  const decision = decideSessionRecovery(facts, registries)
+  const decision = decideSessionRecovery(facts)
   if (decision.kind === 'readonlyDiagnostic') {
     if (mode === 'ordinary') {
       await enterReadonlyDiagnostic(
@@ -441,14 +425,12 @@ export interface SessionRecoveryRepository {
     owner: ResolvedOwnerScope,
     sessionId: string,
     recoveryAt: string,
-    registries: RecoveryRegistries,
   ): Promise<SessionRecoveryTransactionResult>
   retryReadonlySessionRecovery(
     transaction: TransactionSql,
     owner: ResolvedOwnerScope,
     sessionId: string,
     recoveryAt: string,
-    registries: RecoveryRegistries,
   ): Promise<SessionRecoveryTransactionResult>
 }
 
@@ -471,7 +453,6 @@ export function createSessionRecoveryRepository(input: {
       owner: ResolvedOwnerScope,
       sessionId: string,
       recoveryAt: string,
-      registries: RecoveryRegistries,
     ) =>
       recover(
         'ordinary',
@@ -480,14 +461,12 @@ export function createSessionRecoveryRepository(input: {
         owner,
         sessionId,
         recoveryAt,
-        registries,
       ),
     retryReadonlySessionRecovery: (
       transaction: TransactionSql,
       owner: ResolvedOwnerScope,
       sessionId: string,
       recoveryAt: string,
-      registries: RecoveryRegistries,
     ) =>
       recover(
         'retry',
@@ -496,7 +475,6 @@ export function createSessionRecoveryRepository(input: {
         owner,
         sessionId,
         recoveryAt,
-        registries,
       ),
   })
 }
@@ -505,8 +483,3 @@ export const productionSessionRecoveryRepository =
   createSessionRecoveryRepository({
     sessionMutationRepository: productionSessionMutationRepository,
   })
-
-export const recoverSessionForMutation =
-  productionSessionRecoveryRepository.recoverSessionForMutation
-export const retryReadonlySessionRecovery =
-  productionSessionRecoveryRepository.retryReadonlySessionRecovery

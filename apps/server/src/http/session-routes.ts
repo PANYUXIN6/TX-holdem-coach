@@ -91,17 +91,6 @@ export function registerSessionRoutes(
         ],
       )
     }
-    if (request.command.type === 'retryAgent') {
-      return jsonResponse(
-        context,
-        ErrorResponseSchema,
-        {
-          code: 'COMMAND_NOT_ALLOWED_IN_PHASE',
-          message: '当前服务尚不支持该命令类型。',
-        },
-        409,
-      )
-    }
     const result = await ports.commands.execute(request.command)
     if (result.kind === 'completed') {
       return jsonResponse(context, CommandResponseSchema, result.response)
@@ -114,15 +103,5 @@ export function registerSessionRoutes(
         statusForStableErrorCode(result.response.code),
       )
     }
-    context.header('Retry-After', '1')
-    return jsonResponse(
-      context,
-      ErrorResponseSchema,
-      {
-        code: 'COMMAND_PROCESSING',
-        message: '命令正在处理中，请稍后重试。',
-      },
-      409,
-    )
   })
 }

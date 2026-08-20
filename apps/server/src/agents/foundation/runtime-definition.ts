@@ -6,7 +6,6 @@ import {
 } from '../audit/audit-primitives.js'
 import type { CapabilityManifest } from './capability-protocol.js'
 import type { RuntimeBudgetPolicy } from './execution-budget.js'
-import type { RuntimeStateMachineDefinition } from './runtime-state-machine.js'
 
 export const RuntimeTypeSchema = z.enum(['player', 'coach'])
 export type RuntimeType = z.infer<typeof RuntimeTypeSchema>
@@ -30,7 +29,6 @@ export const RuntimeDefinitionVersionSchema = PositiveSafeIntegerSchema
 export interface RuntimeDefinitionBase<
   TRuntime extends RuntimeType,
   TContextKind extends string,
-  TState extends string,
 > {
   readonly runtimeType: TRuntime
   readonly runtimeDefinitionVersion: number
@@ -45,17 +43,12 @@ export interface RuntimeDefinitionBase<
   readonly validator: RuntimeComponentReference
   readonly commitGate: RuntimeCommitGateReference<TRuntime>
   readonly recoveryPolicy: RuntimeComponentReference
-  readonly stateMachine: RuntimeStateMachineDefinition<TRuntime, TState>
   readonly modelToolPolicy: 'none'
 }
 
-export type AnyRuntimeDefinition = RuntimeDefinitionBase<
-  RuntimeType,
-  string,
-  string
->
+export type AnyRuntimeDefinition = RuntimeDefinitionBase<RuntimeType, string>
 
 export interface RuntimeDefinitionMap {
-  readonly player: RuntimeDefinitionBase<'player', string, string>
-  readonly coach: RuntimeDefinitionBase<'coach', string, string>
+  readonly player: RuntimeDefinitionBase<'player', string>
+  readonly coach: RuntimeDefinitionBase<'coach', string>
 }

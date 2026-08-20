@@ -1,23 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { TransactionSql } from 'postgres'
 import {
-  AiSeatNumberSchema,
   CommandResponseSchema,
   CommandIdSchema,
-  DecisionRequestIdSchema,
   ErrorResponseSchema,
-  HandIdSchema,
-  PokerActionSchema,
+  PublicSessionSnapshotSchema,
   SessionCommandSchema,
   SessionIdSchema,
 } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
-import {
-  canonicalJson,
-  deepFreeze,
-  type DeepReadonly,
-  type JsonValue,
-} from '../personas/config.js'
+import { deepFreeze, type DeepReadonly } from '../personas/config.js'
+import { canonicalJson, type JsonValue } from '../persisted-json.js'
 import {
   CommandLedgerTransitionError,
   CommandPayloadConflictError,
@@ -35,33 +28,13 @@ const SafeIntegerSchema = z
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER)
 
-const PublicLedgerCommandSchema = SessionCommandSchema.refine(
+export const LedgerCommandSchema = SessionCommandSchema.refine(
   (command) => command.expectedStateVersion <= Number.MAX_SAFE_INTEGER,
 )
-
-const AiActionLedgerCommandSchema = z.strictObject({
-  sessionId: SessionIdSchema,
-  commandId: CommandIdSchema,
-  expectedStateVersion: SafeIntegerSchema,
-  type: z.literal('aiAction'),
-  payload: z.strictObject({
-    decisionRequestId: DecisionRequestIdSchema,
-    handId: HandIdSchema,
-    actorSeatNumber: AiSeatNumberSchema,
-    candidateActionId: z.string().trim().min(1).max(128),
-    action: PokerActionSchema,
-  }),
-})
-
-export const LedgerCommandSchema = z.union([
-  PublicLedgerCommandSchema,
-  AiActionLedgerCommandSchema,
-])
 
 export type LedgerCommand = z.infer<typeof LedgerCommandSchema>
 
 export const COMMAND_LEDGER_RESPONSE_PAYLOAD_VERSION = 1 as const
-const POSTGRES_TEXT_OID = 25
 
 const LedgerRowSchema = z.strictObject({
   ledgerId: z.string().uuid(),
@@ -102,14 +75,13 @@ export interface AcquiredCommandRegistration {
 
 export type CommandRegistrationResult =
   | AcquiredCommandRegistration
-  | { readonly status: 'processing' }
   | {
       readonly status: 'completed'
       readonly response: DeepReadonly<z.infer<typeof CommandResponseSchema>>
     }
   | {
       readonly status: 'failed'
-      readonly response: DeepReadonly<z.infer<typeof ErrorResponseSchema>>
+      readonly response: DeepReadonly<LedgerFailureResponse>
     }
 
 export type ExistingCommandResult =
@@ -134,6 +106,11 @@ export type CommandEventRange = Readonly<
   z.infer<typeof CommandEventRangeSchema>
 >
 
+const LedgerFailureResponseSchema = ErrorResponseSchema.extend({
+  latestSnapshot: PublicSessionSnapshotSchema,
+})
+type LedgerFailureResponse = z.infer<typeof LedgerFailureResponseSchema>
+
 function invalidLedger(): PersistenceDataCorruptionError {
   return new PersistenceDataCorruptionError('invalidCommandLedger')
 }
@@ -147,22 +124,10 @@ function uuidEquals(left: string, right: string): boolean {
 }
 
 function normalizeLedgerCommand(command: LedgerCommand): LedgerCommand {
-  if (command.type !== 'aiAction') {
-    return {
-      ...command,
-      sessionId: normalizeUuid(command.sessionId),
-      commandId: normalizeUuid(command.commandId),
-    }
-  }
   return {
     ...command,
     sessionId: normalizeUuid(command.sessionId),
     commandId: normalizeUuid(command.commandId),
-    payload: {
-      ...command.payload,
-      decisionRequestId: normalizeUuid(command.payload.decisionRequestId),
-      handId: normalizeUuid(command.payload.handId),
-    },
   }
 }
 
@@ -199,17 +164,7 @@ function parseExistingRegistration(
   }
 
   if (row.processingStatus === 'processing') {
-    if (
-      row.finalStateVersion !== null ||
-      row.firstEventSeq !== null ||
-      row.lastEventSeq !== null ||
-      row.responsePayloadVersion !== null ||
-      row.responsePayload !== null ||
-      row.hasCompletedAt
-    ) {
-      throw invalidLedger()
-    }
-    return Object.freeze({ status: 'processing' })
+    throw invalidLedger()
   }
 
   if (
@@ -222,7 +177,11 @@ function parseExistingRegistration(
   assertTerminalPayloadVersion(row)
 
   if (row.processingStatus === 'completed') {
-    if (row.finalStateVersion === null) {
+    if (
+      row.finalStateVersion === null ||
+      row.firstEventSeq === null ||
+      row.lastEventSeq === null
+    ) {
       throw invalidLedger()
     }
     const response = CommandResponseSchema.safeParse(row.responsePayload)
@@ -232,31 +191,30 @@ function parseExistingRegistration(
         .success ||
       !uuidEquals(response.data.snapshot.sessionId, row.sessionId) ||
       response.data.snapshot.stateVersion !== row.finalStateVersion ||
-      (row.firstEventSeq === null) !== (row.lastEventSeq === null) ||
-      (row.firstEventSeq !== null &&
-        row.lastEventSeq !== null &&
-        (row.firstEventSeq > row.lastEventSeq ||
-          row.lastEventSeq !== response.data.snapshot.eventSeq))
+      row.firstEventSeq > row.lastEventSeq ||
+      row.lastEventSeq !== response.data.snapshot.eventSeq
     ) {
       throw invalidLedger()
     }
     return deepFreeze({ status: 'completed', response: response.data })
   }
 
-  if (row.firstEventSeq !== null || row.lastEventSeq !== null) {
+  if (
+    row.finalStateVersion === null ||
+    row.firstEventSeq !== null ||
+    row.lastEventSeq !== null
+  ) {
     throw invalidLedger()
   }
-  const response = ErrorResponseSchema.safeParse(row.responsePayload)
+  const response = LedgerFailureResponseSchema.safeParse(row.responsePayload)
   if (!response.success) {
     throw invalidLedger()
   }
   const latestSnapshot = response.data.latestSnapshot
   if (
-    (latestSnapshot === undefined && row.finalStateVersion !== null) ||
-    (latestSnapshot !== undefined &&
-      (!SafeIntegerSchema.safeParse(latestSnapshot.stateVersion).success ||
-        !uuidEquals(latestSnapshot.sessionId, row.sessionId) ||
-        latestSnapshot.stateVersion !== row.finalStateVersion))
+    !SafeIntegerSchema.safeParse(latestSnapshot.stateVersion).success ||
+    !uuidEquals(latestSnapshot.sessionId, row.sessionId) ||
+    latestSnapshot.stateVersion !== row.finalStateVersion
   ) {
     throw invalidLedger()
   }
@@ -475,28 +433,22 @@ export async function completeCommand(
   transaction: TransactionSql,
   acquired: AcquiredCommandRegistration,
   responseInput: unknown,
-  eventRangeInput: CommandEventRange | null,
+  eventRangeInput: CommandEventRange,
 ): Promise<void> {
   assertAvailableAcquired(acquired, transaction)
 
   const response = CommandResponseSchema.safeParse(responseInput)
-  const eventRange = z
-    .union([z.null(), CommandEventRangeSchema])
-    .safeParse(eventRangeInput)
+  const eventRange = CommandEventRangeSchema.safeParse(eventRangeInput)
   if (
     !response.success ||
     !eventRange.success ||
     !SafeIntegerSchema.safeParse(response.data.snapshot.stateVersion).success ||
     !uuidEquals(response.data.snapshot.sessionId, acquired.sessionId) ||
-    (eventRange.data !== null &&
-      eventRange.data.lastEventSeq !== response.data.snapshot.eventSeq)
+    eventRange.data.lastEventSeq !== response.data.snapshot.eventSeq
   ) {
     throw new RepositoryInputValidationError()
   }
-  const responsePayload = transaction.typed(
-    JSON.stringify(response.data),
-    POSTGRES_TEXT_OID,
-  )
+  const responsePayload = transaction.json(response.data)
 
   consumeAcquired(acquired)
   let rows: readonly { readonly ledgerId: string }[]
@@ -505,10 +457,10 @@ export async function completeCommand(
       UPDATE app_private.command_ledger
       SET processing_status = 'completed',
           final_state_version = ${response.data.snapshot.stateVersion}::bigint,
-          first_event_seq = ${eventRange.data?.firstEventSeq ?? null}::bigint,
-          last_event_seq = ${eventRange.data?.lastEventSeq ?? null}::bigint,
+          first_event_seq = ${eventRange.data.firstEventSeq}::bigint,
+          last_event_seq = ${eventRange.data.lastEventSeq}::bigint,
           response_payload_version = ${COMMAND_LEDGER_RESPONSE_PAYLOAD_VERSION},
-          response_payload = ${responsePayload}::jsonb,
+          response_payload = ${responsePayload},
           completed_at = clock_timestamp(),
           updated_at = clock_timestamp()
       WHERE owner_id = ${acquired.owner.databaseOwnerId}::uuid
@@ -531,22 +483,16 @@ export async function failCommand(
 ): Promise<void> {
   assertAvailableAcquired(acquired, transaction)
 
-  const response = ErrorResponseSchema.safeParse(responseInput)
-  const latestSnapshot = response.success
-    ? response.data.latestSnapshot
-    : undefined
+  const response = LedgerFailureResponseSchema.safeParse(responseInput)
   if (
     !response.success ||
-    (latestSnapshot !== undefined &&
-      (!SafeIntegerSchema.safeParse(latestSnapshot.stateVersion).success ||
-        !uuidEquals(latestSnapshot.sessionId, acquired.sessionId)))
+    !SafeIntegerSchema.safeParse(response.data.latestSnapshot.stateVersion)
+      .success ||
+    !uuidEquals(response.data.latestSnapshot.sessionId, acquired.sessionId)
   ) {
     throw new RepositoryInputValidationError()
   }
-  const responsePayload = transaction.typed(
-    JSON.stringify(response.data),
-    POSTGRES_TEXT_OID,
-  )
+  const responsePayload = transaction.json(response.data)
 
   consumeAcquired(acquired)
   let rows: readonly { readonly ledgerId: string }[]
@@ -554,11 +500,11 @@ export async function failCommand(
     rows = await transaction<{ readonly ledgerId: string }[]>`
       UPDATE app_private.command_ledger
       SET processing_status = 'failed',
-          final_state_version = ${latestSnapshot?.stateVersion ?? null}::bigint,
+          final_state_version = ${response.data.latestSnapshot.stateVersion}::bigint,
           first_event_seq = NULL,
           last_event_seq = NULL,
           response_payload_version = ${COMMAND_LEDGER_RESPONSE_PAYLOAD_VERSION},
-          response_payload = ${responsePayload}::jsonb,
+          response_payload = ${responsePayload},
           completed_at = clock_timestamp(),
           updated_at = clock_timestamp()
       WHERE owner_id = ${acquired.owner.databaseOwnerId}::uuid

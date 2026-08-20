@@ -2,10 +2,7 @@ import { CardSchema } from '@tx-holdem-coach/contracts'
 import type { Card } from '@tx-holdem-coach/contracts'
 import { STANDARD_DECK } from './cards.js'
 import { clockwiseParticipantSeatNumbersAfter } from './positioning.js'
-import { SECURE_RANDOM_SOURCE, type RandomSource } from './random-source.js'
-
-export { SECURE_RANDOM_SOURCE } from './random-source.js'
-export type { RandomSource } from './random-source.js'
+import type { RandomSource } from './random-source.js'
 
 export interface DealPreflopInput {
   readonly shuffledDeck: readonly Card[]
@@ -127,9 +124,7 @@ function randomIndex(random: RandomSource, maxExclusive: number): number {
   return index
 }
 
-export function shuffleStandardDeck(
-  random: RandomSource = SECURE_RANDOM_SOURCE,
-): readonly Card[] {
+export function shuffleStandardDeck(random: RandomSource): readonly Card[] {
   const shuffledDeck = STANDARD_DECK.map(copyPureCard)
 
   for (let index = shuffledDeck.length - 1; index > 0; index -= 1) {

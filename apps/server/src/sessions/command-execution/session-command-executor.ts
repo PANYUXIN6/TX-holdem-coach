@@ -24,7 +24,6 @@ import type { ResolvedOwnerScope } from '../../persistence/owner-scope.js'
 import type { SessionMutationRepository } from '../../persistence/session-mutation-repository.js'
 import type { SessionRecoveryRepository } from '../../persistence/session-recovery-repository.js'
 import { runDatabaseTransaction } from '../../persistence/database-transaction.js'
-import type { RecoveryRegistries } from '../authoritative-state/recovery-decision.js'
 import {
   createPrivateTableState,
   createPrivateTableStateContent,
@@ -62,7 +61,7 @@ export type StableSessionCommandErrorCode =
   | 'SESSION_ENDED'
   | 'SESSION_READONLY_DIAGNOSTIC'
 
-export type StableSessionCommandErrorResponse = ErrorResponse & {
+type StableSessionCommandErrorResponse = ErrorResponse & {
   readonly code: StableSessionCommandErrorCode
 }
 
@@ -83,7 +82,6 @@ export type SessionCommandExecutionResult =
       readonly origin: 'ledgerCommit' | 'replay' | 'unregistered'
       readonly response: StableSessionCommandErrorResponse
     }
-  | { readonly kind: 'processing' }
 
 interface CommandLedgerRepositoryPort {
   registerCommand: typeof registerCommand
@@ -92,16 +90,7 @@ interface CommandLedgerRepositoryPort {
   failCommand: typeof failCommand
 }
 
-const CanonicalUtcTimestampSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
-  .refine((value) => {
-    const milliseconds = Date.parse(value)
-    return (
-      Number.isFinite(milliseconds) &&
-      new Date(milliseconds).toISOString() === value
-    )
-  })
+const CanonicalUtcTimestampSchema = z.iso.datetime({ precision: 3 })
 const PreparedCandidateSchema = z.strictObject({
   stateEffect: z.discriminatedUnion('kind', [
     z.strictObject({
@@ -197,8 +186,6 @@ function replayResult(
       >,
 ): SessionCommandExecutionResult {
   switch (result.status) {
-    case 'processing':
-      return Object.freeze({ kind: 'processing' })
     case 'completed':
       return deepFreeze({
         kind: 'completed',
@@ -265,13 +252,12 @@ export function createSessionCommandExecutor(input: {
   readonly handlers: SessionCommandHandlerMap
   readonly mutationRepository: SessionMutationRepository
   readonly recoveryRepository: SessionRecoveryRepository
-  readonly recoveryRegistries: RecoveryRegistries
   readonly commandLedgerRepository?: CommandLedgerRepositoryPort
   readonly snapshotProjectorBinding: SnapshotProjectorBinding
   readonly now: () => string
   readonly nextEventId: () => string
   readonly logPointerRepair?: (repair: unknown) => void
-  readonly committedEventPublisher?: CommittedSessionEventPublisher
+  readonly committedEventPublisher: CommittedSessionEventPublisher
   readonly logPublishFailure?: (input: {
     readonly eventCount: number
     readonly firstEventSeq: number
@@ -284,7 +270,6 @@ export function createSessionCommandExecutor(input: {
     handlers,
     mutationRepository,
     recoveryRepository,
-    recoveryRegistries,
     commandLedgerRepository,
     snapshotProjectorBinding,
     now,
@@ -327,7 +312,6 @@ export function createSessionCommandExecutor(input: {
                 owner,
                 prepared.command.sessionId,
                 commandAt,
-                recoveryRegistries,
               )
             } catch (error) {
               if (error instanceof ResourceNotFoundError) {
@@ -696,8 +680,7 @@ export function createSessionCommandExecutor(input: {
         }
         if (
           executionResult.kind === 'completed' &&
-          executionResult.origin === 'newCommit' &&
-          committedEventPublisher !== undefined
+          executionResult.origin === 'newCommit'
         ) {
           try {
             committedEventPublisher.publish(

@@ -19,8 +19,8 @@ type PokerPrivateEvent = Extract<
   }
 >
 
-export type EventDraftForCommand<Type extends LedgerCommand['type']> =
-  Type extends 'playerAction' | 'aiAction'
+type EventDraftForCommand<Type extends LedgerCommand['type']> =
+  Type extends 'playerAction'
     ? PokerPrivateEvent
     : Type extends 'startNextHand'
       ? Extract<PrivateEvent, { type: 'aiAutoRebuy' | 'handStarted' }>
@@ -30,20 +30,20 @@ export type EventDraftForCommand<Type extends LedgerCommand['type']> =
           ? Extract<PrivateEvent, { type: 'handAborted' | 'sessionEnded' }>
           : never
 
-export interface PlayerCoordinationState {
+interface PlayerCoordinationState {
   readonly agentRunState: 'idle' | 'thinking' | 'paused'
   readonly activePlayerRunId: string | null
   readonly activeDecisionRequestId: string | null
 }
 
-export type PreparedStateEffect =
+type PreparedStateEffect =
   | {
       readonly kind: 'stateChanged'
       readonly stateContent: PrivateTableStateContent
     }
   | { readonly kind: 'stateUnchanged' }
 
-export interface PreparedDomainMutationCandidate<
+interface PreparedDomainMutationCandidate<
   RelationPlan = unknown,
   EventDraft = PrivateEvent,
 > {
@@ -72,7 +72,7 @@ export type PrepareCommandResult<
       >
     }
 
-export interface PrepareCommandContext<
+interface PrepareCommandContext<
   Command extends LedgerCommand = LedgerCommand,
   ReadPort = unknown,
 > {
@@ -82,7 +82,7 @@ export interface PrepareCommandContext<
   readonly reads: ReadPort
 }
 
-export interface ApplyRelationsContext<WritePort = unknown> {
+interface ApplyRelationsContext<WritePort = unknown> {
   readonly writes: WritePort
   readonly commandAt: string
 }
@@ -94,7 +94,7 @@ export interface PreparedMutationCapability<RelationPlan = unknown> {
   readonly [preparedMutationCapabilityBrand]: never
 }
 
-export interface SessionCommandHandler<
+interface SessionCommandHandler<
   Command extends LedgerCommand = LedgerCommand,
   ReadPort = unknown,
   WritePort = unknown,

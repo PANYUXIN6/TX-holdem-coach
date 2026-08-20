@@ -17,11 +17,6 @@ describe('M4.1 static runtime registry', () => {
       runtimeType: 'coach',
       contextKinds: ['decisionAnalysis', 'hindsight'],
     })
-    expect(
-      productionRuntimeRegistry
-        .listCurrent()
-        .map(({ runtimeType }) => runtimeType),
-    ).toEqual(['player', 'coach'])
     expect(() => productionRuntimeRegistry.resolveExact('player', 2)).toThrow()
     expect(() =>
       productionRuntimeRegistry.resolveCurrent('plugin' as never),

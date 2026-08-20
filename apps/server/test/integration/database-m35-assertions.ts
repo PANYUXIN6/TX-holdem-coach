@@ -1,7 +1,7 @@
 import type { PublicSessionSnapshot } from '@tx-holdem-coach/contracts'
 import type { Sql, TransactionSql } from 'postgres'
 import { expect } from 'vitest'
-import { createApp } from '../../src/app.js'
+import { createApp } from '../../src/http/create-app.js'
 import { ServerConfig } from '../../src/config.js'
 import { createHealthService } from '../../src/http/health-service.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
@@ -9,8 +9,8 @@ import { runDatabaseTransaction } from '../../src/persistence/database-transacti
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import {
   PLAYER_TIMEOUT_SETTING_KEY,
+  patchPlayerTimeoutSettings,
   readResolvedPlayerTimeoutSettings,
-  writePlayerTimeoutSettings,
 } from '../../src/persistence/player-settings-repository.js'
 import { createProviderHealthService } from '../../src/providers/provider-health-service.js'
 import { createProviderCheckTransport } from '../../src/providers/provider-check-transport.js'
@@ -34,6 +34,31 @@ import {
 
 const ORIGIN = 'http://localhost:5173'
 const BASE_URL = 'http://127.0.0.1:8787'
+const unavailableSessionHttp = {
+  creation: {
+    async create() {
+      throw new Error('unavailable')
+    },
+  },
+  query: {
+    async findActive() {
+      return null
+    },
+    async getById() {
+      return null
+    },
+  },
+  commands: {
+    async execute() {
+      throw new Error('unavailable')
+    },
+  },
+} as never
+const unavailableSessionEvents = {
+  async open() {
+    throw new Error('unavailable')
+  },
+} as never
 
 async function deleteSettingsRow(sql: Sql, databaseOwnerId: string) {
   await sql`
@@ -212,6 +237,8 @@ export async function assertM35HttpAndAtomicSettings(
           playerAgentSettings: settings,
           personaCatalog,
           deletion,
+          sessionHttp: unavailableSessionHttp,
+          sessionEvents: unavailableSessionEvents,
         },
         { port: 8787, allowedOrigins: new Set([ORIGIN]) },
       )
@@ -226,13 +253,11 @@ export async function assertM35HttpAndAtomicSettings(
       },
     })
 
-    await writePlayerTimeoutSettings(
-      sql,
-      { ownerId: 'local-user' },
-      {
+    await sql.begin((transaction) =>
+      patchPlayerTimeoutSettings(transaction, owner, {
         attemptTimeoutSeconds: 10,
         decisionDeadlineSeconds: 60,
-      },
+      }),
     )
     await assertConcurrentHttpPatches(
       sql,
@@ -336,6 +361,7 @@ export async function assertM35HttpAndAtomicSettings(
             },
           },
         },
+        sessionEvents: unavailableSessionEvents,
       },
       { port: 8787, allowedOrigins: new Set([ORIGIN]) },
     )
@@ -612,6 +638,8 @@ export async function assertM35HttpAndAtomicSettings(
         playerAgentSettings: createPlayerAgentSettingsService({ sql, owner }),
         personaCatalog: loadAndValidatePersonaCatalog(),
         deletion: createSessionDataDeletionService({ sql, owner }),
+        sessionHttp: unavailableSessionHttp,
+        sessionEvents: unavailableSessionEvents,
       },
       { port: 8787, allowedOrigins: new Set([ORIGIN]) },
     )

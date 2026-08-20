@@ -61,7 +61,11 @@ export function createCommittedSessionEventHub(input?: {
               listener(event)
             } catch {
               listeners.delete(listener)
-              input?.onListenerError?.()
+              try {
+                input?.onListenerError?.()
+              } catch {
+                // Listener diagnostics must not interrupt committed delivery.
+              }
             }
           }
         }

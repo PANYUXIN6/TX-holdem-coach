@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import type { Sql, TransactionSql } from 'postgres'
+import type { JSONValue, Sql, TransactionSql } from 'postgres'
 import { expect } from 'vitest'
 import {
   completeCommand,
   failCommand,
   readExistingCommandResult,
   registerCommand,
-  type LedgerCommand,
 } from '../../src/persistence/command-ledger-repository.js'
 import { readHandAudit } from '../../src/persistence/hand-audit-repository.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
@@ -22,7 +21,6 @@ import { createPokerTableState } from '../../src/poker/state.js'
 import { currentPrivateEventReader } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import {
-  currentSnapshotReader,
   decodeCurrentSnapshot,
   encodeSnapshot,
 } from '../../src/sessions/authoritative-state/snapshot-codec.js'
@@ -51,14 +49,12 @@ import { insertAgentRunFixture } from '../helpers/agent-run-fixture.js'
 import {
   createDatabaseTestSqlForRole,
   readTransactionBackendPid,
-  serializeJsonbFixture,
 } from './database-test-runtime.js'
 
 const REBUY_AT = '2026-08-11T04:00:00.000Z'
 const NEXT_HAND_AT = '2026-08-11T04:01:00.000Z'
 const ABORT_AT = '2026-08-11T04:02:00.000Z'
 const NORMAL_END_AT = '2026-08-11T04:03:00.000Z'
-const POSTGRES_TEXT_OID = 25
 
 type CommandLedgerRepositoryOverride = NonNullable<
   Parameters<typeof createSessionCommandExecutor>[0]['commandLedgerRepository']
@@ -79,25 +75,6 @@ function createDeferred<Value>(): {
     },
   })
 }
-
-const LateRetryFixtureBinding = defineSessionCommandHandlerBinding<
-  Extract<LedgerCommand, { readonly type: 'retryAgent' }>,
-  Readonly<Record<string, never>>,
-  Readonly<Record<string, never>>,
-  Readonly<Record<string, never>>
->({
-  commandType: 'retryAgent',
-  handler: {
-    async prepare() {
-      throw new Error('M3.4 迟到 retry 不得进入 active Handler。')
-    },
-    async applyRelations() {
-      throw new Error('M3.4 迟到 retry 不得写入关系。')
-    },
-  },
-  bindReadPort: () => Object.freeze({}),
-  bindWritePort: () => Object.freeze({}),
-})
 
 async function executeM34Stage<Result>(
   stage: string,
@@ -120,7 +97,6 @@ export function createM34Executor(input: {
   readonly startNextHandBinding?: ReturnType<
     typeof createStartNextHandHandlerBinding
   >
-  readonly includeLateRetryFixture?: boolean
 }) {
   const mutationRepository =
     input.mutationRepository ?? productionSessionMutationRepository
@@ -140,25 +116,14 @@ export function createM34Executor(input: {
       }),
     createEndSessionHandlerBinding({ owner: input.owner }),
   ]
-  if (input.includeLateRetryFixture) bindings.push(LateRetryFixtureBinding)
   return createSessionCommandExecutor({
     sql: input.sql,
     owner: input.owner,
     handlers: createSessionCommandHandlerMap({
-      enabledCommandTypes: [
-        'rebuy',
-        'startNextHand',
-        'endSession',
-        ...(input.includeLateRetryFixture ? (['retryAgent'] as const) : []),
-      ],
       bindings,
     }),
     mutationRepository,
     recoveryRepository,
-    recoveryRegistries: {
-      snapshot: currentSnapshotReader,
-      privateEvent: currentPrivateEventReader,
-    },
     snapshotProjectorBinding: {
       bindReadPort: () => Object.freeze({}),
       projector: {
@@ -169,6 +134,7 @@ export function createM34Executor(input: {
     },
     now: () => input.commandAt,
     nextEventId: randomUUID,
+    committedEventPublisher: { publish: () => undefined },
     ...(input.commandLedgerRepository === undefined
       ? {}
       : { commandLedgerRepository: input.commandLedgerRepository }),
@@ -295,14 +261,11 @@ async function writePrivateStateFixture(
   state: ReturnType<typeof createPrivateTableState>,
 ): Promise<void> {
   const encoded = encodeSnapshot(state)
-  const payload = sql.typed(
-    serializeJsonbFixture(encoded.payload),
-    POSTGRES_TEXT_OID,
-  )
+  const payload = sql.json(encoded.payload as unknown as JSONValue)
   const rows = await sql<{ readonly sessionId: string }[]>`
     UPDATE app_private.session_snapshots
     SET private_table_state_payload_version = ${encoded.payloadVersion},
-        private_table_state_payload = ${payload}::jsonb,
+        private_table_state_payload = ${payload},
         updated_at = clock_timestamp()
     WHERE session_id = ${sessionId}::uuid
     RETURNING session_id::text AS "sessionId"
@@ -956,7 +919,7 @@ async function waitForTransactionBlock(
   throw new Error('M3.4 未观察到中止命令持有的真实 PostgreSQL 锁等待。')
 }
 
-async function assertAbortBlocksLateRetry(input: {
+async function assertAbortBlocksLateCommand(input: {
   readonly observerSql: Sql
   readonly runtimeUrl: string
   readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
@@ -965,7 +928,7 @@ async function assertAbortBlocksLateRetry(input: {
 }): Promise<string> {
   const before = await readM34AtomicCounts(input.observerSql, input.sessionId)
   const abortLocked = createDeferred<number>()
-  const retryStarted = createDeferred<number>()
+  const commandStarted = createDeferred<number>()
   const releaseAbort = createDeferred<void>()
   const blockingMutationRepository: SessionMutationRepository = Object.freeze({
     ...productionSessionMutationRepository,
@@ -992,7 +955,7 @@ async function assertAbortBlocksLateRetry(input: {
       >
     ) {
       const [transaction] = parameters
-      retryStarted.resolve(await readTransactionBackendPid(transaction))
+      commandStarted.resolve(await readTransactionBackendPid(transaction))
       return productionSessionMutationRepository.lockSessionForMutation(
         ...parameters,
       )
@@ -1002,18 +965,18 @@ async function assertAbortBlocksLateRetry(input: {
     input.runtimeUrl,
     'm34-abort-lock',
   )
-  const retrySql = createDatabaseTestSqlForRole(
+  const commandSql = createDatabaseTestSqlForRole(
     input.runtimeUrl,
-    'm34-late-retry',
+    'm34-late-command',
   )
   const abortCommandId = randomUUID()
   type ExecutionResult = Awaited<
     ReturnType<ReturnType<typeof createM34Executor>['execute']>
   >
   let abortResult: ExecutionResult | undefined
-  let retryResult: ExecutionResult | undefined
+  let commandResult: ExecutionResult | undefined
   let abortPromise: Promise<ExecutionResult> | undefined
-  let retryPromise: Promise<ExecutionResult> | undefined
+  let commandPromise: Promise<ExecutionResult> | undefined
   try {
     abortPromise = createM34Executor({
       sql: abortSql,
@@ -1029,42 +992,41 @@ async function assertAbortBlocksLateRetry(input: {
       payload: {},
     })
     const blockingBackendPid = await abortLocked.promise
-    retryPromise = createM34Executor({
-      sql: retrySql,
+    commandPromise = createM34Executor({
+      sql: commandSql,
       owner: input.owner,
       nextHandId: randomUUID(),
       commandAt: ABORT_AT,
       mutationRepository: waitingMutationRepository,
-      includeLateRetryFixture: true,
     }).execute({
       sessionId: input.sessionId,
       commandId: randomUUID(),
       expectedStateVersion: input.stateVersion,
-      type: 'retryAgent',
-      payload: {},
+      type: 'rebuy',
+      payload: { amount: 1_000 },
     })
-    const waitingBackendPid = await retryStarted.promise
+    const waitingBackendPid = await commandStarted.promise
     await waitForTransactionBlock(
       input.observerSql,
       blockingBackendPid,
       waitingBackendPid,
     )
     releaseAbort.resolve(undefined)
-    ;[abortResult, retryResult] = await Promise.all([
+    ;[abortResult, commandResult] = await Promise.all([
       abortPromise,
-      retryPromise,
+      commandPromise,
     ])
   } finally {
     releaseAbort.resolve(undefined)
     await Promise.allSettled(
-      [abortPromise, retryPromise].filter(
+      [abortPromise, commandPromise].filter(
         (operation): operation is Promise<ExecutionResult> =>
           operation !== undefined,
       ),
     )
     await Promise.all([
       abortSql.end({ timeout: 0 }),
-      retrySql.end({ timeout: 0 }),
+      commandSql.end({ timeout: 0 }),
     ])
   }
   expect(abortResult).toMatchObject({
@@ -1078,7 +1040,7 @@ async function assertAbortBlocksLateRetry(input: {
       },
     },
   })
-  expect(retryResult).toMatchObject({
+  expect(commandResult).toMatchObject({
     kind: 'rejected',
     origin: 'unregistered',
     response: { code: 'SESSION_ENDED' },
@@ -1376,7 +1338,7 @@ export async function assertM34RebuyNextHandSessionEnd(
       `
     })
 
-    const abortCommandId = await assertAbortBlocksLateRetry({
+    const abortCommandId = await assertAbortBlocksLateCommand({
       observerSql: sql,
       runtimeUrl,
       owner,

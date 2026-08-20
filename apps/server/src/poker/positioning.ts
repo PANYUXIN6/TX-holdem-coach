@@ -1,4 +1,4 @@
-import { SECURE_RANDOM_SOURCE, type RandomSource } from './random-source.js'
+import type { RandomSource } from './random-source.js'
 
 function normalizeSeatNumbers(
   seatNumbers: readonly number[],
@@ -267,7 +267,7 @@ export function findPostflopFirstActionableSeatNumber(
 
 export function selectInitialButtonSeatNumber(
   occupiedSeatNumbers: readonly number[],
-  random: RandomSource = SECURE_RANDOM_SOURCE,
+  random: RandomSource,
 ): number {
   const normalizedSeatNumbers = normalizeSeatNumbers(
     occupiedSeatNumbers,

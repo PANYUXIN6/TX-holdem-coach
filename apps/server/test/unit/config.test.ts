@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
   getProviderCreationPolicy,
-  getServerCapabilities,
   getProviderSettingsResponse,
   loadServerConfig,
   ServerConfigurationError,
@@ -31,17 +30,9 @@ describe('server configuration', () => {
     })
   })
 
-  test('keeps read-only features available when both provider keys are missing', () => {
+  test('reports both providers as unavailable when their keys are missing', () => {
     const config = loadServerConfig(createEnvironment())
 
-    expect(getServerCapabilities(config)).toStrictEqual({
-      canUseReadOnlyFeatures: true,
-      canCreateSession: false,
-      warnings: [
-        'DeepSeek API Key 未配置，无法创建场次。',
-        'Kimi API Key 未配置，自动降级不可用。',
-      ],
-    })
     expect(getProviderSettingsResponse(config)).toStrictEqual({
       deepSeek: {
         configured: false,
@@ -68,14 +59,6 @@ describe('server configuration', () => {
       }),
     )
 
-    expect(getServerCapabilities(config)).toStrictEqual({
-      canUseReadOnlyFeatures: true,
-      canCreateSession: false,
-      warnings: [
-        'DeepSeek API Key 未配置，无法创建场次。',
-        'Kimi API Key 未配置，自动降级不可用。',
-      ],
-    })
     expect(getProviderSettingsResponse(config)).toStrictEqual(
       getProviderSettingsResponse(loadServerConfig(createEnvironment())),
     )
@@ -88,11 +71,6 @@ describe('server configuration', () => {
       }),
     )
 
-    expect(getServerCapabilities(config)).toStrictEqual({
-      canUseReadOnlyFeatures: true,
-      canCreateSession: false,
-      warnings: ['DeepSeek API Key 未配置，无法创建场次。'],
-    })
     expect(getProviderSettingsResponse(config)).toStrictEqual({
       deepSeek: {
         configured: false,
@@ -118,11 +96,6 @@ describe('server configuration', () => {
       }),
     )
 
-    expect(getServerCapabilities(config)).toStrictEqual({
-      canUseReadOnlyFeatures: true,
-      canCreateSession: true,
-      warnings: ['Kimi API Key 未配置，自动降级不可用。'],
-    })
     expect(getProviderSettingsResponse(config)).toStrictEqual({
       deepSeek: {
         configured: true,
@@ -157,11 +130,6 @@ describe('server configuration', () => {
     expect(config.port).toBe(8799)
     expect(config.getDatabaseUrl()).toBe(markedDatabaseUrl)
     expect('databasePath' in config).toBe(false)
-    expect(getServerCapabilities(config)).toStrictEqual({
-      canUseReadOnlyFeatures: true,
-      canCreateSession: true,
-      warnings: [],
-    })
     expect(getProviderSettingsResponse(config)).toStrictEqual({
       deepSeek: {
         configured: true,
@@ -178,11 +146,7 @@ describe('server configuration', () => {
         canFallback: true,
       },
     })
-    expect(getServerCapabilities(config).canCreateSession).toBe(
-      getProviderSettingsResponse(config).deepSeek.canCreateSession,
-    )
     expect(JSON.stringify(config)).not.toContain(marker)
-    expect(JSON.stringify(getServerCapabilities(config))).not.toContain(marker)
     expect(JSON.stringify(getProviderSettingsResponse(config))).not.toContain(
       marker,
     )

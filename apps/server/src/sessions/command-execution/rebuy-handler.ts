@@ -15,7 +15,7 @@ export interface RebuyRelationPlan {
 const EmptyPort = Object.freeze({})
 const RebuyPlan = Object.freeze({ kind: 'rebuy' as const })
 
-export class RebuyHandlerInvariantError extends Error {
+class RebuyHandlerInvariantError extends Error {
   public constructor() {
     super('补码 Handler 不变量被破坏。')
     this.name = 'RebuyHandlerInvariantError'

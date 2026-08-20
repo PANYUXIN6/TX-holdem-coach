@@ -37,7 +37,3 @@ export interface AgentWorkerLifecyclePort {
   wake(runtimeType: RuntimeType, runIds: readonly string[]): void
   stop(): Promise<void>
 }
-
-export interface PlayerWorkerLifecyclePort {
-  wake(runIds: readonly string[]): void
-}

@@ -6,10 +6,6 @@ import { getLegalActions } from '../../src/poker/betting.js'
 import type { RandomSource } from '../../src/poker/random-source.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import {
-  createConfigSnapshotKey,
-  PERSONA_CONFIG_PAYLOAD_VERSION,
-} from '../../src/personas/config.js'
-import {
   clearOwnerSessionData,
   deleteEndedSessionData,
 } from '../../src/persistence/session-deletion-repository.js'
@@ -42,7 +38,6 @@ import {
 import {
   createDatabaseTestSqlForRole,
   readTransactionBackendPid,
-  serializeJsonbFixture,
 } from './database-test-runtime.js'
 
 const CREATED_AT = '2026-08-09T12:00:00.000Z'
@@ -179,74 +174,82 @@ export function createM32Service(
   } = {},
 ) {
   const catalog = loadAndValidatePersonaCatalog()
-  return createSessionCreationService({
-    sql,
-    catalog,
-    readProviderPolicy: () => ({
-      deepSeekConfigured: true,
-      kimiConfigured: true,
-    }),
-    createIdentityGraph: (seatNumbers) => {
-      const identity = createSessionCreationIdentityGraph(seatNumbers)
-      onIdentity(identity)
-      return identity
-    },
-    randomSource: options.randomSource ?? { nextInt: () => 0 },
-    now: () => CREATED_AT,
-    creationRepository:
-      options.creationRepository ?? createSessionCreationRepository(),
-    mutationRepository:
-      options.mutationRepository ?? productionSessionMutationRepository,
-    handAuditWriter: options.handAuditWriter ?? {
-      insertInProgress: insertInProgressHandAudit,
-    },
-    snapshotProjectorBinding: {
-      bindReadPort: (transaction) => transaction,
-      projector: {
-        async project(
-          input: SessionCreationSnapshotProjectionInput<TransactionSql>,
-        ) {
-          return projectPublicSnapshot(
-            input.state,
-            input.session,
-            input.eventSeq,
-          )
+  const service = resolveOwnerScope(sql, { ownerId: 'local-user' }).then(
+    (owner) =>
+      createSessionCreationService({
+        sql,
+        owner,
+        catalog,
+        readProviderPolicy: () => ({
+          deepSeekConfigured: true,
+          kimiConfigured: true,
+        }),
+        createIdentityGraph: (seatNumbers) => {
+          const identity = createSessionCreationIdentityGraph(seatNumbers)
+          onIdentity(identity)
+          return identity
         },
-      },
-    },
-    activeSessionSnapshotReaderBinding: {
-      bindReadPort: (transaction) => transaction,
-      reader: {
-        async read({ reference, reads }) {
-          const transaction = reads as TransactionSql
-          const rows = await transaction<
-            {
-              readonly payloadVersion: number
-              readonly payload: unknown
-            }[]
-          >`
+        randomSource: options.randomSource ?? { nextInt: () => 0 },
+        now: () => CREATED_AT,
+        creationRepository:
+          options.creationRepository ?? createSessionCreationRepository(),
+        mutationRepository:
+          options.mutationRepository ?? productionSessionMutationRepository,
+        handAuditWriter: options.handAuditWriter ?? {
+          insertInProgress: insertInProgressHandAudit,
+        },
+        committedEventPublisher: { publish() {} },
+        snapshotProjectorBinding: {
+          bindReadPort: (transaction) => transaction,
+          projector: {
+            async project(
+              input: SessionCreationSnapshotProjectionInput<TransactionSql>,
+            ) {
+              return projectPublicSnapshot(
+                input.state,
+                input.session,
+                input.eventSeq,
+              )
+            },
+          },
+        },
+        activeSessionSnapshotReaderBinding: {
+          bindReadPort: (transaction) => transaction,
+          reader: {
+            async read({ reference, reads }) {
+              const transaction = reads as TransactionSql
+              const rows = await transaction<
+                {
+                  readonly payloadVersion: number
+                  readonly payload: unknown
+                }[]
+              >`
             SELECT
               private_table_state_payload_version AS "payloadVersion",
               private_table_state_payload AS payload
             FROM app_private.session_snapshots
             WHERE session_id = ${reference.session.sessionId}::uuid
           `
-          const row = rows[0]
-          if (row === undefined || rows.length !== 1) {
-            throw new Error('M3.2 active Session 缺少唯一权威快照。')
-          }
-          const stored = decodeCurrentSnapshot({
-            payloadVersion: row.payloadVersion,
-            payload: row.payload,
-          })
-          return projectPublicSnapshot(
-            stored.payload.state,
-            reference.session,
-            reference.session.nextEventSeq - 1,
-          )
+              const row = rows[0]
+              if (row === undefined || rows.length !== 1) {
+                throw new Error('M3.2 active Session 缺少唯一权威快照。')
+              }
+              const stored = decodeCurrentSnapshot({
+                payloadVersion: row.payloadVersion,
+                payload: row.payload,
+              })
+              return projectPublicSnapshot(
+                stored.payload.state,
+                reference.session,
+                reference.session.nextEventSeq - 1,
+              )
+            },
+          },
         },
-      },
-    },
+      }),
+  )
+  return Object.freeze({
+    create: async (request: unknown) => (await service).create(request),
   })
 }
 
@@ -398,7 +401,6 @@ async function endSession(
 async function createEndedSource(
   sql: Sql,
   endedAt: string,
-  oldVersionBase?: number,
 ): Promise<SessionCreationIdentityGraph> {
   let identity: SessionCreationIdentityGraph | undefined
   requireCreated(
@@ -407,45 +409,6 @@ async function createEndedSource(
     }).create(currentCatalogRequest(5)),
   )
   if (identity === undefined) throw new Error('M3.2 缺少历史来源身份图。')
-
-  if (oldVersionBase !== undefined) {
-    const rows = await sql<
-      {
-        readonly participantId: string
-        readonly seatNumber: number
-        readonly configPayload: Record<string, unknown>
-      }[]
-    >`
-      SELECT
-        agent.participant_id::text AS "participantId",
-        participant.seat_number::int AS "seatNumber",
-        agent.config_payload AS "configPayload"
-      FROM app_private.session_agents AS agent
-      JOIN app_private.session_participants AS participant
-        ON participant.id = agent.participant_id
-      WHERE agent.session_id = ${identity.sessionId}::uuid
-      ORDER BY participant.seat_number
-    `
-    for (const row of rows) {
-      const payload = {
-        ...row.configPayload,
-        personaVersion: oldVersionBase + row.seatNumber,
-        name: `Historical M3.2 ${row.seatNumber}`,
-      } as Parameters<typeof createConfigSnapshotKey>[1]
-      const configSnapshotKey = createConfigSnapshotKey(
-        PERSONA_CONFIG_PAYLOAD_VERSION,
-        payload,
-      )
-      await sql`
-        UPDATE app_private.session_agents
-        SET display_name = ${payload.name},
-            persona_version = ${payload.personaVersion},
-            config_snapshot_key = ${configSnapshotKey},
-            config_payload = ${serializeJsonbFixture(payload)}::text::jsonb
-        WHERE participant_id = ${row.participantId}::uuid
-      `
-    }
-  }
 
   await endSession(sql, identity.sessionId, endedAt)
   return identity
@@ -962,7 +925,6 @@ async function assertLatestEndedReuse(sql: Sql): Promise<void> {
   const sourceIdentity = await createEndedSource(
     sql,
     '2026-08-09T12:01:00.000Z',
-    700,
   )
   let reusedIdentity: SessionCreationIdentityGraph | undefined
   const reused = requireCreated(
@@ -1018,7 +980,7 @@ async function assertLatestEndedReuse(sql: Sql): Promise<void> {
   `
   expect(rows[0]?.reusedKeys).toEqual(rows[0]?.sourceKeys)
   expect(rows[0]?.reusedVersions).toEqual(rows[0]?.sourceVersions)
-  expect(rows[0]?.sourceVersions.every((version) => version >= 701)).toBe(true)
+  expect(rows[0]?.sourceVersions).toEqual([1, 1, 1, 1, 1])
   expect(rows[0]?.reusedMemoryRevisions).toEqual([0, 0, 0, 0, 0])
   expect(reused.response.snapshot.pokerPhase).toBe('inHand')
 }
@@ -1152,7 +1114,7 @@ async function assertLatestEndedClearContention(
   const owner = await resolveOwnerScope(sql, { ownerId: 'local-user' })
 
   await clearLocalOwnerSessions(sql)
-  await createEndedSource(sql, '2026-08-09T13:10:00.000Z', 810)
+  await createEndedSource(sql, '2026-08-09T13:10:00.000Z')
   const clearFirstSql = createDatabaseTestSqlForRole(
     runtimeUrl,
     'm32-latest-clear-first',
@@ -1210,7 +1172,7 @@ async function assertLatestEndedClearContention(
   }
 
   await clearLocalOwnerSessions(sql)
-  await createEndedSource(sql, '2026-08-09T13:20:00.000Z', 820)
+  await createEndedSource(sql, '2026-08-09T13:20:00.000Z')
   const creatingSql = createDatabaseTestSqlForRole(
     runtimeUrl,
     'm32-latest-create-first',
@@ -1284,7 +1246,7 @@ async function assertPreflightClearDoesNotReviveHistory(
   runtimeUrl: string,
 ): Promise<void> {
   await clearLocalOwnerSessions(sql)
-  await createEndedSource(sql, '2026-08-09T13:30:00.000Z', 830)
+  await createEndedSource(sql, '2026-08-09T13:30:00.000Z')
   const owner = await resolveOwnerScope(sql, { ownerId: 'local-user' })
   const creationSql = createDatabaseTestSqlForRole(
     runtimeUrl,
@@ -1333,8 +1295,8 @@ async function assertDeletedLatestDoesNotFallback(
   runtimeUrl: string,
 ): Promise<void> {
   await clearLocalOwnerSessions(sql)
-  const older = await createEndedSource(sql, '2026-08-09T13:40:00.000Z', 840)
-  const latest = await createEndedSource(sql, '2026-08-09T13:41:00.000Z', 850)
+  const older = await createEndedSource(sql, '2026-08-09T13:40:00.000Z')
+  const latest = await createEndedSource(sql, '2026-08-09T13:41:00.000Z')
   const owner = await resolveOwnerScope(sql, { ownerId: 'local-user' })
   const deletionSql = createDatabaseTestSqlForRole(
     runtimeUrl,

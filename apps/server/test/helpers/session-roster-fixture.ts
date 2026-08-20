@@ -3,7 +3,6 @@ import type { Sql, TransactionSql } from 'postgres'
 import { z } from 'zod'
 import {
   AgentMemoryPayloadSchema,
-  canonicalJson,
   createConfigSnapshotKey,
   deepFreeze,
   MEMORY_PAYLOAD_VERSION,
@@ -12,6 +11,7 @@ import {
   type AgentMemoryPayload,
   type PersonaConfigPayload,
 } from '../../src/personas/config.js'
+import { canonicalJson } from '../../src/persisted-json.js'
 import {
   ActiveSessionConflictError,
   DatabaseOperationError,
@@ -37,7 +37,6 @@ import {
 } from '../../src/sessions/roster-preparation.js'
 import { ActiveModelConfigurationSchema } from '../../src/personas/config.js'
 
-const POSTGRES_TEXT_OID = 25
 const UuidSchema = z.string().uuid()
 
 export interface InitialAgentMemoryInput {
@@ -208,14 +207,8 @@ export async function insertSessionRosterSnapshot(
     memory_payload_version: agent.initialMemory.revisionPayloadVersion,
     memory_payload: agent.initialMemory.revisionPayload,
   }))
-  const agentRowsJson = transaction.typed(
-    JSON.stringify(agentRows),
-    POSTGRES_TEXT_OID,
-  )
-  const memoryRowsJson = transaction.typed(
-    JSON.stringify(memoryRows),
-    POSTGRES_TEXT_OID,
-  )
+  const agentRowsJson = transaction.json(agentRows)
+  const memoryRowsJson = transaction.json(memoryRows)
 
   try {
     await transaction`
@@ -285,7 +278,7 @@ export async function insertSessionRosterSnapshot(
         memory_payload
       FROM jsonb_populate_recordset(
         NULL::app_private.session_agents,
-        ${agentRowsJson}::jsonb
+        ${agentRowsJson}
       )
     `
     await transaction`
@@ -306,7 +299,7 @@ export async function insertSessionRosterSnapshot(
         memory_payload
       FROM jsonb_populate_recordset(
         NULL::app_private.agent_memory_revisions,
-        ${memoryRowsJson}::jsonb
+        ${memoryRowsJson}
       )
     `
   } catch (error) {

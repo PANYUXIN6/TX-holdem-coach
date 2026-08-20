@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Sql } from 'postgres'
 import { expect } from 'vitest'
-import { createApp } from '../../src/app.js'
+import { createApp } from '../../src/http/create-app.js'
 import { createApiRuntime } from '../../src/bootstrap.js'
 import { ServerConfig } from '../../src/config.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
@@ -78,7 +78,7 @@ export async function assertM36PublicProjectionRuntime(
     SELECT count(*)::int AS count FROM app_private.command_ledger
     WHERE session_id = ${createdBody.snapshot.sessionId}::uuid
   `
-    const retry = await app.request(
+    const unknownCommand = await app.request(
       `${BASE_URL}/api/sessions/${createdBody.snapshot.sessionId}/commands`,
       {
         method: 'POST',
@@ -88,15 +88,15 @@ export async function assertM36PublicProjectionRuntime(
             sessionId: createdBody.snapshot.sessionId,
             commandId: randomUUID(),
             expectedStateVersion: 1,
-            type: 'retryAgent',
+            type: 'unknownCommand',
             payload: {},
           },
         }),
       },
     )
-    expect(retry.status).toBe(409)
-    await expect(retry.json()).resolves.toMatchObject({
-      code: 'COMMAND_NOT_ALLOWED_IN_PHASE',
+    expect(unknownCommand.status).toBe(400)
+    await expect(unknownCommand.json()).resolves.toMatchObject({
+      code: 'INVALID_REQUEST',
     })
     const afterLedger = await sql<{ readonly count: number }[]>`
     SELECT count(*)::int AS count FROM app_private.command_ledger

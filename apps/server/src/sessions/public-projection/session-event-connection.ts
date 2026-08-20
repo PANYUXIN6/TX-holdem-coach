@@ -137,8 +137,12 @@ export function createPendingSessionEventConnection(
   const fail = (diagnostic: SessionEventStreamDiagnostic) => {
     if (diagnostic.category === 'sse_queue_overflow') overflowed = true
     else failed = true
-    input.diagnose?.(diagnostic)
     close()
+    try {
+      input.diagnose?.(diagnostic)
+    } catch {
+      // Diagnostics must not escape or compromise connection cleanup.
+    }
   }
   const listener = (rawEvent: SseEvent) => {
     if (closed) return

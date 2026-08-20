@@ -81,7 +81,7 @@ function createTransaction(responses: readonly unknown[]) {
       : Promise.resolve(response ?? [])
   }) as unknown as TransactionSql
   Object.assign(transaction, {
-    typed: (value: string) => JSON.parse(value) as unknown,
+    json: (value: unknown) => value,
   })
   return { transaction, calls, remaining: () => pending.length }
 }

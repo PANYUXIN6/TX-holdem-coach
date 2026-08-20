@@ -82,7 +82,6 @@ function createTransactionMock(responses: readonly unknown[]): TransactionSql {
   }) as unknown as TransactionSql
   Object.assign(transaction, {
     json: (value: unknown) => value,
-    typed: (value: string) => JSON.parse(value) as unknown,
   })
   return transaction
 }

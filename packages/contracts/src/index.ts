@@ -89,11 +89,6 @@ export const CreateSessionRosterSourceSchema = z.discriminatedUnion('type', [
 export const CreateSessionRequestSchema = z.strictObject({
   rosterSource: CreateSessionRosterSourceSchema,
 })
-export const PersonaSnapshotFilterSchema = z.strictObject({
-  personaId: AgentPersonaIdSchema,
-  personaVersion: z.literal(1).optional(),
-})
-
 export const CARD_RANKS = Object.freeze([
   '2',
   '3',
@@ -349,11 +344,6 @@ export const SessionCommandSchema = z.discriminatedUnion('type', [
   z.strictObject({
     ...commandBaseShape,
     type: z.literal('endSession'),
-    payload: z.strictObject({}),
-  }),
-  z.strictObject({
-    ...commandBaseShape,
-    type: z.literal('retryAgent'),
     payload: z.strictObject({}),
   }),
 ])
@@ -1103,7 +1093,6 @@ export type SessionCreationWarning = z.infer<
   typeof SessionCreationWarningSchema
 >
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>
-export type PersonaSnapshotFilter = z.infer<typeof PersonaSnapshotFilterSchema>
 export type PokerAction = z.infer<typeof PokerActionSchema>
 export type SuggestedTarget = z.infer<typeof SuggestedTargetSchema>
 export type LegalAction = z.infer<typeof LegalActionSchema>

@@ -1,12 +1,22 @@
 import type { Sql, TransactionSql } from 'postgres'
 import { describe, expect, test } from 'vitest'
 import { coachRuntimeDefinition } from '../../src/agents/coach/foundation-definition.js'
+import { playerRuntimeDefinition } from '../../src/agents/player/foundation-definition.js'
 import { createAgentRunCoordinator } from '../../src/agents/foundation/agent-run-coordinator.js'
-import type { PersistedAgentRun } from '../../src/agents/foundation/agent-run-types.js'
-import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
 import type {
+  AgentRunClaimInput,
+  AgentRunCancellationInput,
+  LeasedAgentRun,
+  PersistedAgentRun,
+} from '../../src/agents/foundation/agent-run-types.js'
+import { AgentRunTransitionError } from '../../src/agents/foundation/agent-run-lifecycle.js'
+import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
+import type { PersistedAgentRunEvent } from '../../src/agents/foundation/runtime-ports.js'
+import type {
+  ClaimCandidateDecision,
   AgentRunLifecycleRepository,
   PreparedAgentRunInsert,
+  ClaimNextRepositoryResult,
 } from '../../src/persistence/agent-run-lifecycle-repository.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 
@@ -16,6 +26,7 @@ const handId = '33333333-3333-4333-8333-333333333333'
 const runId = '44444444-4444-4444-8444-444444444444'
 const participantId = '55555555-5555-4555-8555-555555555555'
 const requestId = '66666666-6666-4666-8666-666666666666'
+const noopEventPort = { publish: async () => undefined }
 
 async function owner() {
   const sql = (() => Promise.resolve([{ databaseOwnerId }])) as unknown as Sql
@@ -27,7 +38,7 @@ function transaction(responses: readonly unknown[]): TransactionSql {
   const query = (() =>
     Promise.resolve(pending.shift() ?? [])) as unknown as TransactionSql
   Object.assign(query, {
-    typed: (value: string) => JSON.parse(value) as unknown,
+    json: (value: unknown) => value,
   })
   return query
 }
@@ -53,10 +64,6 @@ function persistedRun(input: PreparedAgentRunInsert): PersistedAgentRun {
     runConfiguration:
       input.runConfiguration as PersistedAgentRun['runConfiguration'],
     budget: input.budget as PersistedAgentRun['budget'],
-    checkpointPayloadVersion: null,
-    checkpointPayload: null,
-    resultPayloadVersion: null,
-    resultPayload: null,
     createdAt: input.createdAt,
     startedAt: null,
     completedAt: null,
@@ -122,6 +129,51 @@ function coachPreparedRun(): PreparedAgentRunInsert {
   }
 }
 
+function playerPreparedRun(): PreparedAgentRunInsert {
+  return {
+    agentRunId: runId,
+    runtimeType: 'player',
+    sessionId,
+    handId,
+    participantId,
+    sourceStateVersion: 9,
+    decisionRequestId: requestId,
+    triggerType: 'action_required',
+    idempotencyKey: 'player/recovery/1',
+    parentRunId: null,
+    deadlineAt: '2099-01-01T00:02:00.000Z',
+    runtimeDefinitionVersion: 1,
+    runConfiguration: {
+      runtime: 'player',
+      runtimeDefinitionVersion: 1,
+      contextSchemaVersion: playerRuntimeDefinition.contextSchemaVersion,
+      promptModules: playerRuntimeDefinition.promptModules,
+      capabilityManifest: {
+        id: 'player.capability-manifest',
+        version: playerRuntimeDefinition.capabilityManifest.manifestVersion,
+      },
+      capabilities: playerRuntimeDefinition.capabilityManifest.grants.map(
+        ({ capability }) => capability,
+      ),
+      routePolicy: playerRuntimeDefinition.routePolicy,
+      outputSchema: playerRuntimeDefinition.outputSchema,
+      validator: playerRuntimeDefinition.validator,
+      commitGate: {
+        id: playerRuntimeDefinition.commitGate.id,
+        version: playerRuntimeDefinition.commitGate.version,
+      },
+      recoveryPolicy: playerRuntimeDefinition.recoveryPolicy,
+      dataDependencies: [],
+    },
+    budget: playerRuntimeDefinition.budgetPolicy.createSnapshot({
+      runtimeType: 'player',
+      attemptTimeoutSeconds: 15,
+      decisionDeadlineSeconds: 45,
+    }),
+    createdAt: '2099-01-01T00:00:00.000Z',
+  }
+}
+
 describe('agent run coordinator', () => {
   test('freezes the current Player definition and transaction-visible timeout settings', async () => {
     const resolvedOwner = await owner()
@@ -140,6 +192,7 @@ describe('agent run coordinator', () => {
       sql: (() => undefined) as unknown as Sql,
       owner: resolvedOwner,
       repository,
+      eventPort: noopEventPort,
     })
 
     const result = await coordinator.createOrReuse(
@@ -154,7 +207,6 @@ describe('agent run coordinator', () => {
           },
         ],
       ]),
-      resolvedOwner,
       {
         runtimeType: 'player',
         agentRunId: runId,
@@ -208,79 +260,20 @@ describe('agent run coordinator', () => {
       sql: (() => undefined) as unknown as Sql,
       owner: resolvedOwner,
       repository,
+      eventPort: noopEventPort,
     })
-    const result = await coordinator.createOrReuse(
-      transaction([]),
-      resolvedOwner,
-      {
-        runtimeType: 'coach',
-        agentRunId: runId,
-        sessionId,
-        handId,
-        triggerType: 'hand_completed',
-        idempotencyKey: 'coach/review/1',
-        supersedesRunId: null,
-        dataDependencies: [],
-        createdAt: '2026-08-17T00:00:00.000Z',
-      },
-    )
+    const result = await coordinator.createOrReuse(transaction([]), {
+      runtimeType: 'coach',
+      agentRunId: runId,
+      sessionId,
+      handId,
+      triggerType: 'hand_completed',
+      idempotencyKey: 'coach/review/1',
+      supersedesRunId: null,
+      dataDependencies: [],
+      createdAt: '2026-08-17T00:00:00.000Z',
+    })
     expect(result).toMatchObject({ kind: 'existing', committedEffects: [] })
-  })
-
-  test('validates a same-owner Coach checkpoint before reclaiming an expired run', async () => {
-    const resolvedOwner = await owner()
-    const prepared = coachPreparedRun()
-    const candidate = {
-      ...persistedRun(prepared),
-      lifecycle: 'running' as const,
-      leaseOwner: 'same-process:coach:0',
-      leaseExpiresAt: '2000-01-01T00:00:00.000000Z',
-      fencingToken: 1,
-      checkpointPayloadVersion: 1,
-      checkpointPayload: { phase: 'analysis' },
-    } as PersistedAgentRun<'coach'>
-    const repository = {
-      async claimNext(
-        _transaction: TransactionSql,
-        _owner: typeof resolvedOwner,
-        _input: unknown,
-        validate: (
-          run: PersistedAgentRun,
-        ) =>
-          | { readonly kind: 'eligible' }
-          | { readonly kind: 'rejected'; readonly diagnostic: string },
-      ) {
-        const decision = validate(candidate)
-        return decision.kind === 'rejected'
-          ? { kind: 'none' as const, diagnostics: [decision.diagnostic] }
-          : { kind: 'none' as const, diagnostics: [] }
-      },
-    } as unknown as AgentRunLifecycleRepository
-    let checkpointChecks = 0
-    const sql = Object.assign((() => undefined) as unknown as Sql, {
-      begin: (callback: (transaction: TransactionSql) => unknown) =>
-        callback(transaction([])),
-    })
-    const coordinator = createAgentRunCoordinator({
-      sql,
-      owner: resolvedOwner,
-      repository,
-      isRecoveryCheckpointCompatible() {
-        checkpointChecks += 1
-        return false
-      },
-    })
-
-    await expect(
-      coordinator.workerControl.claimNext({
-        runtimeType: 'coach',
-        leaseOwner: 'same-process:coach:0',
-      }),
-    ).resolves.toEqual({
-      kind: 'none',
-      diagnostics: ['agent_run_recovery_rejected'],
-    })
-    expect(checkpointChecks).toBe(1)
   })
 
   test('keeps committed markRunning successful when event delivery and its error callback both fail', async () => {
@@ -329,5 +322,289 @@ describe('agent run coordinator', () => {
       coordinator.workerControl.markRunning(authority),
     ).resolves.toEqual(run)
     expect(deliveryErrors).toBe(1)
+  })
+
+  test('cancels process_restart rejected run during claimNext', async () => {
+    const resolvedOwner = await owner()
+    const candidate = {
+      ...persistedRun(coachPreparedRun()),
+      lifecycle: 'running' as const,
+      leaseOwner: 'm42-foreign:coach:0',
+      leaseExpiresAt: '2099-01-01T00:00:00.000000Z',
+    }
+    let canceledRunId: string | undefined
+    const publishedEvents: PersistedAgentRunEvent[] = []
+    const repository = {
+      async claimNext(
+        _transaction: TransactionSql,
+        _owner: typeof resolvedOwner,
+        _input: AgentRunClaimInput,
+        validate: (candidate: PersistedAgentRun) => ClaimCandidateDecision,
+      ): Promise<ClaimNextRepositoryResult> {
+        const decision = validate(candidate)
+        return Object.freeze({
+          kind: 'none' as const,
+          diagnostics:
+            decision.kind === 'rejected' ? [decision.diagnostic] : [],
+        })
+      },
+      async cancel(
+        _transaction: TransactionSql,
+        _owner: typeof resolvedOwner,
+        input: AgentRunCancellationInput,
+      ) {
+        canceledRunId = input.runId
+        return Object.freeze({
+          run: {
+            ...candidate,
+            lifecycle: 'cancelled',
+            terminationReason: input.reason,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            completedAt: input.completedAt,
+          },
+          changed: true,
+        })
+      },
+    } as unknown as AgentRunLifecycleRepository
+    const sql = Object.assign((() => undefined) as unknown as Sql, {
+      begin: (callback: (transaction: TransactionSql) => unknown) =>
+        callback(transaction([])),
+    })
+    const coordinator = createAgentRunCoordinator({
+      sql,
+      owner: resolvedOwner,
+      repository,
+      eventPort: {
+        async publish(events) {
+          publishedEvents.push(...events)
+        },
+      },
+    })
+
+    const result = await coordinator.workerControl.claimNext({
+      runtimeType: 'coach',
+      leaseOwner: 'm42-local:coach:0',
+    })
+
+    expect(result).toMatchObject({
+      kind: 'none',
+      diagnostics: ['agent_run_recovery_rejected'],
+    })
+    expect(canceledRunId).toBe(runId)
+    expect(publishedEvents).toMatchObject([
+      { runtimeType: 'coach', kind: 'cancelled', runId },
+    ])
+  })
+
+  test('cancels recovery-rejected runs even when a runnable run is claimed', async () => {
+    const resolvedOwner = await owner()
+    const rejectedCandidate = {
+      ...persistedRun(coachPreparedRun()),
+      lifecycle: 'running' as const,
+      leaseOwner: 'm42-foreign:coach:0',
+      leaseExpiresAt: '2099-01-01T00:00:00.000000Z',
+    }
+    const claimableRunId = '77777777-7777-4777-8777-777777777777'
+    const claimableCandidate = {
+      ...persistedRun({ ...coachPreparedRun(), agentRunId: claimableRunId }),
+      lifecycle: 'queued' as const,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    }
+    const claimedRun = {
+      ...claimableCandidate,
+      lifecycle: 'leased' as const,
+      leaseOwner: 'm42-local:coach:0',
+      leaseExpiresAt: '2099-01-01T00:00:00.000000Z',
+      fencingToken: 2,
+    } as LeasedAgentRun
+    const canceledRunIds: string[] = []
+    const publishedEvents: PersistedAgentRunEvent[] = []
+    const repository = {
+      async claimNext(
+        _transaction: TransactionSql,
+        _owner: typeof resolvedOwner,
+        claimInput: AgentRunClaimInput,
+        validate: (candidate: PersistedAgentRun) => ClaimCandidateDecision,
+      ): Promise<ClaimNextRepositoryResult> {
+        validate(rejectedCandidate)
+        validate(claimableCandidate)
+        expect(claimInput.runtimeType).toBe('coach')
+        return {
+          kind: 'claimed' as const,
+          value: { run: claimedRun },
+        }
+      },
+      async cancel(
+        _transaction: TransactionSql,
+        _owner: typeof resolvedOwner,
+        input: AgentRunCancellationInput,
+      ) {
+        canceledRunIds.push(input.runId)
+        return Object.freeze({
+          run: {
+            ...rejectedCandidate,
+            lifecycle: 'cancelled',
+            terminationReason: input.reason,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            completedAt: input.completedAt,
+          },
+          changed: true,
+        })
+      },
+    } as unknown as AgentRunLifecycleRepository
+    const sql = Object.assign((() => undefined) as unknown as Sql, {
+      begin: (callback: (transaction: TransactionSql) => unknown) =>
+        callback(transaction([])),
+    })
+    const coordinator = createAgentRunCoordinator({
+      sql,
+      owner: resolvedOwner,
+      repository,
+      eventPort: {
+        async publish(events) {
+          publishedEvents.push(...events)
+        },
+      },
+    })
+
+    const result = await coordinator.workerControl.claimNext({
+      runtimeType: 'coach',
+      leaseOwner: 'm42-local:coach:0',
+    })
+
+    expect(result).toMatchObject({
+      kind: 'claimed',
+      run: { runId: claimableRunId },
+    })
+    expect(canceledRunIds).toEqual([runId])
+    expect(publishedEvents).toEqual([
+      { runtimeType: 'coach', kind: 'cancelled', runId },
+      { runtimeType: 'coach', kind: 'leased', runId: claimableRunId },
+    ])
+  })
+
+  test('does not auto-cancel recovery-rejected Player runs', async () => {
+    const resolvedOwner = await owner()
+    const playerCandidate = {
+      ...persistedRun(playerPreparedRun()),
+      lifecycle: 'running' as const,
+      leaseOwner: 'm42-foreign:player:0',
+      leaseExpiresAt: '2099-01-01T00:00:00.000000Z',
+    }
+    let cancelCalled = false
+    const repository = {
+      async claimNext(
+        _transaction: TransactionSql,
+        _owner: typeof resolvedOwner,
+        _input: AgentRunClaimInput,
+        validate: (candidate: PersistedAgentRun) => ClaimCandidateDecision,
+      ): Promise<ClaimNextRepositoryResult> {
+        const decision = validate(playerCandidate)
+        return Object.freeze({
+          kind: 'none' as const,
+          diagnostics:
+            decision.kind === 'rejected' ? [decision.diagnostic] : [],
+        })
+      },
+      async cancel() {
+        cancelCalled = true
+        return Object.freeze({
+          run: {
+            ...playerCandidate,
+            lifecycle: 'cancelled' as const,
+            terminationReason: 'process_restart',
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            completedAt: '2026-08-17T00:00:00.000000Z',
+          },
+          changed: true,
+        })
+      },
+    } as unknown as AgentRunLifecycleRepository
+    const sql = Object.assign((() => undefined) as unknown as Sql, {
+      begin: (callback: (transaction: TransactionSql) => unknown) =>
+        callback(transaction([])),
+    })
+    const coordinator = createAgentRunCoordinator({
+      sql,
+      owner: resolvedOwner,
+      repository,
+      eventPort: {
+        async publish() {
+          throw new Error('should not publish')
+        },
+      },
+    })
+
+    const result = await coordinator.workerControl.claimNext({
+      runtimeType: 'player',
+      leaseOwner: 'm42-local:player:0',
+    })
+
+    expect(result).toMatchObject({
+      kind: 'none',
+      diagnostics: ['agent_run_recovery_rejected'],
+    })
+    expect(cancelCalled).toBe(false)
+  })
+
+  test('treats already terminal recovery cancellation as converged', async () => {
+    const resolvedOwner = await owner()
+    const candidate = {
+      ...persistedRun(coachPreparedRun()),
+      lifecycle: 'running' as const,
+      leaseOwner: 'm42-foreign:coach:0',
+      leaseExpiresAt: '2099-01-01T00:00:00.000000Z',
+    }
+    let cancelInvocations = 0
+    const publishedEvents: PersistedAgentRunEvent[] = []
+    const repository = {
+      async claimNext(
+        _transaction: TransactionSql,
+        _owner: typeof resolvedOwner,
+        _input: AgentRunClaimInput,
+        validate: (candidate: PersistedAgentRun) => ClaimCandidateDecision,
+      ): Promise<ClaimNextRepositoryResult> {
+        const decision = validate(candidate)
+        return Object.freeze({
+          kind: 'none' as const,
+          diagnostics:
+            decision.kind === 'rejected' ? [decision.diagnostic] : [],
+        })
+      },
+      async cancel() {
+        cancelInvocations += 1
+        throw new AgentRunTransitionError('agent_run_already_terminal')
+      },
+    } as unknown as AgentRunLifecycleRepository
+    const sql = Object.assign((() => undefined) as unknown as Sql, {
+      begin: (callback: (transaction: TransactionSql) => unknown) =>
+        callback(transaction([])),
+    })
+    const coordinator = createAgentRunCoordinator({
+      sql,
+      owner: resolvedOwner,
+      repository,
+      eventPort: {
+        async publish(events) {
+          publishedEvents.push(...events)
+        },
+      },
+    })
+
+    const result = await coordinator.workerControl.claimNext({
+      runtimeType: 'coach',
+      leaseOwner: 'm42-local:coach:0',
+    })
+
+    expect(result).toMatchObject({
+      kind: 'none',
+      diagnostics: ['agent_run_recovery_rejected'],
+    })
+    expect(cancelInvocations).toBe(1)
+    expect(publishedEvents).toEqual([])
   })
 })

@@ -2,10 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { z } from 'zod'
 import { createCapabilityExecutor } from '../../src/agents/foundation/capability-executor.js'
 import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
-import {
-  playerRuntimeDefinition,
-  playerRuntimeBudgetPolicy,
-} from '../../src/agents/player/foundation-definition.js'
+import { playerRuntimeDefinition } from '../../src/agents/player/foundation-definition.js'
 
 const authority = issueRuntimeCommitAuthority({
   runtimeType: 'player',
@@ -13,12 +10,6 @@ const authority = issueRuntimeCommitAuthority({
   leaseOwner: 'test:player:0',
   fencingToken: 1,
 })
-const budget = playerRuntimeBudgetPolicy.createSnapshot({
-  runtimeType: 'player',
-  attemptTimeoutSeconds: 15,
-  decisionDeadlineSeconds: 45,
-})
-
 describe('capability executor', () => {
   test('executes only a declared static capability and hashes its projection', async () => {
     const execute = vi.fn(async (input: unknown) => {
@@ -29,7 +20,6 @@ describe('capability executor', () => {
     const executor = createCapabilityExecutor({
       runtimeType: 'player',
       manifest: playerRuntimeDefinition.capabilityManifest,
-      budget,
       definitions: [
         {
           runtimeType: 'player',
@@ -74,7 +64,6 @@ describe('capability executor', () => {
     const executor = createCapabilityExecutor({
       runtimeType: 'player',
       manifest: playerRuntimeDefinition.capabilityManifest,
-      budget,
       definitions: [],
     })
     await expect(
@@ -106,7 +95,6 @@ describe('capability executor', () => {
     const executor = createCapabilityExecutor({
       runtimeType: 'player',
       manifest: playerRuntimeDefinition.capabilityManifest,
-      budget,
       definitions: [
         {
           runtimeType: 'player',
@@ -145,7 +133,6 @@ describe('capability executor', () => {
     const executor = createCapabilityExecutor({
       runtimeType: 'player',
       manifest: playerRuntimeDefinition.capabilityManifest,
-      budget,
       definitions: [
         {
           runtimeType: 'player',
@@ -200,7 +187,6 @@ describe('capability executor', () => {
     const executor = createCapabilityExecutor({
       runtimeType: 'player',
       manifest: playerRuntimeDefinition.capabilityManifest,
-      budget,
       definitions: [
         {
           runtimeType: 'player',
@@ -252,7 +238,6 @@ describe('capability executor', () => {
     const executor = createCapabilityExecutor({
       runtimeType: 'player',
       manifest: playerRuntimeDefinition.capabilityManifest,
-      budget,
       definitions: [
         {
           runtimeType: 'player',
@@ -302,7 +287,6 @@ describe('capability executor', () => {
     const executor = createCapabilityExecutor({
       runtimeType: 'player',
       manifest: playerRuntimeDefinition.capabilityManifest,
-      budget,
       definitions: [
         {
           runtimeType: 'player',
@@ -336,5 +320,63 @@ describe('capability executor', () => {
         },
       }),
     ).rejects.toMatchObject({ failure: 'capabilityDeadlineExhausted' })
+  })
+
+  test('applies the Capability Definition timeout independently', async () => {
+    vi.useFakeTimers()
+    try {
+      const finishInvocation = vi.fn(async () => 'recorded' as const)
+      const executor = createCapabilityExecutor({
+        runtimeType: 'player',
+        manifest: playerRuntimeDefinition.capabilityManifest,
+        definitions: [
+          {
+            runtimeType: 'player',
+            capability: {
+              id: 'player.compute-decision-metrics',
+              version: 1,
+            },
+            mode: 'deterministicCompute',
+            inputSchema: { id: 'player.input.metrics', version: 1 },
+            outputSchema: { id: 'player.output.metrics', version: 1 },
+            timeoutMs: 25,
+            parseInput: (value) =>
+              z.strictObject({ value: z.number() }).parse(value),
+            parseOutput: (value) =>
+              z.strictObject({ result: z.number() }).parse(value),
+            execute: async () => new Promise(() => undefined),
+          },
+        ],
+      })
+
+      const result = expect(
+        executor.invoke({
+          runtimeType: 'player',
+          authority,
+          capability: {
+            id: 'player.compute-decision-metrics',
+            version: 1,
+          },
+          payload: { value: 1 },
+          signal: new AbortController().signal,
+          control: {
+            reserveInvocation: async () => ({
+              kind: 'reserved',
+              reservationId: 'reservation-1',
+            }),
+            finishInvocation,
+          },
+        }),
+      ).rejects.toMatchObject({ failure: 'capabilityTimeout' })
+      await vi.advanceTimersByTimeAsync(25)
+      await result
+      expect(finishInvocation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          audit: expect.objectContaining({ errorCode: 'capabilityTimeout' }),
+        }),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

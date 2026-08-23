@@ -7,14 +7,19 @@ import { createAgentFoundationAuditRepository } from '../../src/persistence/agen
 import { createDatabaseCapabilityExecutionControl } from '../../src/persistence/agent-capability-execution-control.js'
 import { createDatabaseModelAttemptControl } from '../../src/persistence/agent-model-attempt-control.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
+import { createDatabaseTestSqlForRole } from './database-test-runtime.js'
 import { insertCommittedM27CompletedHand } from './database-repository-assertions.js'
 
 const eventPort = { publish: async () => undefined }
 
-export async function assertM43ModelAttemptControl(sql: Sql): Promise<void> {
+export async function assertM43ModelAttemptControl(
+  sql: Sql,
+  runtimeUrl: string,
+): Promise<void> {
   const sessionId = randomUUID()
   const handId = randomUUID()
   const runId = randomUUID()
+  const secondSql = createDatabaseTestSqlForRole(runtimeUrl, 'm43-secondary')
   const coachCapabilityManifest = productionRuntimeRegistry.resolveExact(
     'coach',
     1,
@@ -47,6 +52,14 @@ export async function assertM43ModelAttemptControl(sql: Sql): Promise<void> {
     const repository = createAgentFoundationAuditRepository()
     const resolvedOwner = await resolveOwnerScope(sql, {
       ownerId: 'local-user',
+    })
+    const secondOwner = await resolveOwnerScope(secondSql, {
+      ownerId: 'local-user',
+    })
+    const secondCoordinator = createAgentRunCoordinator({
+      sql: secondSql,
+      owner: secondOwner,
+      eventPort,
     })
     const capabilityControl = createDatabaseCapabilityExecutionControl({
       sql,
@@ -156,6 +169,14 @@ export async function assertM43ModelAttemptControl(sql: Sql): Promise<void> {
       sessionId,
       agentRunId: runId,
     })
+    const secondControl = createDatabaseModelAttemptControl({
+      sql: secondSql,
+      repository: createAgentFoundationAuditRepository(),
+      owner: secondOwner,
+      authority: claim.authority,
+      sessionId,
+      agentRunId: runId,
+    })
     const start = await control.startAttempt({
       attemptType: 'initial',
       routingReasonCode: null,
@@ -235,7 +256,7 @@ export async function assertM43ModelAttemptControl(sql: Sql): Promise<void> {
       accepted: false,
     })
 
-    for (const [index, hashCharacter] of ['c', 'd', 'e'].entries()) {
+    for (const [index, hashCharacter] of ['c', 'd'].entries()) {
       await coordinator.workerControl.renewLease(claim.authority)
       const correction = await control.startAttempt({
         attemptType: 'correction',
@@ -272,6 +293,64 @@ export async function assertM43ModelAttemptControl(sql: Sql): Promise<void> {
       ).resolves.toBe('recorded')
     }
     await coordinator.workerControl.renewLease(claim.authority)
+    const competingStarts = await Promise.all([
+      control.startAttempt({
+        attemptType: 'correction',
+        routingReasonCode: 'content_correction',
+        stage: 'decision_analysis',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        estimatedInputTokens: 100,
+        requestedMaximumOutputTokens: 256,
+        reservedCostMicrounits: 612,
+        requestProjectionHash: 'e'.repeat(64),
+      }),
+      secondControl.startAttempt({
+        attemptType: 'correction',
+        routingReasonCode: 'content_correction',
+        stage: 'decision_analysis',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        estimatedInputTokens: 100,
+        requestedMaximumOutputTokens: 256,
+        reservedCostMicrounits: 612,
+        requestProjectionHash: 'f'.repeat(64),
+      }),
+    ])
+    const winningStart = competingStarts.find(
+      (candidate) => candidate.kind === 'started',
+    )
+    expect(
+      competingStarts.filter((candidate) => candidate.kind === 'started'),
+    ).toHaveLength(1)
+    expect(
+      competingStarts.filter(
+        (candidate) =>
+          candidate.kind === 'rejected' &&
+          candidate.failure === 'execution_budget_exhausted',
+      ),
+    ).toHaveLength(1)
+    if (winningStart?.kind !== 'started') {
+      throw new Error('M4.3 双连接 Attempt 竞争没有产生唯一胜者。')
+    }
+    await coordinator.workerControl.renewLease(claim.authority)
+    await expect(
+      control.finishAttempt({
+        attemptId: winningStart.attemptId,
+        lifecycle: 'completed',
+        accepted: false,
+        inputTokens: 90,
+        outputTokens: 20,
+        costMicrounits: 130,
+        durationMs: 50,
+        errorCode: null,
+        responseProjectionHash: '7'.repeat(64),
+        validationStatus: 'invalid',
+        usageAccounting: 'providerReported',
+        costAccounting: 'allInputAtCacheMiss',
+      }),
+    ).resolves.toBe('recorded')
+    await coordinator.workerControl.renewLease(claim.authority)
     await expect(
       control.startAttempt({
         attemptType: 'correction',
@@ -299,6 +378,191 @@ export async function assertM43ModelAttemptControl(sql: Sql): Promise<void> {
         completedAt: new Date().toISOString(),
       }),
     )
+
+    const createStartedAttemptFixture = async (label: string) => {
+      const fixtureRunId = randomUUID()
+      await sql.begin((transaction) =>
+        coordinator.createOrReuse(transaction, {
+          runtimeType: 'coach',
+          agentRunId: fixtureRunId,
+          sessionId,
+          handId,
+          triggerType: 'hand_completed',
+          idempotencyKey: `m43/coach/${label}/${fixtureRunId}`,
+          supersedesRunId: null,
+          dataDependencies: [],
+          createdAt: new Date().toISOString(),
+        }),
+      )
+      const fixtureClaim = await coordinator.workerControl.claimNext({
+        runtimeType: 'coach',
+        leaseOwner: `m43-${label}:coach:0`,
+      })
+      if (
+        fixtureClaim.kind !== 'claimed' ||
+        fixtureClaim.run.runId !== fixtureRunId
+      ) {
+        throw new Error(`M4.3 ${label} 竞争测试 Run 未领取。`)
+      }
+      await coordinator.workerControl.markRunning(fixtureClaim.authority)
+      const primaryControl = createDatabaseModelAttemptControl({
+        sql,
+        repository: createAgentFoundationAuditRepository(),
+        owner: resolvedOwner,
+        authority: fixtureClaim.authority,
+        sessionId,
+        agentRunId: fixtureRunId,
+      })
+      const secondaryControl = createDatabaseModelAttemptControl({
+        sql: secondSql,
+        repository: createAgentFoundationAuditRepository(),
+        owner: secondOwner,
+        authority: fixtureClaim.authority,
+        sessionId,
+        agentRunId: fixtureRunId,
+      })
+      const fixtureStart = await primaryControl.startAttempt({
+        attemptType: 'initial',
+        routingReasonCode: null,
+        stage: 'hindsight',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        estimatedInputTokens: 100,
+        requestedMaximumOutputTokens: 256,
+        reservedCostMicrounits: 612,
+        requestProjectionHash: '1'.repeat(64),
+      })
+      if (fixtureStart.kind !== 'started') {
+        throw new Error(`M4.3 ${label} 竞争测试 Attempt 未启动。`)
+      }
+      return {
+        runId: fixtureRunId,
+        claim: fixtureClaim,
+        primaryControl,
+        secondaryControl,
+        attemptId: fixtureStart.attemptId,
+      }
+    }
+
+    const finishAcceptedAttempt = (attemptId: string) => ({
+      attemptId,
+      lifecycle: 'completed' as const,
+      accepted: true,
+      inputTokens: 90,
+      outputTokens: 20,
+      costMicrounits: 130,
+      durationMs: 50,
+      errorCode: null,
+      responseProjectionHash: '8'.repeat(64),
+      validationStatus: 'valid' as const,
+      usageAccounting: 'providerReported' as const,
+      costAccounting: 'allInputAtCacheMiss' as const,
+    })
+
+    const fencingFixture = await createStartedAttemptFixture('fencing')
+    await sql`
+      UPDATE app_private.agent_runs
+      SET lease_expires_at = clock_timestamp() - interval '1 millisecond'
+      WHERE id = ${fencingFixture.runId}::uuid
+    `
+    const [replacementClaim, oldWriterResult] = await Promise.all([
+      coordinator.workerControl.claimNext({
+        runtimeType: 'coach',
+        leaseOwner: fencingFixture.claim.authority.leaseOwner,
+      }),
+      fencingFixture.secondaryControl.finishAttempt(
+        finishAcceptedAttempt(fencingFixture.attemptId),
+      ),
+    ])
+    expect(replacementClaim).toMatchObject({
+      kind: 'claimed',
+      run: {
+        runId: fencingFixture.runId,
+        fencingToken: fencingFixture.claim.authority.fencingToken + 1,
+      },
+    })
+    expect(oldWriterResult).toBe('authorityLost')
+    if (replacementClaim.kind !== 'claimed') {
+      throw new Error('M4.3 新 fencing token 竞争未产生新 authority。')
+    }
+    await coordinator.workerControl.markRunning(replacementClaim.authority)
+    await sql.begin((transaction) =>
+      coordinator.finalize(transaction, {
+        runId: fencingFixture.runId,
+        authority: replacementClaim.authority,
+        lifecycle: 'completed',
+        terminationReason: null,
+        completedAt: new Date().toISOString(),
+      }),
+    )
+    const fencedAttemptRows = await sql<{ readonly lifecycle: string }[]>`
+      SELECT lifecycle
+      FROM app_private.agent_attempts
+      WHERE id = ${fencingFixture.attemptId}::uuid
+    `
+    expect(fencedAttemptRows[0]?.lifecycle).toBe('stale')
+
+    const cancellationFixture =
+      await createStartedAttemptFixture('cancellation')
+    let releaseCancellation!: () => void
+    let settleCancellationReadiness!: (
+      readiness:
+        | { readonly kind: 'ready' }
+        | { readonly kind: 'failed'; readonly error: unknown },
+    ) => void
+    const cancellationHold = new Promise<void>((resolve) => {
+      releaseCancellation = resolve
+    })
+    const cancellationReady = new Promise<
+      | { readonly kind: 'ready' }
+      | { readonly kind: 'failed'; readonly error: unknown }
+    >((resolve) => {
+      settleCancellationReadiness = resolve
+    })
+    const cancellation = secondSql.begin(async (transaction) => {
+      try {
+        const result = await secondCoordinator.cancel(transaction, {
+          runId: cancellationFixture.runId,
+          reason: 'user_cancelled',
+          completedAt: new Date().toISOString(),
+        })
+        settleCancellationReadiness({ kind: 'ready' })
+        await cancellationHold
+        return result
+      } catch (error) {
+        settleCancellationReadiness({ kind: 'failed', error })
+        throw error
+      }
+    })
+    void cancellation.catch((error: unknown) =>
+      settleCancellationReadiness({ kind: 'failed', error }),
+    )
+    const cancellationReadiness = await cancellationReady
+    if (cancellationReadiness.kind === 'failed') {
+      releaseCancellation()
+      await Promise.allSettled([cancellation])
+      throw cancellationReadiness.error
+    }
+    const cancelledWriter = Promise.resolve().then(() =>
+      cancellationFixture.primaryControl.finishAttempt(
+        finishAcceptedAttempt(cancellationFixture.attemptId),
+      ),
+    )
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    } finally {
+      releaseCancellation()
+    }
+    await expect(cancellation).resolves.toMatchObject({
+      run: { lifecycle: 'cancelled' },
+    })
+    await expect(cancelledWriter).resolves.toBe('authorityLost')
+    const cancelledAttemptRows = await sql<{ readonly lifecycle: string }[]>`
+      SELECT lifecycle
+      FROM app_private.agent_attempts
+      WHERE id = ${cancellationFixture.attemptId}::uuid
+    `
+    expect(cancelledAttemptRows[0]?.lifecycle).toBe('cancelled')
 
     const staleRunId = randomUUID()
     await sql.begin((transaction) =>
@@ -432,10 +696,39 @@ export async function assertM43ModelAttemptControl(sql: Sql): Promise<void> {
       outputHash: null,
       errorCategory: 'capability_deadline_exhausted',
     })
-  } finally {
+    await sql.begin((transaction) =>
+      coordinator.cancel(transaction, {
+        runId: staleRunId,
+        reason: 'process_restart',
+        completedAt: new Date().toISOString(),
+      }),
+    )
+
+    const expiredFixture = await createStartedAttemptFixture('expired-lease')
     await sql`
-      DELETE FROM app_private.sessions
-      WHERE id = ${sessionId}::uuid
+      UPDATE app_private.agent_runs
+      SET lease_expires_at = clock_timestamp() - interval '1 millisecond'
+      WHERE id = ${expiredFixture.runId}::uuid
     `
+    await expect(
+      expiredFixture.secondaryControl.finishAttempt(
+        finishAcceptedAttempt(expiredFixture.attemptId),
+      ),
+    ).resolves.toBe('authorityLost')
+    const expiredAttemptRows = await sql<{ readonly lifecycle: string }[]>`
+      SELECT lifecycle
+      FROM app_private.agent_attempts
+      WHERE id = ${expiredFixture.attemptId}::uuid
+    `
+    expect(expiredAttemptRows[0]?.lifecycle).toBe('started')
+  } finally {
+    try {
+      await secondSql.end({ timeout: 0 })
+    } finally {
+      await sql`
+        DELETE FROM app_private.sessions
+        WHERE id = ${sessionId}::uuid
+      `
+    }
   }
 }

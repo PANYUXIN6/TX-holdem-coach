@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { describe, expect, test } from 'vitest'
 import {
   TOKEN_ESTIMATOR_REFERENCE,
+  createContextPolicyDefinition,
   prepareContextEnvelope,
 } from '../../src/agents/foundation/context-envelope.js'
 import { createModelGateway } from '../../src/agents/foundation/model-gateway.js'
@@ -10,13 +12,18 @@ import type {
   ModelProviderAdapter,
   ProviderAttemptResult,
 } from '../../src/agents/foundation/model-gateway-protocol.js'
-import { prepareModelRequest } from '../../src/agents/foundation/prompt-module.js'
+import { SENSITIVE_PROJECTION_REJECTION } from '../../src/agents/foundation/model-gateway-protocol.js'
+import {
+  createPromptModuleDefinition,
+  prepareModelRequest,
+} from '../../src/agents/foundation/prompt-module.js'
 import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
 import { createSensitiveValueScanner } from '../../src/agents/model-gateway/sensitive-value-scanner.js'
 import { deepSeekPricingPolicy } from '../../src/agents/model-gateway/model-pricing-policy.js'
 import { playerRuntimeBudgetPolicy } from '../../src/agents/player/foundation-definition.js'
 import { playerModelRoutePolicy } from '../../src/agents/player/route-policy.js'
 import { productionRuntimeRegistry } from '../../src/agents/production-runtime-registry.js'
+import { canonicalJson } from '../../src/persisted-json.js'
 
 const scanner = createSensitiveValueScanner()
 const budget = playerRuntimeBudgetPolicy.createSnapshot({
@@ -46,7 +53,7 @@ function preparedRequest(maximumRequestBytes = 8_192) {
         },
       ],
     },
-    policy: {
+    policy: createContextPolicyDefinition({
       runtimeType: 'player',
       policy: { id: 'player.context-policy', version: 1 },
       tokenEstimator: TOKEN_ESTIMATOR_REFERENCE,
@@ -64,26 +71,28 @@ function preparedRequest(maximumRequestBytes = 8_192) {
           ],
         },
       ],
-    },
+    }),
     registry: productionRuntimeRegistry,
     budget,
     scanner,
   })
   const modules = [
-    {
+    createPromptModuleDefinition({
       runtimeType: 'player' as const,
       module: { id: 'player.prompt.system', version: 1 },
       inputSchema: { id: 'player.prompt.system-input', version: 1 },
       maximumOutputBytes: 64,
+      parseInput: (value) => z.strictObject({}).parse(value),
       render: () => [{ role: 'system' as const, content: 'system' }],
-    },
-    {
+    }),
+    createPromptModuleDefinition({
       runtimeType: 'player' as const,
       module: { id: 'player.prompt.decision', version: 1 },
       inputSchema: { id: 'player.prompt.decision-input', version: 1 },
       maximumOutputBytes: 64,
+      parseInput: (value) => z.strictObject({}).parse(value),
       render: () => [{ role: 'user' as const, content: 'choose' }],
-    },
+    }),
   ]
   return prepareModelRequest({
     runtimeType: 'player',
@@ -220,6 +229,44 @@ describe('single-provider model gateway', () => {
     ])
   })
 
+  test('binds an accepted Attempt hash to the final semantic value', async () => {
+    const adapter = programmableAdapter([
+      {
+        kind: 'success',
+        value: { choice: 'call' },
+        textProjection: '{"choice":"call"}',
+        usage,
+        finishReason: 'stop',
+      },
+    ])
+    const control = attemptControl()
+    const { gateway, input } = generationInput(adapter, control)
+
+    await expect(
+      gateway.generateStructured({
+        ...input,
+        validate: () => ({ kind: 'valid', value: { choice: 'fold' } }),
+      }),
+    ).resolves.toEqual({
+      kind: 'accepted',
+      value: { choice: 'fold' },
+      attempts: 1,
+    })
+    const expectedHash = createHash('sha256')
+      .update(
+        canonicalJson({
+          output: { choice: 'fold' },
+          finishReason: 'stop',
+          usage: { inputTokens: 100, outputTokens: 10 },
+        }),
+        'utf8',
+      )
+      .digest('hex')
+    expect(control.finishes).toMatchObject([
+      { accepted: true, responseProjectionHash: expectedHash },
+    ])
+  })
+
   test('performs at most two bounded content corrections', async () => {
     const invalid = {
       kind: 'contentInvalid' as const,
@@ -256,6 +303,48 @@ describe('single-provider model gateway', () => {
       attempts: 1,
     })
     expect(adapter.calls).toHaveLength(1)
+  })
+
+  test('audits a sensitive Adapter rejection with safe projection and actual usage', async () => {
+    const adapter = programmableAdapter([
+      {
+        kind: 'sensitiveRejected',
+        failure: 'sensitive_projection_rejected',
+        safeProjection: SENSITIVE_PROJECTION_REJECTION,
+        usage,
+        finishReason: 'stop',
+      },
+    ])
+    const control = attemptControl()
+    const { gateway, input } = generationInput(adapter, control)
+    const expectedHash = createHash('sha256')
+      .update(
+        canonicalJson({
+          output: SENSITIVE_PROJECTION_REJECTION,
+          finishReason: 'stop',
+          usage,
+        }),
+        'utf8',
+      )
+      .digest('hex')
+
+    await expect(gateway.generateStructured(input)).resolves.toEqual({
+      kind: 'failed',
+      failure: 'sensitive_projection_rejected',
+      attempts: 1,
+    })
+    expect(control.finishes).toMatchObject([
+      {
+        lifecycle: 'failed',
+        accepted: false,
+        inputTokens: 100,
+        outputTokens: 10,
+        errorCode: 'sensitive_projection_rejected',
+        responseProjectionHash: expectedHash,
+        validationStatus: 'invalid',
+        usageAccounting: 'providerReported',
+      },
+    ])
   })
 
   test('rejects an adapter result that resolves after the attempt timeout', async () => {
@@ -495,6 +584,54 @@ describe('single-provider model gateway', () => {
         lifecycle: 'failed',
         accepted: false,
         errorCode: 'response_semantic_invalid',
+        validationStatus: 'invalid',
+      },
+    ])
+  })
+
+  test('rejects a sensitive value introduced by the semantic validator', async () => {
+    const adapter = programmableAdapter([
+      {
+        kind: 'success',
+        value: { choice: 'call' },
+        textProjection: '{"choice":"call"}',
+        usage,
+        finishReason: 'stop',
+      },
+    ])
+    const control = attemptControl()
+    const { gateway, input } = generationInput(adapter, control)
+    const expectedHash = createHash('sha256')
+      .update(
+        canonicalJson({
+          output: SENSITIVE_PROJECTION_REJECTION,
+          finishReason: 'stop',
+          usage,
+        }),
+        'utf8',
+      )
+      .digest('hex')
+
+    await expect(
+      gateway.generateStructured({
+        ...input,
+        outputSchema: z.strictObject({ choice: z.string() }),
+        validate: () => ({
+          kind: 'valid',
+          value: { choice: 'postgresql://user:secret@localhost/private' },
+        }),
+      }),
+    ).resolves.toEqual({
+      kind: 'failed',
+      failure: 'sensitive_projection_rejected',
+      attempts: 1,
+    })
+    expect(control.finishes).toMatchObject([
+      {
+        lifecycle: 'failed',
+        accepted: false,
+        errorCode: 'sensitive_projection_rejected',
+        responseProjectionHash: expectedHash,
         validationStatus: 'invalid',
       },
     ])

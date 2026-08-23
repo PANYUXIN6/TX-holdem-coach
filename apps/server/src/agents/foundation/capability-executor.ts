@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import { canonicalJson, type JsonValue } from '../../persisted-json.js'
 import type { CapabilityManifest } from './capability-protocol.js'
 import { FoundationProtocolError } from './errors.js'
-import type { ExecutionBudget } from './execution-budget.js'
 import {
   isRuntimeCommitAuthority,
   type RuntimeCommitAuthority,
@@ -117,7 +116,6 @@ function deepFreeze<Value>(value: Value): Value {
 export function createCapabilityExecutor<TRuntime extends RuntimeType>(input: {
   readonly runtimeType: TRuntime
   readonly manifest: CapabilityManifest<TRuntime>
-  readonly budget: ExecutionBudget
   readonly definitions: readonly CapabilityDefinition<TRuntime>[]
 }): CapabilityExecutor<TRuntime> {
   if (input.manifest.runtimeType !== input.runtimeType) {
@@ -224,7 +222,7 @@ export function createCapabilityExecutor<TRuntime extends RuntimeType>(input: {
       const startedAt = performance.now()
       const combined = createCombinedAbort(
         invocation.signal,
-        Math.min(definition.timeoutMs, input.budget.attemptTimeoutMs),
+        definition.timeoutMs,
       )
       let output: JsonValue | undefined
       let failure: FoundationProtocolError | undefined

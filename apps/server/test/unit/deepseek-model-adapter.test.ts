@@ -162,6 +162,44 @@ describe('AI SDK DeepSeek adapter', () => {
     })
   })
 
+  test('rejects sensitive invalid projections without returning raw content', async () => {
+    const adapter = createAiSdkModelAdapter({
+      provider: 'deepseek',
+      createModel: () => ({}) as LanguageModel,
+      scanner: createSensitiveValueScanner({ secrets: ['private-secret'] }),
+      generate: (async () => {
+        throw noObjectGenerated({
+          cause: new TypeValidationError({
+            value: { apiKey: 'private-secret' },
+            cause: new Error('private schema detail'),
+          }),
+        })
+      }) as typeof import('ai').generateText,
+    })
+
+    await expect(
+      adapter.generate({
+        messages: [{ role: 'user', content: 'return json' }],
+        modelId: 'deepseek-v4-flash',
+        temperature: 0.2,
+        maximumOutputTokens: 256,
+        outputSchema: z.strictObject({ ok: z.boolean() }),
+        abortSignal: new AbortController().signal,
+      }),
+    ).resolves.toEqual({
+      kind: 'sensitiveRejected',
+      failure: 'sensitive_projection_rejected',
+      safeProjection: { failure: 'sensitive_projection_rejected' },
+      usage: {
+        inputTokens: 10,
+        outputTokens: 2,
+        cacheReadInputTokens: 0,
+        cacheMissInputTokens: 10,
+      },
+      finishReason: 'stop',
+    })
+  })
+
   test('scans structured output before producing its canonical projection', async () => {
     const adapter = createAiSdkModelAdapter({
       provider: 'deepseek',
@@ -184,8 +222,16 @@ describe('AI SDK DeepSeek adapter', () => {
         abortSignal: new AbortController().signal,
       }),
     ).resolves.toEqual({
-      kind: 'failure',
-      failure: 'provider_unknown_error',
+      kind: 'sensitiveRejected',
+      failure: 'sensitive_projection_rejected',
+      safeProjection: { failure: 'sensitive_projection_rejected' },
+      usage: {
+        inputTokens: 10,
+        outputTokens: 2,
+        cacheReadInputTokens: 0,
+        cacheMissInputTokens: 10,
+      },
+      finishReason: 'stop',
     })
   })
 

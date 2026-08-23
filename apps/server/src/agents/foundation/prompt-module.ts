@@ -11,6 +11,10 @@ import type {
   RuntimeComponentReference,
   RuntimeType,
 } from './runtime-definition.js'
+import {
+  RuntimeComponentReferenceSchema,
+  RuntimeTypeSchema,
+} from './runtime-definition.js'
 import type { RuntimeRegistry } from './runtime-registry.js'
 
 export interface ModelMessage {
@@ -23,7 +27,8 @@ export interface PromptModuleDefinition<TRuntime extends RuntimeType> {
   readonly module: RuntimeComponentReference
   readonly inputSchema: RuntimeComponentReference
   readonly maximumOutputBytes: number
-  readonly render: (input: unknown) => readonly ModelMessage[]
+  readonly parseInput: (input: unknown) => JsonValue
+  readonly render: (input: JsonValue) => readonly ModelMessage[]
 }
 
 export interface PromptModuleInvocation {
@@ -47,6 +52,7 @@ export interface PreparedModelRequest<
 }
 
 const preparedRequests = new WeakSet<object>()
+const promptModules = new WeakSet<object>()
 
 function sameReference(
   left: RuntimeComponentReference,
@@ -61,6 +67,49 @@ function deepFreeze<Value>(value: Value): Value {
     Object.freeze(value)
   }
   return value
+}
+
+export function createPromptModuleDefinition<TRuntime extends RuntimeType>(
+  input: PromptModuleDefinition<TRuntime>,
+): PromptModuleDefinition<TRuntime> {
+  const runtimeType = RuntimeTypeSchema.safeParse(input.runtimeType)
+  const module = RuntimeComponentReferenceSchema.safeParse(input.module)
+  const inputSchema = RuntimeComponentReferenceSchema.safeParse(
+    input.inputSchema,
+  )
+  if (
+    !runtimeType.success ||
+    !module.success ||
+    !inputSchema.success ||
+    !Number.isSafeInteger(input.maximumOutputBytes) ||
+    input.maximumOutputBytes <= 0 ||
+    typeof input.parseInput !== 'function' ||
+    typeof input.render !== 'function'
+  ) {
+    throw new FoundationProtocolError('invalidPromptModule')
+  }
+  const definition = deepFreeze({
+    runtimeType: runtimeType.data,
+    module: { ...module.data },
+    inputSchema: { ...inputSchema.data },
+    maximumOutputBytes: input.maximumOutputBytes,
+    parseInput: input.parseInput,
+    render: input.render,
+  }) as PromptModuleDefinition<TRuntime>
+  promptModules.add(definition)
+  return definition
+}
+
+export function isPromptModuleDefinition<TRuntime extends RuntimeType>(
+  value: unknown,
+  runtimeType: TRuntime,
+): value is PromptModuleDefinition<TRuntime> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    promptModules.has(value) &&
+    (value as { readonly runtimeType?: unknown }).runtimeType === runtimeType
+  )
 }
 
 export function prepareModelRequest<TRuntime extends RuntimeType>(input: {
@@ -100,6 +149,7 @@ export function prepareModelRequest<TRuntime extends RuntimeType>(input: {
     if (
       module === undefined ||
       invocation === undefined ||
+      !isPromptModuleDefinition(module, input.runtimeType) ||
       module.runtimeType !== input.runtimeType ||
       !sameReference(module.module, expected) ||
       !sameReference(invocation.module, expected) ||
@@ -111,11 +161,13 @@ export function prepareModelRequest<TRuntime extends RuntimeType>(input: {
     }
     let rendered: readonly ModelMessage[]
     try {
-      rendered = module.render(invocation.input)
+      const parsedInput = module.parseInput(invocation.input)
+      canonicalJson(parsedInput)
+      rendered = module.render(parsedInput)
     } catch {
       throw new FoundationProtocolError('invalidPromptModule')
     }
-    if (rendered.length === 0) {
+    if (!Array.isArray(rendered) || rendered.length === 0) {
       throw new FoundationProtocolError('invalidPromptModule')
     }
     let moduleBytes = 0

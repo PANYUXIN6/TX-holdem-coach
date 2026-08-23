@@ -243,6 +243,8 @@ interface ContextPolicyDefinition<
 
 `parse` 只能由对应 Runtime 模块提供严格、封闭的业务 Schema 包装器。M4.3 提供协议和机械执行器，不伪造 M4.4–M4.6/M8 尚未冻结的业务 section payload。
 
+`ContextPolicyDefinition` 只能由 Foundation 封闭工厂签发。工厂严格验证并复制全部引用和分区定义、递归冻结快照并登记私有认证身份；`prepareContextEnvelope()` 拒绝同引用普通对象，不能让调用方替换 `kinds`、`parse` 或字节上限后继续签发 Prepared Context。
+
 ### 6.2 准备结果与认证
 
 ```ts
@@ -323,13 +325,15 @@ interface PromptModuleDefinition<TRuntime extends RuntimeType> {
   readonly module: RuntimeComponentReference
   readonly inputSchema: RuntimeComponentReference
   readonly maximumOutputBytes: number
-  readonly render: (input: unknown) => readonly ModelMessage[]
+  readonly parseInput: (input: unknown) => JsonValue
+  readonly render: (input: JsonValue) => readonly ModelMessage[]
 }
 ```
 
 Foundation 的 `prepareModelRequest()`：
 
 - 要求模块顺序和版本与 exact Runtime Definition 一致；
+- 要求模块由 Foundation 封闭工厂签发、深冻结并通过私有身份认证，同引用普通对象不能替换 renderer；
 - 要求每个模块 Runtime 一致且输入通过严格 Schema；
 - 只允许 `system | user` 文本消息，不允许工具、图片、文件、URL、任意 Header 或 provider options；
 - 拼接最后一个由 `PreparedContextEnvelope.serialized` 生成的只读 Context 数据消息；
@@ -789,12 +793,12 @@ initial | correction
 
 ### 13.4 原始 I/O 不落库
 
-Attempt 哈希输入是 Provider Adapter 产出的规范脱敏投影：
+Attempt 哈希输入是安全边界产出的规范脱敏投影：
 
 - 请求投影包含 Provider-independent messages 的语义内容、Provider、model、允许的非敏感生成参数和 Schema 引用；
-- 响应投影只包含最终结构化对象或有界无效文本、finish reason 和允许的 usage 元数据；
+- accepted 响应投影包含最终经语义 Validator 规范化并实际交给 Runtime 的结构化对象；未接受响应包含 Adapter 的有界无效文本或安全结构投影。两者都只附带 finish reason 和允许的 usage 元数据；
 - 认证 Header、URL query、API Key、reasoning、原始 request/response body 和 SDK 原始错误先移除；
-- 发现已登记 secret 哨兵时，当前 Attempt 失败并只对替换后的投影计算哈希；
+- Adapter 原始输出与 Runtime 语义 Validator 的最终输出都必须执行敏感扫描；发现已登记 secret 哨兵时，当前 Attempt 失败，只对固定 `{failure: "sensitive_projection_rejected"}` 替代投影、允许的 finish reason 和 usage 元数据计算哈希；Provider 已返回合法 usage 时仍按实际 Token/成本完成拒绝审计，不把原始敏感值带出边界；
 - Repository 仍只接收 64 位小写 SHA-256，不接收原始对象。
 
 ## 14. 取消、迟到与恢复
@@ -1055,7 +1059,7 @@ Coach 不接收 Player Prepared Context、结果或 Gate。
 - Run/Attempt 固定锁序无反向 Session/Owner 锁；
 - 整体回滚零半成品，错误不泄露 SQL、payload 或 secret。
 
-本任务不改 Schema、baseline、migration 或 Session 锁，但会扩展 M4.2/M4.3 共用的 `AgentRun → Attempt` 锁内预算裁决和 started Attempt 收敛，因此属于共享事务/锁协议变更。按仓库规则，完成定向诊断、m43 和离线验证后主动执行一次且最多一次 `db:test:full`；full 失败时先定向诊断失败里程碑，不直接反复重跑。
+本任务不改 Schema、baseline、migration 或 Session 锁，但会扩展 M4.2/M4.3 共用的 `AgentRun → Attempt` 锁内预算裁决和 started Attempt 收敛，因此属于跨层 PostgreSQL 事务/锁协议变更。按仓库规则，完成定向诊断、m43 和离线验证后主动执行一次且最多一次 `postgres:e2e:full`；full 失败时先用同一入口定向诊断失败里程碑，不直接反复重跑。
 
 ### 18.7 显式真实 Provider smoke
 
@@ -1085,8 +1089,8 @@ Coach 不接收 Player Prepared Context、结果或 Gate。
 ```text
 相关 unit 测试
 → pnpm run verify
-→ m43 数据库里程碑（因本任务涉及 Attempt 持久化）
-→ db:test:full 一次（因修改共享 AgentRun/Attempt 事务与锁协议）
+→ postgres:e2e:milestone m43（因本任务贯穿 Foundation 控制端口与 Attempt 持久化）
+→ postgres:e2e:full 一次（因修改跨层 AgentRun/Attempt 事务与锁协议）
 ```
 
 所有远程数据库阶段串行执行；full 失败后先定位并重跑对应 milestone，不在同一任务内自行发起第二次 full；若修复确实可能影响其他阶段，先报告证据并由用户决定是否追加。不接 `bootstrap.ts`，不运行真实 Provider 作为默认完成条件，不把 fake Adapter 当生产可用证明。

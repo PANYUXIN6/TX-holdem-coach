@@ -14,6 +14,7 @@ import type {
   ProviderAttemptResult,
   ProviderUsage,
 } from '../foundation/model-gateway-protocol.js'
+import { SENSITIVE_PROJECTION_REJECTION } from '../foundation/model-gateway-protocol.js'
 import { classifyProviderError } from './provider-error-classifier.js'
 import type { SensitiveValueScanner } from '../foundation/context-envelope.js'
 
@@ -42,6 +43,19 @@ function projectUsage(
 function boundedInvalidText(text: string | undefined): string {
   if (text === undefined) return ''
   return Buffer.from(text, 'utf8').subarray(0, 4_096).toString('utf8')
+}
+
+function sensitiveProjectionRejected(input: {
+  readonly usage: LanguageModelUsage | undefined
+  readonly finishReason: string | null
+}): ProviderAttemptResult {
+  return Object.freeze({
+    kind: 'sensitiveRejected' as const,
+    failure: 'sensitive_projection_rejected' as const,
+    safeProjection: SENSITIVE_PROJECTION_REJECTION,
+    usage: projectUsage(input.usage),
+    finishReason: input.finishReason,
+  })
 }
 
 export function createAiSdkModelAdapter(input: {
@@ -81,7 +95,14 @@ export function createAiSdkModelAdapter(input: {
           },
         })
         const value = result.output as JsonValue
-        input.scanner.assertSafe(value)
+        try {
+          input.scanner.assertSafe(value)
+        } catch {
+          return sensitiveProjectionRejected({
+            usage: result.usage,
+            finishReason: result.finishReason,
+          })
+        }
         const textProjection = canonicalJson(value)
         return Object.freeze({
           kind: 'success' as const,
@@ -103,11 +124,25 @@ export function createAiSdkModelAdapter(input: {
           try {
             if (JSONParseError.isInstance(error.cause)) {
               textProjection = boundedInvalidText(error.cause.text)
-              input.scanner.assertSafe(textProjection)
+              try {
+                input.scanner.assertSafe(textProjection)
+              } catch {
+                return sensitiveProjectionRejected({
+                  usage: error.usage,
+                  finishReason: error.finishReason ?? null,
+                })
+              }
               failure = 'response_parse_error'
             } else if (TypeValidationError.isInstance(error.cause)) {
               const invalidValue = error.cause.value as JsonValue
-              input.scanner.assertSafe(invalidValue)
+              try {
+                input.scanner.assertSafe(invalidValue)
+              } catch {
+                return sensitiveProjectionRejected({
+                  usage: error.usage,
+                  finishReason: error.finishReason ?? null,
+                })
+              }
               textProjection = boundedInvalidText(canonicalJson(invalidValue))
               failure = 'response_schema_error'
             } else {

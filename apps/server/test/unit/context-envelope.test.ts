@@ -2,17 +2,20 @@ import { z } from 'zod'
 import { describe, expect, test } from 'vitest'
 import {
   TOKEN_ESTIMATOR_REFERENCE,
+  createContextPolicyDefinition,
   isPreparedContextEnvelope,
   prepareContextEnvelope,
-  type ContextPolicyDefinition,
 } from '../../src/agents/foundation/context-envelope.js'
-import { prepareModelRequest } from '../../src/agents/foundation/prompt-module.js'
+import {
+  createPromptModuleDefinition,
+  prepareModelRequest,
+} from '../../src/agents/foundation/prompt-module.js'
 import { playerRuntimeBudgetPolicy } from '../../src/agents/player/foundation-definition.js'
 import { productionRuntimeRegistry } from '../../src/agents/production-runtime-registry.js'
 import { createSensitiveValueScanner } from '../../src/agents/model-gateway/sensitive-value-scanner.js'
 
 const SectionSchema = z.strictObject({ value: z.string() })
-const policy: ContextPolicyDefinition<'player', 'decision'> = {
+const policy = createContextPolicyDefinition({
   runtimeType: 'player',
   policy: { id: 'player.context-policy', version: 1 },
   tokenEstimator: TOKEN_ESTIMATOR_REFERENCE,
@@ -29,7 +32,26 @@ const policy: ContextPolicyDefinition<'player', 'decision'> = {
       ],
     },
   ],
-}
+})
+
+const promptModules = [
+  createPromptModuleDefinition({
+    runtimeType: 'player',
+    module: { id: 'player.prompt.system', version: 1 },
+    inputSchema: { id: 'player.prompt.system-input', version: 1 },
+    maximumOutputBytes: 128,
+    parseInput: (value) => z.strictObject({}).parse(value),
+    render: () => [{ role: 'system', content: 'system' }],
+  }),
+  createPromptModuleDefinition({
+    runtimeType: 'player',
+    module: { id: 'player.prompt.decision', version: 1 },
+    inputSchema: { id: 'player.prompt.decision-input', version: 1 },
+    maximumOutputBytes: 128,
+    parseInput: (value) => z.strictObject({}).parse(value),
+    render: () => [{ role: 'user', content: 'choose' }],
+  }),
+] as const
 
 function envelope() {
   return {
@@ -150,6 +172,32 @@ describe('context envelope and prompt preparation', () => {
     ).toThrow('Agent Foundation 协议校验失败。')
   })
 
+  test('rejects an unauthenticated same-reference Context Policy', () => {
+    expect(() =>
+      prepareContextEnvelope({
+        envelope: envelope(),
+        policy: {
+          ...policy,
+          kinds: [
+            {
+              contextKind: 'decision',
+              sections: [
+                {
+                  sectionId: 'protocol',
+                  schema: { id: 'player.context.protocol', version: 1 },
+                  parse: () => ({ forged: true }),
+                },
+              ],
+            },
+          ],
+        },
+        registry: productionRuntimeRegistry,
+        budget,
+        scanner,
+      }),
+    ).toThrow('Agent Foundation 协议校验失败。')
+  })
+
   test('compiles only the exact static prompt order plus readonly context', () => {
     const context = prepareContextEnvelope({
       envelope: envelope(),
@@ -158,28 +206,12 @@ describe('context envelope and prompt preparation', () => {
       budget,
       scanner,
     })
-    const modules = [
-      {
-        runtimeType: 'player' as const,
-        module: { id: 'player.prompt.system', version: 1 },
-        inputSchema: { id: 'player.prompt.system-input', version: 1 },
-        maximumOutputBytes: 128,
-        render: () => [{ role: 'system' as const, content: 'system' }],
-      },
-      {
-        runtimeType: 'player' as const,
-        module: { id: 'player.prompt.decision', version: 1 },
-        inputSchema: { id: 'player.prompt.decision-input', version: 1 },
-        maximumOutputBytes: 128,
-        render: () => [{ role: 'user' as const, content: 'choose' }],
-      },
-    ]
     const request = prepareModelRequest({
       runtimeType: 'player',
       runtimeDefinitionVersion: 1,
       context,
-      modules,
-      invocations: modules.map((module) => ({
+      modules: promptModules,
+      invocations: promptModules.map((module) => ({
         module: module.module,
         inputSchema: module.inputSchema,
         input: {},
@@ -195,5 +227,55 @@ describe('context envelope and prompt preparation', () => {
       'user',
     ])
     expect(request.messages.at(-1)?.content).toContain('只读上下文数据')
+  })
+
+  test('rejects a forged renderer and invalid prompt input', () => {
+    const context = prepareContextEnvelope({
+      envelope: envelope(),
+      policy,
+      registry: productionRuntimeRegistry,
+      budget,
+      scanner,
+    })
+    const invocations = promptModules.map((module) => ({
+      module: module.module,
+      inputSchema: module.inputSchema,
+      input: {},
+    }))
+    expect(() =>
+      prepareModelRequest({
+        runtimeType: 'player',
+        runtimeDefinitionVersion: 1,
+        context,
+        modules: [
+          {
+            ...promptModules[0],
+            render: () => [{ role: 'system', content: 'forged' }],
+          },
+          promptModules[1],
+        ],
+        invocations,
+        registry: productionRuntimeRegistry,
+        scanner,
+        maximumRequestBytes: 16_384,
+        maximumInputTokens: budget.maxInputTokens,
+      }),
+    ).toThrow('Agent Foundation 协议校验失败。')
+    expect(() =>
+      prepareModelRequest({
+        runtimeType: 'player',
+        runtimeDefinitionVersion: 1,
+        context,
+        modules: promptModules,
+        invocations: [
+          { ...invocations[0]!, input: { extra: true } },
+          invocations[1]!,
+        ],
+        registry: productionRuntimeRegistry,
+        scanner,
+        maximumRequestBytes: 16_384,
+        maximumInputTokens: budget.maxInputTokens,
+      }),
+    ).toThrow('Agent Foundation 协议校验失败。')
   })
 })

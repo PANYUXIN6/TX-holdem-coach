@@ -83,6 +83,7 @@ export interface PreparedContextEnvelope<
 }
 
 const preparedContexts = new WeakSet<object>()
+const contextPolicies = new WeakSet<object>()
 const ContextEnvelopeCommonSchema = z.strictObject({
   runtimeType: RuntimeTypeSchema,
   runtimeDefinitionVersion: z.number().int().positive().safe(),
@@ -136,6 +137,87 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
+export function createContextPolicyDefinition<
+  TRuntime extends RuntimeType,
+  TContextKind extends string,
+>(
+  input: ContextPolicyDefinition<TRuntime, TContextKind>,
+): ContextPolicyDefinition<TRuntime, TContextKind> {
+  const runtimeType = RuntimeTypeSchema.safeParse(input.runtimeType)
+  const policy = RuntimeComponentReferenceSchema.safeParse(input.policy)
+  const tokenEstimator = RuntimeComponentReferenceSchema.safeParse(
+    input.tokenEstimator,
+  )
+  if (
+    !runtimeType.success ||
+    !policy.success ||
+    !tokenEstimator.success ||
+    !sameReference(tokenEstimator.data, TOKEN_ESTIMATOR_REFERENCE) ||
+    !Number.isSafeInteger(input.maximumSerializedBytes) ||
+    input.maximumSerializedBytes <= 0 ||
+    !Array.isArray(input.kinds) ||
+    input.kinds.length === 0
+  ) {
+    throw new FoundationProtocolError('contextPolicyMismatch')
+  }
+
+  const contextKinds = new Set<string>()
+  const kinds = input.kinds.map((kind: ContextKindDefinition<TContextKind>) => {
+    if (
+      !/^[a-z][A-Za-z0-9]{0,79}$/.test(kind.contextKind) ||
+      contextKinds.has(kind.contextKind) ||
+      !Array.isArray(kind.sections) ||
+      kind.sections.length === 0
+    ) {
+      throw new FoundationProtocolError('contextPolicyMismatch')
+    }
+    contextKinds.add(kind.contextKind)
+    const sectionIds = new Set<string>()
+    const sections = kind.sections.map((section: ContextSectionDefinition) => {
+      const schema = RuntimeComponentReferenceSchema.safeParse(section.schema)
+      if (
+        !/^[a-z][A-Za-z0-9]{0,79}$/.test(section.sectionId) ||
+        sectionIds.has(section.sectionId) ||
+        !schema.success ||
+        typeof section.parse !== 'function'
+      ) {
+        throw new FoundationProtocolError('contextPolicyMismatch')
+      }
+      sectionIds.add(section.sectionId)
+      return {
+        sectionId: section.sectionId,
+        schema: { ...schema.data },
+        parse: section.parse,
+      }
+    })
+    return { contextKind: kind.contextKind, sections }
+  })
+  const definition = deepFreeze({
+    runtimeType: runtimeType.data,
+    policy: { ...policy.data },
+    tokenEstimator: { ...tokenEstimator.data },
+    kinds,
+    maximumSerializedBytes: input.maximumSerializedBytes,
+  }) as unknown as ContextPolicyDefinition<TRuntime, TContextKind>
+  contextPolicies.add(definition)
+  return definition
+}
+
+export function isContextPolicyDefinition<
+  TRuntime extends RuntimeType,
+  TContextKind extends string,
+>(
+  value: unknown,
+  runtimeType: TRuntime,
+): value is ContextPolicyDefinition<TRuntime, TContextKind> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    contextPolicies.has(value) &&
+    (value as { readonly runtimeType?: unknown }).runtimeType === runtimeType
+  )
+}
+
 export function estimateUtf8UpperBoundTokens(
   serialized: string,
   messageCount: number,
@@ -166,6 +248,7 @@ export function prepareContextEnvelope<
     throw new FoundationProtocolError('invalidContextEnvelope')
   }
   if (
+    !isContextPolicyDefinition(input.policy, parsed.data.runtimeType) ||
     parsed.data.runtimeType !== input.policy.runtimeType ||
     input.policy.runtimeType !== input.envelope.runtimeType
   ) {

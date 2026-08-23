@@ -65,6 +65,6 @@ registerDatabaseMilestoneTest(
 registerDatabaseMilestoneTest(
   'm43',
   'M4.3 ModelGateway Attempt budget control',
-  (sql) => assertM43ModelAttemptControl(sql),
+  (sql, runtimeUrl) => assertM43ModelAttemptControl(sql, runtimeUrl),
   300_000,
 )

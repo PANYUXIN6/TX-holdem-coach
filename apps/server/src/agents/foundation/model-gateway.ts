@@ -11,6 +11,7 @@ import type {
   StructuredGenerationInput,
   StructuredGenerationResult,
 } from './model-gateway-protocol.js'
+import { SENSITIVE_PROJECTION_REJECTION } from './model-gateway-protocol.js'
 import type { ModelGatewayFailure } from './errors.js'
 import type {
   RuntimeComponentReference,
@@ -69,6 +70,19 @@ function safeUsage(usage: ProviderUsage | null): ProviderUsage | null {
     return null
   }
   return usage
+}
+
+function projectProviderUsage(usage: ProviderUsage): JsonValue {
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    ...(usage.cacheReadInputTokens === undefined
+      ? {}
+      : { cacheReadInputTokens: usage.cacheReadInputTokens }),
+    ...(usage.cacheMissInputTokens === undefined
+      ? {}
+      : { cacheMissInputTokens: usage.cacheMissInputTokens }),
+  }
 }
 
 function boundedIssues(
@@ -445,6 +459,57 @@ export function createModelGateway(input: {
             return Object.freeze({ kind: 'failed', failure, attempts })
           }
 
+          if (providerResult.kind === 'sensitiveRejected') {
+            const usage = safeUsage(providerResult.usage)
+            const usageProjection =
+              usage === null ? null : projectProviderUsage(usage)
+            let costMicrounits = 0
+            let costAccounting:
+              | 'providerReportedSplit'
+              | 'allInputAtCacheMiss'
+              | 'reservedUpperBound' = 'reservedUpperBound'
+            if (usage !== null) {
+              try {
+                costMicrounits =
+                  generation.pricingPolicy.calculateCostMicrounits(usage)
+                costAccounting =
+                  usage.cacheReadInputTokens === undefined
+                    ? 'allInputAtCacheMiss'
+                    : 'providerReportedSplit'
+              } catch {
+                costMicrounits = 0
+              }
+            }
+            const responseProjectionHash = hashProjection({
+              output: providerResult.safeProjection,
+              finishReason: providerResult.finishReason,
+              usage: usageProjection,
+            })
+            const finish = await generation.control.finishAttempt({
+              attemptId: start.attemptId,
+              lifecycle: 'failed',
+              accepted: false,
+              inputTokens: usage?.inputTokens ?? 0,
+              outputTokens: usage?.outputTokens ?? 0,
+              costMicrounits,
+              durationMs,
+              errorCode: 'sensitive_projection_rejected',
+              responseProjectionHash,
+              validationStatus: 'invalid',
+              usageAccounting:
+                usage === null ? 'reservedUpperBound' : 'providerReported',
+              costAccounting,
+            })
+            return Object.freeze({
+              kind: 'failed',
+              failure:
+                finish === 'recorded'
+                  ? 'sensitive_projection_rejected'
+                  : finishFailure(finish),
+              attempts,
+            })
+          }
+
           const usage = safeUsage(providerResult.usage)
           if (usage === null) {
             const finish = await generation.control.finishAttempt({
@@ -476,19 +541,10 @@ export function createModelGateway(input: {
           }
           let costMicrounits: number
           let responseProjectionHash: string
+          const usageProjection = projectProviderUsage(usage)
           try {
             costMicrounits =
               generation.pricingPolicy.calculateCostMicrounits(usage)
-            const usageProjection: JsonValue = {
-              inputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
-              ...(usage.cacheReadInputTokens === undefined
-                ? {}
-                : { cacheReadInputTokens: usage.cacheReadInputTokens }),
-              ...(usage.cacheMissInputTokens === undefined
-                ? {}
-                : { cacheMissInputTokens: usage.cacheMissInputTokens }),
-            }
             responseProjectionHash = hashProjection({
               output: providerResult.textProjection,
               finishReason: providerResult.finishReason,
@@ -560,6 +616,7 @@ export function createModelGateway(input: {
           let value: TOutput | undefined
           let issues: readonly ModelVisibleValidationIssue[] = []
           let validatorFailed = false
+          let sensitiveProjectionRejected = false
           if (providerResult.kind === 'contentInvalid') {
             invalidText = providerResult.textProjection
             issues = [{ code: providerResult.failure, path: [] }]
@@ -597,7 +654,19 @@ export function createModelGateway(input: {
                     throw new TypeError('Validator 结果无效。')
                   }
                   canonicalJson(validatedValue.data)
-                  value = validatedValue.data
+                  try {
+                    generation.scanner.assertSafe(validatedValue.data)
+                  } catch {
+                    sensitiveProjectionRejected = true
+                  }
+                  if (!sensitiveProjectionRejected) {
+                    value = validatedValue.data
+                    responseProjectionHash = hashProjection({
+                      output: validatedValue.data,
+                      finishReason: providerResult.finishReason,
+                      usage: usageProjection,
+                    })
+                  }
                 } else if (semantic.kind === 'invalid') {
                   if (
                     Object.keys(semantic).sort().join(',') !== 'issues,kind' ||
@@ -621,6 +690,37 @@ export function createModelGateway(input: {
           )
           if (cancelledAfterValidation !== null) {
             return cancelledAfterValidation
+          }
+          if (sensitiveProjectionRejected) {
+            const finish = await generation.control.finishAttempt({
+              attemptId: start.attemptId,
+              lifecycle: 'failed',
+              accepted: false,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              costMicrounits,
+              durationMs,
+              errorCode: 'sensitive_projection_rejected',
+              responseProjectionHash: hashProjection({
+                output: SENSITIVE_PROJECTION_REJECTION,
+                finishReason: providerResult.finishReason,
+                usage: usageProjection,
+              }),
+              validationStatus: 'invalid',
+              usageAccounting: 'providerReported',
+              costAccounting:
+                usage.cacheReadInputTokens === undefined
+                  ? 'allInputAtCacheMiss'
+                  : 'providerReportedSplit',
+            })
+            return Object.freeze({
+              kind: 'failed',
+              failure:
+                finish === 'recorded'
+                  ? 'sensitive_projection_rejected'
+                  : finishFailure(finish),
+              attempts,
+            })
           }
           if (validatorFailed) {
             const finish = await generation.control.finishAttempt({

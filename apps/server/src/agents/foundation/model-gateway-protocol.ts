@@ -40,6 +40,10 @@ export interface ProviderUsage {
   readonly cacheMissInputTokens?: number
 }
 
+export const SENSITIVE_PROJECTION_REJECTION = Object.freeze({
+  failure: 'sensitive_projection_rejected',
+}) satisfies JsonValue
+
 export interface ProviderAttemptInput {
   readonly messages: readonly ModelMessage[]
   readonly modelId: string
@@ -63,6 +67,13 @@ export type ProviderAttemptResult =
       readonly usage: ProviderUsage | null
       readonly finishReason: string | null
       readonly failure: 'response_parse_error' | 'response_schema_error'
+    }
+  | {
+      readonly kind: 'sensitiveRejected'
+      readonly failure: 'sensitive_projection_rejected'
+      readonly safeProjection: typeof SENSITIVE_PROJECTION_REJECTION
+      readonly usage: ProviderUsage | null
+      readonly finishReason: string | null
     }
   | {
       readonly kind: 'failure'

@@ -896,11 +896,11 @@ M4.2 不执行真实 Provider，不需要 API Key 或网络。
 1. M4.2 Codec/Coordinator/Repository/Worker 目标测试；
 2. `pnpm run verify`；
 3. `pnpm --filter @tx-holdem-coach/server run verify:migration-assets`；
-4. 在数据库测试计划登记 `m42` 后执行 `pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m42`；
-5. 因 M4.2 修改 Schema/baseline 和共享 Agent 事务协议，主动执行一次 `db:test:full`；失败后先定向诊断，不直接重复 full；
+4. 在 PostgreSQL E2E 计划登记 `m42` 后执行 `pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m42`；
+5. 因 M4.2 同时修改 Schema/baseline 和跨层 Agent 事务协议，串行执行一次 `db:test:full` 与一次 `postgres:e2e:full`；任一失败后先在同套入口定向诊断，不直接重复 full；
 6. `git diff --check`。
 
-最终报告分别列出目标测试、verify、migration assets、m42 和 full，不能用 milestone 冒充 full。
+最终报告分别列出目标测试、verify、migration assets、PostgreSQL E2E m42、`db:test:full` 与 `postgres:e2e:full`，不能用 milestone 或其中一套 full 冒充另一套证据。
 
 ## 14. 方案取舍
 

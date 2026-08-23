@@ -557,23 +557,20 @@ apps/server/src/persistence/session-deletion-repository.ts
 
 ### 12.7 真实 PostgreSQL `m35`
 
-新增显式命令：
+当前按责任使用两个显式命令：
 
 ```bash
 pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m35
+pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m35
 ```
 
-通过 Hono `app.request()` 和真实 PostgreSQL 验收：
+数据库里程碑只通过 Repository 和真实 PostgreSQL 验收设置默认值、已有行/无行并发部分更新、唯一行、`FOR UPDATE` 串行化与事务回滚。E2E 里程碑只保留一次 Hono `app.request()` GET/PATCH→PostgreSQL 冒烟。其余 readiness、Provider、人物、删除、创建/命令映射与错误脱敏分支由离线 service/unit 测试拥有，不再为了复用数据库夹具进入远程套件：
 
-- readiness、Player 设置默认/更新/重启读取；
 - Player 设置已有行和无行两种并发部分更新均通过真实 `FOR UPDATE`/唯一约束串行化，最终值包含两个不同字段的成功修改；
-- 人物目录零数据库写；
-- M3.2 创建和 M3.4 命令的成功/冲突/重放 HTTP 映射，使用与 M3.6 接口相同的严格测试 projector；
-- ended 单场删除、active 单场拒绝、Owner 清空和确认失败零写入；
-- 数据库受控失败统一脱敏，不泄露 SQL、URL 或内部错误；
-- Provider 传输仍用假 fetch，不连接真实供应商、不读取真实 Key。
+- 设置事务提交失败时更新与同事务夹具整体回滚；
+- HTTP 冒烟只证明默认读取、单字段 PATCH 和提交后回读一致。
 
-`m35` 证明 HTTP 边界与真实事务组合，不冒充 M3.6 公开投影安全验收或 M5 历史/统计验收。
+两套 `m35` 分别证明持久化事实与最小 HTTP→PostgreSQL 组合，不冒充 M3.6 公开投影安全验收或 M5 历史/统计验收。
 
 ### 12.8 完整验证顺序
 
@@ -583,8 +580,8 @@ Contracts 目标测试
 -> Server 单元测试
 -> Server 类型检查
 -> 根 pnpm run verify
--> 可用时远程 m35
--> 一次 db:test:full
+-> 可用时按改动责任串行执行远程 database m35 与/或 PostgreSQL E2E m35
+-> 仅在仓库规则要求时串行执行对应 db:test:full 与/或 postgres:e2e:full
 -> git diff --check
 ```
 
@@ -660,7 +657,7 @@ M3.5 只有同时满足以下条件才完成：
 - 创建与命令重放/冲突/processing/稳定拒绝具有确定 HTTP 语义，原账本响应不被改写；
 - 删除确认、事务、OwnerScope、运行失效与提交后中断边界闭合；
 - 不使用测试 projector、空历史、空统计或 501 占位冒充后续能力；
-- 默认离线验证通过，可用时 `m35` 与 `db:test:full` 有当前证据；
+- 默认离线验证通过，可用时受影响的 `m35` 与对应 full 有当前证据，且 database/E2E 结果分别报告；
 - 实现后的 `REPO_MAP.md`、`ARCHITECTURE.md` 和集成测试说明已同步。
 
 ## 17. 后续里程碑交接

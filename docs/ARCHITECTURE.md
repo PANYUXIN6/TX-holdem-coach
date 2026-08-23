@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-08-20（M0–M2、M3.1–M3.7、M4.1–M4.3 实施状态及首发前预建面收敛已同步）
+更新时间：2026-08-23（M0–M2、M3.1–M3.7、M4.1–M4.3 实施状态、首发前预建面收敛及远程测试分层已同步）
 
 ## Workspace 边界
 
@@ -18,8 +18,8 @@
 - M3.5 已新增 `src/http/`、`src/providers/`、`src/settings/` 与删除应用服务。`createApp()` 是唯一 HTTP 组合入口，先执行回环 Host、精确 Origin、JSON MIME、流式 64 KiB、无查询参数和安全响应头门禁，再由路由严格解析 Contracts、调用应用端口并复验公开输出；请求日志只记录 requestId、方法、路由模板、状态、稳定错误码和耗时。Provider 检测只访问固定 models 端点，使用覆盖响应正文读取的端到端 10 秒超时、流式 256 KiB 响应上限、同 Provider 单飞和进程缓存，并只记录 Provider、公开分类和耗时；Player 设置部分更新通过默认行竞争与 `FOR UPDATE` 在锁内重读、合并、完整复验和更新。M3.5 初始里程碑安装健康、Provider、设置、人物和删除路由；M3.6 已补齐场次创建、读取与命令生产适配器，M3.7 已补齐 SSE 路由。详细事实源见 [M3.5 设计](./superpowers/specs/2026-08-11-m3-5-hono-api-error-mapping-design.md)。
 - M3.6/M3.7 的 `src/sessions/public-projection/` 同时拥有同步公开投影和事件流应用协议。当前事实仍由 `public-projection-repository.ts` 的一致读取视图投影；历史只由 `public-event-replay-repository.ts` 读取固化 `public_event_payload`。stream service 先订阅 Hub，再冻结 bootstrap high watermark、全量分页预验证并以 proof 二次读取；连接用容量一页交接和 64 项实时队列合流，HTTP 层只有一个 writer 串行写 replay、校准、实时事件与心跳。
 - `apps/server/.env.example` 提供脱敏占位的线上运行/迁移连接与 DeepSeek Provider Key；`.env.test.example` 只提供两条测试 URL。真实值只存在于后端、Git 忽略的 `.env.test.local` 或部署环境，project ref 不由环境声明。
-- `apps/server/test` 是非运行时测试层；普通 `verify` 不收集远程数据库测试文件。受控启动器现支持到 `m43`；`m42` 验收 AgentRun 生命周期/fencing，`m43` 以真实 PostgreSQL 验收 Attempt 启动/完成预算裁决、Invocation 并发票据、预留事实先提交和 Provider 实际用量超额拒绝。所有测试连接继续携带 Run ID 标签和数据库侧超时。
-- M2.4–M2.8 单元测试只通过公开构造器、Codec、纯决策和 Repository API 验证契约、capability、写前拒绝及错误转换；`db:test:full` 额外以真实 PostgreSQL 验证 Owner 条件、级联/回滚、`FOR UPDATE` 阻塞、双连接竞争、11 张 Session-scoped 子表清除、设置保留，以及当前/历史阵容创建的 Owner 与精确来源锁协议。默认离线验证不执行该远程文件。
+- `apps/server/test` 是非运行时测试层；`unit/` 与 `service/` 只验证离线领域、Codec、错误、HTTP/Provider 适配和应用端口，不连接真实数据库，coverage 也只收集这两层。远程 PostgreSQL 验收拆成两个受控入口：`db:test:*` 拥有 migration、Schema、Repository、事务与锁事实，当前覆盖 M2.2–M2.8 及 M3.5 设置持久化；`postgres:e2e:*` 拥有 M3.1–M3.7、M4.2–M4.3 的跨应用层 PostgreSQL 流程，M3.1 应用断言只由 E2E 入口依赖，M3.5 只保留一次设置 HTTP 冒烟。CLI 计划按 suite 拒绝未归属的里程碑，普通 `verify` 不收集任何远程入口。所有远程连接继续携带 Run ID 标签和数据库侧超时；阶段超时会沿 Vitest `AbortSignal` 终止迁移进程组和作用域内连接，并等待已登记清理完成。
+- M2.4–M2.8 单元测试通过公开构造器、Codec、纯决策和 Repository API 验证契约、capability、写前拒绝及错误转换；`db:test:full` 额外以真实 PostgreSQL 验证 Owner 条件、级联/回滚、`FOR UPDATE` 阻塞、双连接竞争、11 张 Session-scoped 子表清除、设置保留，以及当前/历史阵容创建的 Owner 与精确来源锁协议。完整应用服务、HTTP/SSE、Session 命令和 Agent 协调只由独立 `postgres:e2e:*` 入口按需贯穿 PostgreSQL，不属于数据库持久化套件。
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议：命令、公开快照、结构化合法动作、人物公开摘要与创建选择、M3.2 创建请求/成功快照响应、DeepSeek 健康/设置、M3.5 健康/Player 设置/人物/删除协议、HTTP/SSE 信封和错误响应。Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。创建请求只允许 `currentCatalog` 的 5–8 个唯一 AI 选择或无额外字段的 `latestEnded`。
 - 公开快照只承载当前手的最小行动时间线及两手之间的最小完成手摘要；M3 以后只能从私有事件与 M1.9 私有 `participantHands` 作可见性投影，Contracts 不导入服务器类型、评估比较等级、牌堆、burn 或未公开底牌。
 

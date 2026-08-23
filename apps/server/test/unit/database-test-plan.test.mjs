@@ -6,8 +6,10 @@ import {
 } from '../../scripts/database-test-plan.mjs'
 
 describe('database test plan', () => {
-  test('stops the full runner after the first failed or timed-out milestone', () => {
-    expect(createDatabaseVitestArguments()).toEqual([
+  test('runs only the persistence entry for the database suite', () => {
+    expect(
+      createDatabaseVitestArguments({ kind: 'full', suite: 'database' }),
+    ).toEqual([
       'exec',
       'vitest',
       'run',
@@ -16,24 +18,53 @@ describe('database test plan', () => {
     ])
   })
 
-  test('selects one allowlisted milestone', () => {
-    expect(parseDatabaseTestArguments(['--milestone=m37'])).toEqual({
+  test('runs only the application entry for the PostgreSQL E2E suite', () => {
+    expect(
+      createDatabaseVitestArguments({ kind: 'full', suite: 'e2e' }),
+    ).toEqual([
+      'exec',
+      'vitest',
+      'run',
+      '--bail=1',
+      'test/integration/postgres-application-e2e.test.ts',
+    ])
+  })
+
+  test('selects one allowlisted E2E milestone', () => {
+    expect(
+      parseDatabaseTestArguments(['--suite=e2e', '--milestone=m37']),
+    ).toEqual({
       kind: 'milestone',
       milestone: 'm37',
+      suite: 'e2e',
+    })
+  })
+
+  test('allows a persistence milestone owned by a later feature', () => {
+    expect(
+      parseDatabaseTestArguments(['--suite=database', '--milestone=m35']),
+    ).toEqual({
+      kind: 'milestone',
+      milestone: 'm35',
+      suite: 'database',
     })
   })
 
   test('accepts the pnpm argument separator before one milestone', () => {
-    expect(parseDatabaseTestArguments(['--', '--milestone=m27'])).toEqual({
+    expect(
+      parseDatabaseTestArguments(['--suite=database', '--', '--milestone=m27']),
+    ).toEqual({
       kind: 'milestone',
       milestone: 'm27',
+      suite: 'database',
     })
   })
 
   test.each([
-    [[], { kind: 'migration' }],
-    [['--full'], { kind: 'full' }],
-    [['--cleanup-stale'], { kind: 'cleanup' }],
+    [[], { kind: 'migration', suite: 'database' }],
+    [['--full'], { kind: 'full', suite: 'database' }],
+    [['--suite=e2e', '--full'], { kind: 'full', suite: 'e2e' }],
+    [['--cleanup-stale'], { kind: 'cleanup', suite: 'database' }],
   ])('accepts the controlled plan %j', (arguments_, expected) => {
     expect(parseDatabaseTestArguments(arguments_)).toEqual(expected)
   })
@@ -41,7 +72,7 @@ describe('database test plan', () => {
   test('creates the explicit launcher environment for a milestone', () => {
     expect(
       createDatabaseTestPlanEnvironment(
-        { kind: 'milestone', milestone: 'm27' },
+        { kind: 'milestone', milestone: 'm27', suite: 'database' },
         '0123456789abcdef',
       ),
     ).toEqual({
@@ -53,9 +84,9 @@ describe('database test plan', () => {
   })
 
   test.each([
-    [{ kind: 'migration' }, undefined],
-    [{ kind: 'full' }, 'full'],
-    [{ kind: 'cleanup' }, 'cleanup'],
+    [{ kind: 'migration', suite: 'database' }, undefined],
+    [{ kind: 'full', suite: 'database' }, 'full'],
+    [{ kind: 'cleanup', suite: 'database' }, 'cleanup'],
   ])('creates the launcher scope for %j', (plan, expectedScope) => {
     const environment = createDatabaseTestPlanEnvironment(
       plan,
@@ -67,6 +98,11 @@ describe('database test plan', () => {
 
   test.each([
     ['--milestone=m29'],
+    ['--suite=database', '--milestone=m37'],
+    ['--suite=e2e', '--milestone=m27'],
+    ['--suite=e2e', '--cleanup-stale'],
+    ['--suite=e2e'],
+    ['--suite=unknown', '--full'],
     ['--full', '--cleanup-stale'],
     ['--unknown'],
   ])('rejects uncontrolled arguments %j', (...arguments_) => {

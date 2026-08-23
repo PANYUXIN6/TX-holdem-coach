@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import postgres, { type Sql, type TransactionSql } from 'postgres'
 import type {
   DatabaseTestMilestone,
@@ -20,6 +21,112 @@ export interface DatabaseTestPhaseReporter {
 
 export interface DatabaseTestCleanupReporter {
   readonly write: (message: string) => void
+}
+
+type AbortableDatabaseTestClient = Pick<Sql, 'end'>
+
+interface DatabaseTestAbortScope {
+  readonly signal: AbortSignal
+  readonly cleanupCallbacks: Set<() => Promise<void>>
+  readonly startedCleanups: Map<() => Promise<void>, Promise<void>>
+  readonly cleanupTasks: Set<Promise<void>>
+  readonly cleanupCompletions: Set<Promise<unknown>>
+  readonly cleanupFailures: unknown[]
+}
+
+const databaseTestAbortScopeStorage =
+  new AsyncLocalStorage<DatabaseTestAbortScope>()
+const databaseTestAbortScopes = new WeakMap<
+  AbortSignal,
+  DatabaseTestAbortScope
+>()
+
+function getDatabaseTestAbortScope(
+  signal: AbortSignal,
+): DatabaseTestAbortScope {
+  const existing = databaseTestAbortScopes.get(signal)
+  if (existing !== undefined) {
+    return existing
+  }
+  const scope: DatabaseTestAbortScope = {
+    signal,
+    cleanupCallbacks: new Set(),
+    startedCleanups: new Map(),
+    cleanupTasks: new Set(),
+    cleanupCompletions: new Set(),
+    cleanupFailures: [],
+  }
+  databaseTestAbortScopes.set(signal, scope)
+  signal.addEventListener(
+    'abort',
+    () => {
+      for (const cleanup of scope.cleanupCallbacks) {
+        startDatabaseTestAbortCleanup(scope, cleanup)
+      }
+    },
+    { once: true },
+  )
+  return scope
+}
+
+function startDatabaseTestAbortCleanup(
+  scope: DatabaseTestAbortScope,
+  cleanup: () => Promise<void>,
+): void {
+  if (scope.startedCleanups.has(cleanup)) {
+    return
+  }
+  const task = Promise.resolve()
+    .then(cleanup)
+    .catch((error: unknown) => {
+      scope.cleanupFailures.push(error)
+    })
+    .finally(() => {
+      scope.cleanupTasks.delete(task)
+    })
+  scope.cleanupTasks.add(task)
+  scope.startedCleanups.set(cleanup, task)
+}
+
+function registerDatabaseTestAbortCleanup(
+  scope: DatabaseTestAbortScope,
+  cleanup: () => Promise<void>,
+): () => void {
+  scope.cleanupCallbacks.add(cleanup)
+  if (scope.signal.aborted) {
+    startDatabaseTestAbortCleanup(scope, cleanup)
+  }
+  return () => scope.cleanupCallbacks.delete(cleanup)
+}
+
+function registerCurrentDatabaseTestAbortCleanup(
+  cleanup: () => Promise<void>,
+): () => void {
+  const scope = databaseTestAbortScopeStorage.getStore()
+  return scope === undefined
+    ? () => undefined
+    : registerDatabaseTestAbortCleanup(scope, cleanup)
+}
+
+export function trackDatabaseTestAbortCleanupCompletion(
+  completion: Promise<unknown>,
+): () => void {
+  const scope = databaseTestAbortScopeStorage.getStore()
+  if (scope === undefined) {
+    return () => undefined
+  }
+  scope.cleanupCompletions.add(completion)
+  const unregister = () => scope.cleanupCompletions.delete(completion)
+  void completion.then(unregister, unregister)
+  return unregister
+}
+
+export function bindDatabaseTestClientToAbortSignal(
+  client: AbortableDatabaseTestClient,
+  signal: AbortSignal,
+): void {
+  const scope = getDatabaseTestAbortScope(signal)
+  registerDatabaseTestAbortCleanup(scope, () => client.end({ timeout: 0 }))
 }
 
 function describeDatabaseTestCleanupFailure(error: unknown): string {
@@ -53,39 +160,52 @@ export async function runDatabaseTestWithCleanup<Result>(
     write: (message) => process.stderr.write(message),
   },
 ): Promise<Result> {
-  let operationCompleted = false
-  let operationFailed = false
-  let operationResult: Result | undefined
-  let primaryFailure: unknown
-  try {
-    operationResult = await operation()
-    operationCompleted = true
-  } catch (error) {
-    operationFailed = true
-    primaryFailure = error
+  const abortScope = databaseTestAbortScopeStorage.getStore()
+  let cleanupPromise: Promise<void> | undefined
+  const runCleanup = (): Promise<void> => {
+    cleanupPromise ??= cleanup()
+    return cleanupPromise
   }
-
+  const unregisterAbortCleanup =
+    registerCurrentDatabaseTestAbortCleanup(runCleanup)
   try {
-    await cleanup()
-  } catch (cleanupFailure) {
-    if (!operationFailed) {
-      throw new Error(
-        `数据库测试清理失败：${describeDatabaseTestCleanupFailure(cleanupFailure)}`,
-        { cause: cleanupFailure },
-      )
+    let operationCompleted = false
+    let operationFailed = false
+    let operationResult: Result | undefined
+    let primaryFailure: unknown
+    try {
+      operationResult = await operation()
+      operationCompleted = true
+    } catch (error) {
+      operationFailed = true
+      primaryFailure = error
     }
-    reporter.write(
-      `[database-test] CLEANUP failed after preserving the primary failure: ${describeDatabaseTestCleanupFailure(cleanupFailure)}\n`,
-    )
-  }
 
-  if (operationFailed) {
-    throw primaryFailure
+    try {
+      await runCleanup()
+    } catch (cleanupFailure) {
+      if (!operationFailed) {
+        throw new Error(
+          `数据库测试清理失败：${describeDatabaseTestCleanupFailure(cleanupFailure)}`,
+        )
+      }
+      if (!abortScope?.signal.aborted) {
+        reporter.write(
+          `[database-test] CLEANUP failed after preserving the primary failure: ${describeDatabaseTestCleanupFailure(cleanupFailure)}\n`,
+        )
+      }
+    }
+
+    if (operationFailed) {
+      throw primaryFailure
+    }
+    if (!operationCompleted) {
+      throw new Error('数据库测试既未完成也未返回失败。')
+    }
+    return operationResult as Result
+  } finally {
+    unregisterAbortCleanup()
   }
-  if (!operationCompleted) {
-    throw new Error('数据库测试既未完成也未返回失败。')
-  }
-  return operationResult as Result
 }
 
 export function createDatabaseTestConnectionOptions(
@@ -116,7 +236,13 @@ export function createDatabaseTestSql(
   runId: string,
   role: string,
 ): Sql {
-  return postgres(url, createDatabaseTestConnectionOptions(runId, role))
+  const scope = databaseTestAbortScopeStorage.getStore()
+  scope?.signal.throwIfAborted()
+  const sql = postgres(url, createDatabaseTestConnectionOptions(runId, role))
+  if (scope !== undefined) {
+    bindDatabaseTestClientToAbortSignal(sql, scope.signal)
+  }
+  return sql
 }
 
 export function createDatabaseTestSqlForRole(
@@ -234,5 +360,64 @@ export async function runTimedDatabasePhase<Result>(
       `[database-test] FAIL ${label} (${reporter.now() - startedAt} ms)\n`,
     )
     throw error
+  }
+}
+
+export async function runAbortableDatabasePhase<Result>(
+  label: string,
+  signal: AbortSignal,
+  operation: (signal: AbortSignal) => Promise<Result>,
+  reporter: DatabaseTestPhaseReporter = {
+    now: Date.now,
+    write: (message) => process.stderr.write(message),
+  },
+): Promise<Result> {
+  const scope = getDatabaseTestAbortScope(signal)
+  return databaseTestAbortScopeStorage.run(scope, async () => {
+    signal.throwIfAborted()
+    try {
+      const result = await runTimedDatabasePhase(
+        label,
+        () => operation(signal),
+        reporter,
+      )
+      signal.throwIfAborted()
+      return result
+    } finally {
+      if (signal.aborted) {
+        await waitForDatabaseTestAbortCleanup(signal, reporter)
+      }
+    }
+  })
+}
+
+export async function waitForDatabaseTestAbortCleanup(
+  signal: AbortSignal,
+  reporter: DatabaseTestCleanupReporter = {
+    write: (message) => process.stderr.write(message),
+  },
+): Promise<void> {
+  const scope = databaseTestAbortScopes.get(signal)
+  if (scope === undefined) {
+    return
+  }
+  if (signal.aborted) {
+    for (const cleanup of scope.cleanupCallbacks) {
+      startDatabaseTestAbortCleanup(scope, cleanup)
+    }
+  }
+  while (scope.cleanupTasks.size > 0 || scope.cleanupCompletions.size > 0) {
+    await Promise.allSettled([
+      ...scope.cleanupTasks,
+      ...scope.cleanupCompletions,
+    ])
+  }
+  const cleanupFailures = scope.cleanupFailures.splice(0)
+  if (cleanupFailures.length > 0) {
+    reporter.write(
+      `[database-test] CLEANUP failed after preserving the primary failure: ${cleanupFailures
+        .map((failure) => describeDatabaseTestCleanupFailure(failure))
+        .join(',')}\n`,
+    )
   }
 }

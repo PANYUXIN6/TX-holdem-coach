@@ -83,7 +83,7 @@ Object.assign(
 const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const { completion } = runManagedChildProcess(
   command,
-  createDatabaseVitestArguments(),
+  createDatabaseVitestArguments(testPlan),
   {
     cwd: process.cwd(),
     env: childEnvironment,

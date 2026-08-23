@@ -82,16 +82,16 @@
 - 普通需求完成时默认依次执行：
   1. 与当前变更直接相关的目标测试；
   2. `pnpm run verify`；
-  3. 涉及数据库时执行对应的 `db:test:milestone`。
-- `db:test:full` 只在以下情况执行：
+  3. 涉及 Schema、Repository、事务或锁语义时执行对应的 `db:test:milestone`；涉及应用服务、HTTP/SSE、Session 命令或 Agent 协调贯穿 PostgreSQL 时执行对应的 `postgres:e2e:milestone`。同时影响两层时必须串行执行两者。
+- 对应的 `db:test:full` 或 `postgres:e2e:full` 只在以下情况执行：
   - 用户明确要求；
   - 合并主分支或发布前；
   - 修改共享事务、锁、Schema、migration 或数据库测试基础设施；
   - 多个里程碑之间存在无法由定向测试排除的影响。
-- 同一个任务最多主动执行一次 `db:test:full`。
-- `db:test:full` 失败后不得直接反复重跑；必须先定向诊断失败里程碑。修复仅涉及该里程碑测试或预算时，优先重跑该里程碑；只有变更可能影响其他阶段时才重新执行 full。
-- 远程数据库测试必须串行执行，不得并行运行 full 和 milestone。
-- 最终报告必须明确列出已执行和未执行的测试，不得把 milestone 通过描述为 full 通过。
+- 同一个任务中每套 full 最多主动执行一次；发布前需要两套 full 证据时必须串行执行。
+- 任一 full 失败后不得直接反复重跑；必须先用同一套命令定向诊断失败里程碑。修复仅涉及该里程碑测试或预算时，优先重跑该里程碑；只有变更可能影响同套其他阶段时才重新执行 full。
+- 所有远程 PostgreSQL 测试必须串行执行，不得并行运行 database 与 E2E，也不得并行运行 full 和 milestone。
+- 最终报告必须明确列出两套远程测试各自已执行和未执行的范围，不得把 milestone 通过描述为对应 full 通过，也不得把 `db:test:full` 通过描述为 PostgreSQL E2E 通过。
 
 ## 代码简化
 

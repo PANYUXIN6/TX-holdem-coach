@@ -1,14 +1,18 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import type { Sql, TransactionSql } from 'postgres'
 import {
   assertNoConflictingDatabaseTestConnections,
+  bindDatabaseTestClientToAbortSignal,
   createDatabaseTestConnectionOptions,
   readTransactionBackendPid,
+  runAbortableDatabasePhase,
   runDatabaseTestWithCleanup,
   runTimedDatabasePhase,
   shouldRunDatabaseMilestone,
   serializeJsonbFixture,
   terminateConflictingDatabaseTestConnections,
+  trackDatabaseTestAbortCleanupCompletion,
+  waitForDatabaseTestAbortCleanup,
 } from '../integration/database-test-runtime.js'
 
 describe('database test runtime', () => {
@@ -106,6 +110,139 @@ describe('database test runtime', () => {
     ])
   })
 
+  test('aborts a phase, closes its database clients, and waits for fixture cleanup', async () => {
+    const controller = new AbortController()
+    const abortFailure = new Error('phase timed out')
+    let releaseOperation!: () => void
+    const operationGate = new Promise<void>((resolve) => {
+      releaseOperation = resolve
+    })
+    let signalOperationStarted!: () => void
+    const operationStarted = new Promise<void>((resolve) => {
+      signalOperationStarted = resolve
+    })
+    const closeClient = vi.fn(async () => {
+      releaseOperation()
+    })
+    const cleanup = vi.fn(async () => {
+      releaseOperation()
+    })
+
+    const phase = runAbortableDatabasePhase(
+      'abortable phase',
+      controller.signal,
+      async (signal) => {
+        bindDatabaseTestClientToAbortSignal(
+          { end: closeClient } as unknown as Pick<Sql, 'end'>,
+          signal,
+        )
+        signalOperationStarted()
+        return runDatabaseTestWithCleanup(async () => {
+          await operationGate
+          signal.throwIfAborted()
+        }, cleanup)
+      },
+      { now: () => 0, write: () => undefined },
+    )
+
+    await operationStarted
+    controller.abort(abortFailure)
+
+    await expect(phase).rejects.toBe(abortFailure)
+    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 0 })
+    expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  test('preserves an aborted phase failure and sanitizes abort cleanup diagnostics', async () => {
+    const controller = new AbortController()
+    const primaryFailure = new Error('phase timed out')
+    const cleanupFailure = Object.assign(
+      new Error('failed at postgresql://user:password@example.test/postgres'),
+      { name: 'PostgresError', code: '55P03' },
+    )
+    const output: string[] = []
+    let releaseOperation!: () => void
+    const operationGate = new Promise<void>((resolve) => {
+      releaseOperation = resolve
+    })
+    let signalOperationStarted!: () => void
+    const operationStarted = new Promise<void>((resolve) => {
+      signalOperationStarted = resolve
+    })
+    const reporter = {
+      now: () => 0,
+      write: (message: string) => output.push(message),
+    }
+
+    const phase = runAbortableDatabasePhase(
+      'abort cleanup failure',
+      controller.signal,
+      async (signal) => {
+        signalOperationStarted()
+        return runDatabaseTestWithCleanup(
+          async () => {
+            await operationGate
+            signal.throwIfAborted()
+          },
+          async () => {
+            releaseOperation()
+            throw cleanupFailure
+          },
+          reporter,
+        )
+      },
+      reporter,
+    )
+
+    await operationStarted
+    controller.abort(primaryFailure)
+
+    await expect(phase).rejects.toBe(primaryFailure)
+    expect(output.join('')).toContain('PostgresError(code=55P03)')
+    expect(output.join('')).not.toContain('password')
+    expect(output.join('')).not.toContain('postgresql://')
+  })
+
+  test('waits for tracked process termination before abort cleanup settles', async () => {
+    const controller = new AbortController()
+    const primaryFailure = new Error('phase timed out')
+    let releaseProcessTermination!: () => void
+    const processTermination = new Promise<void>((resolve) => {
+      releaseProcessTermination = resolve
+    })
+    let signalOperationStarted!: () => void
+    const operationStarted = new Promise<void>((resolve) => {
+      signalOperationStarted = resolve
+    })
+    const hookFinished = vi.fn()
+
+    const phase = runAbortableDatabasePhase(
+      'migration termination',
+      controller.signal,
+      async (signal) => {
+        trackDatabaseTestAbortCleanupCompletion(processTermination)
+        signalOperationStarted()
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        )
+        signal.throwIfAborted()
+      },
+      { now: () => 0, write: () => undefined },
+    )
+
+    await operationStarted
+    controller.abort(primaryFailure)
+    const completionHook = waitForDatabaseTestAbortCleanup(controller.signal)
+    void completionHook.then(hookFinished)
+    await Promise.resolve()
+
+    expect(hookFinished).not.toHaveBeenCalled()
+    releaseProcessTermination()
+    await completionHook
+    await expect(phase).rejects.toBe(primaryFailure)
+    expect(hookFinished).toHaveBeenCalledTimes(1)
+  })
+
   test('preserves the primary failure when database fixture cleanup also fails', async () => {
     const output: string[] = []
     const primaryFailure = new Error('concurrent command timed out')
@@ -139,16 +276,26 @@ describe('database test runtime', () => {
       { name: 'PostgresError', code: '55P03' },
     )
 
-    await expect(
-      runDatabaseTestWithCleanup(
-        async () => 'completed',
-        async () => {
-          throw new AggregateError([cleanupFailure], 'fixture cleanup failed')
-        },
-      ),
-    ).rejects.toThrow(
+    const failure: unknown = await runDatabaseTestWithCleanup(
+      async () => 'completed',
+      async () => {
+        throw new AggregateError([cleanupFailure], 'fixture cleanup failed')
+      },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+
+    expect(failure).toBeInstanceOf(Error)
+    if (!(failure instanceof Error)) {
+      throw new Error('预期数据库清理返回 Error。')
+    }
+    expect(failure.message).toBe(
       '数据库测试清理失败：AggregateError(causes=PostgresError(code=55P03))',
     )
+    expect(failure).not.toHaveProperty('cause')
+    expect(JSON.stringify(failure)).not.toContain('password')
+    expect(JSON.stringify(failure)).not.toContain('postgresql://')
   })
 
   test('tags every test connection and bounds abandoned statements and transactions', () => {

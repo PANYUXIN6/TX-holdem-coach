@@ -2,20 +2,31 @@
 
 本目录面向隔离的远程测试 PostgreSQL。默认离线 `pnpm run verify` 不执行这里的远程入口，也不读取测试数据库凭据。
 
+## 测试分层
+
+远程测试按责任分成两套独立入口，不再把应用级流程混入数据库持久化验收：
+
+- `db:test:*`：只验证 migration、Schema、Repository SQL、事务原子性、级联与 PostgreSQL 锁语义；当前拥有 `m22`–`m28` 及 `m35` 设置持久化，入口是 `database-infrastructure.test.ts`。
+- `postgres:e2e:*`：只验证确实需要贯穿应用服务与 PostgreSQL 的跨层流程；里程碑范围固定为 `m31`–`m37`、`m42`、`m43`，入口是 `postgres-application-e2e.test.ts`。
+- `test/unit` 与 `test/service`：领域计算、Codec、错误分类、HTTP 映射、Provider 和服务分支必须优先在离线测试中验证，不得为了复用真实数据库夹具而放入上述远程套件。
+
+两套远程入口共享 `database-test-harness.ts` 中的迁移准备、连接标签、阶段报告与连接清理，但不共享测试选择。M3.1 Session Command Executor 断言独立位于 `postgres-e2e-m31-assertions.ts`，database 入口不会加载其应用层依赖；M3.5 的持久化断言位于 `database-m35-assertions.ts`，不导入 HTTP、Persona 或设置服务，HTTP 冒烟独立位于 `postgres-e2e-m35-assertions.ts`。CLI 计划会拒绝把应用里程碑交给 `db:test:*`，也会拒绝把持久化里程碑交给 `postgres:e2e:*`。
+
 ## 固定执行顺序
 
 开发数据库里程碑时按以下顺序执行，禁止用反复重跑全套代替定位：
 
-1. 当前里程碑：`pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m42`
-2. 若修改共享事务、锁或测试运行时，再分别运行受影响的相邻里程碑。
-3. 离线 `pnpm run verify`。
-4. 提交前只运行一次 `pnpm --filter @tx-holdem-coach/server run db:test:full`。
+1. 持久化改动先运行对应数据库里程碑，例如 `pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m27`。
+2. 应用跨层改动先运行对应 E2E 里程碑，例如 `pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m42`。
+3. 若修改共享事务、锁或测试运行时，再分别运行受影响的相邻里程碑。
+4. 离线 `pnpm run verify`。
+5. 修改持久化边界时只运行一次 `pnpm --filter @tx-holdem-coach/server run db:test:full`；修改跨层 PostgreSQL 流程时只运行一次 `pnpm --filter @tx-holdem-coach/server run postgres:e2e:full`。发布前需要两套证据时必须串行执行。
 
-可选里程碑固定为 `m22`、`m23`、`m24`、`m25`、`m26`、`m27`、`m28`、`m31`、`m32`、`m33`、`m34`、`m35`、`m36`、`m37`、`m42`。不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。
+不带范围的 `db:test:integration` 只执行迁移前缀、迁移和迁移后精确兼容性检查。清理遗留事务仍使用 `db:test:cleanup`，不属于 E2E 套件。
 
 ## 进度与失败定位
 
-远程入口把迁移、M2.2–M2.8、M3.1–M3.7 和 M2.5→M2.6 隔离升级注册为独立 Vitest 测试，并在首个失败或阶段超时后停止调度后续里程碑。M3.2 通过真实创建服务核对创建、锁竞争和回滚；M3.3 从该首手进入生产 `playerAction` Handler，核对普通/终止行动与 Hand 原子完成；M3.4 从已完成首手进入生产 `rebuy|startNextHand|endSession` Handler，核对补码重放、下一手 Hand、暂停失败叶子中止恢复、连续事件与正常结束版本不变；M3.5 通过真实 Hono app 与 PostgreSQL 验证 HTTP 与设置边界；M3.6 验证生产公开投影和提交后发布；M3.7 使用生产 Runtime、Repository 与 Hono SSE 路由验证 PostgreSQL 补发和无游标校准。每个阶段即时输出：
+每套远程入口先执行迁移兼容性准备，再把其拥有的里程碑注册为独立 Vitest 测试，并在首个失败或阶段超时后停止调度同套后续里程碑。数据库套件拥有 M2.2–M2.8 和 M3.5 设置持久化；E2E 套件拥有 M3.1–M3.7、M4.2 和 M4.3，其中 M3.5 只保留一次设置 HTTP→PostgreSQL 冒烟。每个阶段即时输出：
 
 ```text
 [database-test] START M2.7 audit persistence
@@ -27,6 +38,7 @@
 ## 连接与事务护栏
 
 - 所有测试连接必须通过 `database-test-runtime.ts` 创建，携带当前 Run ID 和 `application_name`。
+- 每个远程阶段都把 Vitest `context.signal` 传给迁移进程和阶段断言。阶段超时或测试运行取消时，共享 runtime 会先释放已登记的并发夹具、立即关闭该阶段创建的全部 PostgreSQL 连接，再由测试完成钩子等待清理 Promise 收敛；迁移使用受管进程组并等待退出，不得遗留 Drizzle 子进程。
 - 普通 SQL 的数据库侧 `statement_timeout` 为 90 秒；idle-in-transaction 上限为 60 秒。M3.1 已被 `pg_locks`/`pg_blocking_pids` 证明的受控竞争事务局部把两项上限都设为 240 秒，分别保护等待行锁的事务和停在测试屏障中的持锁事务；该值仍低于阶段 300 秒的 Vitest 总预算，为失败取消与夹具清理保留边界。
 - M3.2 创建阶段的 Vitest 总预算为 600 秒；M2.2 Schema、M2.6 恢复诊断矩阵、M2.7 审计矩阵、M3.1 竞争、M3.3–M3.7 阶段为 300 秒。它们只覆盖阶段内多组顺序远程往返，不放宽单条普通 SQL 的 90 秒数据库侧上限。
 - 每个正常阶段开始前查询 `pg_stat_activity`。发现其他带测试标签且仍有事务的连接时立即失败，输出 PID、状态和事务年龄，不等待业务 SQL 超时。

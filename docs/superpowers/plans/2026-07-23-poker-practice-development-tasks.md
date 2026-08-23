@@ -893,18 +893,22 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 覆盖 DeepSeek 错误完整映射、纠错耗尽、迟到和密钥泄露扫描。
 - 纠错请求只接收原始 Context 与受控纠错提示，不泄露内部错误或隐藏上下文。
 
-### M4.4 实现权威 Player 观察与三道信息防火墙
+### M4.4 实现权威 Player 观察与第一道信息防火墙
+
+详细契约见 [M4.4 权威 Player 观察与信息防火墙设计](../specs/2026-08-23-m4-4-authoritative-player-observation-information-boundary-design.md)。三道信息防火墙仍是 Player Runtime 上线前的整体硬门禁；本里程碑完成第一道，M4.6 在最终 Packet/Context/Prompt Schema 出现后完成第二与第三道。
 
 产出：
 
 - 在 `sessions/authoritative-state` 提供座位级 Player 投影。
-- 实现 `PlayerObservationBuilder`、`PlayerInformationBoundaryGuard`、`PlayerDecisionPacketLeakGuard` 和 Model Adapter Boundary Guard。
-- Guard 后的服务只能接收 `PlayerVisibleState`，不能访问完整 `PrivatePokerState`。
+- 实现 `PlayerObservationBuilder` 与第一道 `PlayerInformationBoundaryGuard`，并发布认证、深冻结且绑定决策截止点与观察哈希的 `PlayerVisibleState`。
+- 第一 Guard 后的服务只能接收 `PlayerVisibleState`，不能访问完整 `PrivatePokerState`。
+- 冻结第二、三道 Guard 必须继承的观察身份、哈希、禁止来源和交接门禁；不在最终 `PlayerDecisionPacket`、Context 与 Prompt Schema 出现前发布 `unknown`、占位 Packet 或字段黑名单 Guard。
 
 后端测试闭环：
 
 - 6–9 人每个 AI 座位只出现自己的隐藏信息。
 - 完整牌堆、burn card、未来牌、Coach audit truth、其他 Agent 记忆和跨 Owner 数据全部被拒绝。
+- 同形普通对象、反序列化对象和跨 Runtime 强转不能绕过第一 Guard；Snapshot、当前手事件与 Run authority 对应同一权威决策点。
 
 ### M4.5 实现 Player 确定性决策预处理
 
@@ -943,7 +947,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 不同下注尺度是不同候选，动作执行频率与下注尺度字段不混淆。
 - 预处理不能引入非法动作。
 
-### M4.6 实现 `PlayerDecisionPacket` 与 LLM Bounded Choice
+### M4.6 实现 `PlayerDecisionPacket`、第二/三道信息防火墙与 LLM Bounded Choice
 
 产出：
 
@@ -957,12 +961,16 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 决策包与候选快照保存 Spot、手牌分析与候选结果的 Schema/算法版本，历史审计不得用 current 分析器覆盖旧事实。
 - 当前手牌和候选集合不因记忆上限被裁剪。
 - 候选 `actionFrequency`/权重只表示参考分布；首版 LLM 选择不保证长期频率校准。精确混合策略若未来需要，由另行设计的服务端审计采样器负责。
+- 实现第二道 `PlayerDecisionPacketLeakGuard`：只接受绑定 M4.4 认证观察身份/哈希及 M4.5 版本化派生事实的最终决策包，复验事实来源、截止点、禁止字段和未知字段。
+- 实现第三道 Model Adapter Boundary Guard：只接受第二 Guard 认证的精简模型投影，在最终 Context/Prompt 序列化后再次执行严格 Player Schema、禁止来源与 M4.3 敏感扫描；完整观察和完整审计快照不能直接进入 Adapter。
+- M4.6 完成时统一验收 Observation、DecisionPacket、Model Adapter 三道防火墙；M4.4 第一 Guard 的既有回归必须继续通过，三道总验收标准不因里程碑拆分而降低。
 
 后端测试闭环：
 
 - 未知候选、自由 action、自由 amount、工具调用和额外字段全部拒绝。
 - 10 手与 1,000 手牌的 Context 大小不随历史线性增长。
 - 完整审计快照无法进入 Model Adapter；模型投影不存在重复事实或“严格按频率抽样”的虚假声明。
+- 三道 Guard 分别具有独立失败测试；其他座位底牌、完整牌堆、burn/future card、Coach audit truth、其他 Agent 配置/记忆、跨 Owner 数据和 authority/secret 哨兵在最终模型请求边界全部拒绝。
 
 ### M4.7 实现 Player Validator 与 Command Commit Gate
 

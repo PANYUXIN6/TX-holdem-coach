@@ -1,8 +1,18 @@
 import type { Sql, TransactionSql } from 'postgres'
 import { describe, expect, test } from 'vitest'
 import { encodeAttemptAudit } from '../../src/agents/audit/attempt-audit-codec.js'
-import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
+import { encodeExecutionBudgetAudit } from '../../src/agents/audit/execution-budget-audit-codec.js'
+import { AgentRunTransitionError } from '../../src/agents/foundation/agent-run-lifecycle.js'
+import {
+  issueRuntimeCommitAuthority,
+  type RuntimeCommitAuthority,
+} from '../../src/agents/foundation/runtime-ports.js'
+import { playerRuntimeBudgetPolicy } from '../../src/agents/player/foundation-definition.js'
 import { createAgentFoundationAuditRepository as createRawAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
+import type {
+  FinishAgentAttemptAuditInput,
+  StartAgentAttemptAuditInput,
+} from '../../src/persistence/agent-foundation-audit-repository.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 
 const databaseOwnerId = '11111111-1111-4111-8111-111111111111'
@@ -25,24 +35,61 @@ function createAgentFoundationAuditRepository() {
     startAgentAttemptAudit: (
       transaction: TransactionSql,
       owner: Parameters<typeof repository.startAgentAttemptAudit>[1],
-      input: Parameters<typeof repository.startAgentAttemptAudit>[3],
+      input: Omit<
+        StartAgentAttemptAuditInput,
+        | 'reservedInputTokens'
+        | 'reservedOutputTokens'
+        | 'reservedCostMicrounits'
+      > &
+        Partial<
+          Pick<
+            StartAgentAttemptAuditInput,
+            | 'reservedInputTokens'
+            | 'reservedOutputTokens'
+            | 'reservedCostMicrounits'
+          >
+        >,
     ) =>
       repository.startAgentAttemptAudit(
         transaction,
         owner,
         testAuthority(input.agentRunId),
-        input,
+        {
+          reservedInputTokens: 100,
+          reservedOutputTokens: 20,
+          reservedCostMicrounits: 800,
+          ...input,
+        },
       ),
     finishAgentAttemptAudit: (
       transaction: TransactionSql,
       owner: Parameters<typeof repository.finishAgentAttemptAudit>[1],
-      input: Parameters<typeof repository.finishAgentAttemptAudit>[3],
+      input: Omit<
+        FinishAgentAttemptAuditInput,
+        'usageAccounting' | 'costAccounting'
+      > &
+        Partial<
+          Pick<
+            FinishAgentAttemptAuditInput,
+            'usageAccounting' | 'costAccounting'
+          >
+        >,
     ) =>
       repository.finishAgentAttemptAudit(
         transaction,
         owner,
         testAuthority(input.agentRunId),
-        input,
+        {
+          usageAccounting:
+            input.lifecycle === 'completed'
+              ? 'providerReported'
+              : 'reservedUpperBound',
+          costAccounting:
+            input.lifecycle === 'completed'
+              ? 'allInputAtCacheMiss'
+              : 'reservedUpperBound',
+          ...input,
+        },
       ),
     appendCapabilityInvocationAudit: (
       transaction: TransactionSql,
@@ -80,7 +127,13 @@ function createTransactionMock(
       )
     ) {
       return Promise.resolve([
-        { agentRunId, sessionId, runtime: 'player', fencingToken: 1 },
+        {
+          agentRunId,
+          sessionId,
+          runtime: 'player',
+          fencingToken: 1,
+          deadlineExpired: false,
+        },
       ])
     }
     const next = pending.shift()
@@ -92,7 +145,12 @@ function createTransactionMock(
             typeof row === 'object' &&
             Object.keys(row).sort().join(',') === 'agentRunId,sessionId'
           ) {
-            return { ...row, runtime: 'player', fencingToken: 1 }
+            return {
+              ...row,
+              runtime: 'player',
+              fencingToken: 1,
+              deadlineExpired: false,
+            }
           }
           if (
             row !== null &&
@@ -121,7 +179,67 @@ async function resolvedOwner() {
   return resolveOwnerScope(sql, { ownerId: 'local-user' })
 }
 
+const storedPlayerBudget = encodeExecutionBudgetAudit(
+  playerRuntimeBudgetPolicy.createSnapshot({
+    runtimeType: 'player',
+    attemptTimeoutSeconds: 15,
+    decisionDeadlineSeconds: 45,
+  }),
+)
+
+function finishBudgetResponses(attemptId: string): readonly SqlResponse[] {
+  return [
+    [
+      {
+        budgetPayloadVersion: storedPlayerBudget.payloadVersion,
+        budgetPayload: storedPlayerBudget.payload,
+        elapsedMs: 1_000,
+      },
+    ],
+    [],
+    [{ budgetCost: 0 }],
+    [{ attemptId }],
+  ]
+}
+
 describe('agent foundation audit repository', () => {
+  test('rejects an unauthenticated authority before starting a budgeted Attempt', async () => {
+    const repository = createRawAgentFoundationAuditRepository()
+    let queried = false
+    const transaction = (() => {
+      queried = true
+      throw new Error('must not query')
+    }) as unknown as TransactionSql
+    const forgedAuthority = {
+      runtimeType: 'player',
+      runId: agentRunId,
+      leaseOwner: 'unit-test:player:0',
+      fencingToken: 1,
+    } as RuntimeCommitAuthority<'player'>
+
+    await expect(
+      repository.startBudgetedAgentAttemptAudit(
+        transaction,
+        await resolvedOwner(),
+        forgedAuthority,
+        {
+          sessionId,
+          agentRunId,
+          stage: 'decision',
+          provider: 'deepseek',
+          model: 'deepseek-v4-flash',
+          attemptType: 'initial',
+          routingReasonCode: null,
+          estimatedInputTokens: 100,
+          requestedMaximumOutputTokens: 20,
+          reservedCostMicrounits: 140,
+          requestProjectionHash: 'a'.repeat(64),
+        },
+      ),
+    ).rejects.toBeInstanceOf(AgentRunTransitionError)
+    expect(queried).toBe(false)
+  })
+
   test('starts a persisted Attempt with an independently allocated zero-based number', async () => {
     const repository = createAgentFoundationAuditRepository()
     const transaction = createTransactionMock([
@@ -191,6 +309,11 @@ describe('agent foundation audit repository', () => {
       actualTimeoutMs: 15_000,
       remainingDeadlineMsAtStart: 45_000,
       requestProjectionHash: 'a'.repeat(64),
+      reservedInputTokens: 100,
+      reservedOutputTokens: 20,
+      reservedCostMicrounits: 800,
+      usageAccounting: 'pending',
+      costAccounting: 'pending',
     })
     const transaction = createTransactionMock([
       [
@@ -203,7 +326,7 @@ describe('agent foundation audit repository', () => {
           payload: started.payload,
         },
       ],
-      [{ attemptId }],
+      ...finishBudgetResponses(attemptId),
     ])
 
     await expect(
@@ -224,7 +347,7 @@ describe('agent foundation audit repository', () => {
         validationStatus: 'valid',
         completedAt: '2026-08-04T12:00:02.250Z',
       }),
-    ).resolves.toBeUndefined()
+    ).resolves.toBe('recorded')
   })
 
   test.each([
@@ -308,6 +431,11 @@ describe('agent foundation audit repository', () => {
       actualTimeoutMs: 15_000,
       remainingDeadlineMsAtStart: 45_000,
       requestProjectionHash: 'a'.repeat(64),
+      reservedInputTokens: 100,
+      reservedOutputTokens: 20,
+      reservedCostMicrounits: 800,
+      usageAccounting: 'pending',
+      costAccounting: 'pending',
     })
     const transaction = createTransactionMock([
       [
@@ -320,7 +448,7 @@ describe('agent foundation audit repository', () => {
           payload: started.payload,
         },
       ],
-      [{ attemptId }],
+      ...finishBudgetResponses(attemptId),
     ])
 
     await expect(
@@ -335,7 +463,62 @@ describe('agent foundation audit repository', () => {
         durationMs: 1_250,
         completedAt: '2026-08-04T12:00:02.250Z',
       }),
-    ).resolves.toBeUndefined()
+    ).resolves.toBe('recorded')
+  })
+
+  test('records actual usage but rejects acceptance when it exceeds the reservation', async () => {
+    const repository = createAgentFoundationAuditRepository()
+    const attemptId = '77777777-7777-4777-8777-777777777777'
+    const started = encodeAttemptAudit({
+      lifecycle: 'started',
+      actualTimeoutMs: 15_000,
+      remainingDeadlineMsAtStart: 45_000,
+      requestProjectionHash: 'a'.repeat(64),
+      reservedInputTokens: 100,
+      reservedOutputTokens: 20,
+      reservedCostMicrounits: 800,
+      usageAccounting: 'pending',
+      costAccounting: 'pending',
+    })
+    let acceptedValue: unknown
+    const transaction = createTransactionMock([
+      [
+        {
+          attemptId,
+          agentRunId,
+          sessionId,
+          lifecycle: 'started',
+          payloadVersion: started.payloadVersion,
+          payload: started.payload,
+        },
+      ],
+      ...finishBudgetResponses(attemptId).slice(0, -1),
+      (values: readonly unknown[]) => {
+        acceptedValue = values[1]
+        return [{ attemptId }]
+      },
+    ])
+
+    await expect(
+      repository.finishAgentAttemptAudit(transaction, await resolvedOwner(), {
+        sessionId,
+        agentRunId,
+        attemptId,
+        lifecycle: 'completed',
+        accepted: true,
+        stale: false,
+        interrupted: false,
+        inputTokens: 101,
+        outputTokens: 20,
+        costMicrounits: 800,
+        durationMs: 1_250,
+        errorCode: null,
+        responseProjectionHash: 'b'.repeat(64),
+        validationStatus: 'valid',
+        completedAt: '2026-08-04T12:00:02.250Z',
+      }),
+    ).resolves.toBe('budgetExceeded')
+    expect(acceptedValue).toBe(false)
   })
 
   test.each([
@@ -399,6 +582,112 @@ describe('agent foundation audit repository', () => {
       ).rejects.toMatchObject({ name: 'RepositoryInputValidationError' })
     },
   )
+
+  test('uses the persisted Run budget for capability reservations', async () => {
+    const repository = createRawAgentFoundationAuditRepository()
+    const transaction = createTransactionMock([
+      [
+        {
+          agentRunId,
+          sessionId,
+          runtime: 'player',
+          fencingToken: 1,
+          deadlineExpired: false,
+        },
+      ],
+      [
+        {
+          budgetPayloadVersion: storedPlayerBudget.payloadVersion,
+          budgetPayload: storedPlayerBudget.payload,
+        },
+      ],
+      [{ totalBudgetCost: 4, capabilityBudgetCost: 0 }],
+      [{ maxNumber: 3 }],
+    ])
+
+    await expect(
+      repository.reserveCapabilityInvocationAudit(
+        transaction,
+        await resolvedOwner(),
+        testAuthority(),
+        {
+          sessionId,
+          agentRunId,
+          capabilityName: 'player.compute-decision-metrics',
+          capabilityVersion: 1,
+          inputSchemaVersion: 1,
+          inputHash: 'c'.repeat(64),
+          grantMaximum: 100,
+          startedAt: '2026-08-04T12:00:01.000Z',
+        },
+      ),
+    ).resolves.toEqual({ kind: 'budgetExhausted' })
+  })
+
+  test('converges a capability finished after the Run deadline as stale', async () => {
+    const repository = createRawAgentFoundationAuditRepository()
+    const invocationId = '88888888-8888-4888-8888-888888888888'
+    let terminalValues: readonly unknown[] = []
+    const transaction = createTransactionMock([
+      [
+        {
+          agentRunId,
+          sessionId,
+          runtime: 'player',
+          fencingToken: 1,
+          deadlineExpired: true,
+        },
+      ],
+      [
+        {
+          invocationId,
+          agentRunId,
+          sessionId,
+          fencingToken: 1,
+          capabilityName: 'player.compute-decision-metrics',
+          capabilityVersion: 1,
+          authorized: true,
+          inputSchemaVersion: 1,
+          inputHash: 'c'.repeat(64),
+          budgetCost: 1,
+        },
+      ],
+      (values: readonly unknown[]) => {
+        terminalValues = values
+        return [{ invocationId }]
+      },
+    ])
+
+    await expect(
+      repository.finishCapabilityInvocationAudit(
+        transaction,
+        await resolvedOwner(),
+        testAuthority(),
+        {
+          sessionId,
+          agentRunId,
+          invocationId,
+          capabilityName: 'player.compute-decision-metrics',
+          capabilityVersion: 1,
+          authorized: true,
+          inputSchemaVersion: 1,
+          inputHash: 'c'.repeat(64),
+          outputSchemaVersion: 1,
+          outputHash: 'd'.repeat(64),
+          budgetCost: 1,
+          durationMs: 10,
+          errorCode: null,
+          completedAt: '2026-08-04T12:00:02.000Z',
+        },
+      ),
+    ).resolves.toBe('stale')
+    expect(terminalValues.slice(0, 4)).toEqual([
+      null,
+      null,
+      10,
+      'capability_deadline_exhausted',
+    ])
+  })
 
   test('appends one complete capability invocation on its independent sequence', async () => {
     const repository = createAgentFoundationAuditRepository()

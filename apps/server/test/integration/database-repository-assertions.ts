@@ -3428,6 +3428,9 @@ function createM27AttemptInput(
     actualTimeoutMs: 15_000,
     remainingDeadlineMsAtStart: 45_000 - sequence * 1_000,
     requestProjectionHash: hashCharacter.repeat(64),
+    reservedInputTokens: 100,
+    reservedOutputTokens: 20,
+    reservedCostMicrounits: 800,
     startedAt: new Date(
       Date.parse('2026-08-04T13:00:01.000Z') + sequence * 1_000,
     ).toISOString(),

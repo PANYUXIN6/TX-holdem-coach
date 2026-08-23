@@ -12,6 +12,7 @@ import {
   RuntimeResolutionError,
 } from './errors.js'
 import { isRuntimeBudgetPolicy } from './execution-budget.js'
+import { isCapabilityManifest } from './capability-protocol.js'
 
 export interface RuntimeRegistry<
   TDefinitions extends RuntimeDefinitionMap = RuntimeDefinitionMap,
@@ -26,7 +27,13 @@ export interface RuntimeRegistry<
 }
 
 function cloneValue<Value>(value: Value): Value {
-  if (isRuntimeBudgetPolicy(value)) return value
+  if (
+    isRuntimeBudgetPolicy(value) ||
+    isCapabilityManifest(value, 'player') ||
+    isCapabilityManifest(value, 'coach')
+  ) {
+    return value
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => cloneValue(entry)) as Value
   }
@@ -92,7 +99,10 @@ function validateDefinition(definition: AnyRuntimeDefinition): void {
       .success ||
     definition.commitGate.runtimeType !== definition.runtimeType ||
     !definition.commitGate.id.startsWith(`${definition.runtimeType}.commit-`) ||
-    definition.capabilityManifest.runtimeType !== definition.runtimeType ||
+    !isCapabilityManifest(
+      definition.capabilityManifest,
+      definition.runtimeType,
+    ) ||
     !isRuntimeBudgetPolicy(definition.budgetPolicy) ||
     definition.budgetPolicy.runtimeType !== definition.runtimeType ||
     !RuntimeDefinitionVersionSchema.safeParse(

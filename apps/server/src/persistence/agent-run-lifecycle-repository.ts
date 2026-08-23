@@ -421,8 +421,13 @@ async function terminateStartedAttempts(
       actualTimeoutMs: started.value.actualTimeoutMs,
       remainingDeadlineMsAtStart: started.value.remainingDeadlineMsAtStart,
       requestProjectionHash: started.value.requestProjectionHash,
+      reservedInputTokens: started.value.reservedInputTokens,
+      reservedOutputTokens: started.value.reservedOutputTokens,
+      reservedCostMicrounits: started.value.reservedCostMicrounits,
       responseProjectionHash: null,
       validationStatus: 'notRun',
+      usageAccounting: 'reservedUpperBound',
+      costAccounting: 'reservedUpperBound',
     })
     const payload = transaction.json(terminal.payload)
     let updatedRows: readonly unknown[]

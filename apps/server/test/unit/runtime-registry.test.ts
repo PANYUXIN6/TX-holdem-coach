@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { coachRuntimeDefinition } from '../../src/agents/coach/foundation-definition.js'
+import { isCapabilityManifest } from '../../src/agents/foundation/capability-protocol.js'
 import { createRuntimeRegistry } from '../../src/agents/foundation/runtime-registry.js'
 import { createRuntimeBudgetPolicy } from '../../src/agents/foundation/execution-budget.js'
 import type { RuntimeDefinitionMap } from '../../src/agents/foundation/runtime-definition.js'
@@ -8,15 +9,25 @@ import { productionRuntimeRegistry } from '../../src/agents/production-runtime-r
 
 describe('M4.1 static runtime registry', () => {
   test('resolves only the static current and exact Player/Coach definitions', () => {
+    const exactCoachDefinition = productionRuntimeRegistry.resolveExact(
+      'coach',
+      1,
+    )
     expect(productionRuntimeRegistry.resolveCurrent('player')).toMatchObject({
       runtimeType: 'player',
       runtimeDefinitionVersion: 1,
       modelToolPolicy: 'none',
     })
-    expect(productionRuntimeRegistry.resolveExact('coach', 1)).toMatchObject({
+    expect(exactCoachDefinition).toMatchObject({
       runtimeType: 'coach',
       contextKinds: ['decisionAnalysis', 'hindsight'],
     })
+    expect(
+      isCapabilityManifest(exactCoachDefinition.capabilityManifest, 'coach'),
+    ).toBe(true)
+    expect(exactCoachDefinition.capabilityManifest).toBe(
+      coachRuntimeDefinition.capabilityManifest,
+    )
     expect(() => productionRuntimeRegistry.resolveExact('player', 2)).toThrow()
     expect(() =>
       productionRuntimeRegistry.resolveCurrent('plugin' as never),
@@ -85,7 +96,24 @@ describe('M4.1 static runtime registry', () => {
     ).toThrow()
   })
 
-  test('rejects unauthenticated policies and invalid policy snapshots during configuration', () => {
+  test('rejects unauthenticated manifests and policies during configuration', () => {
+    expect(() =>
+      createRuntimeRegistry<RuntimeDefinitionMap>({
+        definitions: {
+          player: {
+            ...playerRuntimeDefinition,
+            capabilityManifest: {
+              ...playerRuntimeDefinition.capabilityManifest,
+              grants: playerRuntimeDefinition.capabilityManifest.grants.map(
+                (grant) => ({ ...grant, capability: { ...grant.capability } }),
+              ),
+            },
+          },
+          coach: coachRuntimeDefinition,
+        },
+      }),
+    ).toThrow()
+
     expect(() =>
       createRuntimeRegistry<RuntimeDefinitionMap>({
         definitions: {

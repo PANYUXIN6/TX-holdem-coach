@@ -61,6 +61,9 @@ function attemptInput(sessionId: string, runId: string) {
     actualTimeoutMs: 30_000,
     remainingDeadlineMsAtStart: 120_000,
     requestProjectionHash: 'a'.repeat(64),
+    reservedInputTokens: 100,
+    reservedOutputTokens: 20,
+    reservedCostMicrounits: 800,
     startedAt: new Date().toISOString(),
   }
 }

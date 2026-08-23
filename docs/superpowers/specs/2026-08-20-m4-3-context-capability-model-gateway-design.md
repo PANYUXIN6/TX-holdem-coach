@@ -1,6 +1,6 @@
 # M4.3 Context、Capability 与 ModelGateway 执行设计
 
-状态：待确认；本文确认前不授权实施
+状态：已确认并于 2026-08-20 实施
 
 任务来源：[项目开发任务 M4.3](../plans/2026-07-23-poker-practice-development-tasks.md#m43-实现-contextmodelgateway路由与有界纠错)
 
@@ -123,7 +123,7 @@ persistence + PostgreSQL
 
 边界规则：
 
-- `foundation/` 只依赖通用 Zod Schema、规范 JSON、crypto、AbortSignal 和窄审计端口；不导入 `ai`、`@ai-sdk/*`、人物配置、扑克状态、SQL 或 Hono；
+- M4.3 在 `foundation/` 新增的 Context、Prompt、Capability 与 Gateway 协议只依赖通用 Zod Schema、规范 JSON、crypto、AbortSignal 和窄控制端口；不导入 `ai`、`@ai-sdk/*`、人物配置、扑克状态、SQL 或 Hono。M4.2 既有 Coordinator 的事务绑定边界保持不变；
 - `model-gateway/` 实现 Foundation 的 Provider Adapter 端口，可以导入 AI SDK 和 `ServerConfig` 提供的显式密钥，但不读取数据库或业务 Context 类型；
 - Player/Coach Route Policy 分别位于自己的 Runtime 目录；Foundation 不把一个 Policy 强转给另一 Runtime；
 - 持久化层可以消费 Foundation 的窄输入和 authority，不导入 AI SDK、Player/Coach Context 或 Provider 原始错误；
@@ -144,7 +144,6 @@ apps/server/src/
 │   │   ├── capability-executor.ts
 │   │   ├── model-gateway-protocol.ts
 │   │   ├── model-gateway.ts
-│   │   ├── execution-control.ts
 │   │   ├── execution-budget.ts                # 复用现有预算判定器
 │   │   └── errors.ts
 │   ├── model-gateway/
@@ -158,7 +157,9 @@ apps/server/src/
 │   └── coach/
 │       └── route-policy.ts
 ├── persistence/
-│   └── agent-foundation-audit-repository.ts  # 增加原子预算/Attempt 控制
+│   ├── agent-foundation-audit-repository.ts  # 增加原子预算/Attempt 控制
+│   ├── agent-model-attempt-control.ts        # Gateway 端口的事务绑定
+│   └── agent-capability-execution-control.ts # Capability 端口的事务绑定
 └── personas/
     └── config.ts                              # 只复用已固化模型配置，不改业务值
 
@@ -333,6 +334,7 @@ Foundation 的 `prepareModelRequest()`：
 - 只允许 `system | user` 文本消息，不允许工具、图片、文件、URL、任意 Header 或 provider options；
 - 拼接最后一个由 `PreparedContextEnvelope.serialized` 生成的只读 Context 数据消息；
 - 复验消息数量、单条/总字节、规范哈希、Token 估算和敏感边界；
+- 把构造时认证的 `maximumRequestBytes` 固化进 `PreparedModelRequest`；初始请求与每次纠错都重新计算完整投影字节数，超限时不得启动 Attempt 或调用 Provider；
 - 生成认证的 `PreparedModelRequest`，Provider Adapter 不接收原始 Runtime Context。
 
 M4.3 提供编译协议和测试用静态模块。Player/Coach 的最终业务 Prompt 正文必须等 M4.6/M8 的业务输入输出 Schema 冻结后发布；M4.3 不用占位字符串冒充生产 Prompt 完成。
@@ -370,7 +372,7 @@ interface CapabilityDefinition<
 }
 ```
 
-`createCapabilityExecutor()` 只接收构造期完整只读列表，复制、验证、去重并冻结；不提供运行时 `register/replace/remove`。M4.3 的生产组合不安装假的业务 Capability。M4.5/M8 出现真实实现后，各自提供封闭 Definition bundle 并在组合根构造对应 Executor。
+`createCapabilityExecutor()` 只接收构造期完整只读列表，严格验证全部引用和执行字段，复制所有引用对象并递归冻结内部快照，再完成去重；不提供运行时 `register/replace/remove`。构造后修改调用方原始 Definition 或嵌套 Schema 引用不能改变执行、预留或审计事实。M4.3 的生产组合不安装假的业务 Capability。M4.5/M8 出现真实实现后，各自提供封闭 Definition bundle 并在组合根构造对应 Executor。
 
 ### 8.2 固定执行顺序
 
@@ -383,20 +385,25 @@ Runtime 代码发起的 `CapabilityInvocationIntent` 不接受模型 DTO：
 → Manifest 同 runtime + 同 ID + 同 version grant
 → Commit Gate ID 排除
 → input strict parse + canonical hash
-→ 数据库累计 Capability 预算检查
+→ 父 Run 锁内检查累计 Capability 预算并写 Invocation 预留票据
 → 固定 timeout + Worker signal
 → Definition.execute
 → output strict parse + canonical hash
-→ fenced Invocation 审计
+→ fenced Invocation 票据终结
 → 返回认证、深冻结输出
 ```
 
 规则：
 
+- Registry 构造时拒绝未认证 Manifest；Manifest 由协议构造器深冻结，因此 Registry 复制 Definition 时保留其认证对象身份，`resolveExact()` 返回的 Manifest 可直接作为数据库 Capability control 的 Grant 权威；
 - 每次调用预算成本固定为 `1`；同一 Grant 的 `maxInvocations` 与 Run 总 `maxCapabilityInvocations` 都必须满足；
+- Run 总 Invocation 上限必须在父 Run 锁内从固化 `budget_payload` 严格解码，调用方不得提供或覆盖该上限；Grant 上限只来自 Registry 认证 Manifest；
 - 未授权调用也返回稳定拒绝，但不得为了“记录拒绝”绕过 authority 向数据库写伪 Invocation；
-- 对已授权且实际启动的调用，在完成后写一条 terminal Invocation；现有表没有 started 生命周期，进程在执行中崩溃时允许没有 Invocation 行，业务能力必须可安全重算且无副作用；
-- timeout/Worker cancellation 通过组合 AbortSignal 传播；输出在取消或 authority 丢失后即使返回也不得交给 Runtime；
+- 预算裁决与 `completed_at IS NULL` 的 Invocation 预留票据在同一父 Run 锁事务提交；并发调用会看到已提交票据，不能共同通过同一余额检查；
+- 票据固定 `authorized=true`、输入 Schema/哈希和 `budget_cost=1`，成功、失败或取消后只允许按同 authority/fencing 终结一次；进程崩溃或 authority 丢失留下的未完成票据继续保守占用预算；
+- timeout/Worker cancellation 通过组合 AbortSignal 传播；执行前、执行后、终结前和返回前都复查父 signal，输出在取消或 authority 丢失后即使返回也不得交给 Runtime；
+- Invocation finish 再用数据库时间复验 Run deadline；deadline 后仍终结票据，但强制清空输出投影并记录 `capability_deadline_exhausted`，Executor 收到 stale 后不得交付输出；
+- 输出严格解析后立即克隆并递归冻结，审计哈希与交给 Runtime 的对象是同一个不可变投影；
 - Capability 错误只映射稳定码，不保存异常 message、stack、SQL、输入或输出原文；
 - `player.commit-poker-decision` 和 `coach.commit-review` 永远没有 CapabilityDefinition。
 
@@ -537,6 +544,8 @@ type RuntimeOutputValidation<TOutput> =
 
 Foundation 可以调用该纯 Validator 并据其结果进行同厂商纠错，但不理解 issue 的扑克或 Coach 含义。Validator 不查询数据库、不提交副作用；M4.7/M8 Commit Gate 仍要在事务内复验权威事实。
 
+Validator 的返回值必须严格符合封闭 union，`valid.value` 还要再次通过输出 Schema 与规范 JSON 校验，`invalid.issues` 必须先完整校验再有界化。Validator 若意外抛错或返回非法投影，Gateway 不暴露异常详情、不进入内容纠错；当前 Attempt 以稳定 `response_semantic_invalid` 失败终结并停止本次调用，不能遗留 `started` 预算预留。
+
 ### 10.4 Provider 失败收敛
 
 DeepSeek 的初始或任一纠错 Attempt 发生基础设施失败时：
@@ -595,6 +604,7 @@ generateText({
 - DeepSeek thinking 显式 disabled；
 - 不启用遥测，不给 Provider 发送 Owner、Session、Participant、Run、lease 或 fencing 身份；
 - Provider `user_id` 不使用真实用户/业务 ID；首版不发送；
+- Adapter 先对严格结构化对象执行递归敏感字段扫描，再用 `canonicalJson()` 生成最终文本投影；不得把对象先 `JSON.stringify()` 后当普通字符串扫描；
 - Adapter 只返回严格结构化输出、最终文本的脱敏规范投影、usage、finish reason、稳定 Provider metadata 子集和稳定错误分类；
 - reasoning/reasoningText/reasoning_content、request body、response body、Headers 和原始错误离开 Adapter 前全部丢弃。
 
@@ -618,6 +628,7 @@ AI SDK 的 `Output.object()` 失败时可以通过稳定 SDK 错误取得用于�
 
 - 不直接采用 SDK 的 `isRetryable` 决定重试，因为一次基础设施失败即结束当前 Gateway 调用；
 - 只检查有上限的响应错误投影；超限或无法严格解析时归 `provider_unknown_error`；
+- `NoObjectGeneratedError` 只有明确以 `JSONParseError` 为 cause 时映射 `response_parse_error`，以 `TypeValidationError` 为 cause 时映射 `response_schema_error`；`content-filter`、无对象或其他 cause 一律 fail closed，不进入付费纠错；
 - Provider 原始 response body、URL query、Header、cause、message 和 stack 永不进入上层错误；
 - 适配器错误类只携带稳定码和 HTTP status 的允许枚举，不携带重试或切换控制位；
 - 供应商更新错误格式时，未知错误 fail closed，不用字符串模糊匹配猜成欠费。
@@ -665,8 +676,8 @@ M4.3 不升级 Budget policy、Runtime Definition，不增加兼容 reader 或�
 聚合规则：
 
 - `attempts`：所有已创建 Attempt，包括 started/terminal/stale；
-- `inputTokens/outputTokens/costMicrounits`：started 或用量未知终态按 current payload 的保守预留计；Provider usage 完整的终态按实际审计值计并释放未消费预留；
-- `capabilityInvocations`：全部已授权且实际执行的 Invocation；
+- `inputTokens/outputTokens/costMicrounits`：started 或已调用 Provider 但用量未知的终态按 current payload 的保守预留计；确认 Adapter 未调用的终态记为 `notIncurred` 并释放预留；Provider usage 完整的终态按实际审计值计并释放未消费预留；
+- `capabilityInvocations`：只对 `authorized=true` 的 Invocation 累加 `budget_cost`；M4.3 预留票据固定为 `1`，未授权或零成本审计不消费额度；Run、Grant 和 Attempt start/finish 必须使用同一聚合语义；
 - `elapsedMs`：数据库当前时间减 Run `createdAt`，并与 `deadlineAt` 双重复验；
 - 接管或新 fencing token 不清零累计值。
 
@@ -702,7 +713,7 @@ foundation.deepseek-pricing-cny@1
 
 计算使用整数有理数，禁止浮点累计。若 Adapter 能取得 provider-reported cache read/miss token 拆分则按两档计算；只有 total input 时全部按 cache miss 计算。
 
-Pricing Policy 与 Route Policy 一起代码发布。官方价格变化不会静默改变既有 Run 审计；更新费率需要新 Pricing Policy 引用，并按首发状态决定是否升级 Runtime Definition。
+Pricing Policy 与 Route Policy 一起代码发布。Pricing Policy 只能由封闭构造器签发并保留模块私有 `WeakSet` 认证身份；Gateway 在任何预留或实际成本函数调用前认证对象，公开字段同形但未认证的对象不得参与预算和审计。官方价格变化不会静默改变既有 Run 审计；更新费率需要新 Pricing Policy 引用，并按首发状态决定是否升级 Runtime Definition。
 
 ### 12.5 用量缺失
 
@@ -739,12 +750,16 @@ AI SDK 标准 usage 字段在类型上允许缺失。任一已发出请求若缺
 
 事务 B 必须：
 
+- Model Attempt control 构造和 Repository 事务入口双层认证 `RuntimeCommitAuthority`，并要求 `authority.runId === agentRunId`；同形复制对象不得到达 SQL；
 - 再次复验 Owner、Session、Run、Runtime、lease owner、fencing token、running lifecycle 和数据库租约；
 - 使用数据库当前时间判断 Run deadline；
 - 复验 Attempt 属于同 Run、同 token 且仍为 started；
 - 按 `providerReported | reservedUpperBound | notIncurred` 收敛 started 时的三项预算预留；
+- 以 Provider 实际 Token/成本替换当前预留后重新聚合 Run 总预算；实际值超过当前预留或总预算时仍如实写入，但强制 `accepted=false` 并返回预算耗尽；
 - 对 Provider 投影先脱敏、规范化、哈希，再调用 existing current Codec；
 - 原子写 lifecycle、accepted/stale/interrupted、Token、成本、duration、错误分类、响应哈希和完成时间；
+- Attempt 的 `accepted=true` 表示输出在事务终结点已通过 Schema/语义、deadline、authority 与预算裁决，不表示 Runtime 已消费该值；Gateway 在事务返回后仍执行最终 signal 交付检查；
+- 只有 `AgentRunTransitionError` 映射为 authority lost；重复 finish、非 started 票据等 `AgentAttemptAuditTransitionError` 保持状态机错误并向调用方传播；
 - 不推进 Session、不调用 Commit Gate、不发布 SSE。
 
 ### 13.2 Attempt 类型
@@ -801,8 +816,8 @@ OR Attempt local timeout signal
 
 ### 14.2 迟到结果
 
-- 超时/取消后 Adapter Promise 若迟到 resolve，只允许完成内存清理；
-- Gateway 在任何输出进入 Validator/Runtime 前重新检查 Attempt signal 与 finish 事务结果；
+- Gateway 将 Adapter Promise 与组合 AbortSignal 竞速；超时/取消后 Adapter Promise 若迟到 resolve，只允许完成内存清理；
+- Gateway 在调用 Adapter 前、任何输出进入 Validator 前、Validator 后、finish 前和 finish 返回后重新检查 Attempt signal，并在返回 Runtime 前检查 finish 事务结果；
 - finish 得到 deadline stale 时输出不返回；
 - finish 因 authority lost 失败时不重试旧 token、不创建新 Attempt、不调用 Gate；
 - Provider SDK 内部自动重试关闭，避免一次取消后仍在未知后台重发。
@@ -993,6 +1008,9 @@ Coach 不接收 Player Prepared Context、结果或 Gate。
 - Player `maxAttempts=3`、Coach `maxAttempts=4` 保持不变，单次 Gateway 调用最多消费 3 次；
 - 累计 Token/成本、最小启动窗口和总 deadline 在每次纠错前重新裁决，不重置额度；
 - Worker 取消、local timeout、deadline 后返回、finish authority lost 和迟到 resolve；
+- exact Runtime Definition 的 Route Policy/Output Schema 引用不匹配时零 Provider 调用；
+- 语义 Validator 抛错后仍写稳定失败终态，零遗留 started Attempt；
+- Provider 成功后的用量定价或响应投影失败仍写稳定失败终态，零遗留 started Attempt；
 - usage 缺失按 reserved upper bound 记账并停止后续 Attempt；
 - Provider 返回前崩溃、旧 started Attempt stale 和新 fencing token 后仍消费预留预算；
 - 敏感输出/错误在纠错、哈希、日志前拒绝或脱敏；
@@ -1027,9 +1045,11 @@ Coach 不接收 Player Prepared Context、结果或 Gate。
 
 - start 事务在 Provider 调用前可见 committed `started` Attempt；
 - 累计 Attempt/Token/成本/Invocation 与数据库 deadline 原子裁决；
-- 两连接同 authority 竞争启动时只有预算允许的调用进入；
+- 两连接同 authority 竞争启动 Attempt 或预留 Invocation 时只有预算允许的调用进入；
+- Provider 实际 Token/成本超过预留或 Run 总预算时保留实际审计但强制拒绝输出；
 - 取消/新 token/过期 lease 与 finish 竞争，旧 writer 零写；
 - deadline 后 finish 收敛 stale；
+- Capability finish 跨过数据库 deadline 时清空输出投影、记录稳定 deadline 错误并返回 stale；
 - started → terminal 只能一次；
 - request/response hash、三项预算预留、用量记账来源和成本记账来源 current Codec round-trip；
 - Run/Attempt 固定锁序无反向 Session/Owner 锁；
@@ -1048,7 +1068,7 @@ Coach 不接收 Player Prepared Context、结果或 Gate。
 
 ## 19. 实施切片与验证顺序
 
-本文确认后按以下依赖顺序实施，每个切片先跑最窄测试：
+实施已按以下依赖顺序完成，每个切片先跑最窄测试：
 
 1. **Context/Prompt 纯协议**：Context Policy、Prepared 品牌、规范化、哈希、估算、敏感扫描和 Prompt 编译；
 2. **Capability 纯协议与 Executor**：静态 Definition、授权、预算端口、timeout/cancel 和 Invocation 审计；
@@ -1145,4 +1165,4 @@ M4.3 实施完成后同步：
 5. 生产模型与 Adapter 使用 DeepSeek；
 6. M4.3 只交付通用执行基础，不创建假的生产 Runtime executor，不接 `bootstrap.ts`。
 
-本文确认后才进入实现。若需要改变以上任一项，先修订并重新确认本文；M4.4–M4.8/M8 不得通过修改共享 Gateway 协议来隐藏自己的未决业务。
+以上门禁已按本文实现。若后续需要改变任一项，先修订并重新确认本文；M4.4–M4.8/M8 不得通过修改共享 Gateway 协议来隐藏自己的未决业务。

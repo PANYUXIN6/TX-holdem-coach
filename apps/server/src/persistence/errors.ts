@@ -138,6 +138,13 @@ export class AgentAttemptAuditTransitionError extends Error {
   }
 }
 
+export class CapabilityInvocationAuditTransitionError extends Error {
+  public constructor() {
+    super('Capability Invocation 审计状态无法推进。')
+    this.name = 'CapabilityInvocationAuditTransitionError'
+  }
+}
+
 export class DatabaseOperationError extends Error {
   public constructor() {
     super('数据库操作失败。')
@@ -163,6 +170,7 @@ export function isRepositoryDomainError(error: unknown): error is Error {
     error instanceof RosterSourceChangedError ||
     error instanceof HandAuditTransitionError ||
     error instanceof AgentAttemptAuditTransitionError ||
+    error instanceof CapabilityInvocationAuditTransitionError ||
     error instanceof DatabaseOperationError
   )
 }

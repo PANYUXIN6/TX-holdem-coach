@@ -359,11 +359,11 @@ erDiagram
 | `routing_reason` | `text`，可空 | 选择该 Provider/模型/尝试类型的原因。 |
 | `input_tokens` | `bigint`，非空，默认 `0` | 本次尝试输入 token 数。 |
 | `output_tokens` | `bigint`，非空，默认 `0` | 本次尝试输出 token 数。 |
-| `cost_microunits` | `bigint`，非空，默认 `0` | 以微单位记录的成本，避免浮点金额误差；具体币种/换算由上层契约定义。 |
+| `cost_microunits` | `bigint`，非空，默认 `0` | M4.3 起固定为 `microCny`（`1 CNY = 1_000_000 microCny`）；DeepSeek 费率使用整数有理数并按 Attempt 向上取整，缓存拆分缺失时全部输入按 cache miss 计费。 |
 | `duration_ms` | `bigint`，可空 | 尝试总耗时，单位毫秒。 |
 | `error_category` | `text`，可空 | 脱敏后的错误分类，不保存敏感原始错误内容。 |
 | `attempt_payload_version` | `integer`，可空，正整数 | 尝试详情载荷版本。 |
-| `attempt_payload` | `jsonb` 对象，可空 | 脱敏后的输入/输出和校验详情；不得保存 `reasoning_content`。 |
+| `attempt_payload` | `jsonb` 对象，可空 | current-only 脱敏审计详情；`started` 保存输入/输出/成本预留及 `pending` 来源，终态保存 `providerReported | reservedUpperBound | notIncurred` 用量来源和对应成本来源。只保存投影哈希，不保存原始 Prompt、响应、错误或 `reasoning_content`。 |
 | `started_at` | `timestamptz`，非空 | 尝试开始时间。 |
 | `completed_at` | `timestamptz`，可空 | 尝试结束时间。 |
 | `created_at` | `timestamptz`，非空，默认当前时间 | 审计行创建时间。 |
@@ -392,7 +392,7 @@ erDiagram
 | `duration_ms` | `bigint`，可空 | 调用耗时，单位毫秒。 |
 | `error_category` | `text`，可空 | 脱敏后的错误分类。 |
 | `started_at` | `timestamptz`，非空 | 调用开始时间。 |
-| `completed_at` | `timestamptz`，可空 | 调用结束时间。 |
+| `completed_at` | `timestamptz`，可空 | 调用结束时间；为空表示已在父 Run 锁内完成预算裁决、但尚未终结的 Invocation 票据，该行已计入 Run/Grant 调用额度。 |
 | `created_at` | `timestamptz`，非空，默认当前时间 | 审计行创建时间。 |
 
 ## 6. 应用设置

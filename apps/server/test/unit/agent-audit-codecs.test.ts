@@ -234,35 +234,51 @@ const attemptStartFacts = {
   actualTimeoutMs: 15_000,
   remainingDeadlineMsAtStart: 44_000,
   requestProjectionHash,
+  reservedInputTokens: 100,
+  reservedOutputTokens: 20,
+  reservedCostMicrounits: 800,
 }
 
 describe('current attempt audit', () => {
   test('strictly discriminates started and terminal payloads by the row lifecycle', () => {
     const attempts = [
-      { lifecycle: 'started' as const, ...attemptStartFacts },
+      {
+        lifecycle: 'started' as const,
+        ...attemptStartFacts,
+        usageAccounting: 'pending' as const,
+        costAccounting: 'pending' as const,
+      },
       {
         lifecycle: 'completed' as const,
         ...attemptStartFacts,
         responseProjectionHash,
         validationStatus: 'valid' as const,
+        usageAccounting: 'providerReported' as const,
+        costAccounting: 'allInputAtCacheMiss' as const,
       },
       {
         lifecycle: 'failed' as const,
         ...attemptStartFacts,
         responseProjectionHash: null,
         validationStatus: 'invalid' as const,
+        usageAccounting: 'reservedUpperBound' as const,
+        costAccounting: 'reservedUpperBound' as const,
       },
       {
         lifecycle: 'cancelled' as const,
         ...attemptStartFacts,
         responseProjectionHash: null,
         validationStatus: 'notRun' as const,
+        usageAccounting: 'reservedUpperBound' as const,
+        costAccounting: 'reservedUpperBound' as const,
       },
       {
         lifecycle: 'stale' as const,
         ...attemptStartFacts,
         responseProjectionHash,
         validationStatus: 'valid' as const,
+        usageAccounting: 'providerReported' as const,
+        costAccounting: 'allInputAtCacheMiss' as const,
       },
     ]
 
@@ -279,6 +295,8 @@ describe('current attempt audit', () => {
       encodeAttemptAudit({
         lifecycle: 'started',
         ...attemptStartFacts,
+        usageAccounting: 'pending',
+        costAccounting: 'pending',
         responseProjectionHash,
       }),
     ).toThrow('Agent 审计载荷无效。')
@@ -288,6 +306,8 @@ describe('current attempt audit', () => {
         ...attemptStartFacts,
         responseProjectionHash: null,
         validationStatus: 'valid',
+        usageAccounting: 'providerReported',
+        costAccounting: 'allInputAtCacheMiss',
       }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
@@ -296,6 +316,8 @@ describe('current attempt audit', () => {
         ...attemptStartFacts,
         responseProjectionHash: null,
         validationStatus: 'valid',
+        usageAccounting: 'reservedUpperBound',
+        costAccounting: 'reservedUpperBound',
       }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
@@ -304,6 +326,8 @@ describe('current attempt audit', () => {
         ...attemptStartFacts,
         responseProjectionHash,
         validationStatus: 'notRun',
+        usageAccounting: 'reservedUpperBound',
+        costAccounting: 'reservedUpperBound',
       }),
     ).toThrow('Agent 审计载荷无效。')
     expect(() =>
@@ -312,6 +336,8 @@ describe('current attempt audit', () => {
         ...attemptStartFacts,
         responseProjectionHash,
         validationStatus: 'valid',
+        usageAccounting: 'providerReported',
+        costAccounting: 'allInputAtCacheMiss',
         reasoningContent: 'forbidden',
       }),
     ).toThrow('Agent 审计载荷无效。')
@@ -323,6 +349,8 @@ describe('current attempt audit', () => {
       ...attemptStartFacts,
       responseProjectionHash: null,
       validationStatus: 'notRun' as const,
+      usageAccounting: 'reservedUpperBound' as const,
+      costAccounting: 'reservedUpperBound' as const,
     }
     const current = encodeAttemptAudit(attempt)
 

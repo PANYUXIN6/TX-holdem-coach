@@ -21,8 +21,10 @@
     "verify:migration-assets": "node scripts/verify-migration-assets.mjs"
   },
   "dependencies": {
+    "@ai-sdk/deepseek": "^3.0.28",
     "@hono/node-server": "^1.14.0",
     "@tx-holdem-coach/contracts": "workspace:*",
+    "ai": "^7.0.68",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.7.0",

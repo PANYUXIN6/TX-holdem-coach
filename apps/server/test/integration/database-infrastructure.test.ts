@@ -17,6 +17,7 @@ import { assertM35HttpAndAtomicSettings } from './database-m35-assertions.js'
 import { assertM36PublicProjectionRuntime } from './database-m36-assertions.js'
 import { assertM37SessionEventReplay } from './database-m37-assertions.js'
 import { assertM42AgentRunLifecycle } from './database-m42-assertions.js'
+import { assertM43ModelAttemptControl } from './database-m43-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -252,6 +253,12 @@ registerMilestoneTest(
   'm42',
   'M4.2 AgentRun lifecycle, fencing, and claim scanning',
   (sql, runtimeUrl) => assertM42AgentRunLifecycle(sql, runtimeUrl),
+  300_000,
+)
+registerMilestoneTest(
+  'm43',
+  'M4.3 ModelGateway Attempt budget control',
+  (sql) => assertM43ModelAttemptControl(sql),
   300_000,
 )
 registerMilestoneTest(

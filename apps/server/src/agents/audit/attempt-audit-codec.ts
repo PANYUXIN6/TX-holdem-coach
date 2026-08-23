@@ -25,30 +25,56 @@ const AttemptStartFactsSchema = z.strictObject({
   actualTimeoutMs: PositiveSafeIntegerSchema,
   remainingDeadlineMsAtStart: NonnegativeSafeIntegerSchema,
   requestProjectionHash: Sha256DigestSchema,
+  reservedInputTokens: NonnegativeSafeIntegerSchema,
+  reservedOutputTokens: NonnegativeSafeIntegerSchema,
+  reservedCostMicrounits: NonnegativeSafeIntegerSchema,
 })
 
 const StartedAttemptAuditSchema = AttemptStartFactsSchema.extend({
   lifecycle: z.literal('started'),
+  usageAccounting: z.literal('pending'),
+  costAccounting: z.literal('pending'),
 })
 const CompletedAttemptAuditSchema = AttemptStartFactsSchema.extend({
   lifecycle: z.literal('completed'),
   responseProjectionHash: Sha256DigestSchema,
   validationStatus: z.enum(['valid', 'invalid']),
+  usageAccounting: z.literal('providerReported'),
+  costAccounting: z.enum(['providerReportedSplit', 'allInputAtCacheMiss']),
 })
 const FailedAttemptAuditSchema = AttemptStartFactsSchema.extend({
   lifecycle: z.literal('failed'),
   responseProjectionHash: Sha256DigestSchema.nullable(),
   validationStatus: z.enum(['notRun', 'invalid']),
+  usageAccounting: z.enum([
+    'providerReported',
+    'reservedUpperBound',
+    'notIncurred',
+  ]),
+  costAccounting: z.enum([
+    'providerReportedSplit',
+    'allInputAtCacheMiss',
+    'reservedUpperBound',
+    'notIncurred',
+  ]),
 })
 const CancelledAttemptAuditSchema = AttemptStartFactsSchema.extend({
   lifecycle: z.literal('cancelled'),
   responseProjectionHash: z.null(),
   validationStatus: z.literal('notRun'),
+  usageAccounting: z.enum(['reservedUpperBound', 'notIncurred']),
+  costAccounting: z.enum(['reservedUpperBound', 'notIncurred']),
 })
 const StaleAttemptAuditSchema = AttemptStartFactsSchema.extend({
   lifecycle: z.literal('stale'),
   responseProjectionHash: Sha256DigestSchema.nullable(),
   validationStatus: AttemptValidationStatusSchema,
+  usageAccounting: z.enum(['providerReported', 'reservedUpperBound']),
+  costAccounting: z.enum([
+    'providerReportedSplit',
+    'allInputAtCacheMiss',
+    'reservedUpperBound',
+  ]),
 })
 
 const AttemptAuditSchema = z.discriminatedUnion('lifecycle', [
@@ -61,22 +87,46 @@ const AttemptAuditSchema = z.discriminatedUnion('lifecycle', [
 
 export type AttemptAudit = Readonly<z.infer<typeof AttemptAuditSchema>>
 
-const StartedAttemptPayloadSchema = AttemptStartFactsSchema
+const StartedAttemptPayloadSchema = AttemptStartFactsSchema.extend({
+  usageAccounting: z.literal('pending'),
+  costAccounting: z.literal('pending'),
+})
 const CompletedAttemptPayloadSchema = StartedAttemptPayloadSchema.extend({
   responseProjectionHash: Sha256DigestSchema,
   validationStatus: z.enum(['valid', 'invalid']),
+  usageAccounting: z.literal('providerReported'),
+  costAccounting: z.enum(['providerReportedSplit', 'allInputAtCacheMiss']),
 })
 const FailedAttemptPayloadSchema = StartedAttemptPayloadSchema.extend({
   responseProjectionHash: Sha256DigestSchema.nullable(),
   validationStatus: z.enum(['notRun', 'invalid']),
+  usageAccounting: z.enum([
+    'providerReported',
+    'reservedUpperBound',
+    'notIncurred',
+  ]),
+  costAccounting: z.enum([
+    'providerReportedSplit',
+    'allInputAtCacheMiss',
+    'reservedUpperBound',
+    'notIncurred',
+  ]),
 })
 const CancelledAttemptPayloadSchema = StartedAttemptPayloadSchema.extend({
   responseProjectionHash: z.null(),
   validationStatus: z.literal('notRun'),
+  usageAccounting: z.enum(['reservedUpperBound', 'notIncurred']),
+  costAccounting: z.enum(['reservedUpperBound', 'notIncurred']),
 })
 const StaleAttemptPayloadSchema = StartedAttemptPayloadSchema.extend({
   responseProjectionHash: Sha256DigestSchema.nullable(),
   validationStatus: AttemptValidationStatusSchema,
+  usageAccounting: z.enum(['providerReported', 'reservedUpperBound']),
+  costAccounting: z.enum([
+    'providerReportedSplit',
+    'allInputAtCacheMiss',
+    'reservedUpperBound',
+  ]),
 })
 
 const StoredAttemptAuditSchema = z.discriminatedUnion('lifecycle', [

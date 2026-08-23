@@ -36,6 +36,7 @@ const CapabilityManifestSchema = z.strictObject({
     }),
   ),
 })
+const capabilityManifests = new WeakSet<object>()
 
 function referenceKey(reference: AuditVersionReference): string {
   return `${reference.id}@${String(reference.version)}`
@@ -96,7 +97,21 @@ export function createCapabilityManifest<TRuntime extends RuntimeType>(input: {
     throw new FoundationProtocolError('executionBudgetExhausted')
   }
 
-  return deepFreeze(
+  const manifest = deepFreeze(
     structuredClone(parsed.data),
   ) as unknown as CapabilityManifest<TRuntime>
+  capabilityManifests.add(manifest)
+  return manifest
+}
+
+export function isCapabilityManifest<TRuntime extends RuntimeType>(
+  value: unknown,
+  runtimeType: TRuntime,
+): value is CapabilityManifest<TRuntime> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    capabilityManifests.has(value) &&
+    (value as CapabilityManifest<RuntimeType>).runtimeType === runtimeType
+  )
 }

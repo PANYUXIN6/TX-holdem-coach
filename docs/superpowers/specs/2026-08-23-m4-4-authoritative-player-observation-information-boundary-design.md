@@ -1,6 +1,6 @@
 # M4.4 权威 Player 观察与信息防火墙设计
 
-状态：已于 2026-08-23 确认，待实施
+状态：已于 2026-08-23 确认，并于 2026-08-24 实施
 
 任务来源：[项目开发任务 M4.4](../plans/2026-07-23-poker-practice-development-tasks.md#m44-实现权威-player-观察与第一道信息防火墙)
 
@@ -131,6 +131,8 @@ M4.3 Foundation ModelGateway
 
 ```text
 apps/server/src/
+├── poker/
+│   └── betting-projection.ts
 ├── sessions/authoritative-state/
 │   ├── player-visible-state.ts
 │   ├── player-observation-builder.ts
@@ -349,6 +351,17 @@ interface PlayerVisibleAction {
   readonly streetBefore: 'preflop' | 'flop' | 'turn' | 'river'
   readonly actorSeatNumber: number
   readonly action: PokerCommand
+  readonly amountToCallBefore: number
+  readonly contributionDelta: number
+  readonly targetStreetCommitmentAfter: number
+  readonly totalContributionAfter: number
+  readonly potBefore: number
+  readonly currentBetBefore: number
+  readonly currentBetAfter: number
+  readonly minimumFullRaiseIncrementBefore: number
+  readonly minimumFullRaiseIncrementAfter: number
+  readonly isVoluntaryPreflopContribution: boolean
+  readonly isFullRaise: boolean
 }
 ```
 
@@ -358,6 +371,7 @@ interface PlayerVisibleAction {
 
 - 身份与 `asOfEventSeq` 是后续事实来源、stale 判断和审计关联的截止点；
 - 全桌公开筹码、投入、状态、按钮、盲位、位置、起始筹码和公开行动是 M4.5 规范 spot、有效筹码、行动线和候选结果的必要输入；
+- 公开行动的 call、delta、target、pot、current bet、minimum full raise 与足额加注证明来自共享下注投影，不从缺少金额的 `call | allIn` 命令文本猜测；
 - `bettingRound` 是重新开放、最后足额加注和合法后继空间的权威基础，不让 M4.5 从展示文本猜测；
 - `legalActions` 直接复用当前扑克规则入口，防止预处理重新实现合法边界；
 - Hero 底牌与公共牌是唯一允许进入手牌分析器的牌张集合；
@@ -402,14 +416,16 @@ privateEvent / progression / stateBeforeStartCommand
 ### 9.2 固定构建顺序
 
 1. 复验当前状态是可行动街道，Hand、actor、identity 与下注轮存在；
-2. 从 `handStarted` 事件白名单复制 hand number、参与座位、盲位、位置和起始筹码；
-3. 从当前快照白名单复制按钮、固定盲注、座位公开状态、公共牌、底池和下注轮；
-4. 按 actor seat 精确查找唯一底牌，只复制这两张；
-5. 从 `actionCommitted` 只复制行级截止信息、`before.street`、actor 与标准命令；
-6. 明确忽略 `legalActionsBefore`、`after` 的重复快照、`progression.burnedCardsAdded`、完成手摘要和所有其他事件字段；
-7. 调用现有 `getLegalActions(privateState.poker)` 取得当前结构化合法动作；
-8. 生成全新 plain object，不保留对输入对象、事件数组或卡牌对象的引用；
-9. 把 draft 交给第一道 Guard；构建器本身不签发认证结果。
+2. 先证明 `handStarted.handNumber === PrivateTableState.completedHandCount + 1`，再按按钮位和参与座位调用 `assignLogicalPositions()` 逐座位复验全部位置；通过后才从事件白名单复制 hand number、参与座位、盲位、位置和起始筹码；
+3. 从 `handStarted` 的起始筹码和固定盲注建立公开下注证明种子：实际盲注为 `min(stack, nominal)`，名义 `currentBet=20`、`minimumFullRaiseIncrement=20`，各参与座位 `betLevelAfterLastAction=null`；
+4. 严格按 eventSeq 处理 `actionCommitted`：先证明 `before` 等于上一投影，再用当时的 `legalActionsBefore` 与标准命令签发内部合法行动证明，交给共享 `BettingProjectionKernel` 复验金额、守恒、full raise、reopening、响应者与街道推进；
+5. 要求每个 `after` 的公开座位、pot、street、actor、board 后缀与 kernel 结果一致；推进街道时重置 street contribution/current bet/minimum increment/行动层级，最终投影必须完整镜像当前 `PrivateTableState`；
+6. 只把行级截止、street、actor、标准命令以及 kernel 产出的金额证明字段写入 `publicActions`；`legalActionsBefore`、完整 `before/after`、`progression` 和 burn card 仅作内部证明输入，绝不进入观察；
+7. 从当前快照白名单复制按钮、固定盲注、座位公开状态、公共牌、底池和已被重放证明的下注轮；
+8. 按 actor seat 精确查找唯一底牌，只复制这两张，并调用现有 `getLegalActions(privateState.poker)` 取得当前结构化合法动作；
+9. 生成全新 plain object，不保留对输入对象、事件数组或卡牌对象的引用，再把 draft 交给第一道 Guard；构建器本身不签发认证结果。
+
+`BettingProjectionKernel` 位于 `poker/betting-projection.ts`，只接受最小公开下注 DTO，不导入 Session、Agent、Persistence 或 Provider。现有 `getLegalActions()`、`applyBettingAction()` 和行动后响应/街道推进与 Builder/Guard 共同消费该内核，禁止维护第二套 call、all-in、full raise 或 reopening 算法。
 
 禁止实现：
 
@@ -437,7 +453,8 @@ privateEvent / progression / stateBeforeStartCommand
 ```text
 严格 Schema 解析
 → identity / actor / Hand / cutoff 镜像复验
-→ 座位、位置、下注轮和事件集合不变量
+→ 座位、逻辑位置推导、下注轮和事件集合不变量
+→ 从 handStarted 公开种子逐行动复验金额证明与最终镜像
 → Hero 底牌与公共牌可见性不变量
 → 未知字段与禁止来源拒绝
 → canonicalJson
@@ -524,7 +541,7 @@ M4.6 必须：
 以下属于预期竞争，不记录私有错误详情：
 
 - 用户动作或其他已提交命令推进 state version；
-- 当前行动者变化；
+- Session 版本推进并伴随当前行动者变化；
 - active decision request 或 active Run 被替换；
 - lease 接管导致 fencing token 变化；
 - Run 已取消、终结、过期或 deadline 到达；
@@ -538,8 +555,10 @@ M4.6 必须：
 
 - snapshot/private event current payload version 不支持或载荷无效；
 - Session/Run/Snapshot/Event/participant 镜像关系自相矛盾；
+- Session/Run 仍匹配同一决策版本但 Snapshot 当前行动者与 identity 矛盾；
 - 事件序列缺口、重复、越过 cutoff 或错误 Hand；
-- `handStarted` 缺失/重复，或位置/起始筹码与参与集合不一致；
+- `actionCommitted` 的命令、`legalActionsBefore`、before/after、金额证明、响应者或最终快照无法由共享下注内核形成同一条确定性链；
+- `handStarted` 缺失/重复，hand number 不等于完成手数加一，或任一逻辑位置/起始筹码与权威参与集合不一致；
 - 私有状态合法但无法形成唯一 Hero 底牌；
 - 构建器输出被 Guard 拒绝。
 
@@ -591,6 +610,7 @@ M4.6 必须：
 - 所有纯分析器公开签名接收 `PlayerVisibleState`，不接收 `PrivateTableState | PokerTableState`；
 - M4.5 可以读取当前 Hand checkpoint 的 `pokerRuleSetVersion`，但必须通过只返回规则版本与 Hand 镜像的窄权威读取扩展，不得把 checkpoint 私有状态并入观察；
 - M4.5 派生物必须镜像 observation identity/hash 和自己的 Schema/算法版本；
+- M4.5 直接消费已证明的 action delta/target/current bet/full raise 字段，并复用同一 `BettingProjectionKernel` 做候选投影，不重新解释命令金额；
 - M4.5 不得读取其他底牌、未来牌或完整牌堆来提高“分析准确度”。
 
 ### 14.2 对 M4.6
@@ -622,7 +642,10 @@ M4.9 的本角色记忆是观察之后的独立来源。它必须绑定同 Owner
 
 - Hero 两张底牌精确等于目标 seat；其他座位无底牌字段；
 - board、按钮、盲位、位置、起始筹码、当前座位状态、下注轮、pot 和 legal actions 精确投影；
+- 篡改 `handStarted` hand number 或交换任意两个非盲位逻辑位置时整体拒绝；
 - 当前手多街 action line 按 eventSeq 稳定，保留动作与尺度，不复制 `progression`；
+- call/all-in 精确输出 delta/target/current bet/minimum increment/full raise；足额与不足额 all-in、累计 reopening 和街道重置与权威引擎一致；
+- 合法命令若与事件 before/after 或最终 Snapshot 矛盾则整体拒绝；
 - fold、all-in、短筹码、空 board、flop/turn/river、部分 out 座位等合法状态；
 - 同一事实重复构建 deep-equal，排序、canonical JSON 与 hash 稳定；
 - 不保留源对象引用，构建后修改测试输入不能改变结果。
@@ -645,6 +668,7 @@ M4.9 的本角色记忆是观察之后的独立来源。它必须绑定同 Owner
 - Owner UUID、lease owner、fencing token、Authorization/API Key/数据库 URL；
 - 任意层级未知字段、重复 seat/participant/position/card/event、乱序/越界事件；
 - actor 不是当前行动者、用户 seat 0 冒充 Player、actor folded/all-in/out；
+- public action 的 call/delta/target/pot/current bet/full raise 任一证明字段被修改；
 - Hand/Session/state/request/participant/seat 不一致；
 - 非 JSON 值、原型污染键、循环对象和超出安全整数。
 

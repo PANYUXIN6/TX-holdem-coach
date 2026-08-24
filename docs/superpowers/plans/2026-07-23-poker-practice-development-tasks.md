@@ -897,6 +897,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 详细契约见 [M4.4 权威 Player 观察与信息防火墙设计](../specs/2026-08-23-m4-4-authoritative-player-observation-information-boundary-design.md)。三道信息防火墙仍是 Player Runtime 上线前的整体硬门禁；本里程碑完成第一道，M4.6 在最终 Packet/Context/Prompt Schema 出现后完成第二与第三道。
 
+状态：M4.4 已于 2026-08-24 完成；第一道 Guard 已通过实现与数据库验收，第二、第三道 Guard 仍归 M4.6，三道总验收保持未完成。
+
 产出：
 
 - 在 `sessions/authoritative-state` 提供座位级 Player 投影。

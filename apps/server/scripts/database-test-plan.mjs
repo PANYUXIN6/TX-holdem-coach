@@ -15,13 +15,35 @@ export const DATABASE_TEST_MILESTONES = Object.freeze([
   'm37',
   'm42',
   'm43',
+  'm44',
 ])
 
 export const DATABASE_TEST_SUITES = Object.freeze(['database', 'e2e'])
 
 const DATABASE_MILESTONES_BY_SUITE = Object.freeze({
-  database: new Set(['m22', 'm23', 'm24', 'm25', 'm26', 'm27', 'm28', 'm35']),
-  e2e: new Set(['m31', 'm32', 'm33', 'm34', 'm35', 'm36', 'm37', 'm42', 'm43']),
+  database: new Set([
+    'm22',
+    'm23',
+    'm24',
+    'm25',
+    'm26',
+    'm27',
+    'm28',
+    'm35',
+    'm44',
+  ]),
+  e2e: new Set([
+    'm31',
+    'm32',
+    'm33',
+    'm34',
+    'm35',
+    'm36',
+    'm37',
+    'm42',
+    'm43',
+    'm44',
+  ]),
 })
 
 export function parseDatabaseTestArguments(arguments_) {

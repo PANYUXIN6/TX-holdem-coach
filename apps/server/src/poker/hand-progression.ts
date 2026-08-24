@@ -1,4 +1,8 @@
 import { applyBettingAction } from './betting.js'
+import {
+  projectActionContinuation,
+  type BettingProjectionState,
+} from './betting-projection.js'
 import type { PokerCommand } from './commands.js'
 import {
   dealFlop,
@@ -8,43 +12,12 @@ import {
   runoutRemainingBoard,
   type DealtHand,
 } from './dealing.js'
-import {
-  clockwiseParticipantSeatNumbersAfter,
-  findPostflopFirstActionableSeatNumber,
-} from './positioning.js'
 import { createPokerTableState, type PokerTableState } from './state.js'
 
 type Hand = NonNullable<PokerTableState['hand']>
-type BettingRound = NonNullable<Hand['bettingRound']>
 
 function participantSeatNumbers(hand: Hand): readonly number[] {
   return hand.holeCards.map((holeCards) => holeCards.seatNumber)
-}
-
-function participantSeats(
-  hand: Hand,
-  seats: PokerTableState['seats'],
-): PokerTableState['seats'] {
-  const participants = new Set(participantSeatNumbers(hand))
-  return seats.filter((seat) => participants.has(seat.seatNumber))
-}
-
-function contenderSeats(
-  hand: Hand,
-  seats: PokerTableState['seats'],
-): PokerTableState['seats'] {
-  return participantSeats(hand, seats).filter(
-    (seat) => seat.status === 'active' || seat.status === 'allIn',
-  )
-}
-
-function actionableSeats(
-  hand: Hand,
-  seats: PokerTableState['seats'],
-): PokerTableState['seats'] {
-  return contenderSeats(hand, seats).filter(
-    (seat) => seat.status === 'active' && seat.stack > 0,
-  )
 }
 
 function reconstructFromState(state: PokerTableState, hand: Hand): DealtHand {
@@ -111,7 +84,7 @@ function terminalHand(
 function advanceStreet(
   state: PokerTableState,
   hand: Hand,
-  seats: PokerTableState['seats'],
+  projection: BettingProjectionState,
 ): { readonly hand: Hand; readonly seats: PokerTableState['seats'] } {
   const dealt = reconstructFromState(state, hand)
   const next =
@@ -123,63 +96,28 @@ function advanceStreet(
           ? { street: 'river' as const, dealt: dealRiver(dealt) }
           : null
 
-  if (next === null) {
-    return {
-      hand: terminalHand(state, hand, 'showdown', false),
-      seats,
-    }
+  if (next === null || next.street !== projection.street) {
+    throw new RangeError('下注投影与发牌街道不一致。')
   }
-
-  const resetSeats = seats.map((seat) => ({
-    ...seat,
-    streetContribution: 0,
-  }))
-  const participantNumbers = participantSeatNumbers(hand)
-  const nextActorSeatNumber = findPostflopFirstActionableSeatNumber({
-    buttonSeatNumber: state.buttonSeatNumber,
-    participantSeatNumbers: participantNumbers,
-    seats: participantSeats(hand, resetSeats),
+  const projectedSeatByNumber = new Map(
+    projection.seats.map((seat) => [seat.seatNumber, seat]),
+  )
+  const seats = state.seats.map((seat) => {
+    const projected = projectedSeatByNumber.get(seat.seatNumber)
+    if (projected === undefined) throw new RangeError('下注投影缺少座位。')
+    return { ...seat, ...projected }
   })
 
-  if (nextActorSeatNumber === null) {
-    throw new RangeError('新街必须存在可行动玩家。')
-  }
-
   return {
-    seats: resetSeats,
+    seats,
     hand: {
       ...hand,
       ...projectedCards(next.dealt),
-      street: next.street,
-      currentActorSeatNumber: nextActorSeatNumber,
-      bettingRound: {
-        currentBet: 0,
-        minimumFullRaiseIncrement: 20,
-        seatStates: participantNumbers.map((seatNumber) => ({
-          seatNumber,
-          betLevelAfterLastAction: null,
-        })),
-      },
+      street: projection.street,
+      currentActorSeatNumber: projection.currentActorSeatNumber,
+      bettingRound: projection.bettingRound,
     },
   }
-}
-
-function stillOwesAction(
-  seatNumber: number,
-  seats: PokerTableState['seats'],
-  bettingRound: BettingRound,
-): boolean {
-  const seat = seats.find((candidate) => candidate.seatNumber === seatNumber)
-  const roundState = bettingRound.seatStates.find(
-    (candidate) => candidate.seatNumber === seatNumber,
-  )
-
-  return (
-    seat?.status === 'active' &&
-    seat.stack > 0 &&
-    (roundState?.betLevelAfterLastAction === null ||
-      seat.streetContribution < bettingRound.currentBet)
-  )
 }
 
 export function progressPokerAction(
@@ -204,65 +142,40 @@ export function progressPokerAction(
     pot: transition.pot,
     bettingRound: transition.bettingRound,
   }
-  const contenders = contenderSeats(handAfterAction, transition.seats)
-
-  if (contenders.length === 0) {
-    throw new RangeError('手牌不得没有竞争者。')
+  const projectionState: BettingProjectionState = {
+    buttonSeatNumber: state.buttonSeatNumber,
+    participantSeatNumbers: participantSeatNumbers(hand),
+    street: hand.street as BettingProjectionState['street'],
+    currentActorSeatNumber: transition.actorSeatNumber,
+    pot: transition.pot,
+    seats: transition.seats,
+    bettingRound: transition.bettingRound,
   }
-
+  const continuation = projectActionContinuation(
+    projectionState,
+    transition.actorSeatNumber,
+  )
   let seats = transition.seats
   let nextHand: Hand
-
-  if (contenders.length === 1) {
+  if (continuation.kind === 'complete') {
     nextHand = terminalHand(state, handAfterAction, 'complete', false)
-  } else {
-    const actionable = actionableSeats(handAfterAction, transition.seats)
-
-    if (actionable.length === 0) {
-      nextHand = terminalHand(
-        state,
-        handAfterAction,
-        'showdown',
-        handAfterAction.board.length < 5,
-      )
-    } else if (actionable.length === 1) {
-      const actor = actionable[0] as (typeof actionable)[number]
-      const matchableLevel = Math.max(
-        ...contenders
-          .filter((seat) => seat.seatNumber !== actor.seatNumber)
-          .map((seat) => seat.streetContribution),
-      )
-      const pendingCall = Math.max(0, matchableLevel - actor.streetContribution)
-
-      nextHand =
-        pendingCall > 0
-          ? { ...handAfterAction, currentActorSeatNumber: actor.seatNumber }
-          : terminalHand(
-              state,
-              handAfterAction,
-              'showdown',
-              handAfterAction.board.length < 5,
-            )
-    } else {
-      const clockwiseSeatNumbers = clockwiseParticipantSeatNumbersAfter(
-        transition.actorSeatNumber,
-        participantSeatNumbers(handAfterAction),
-      )
-      const nextActorSeatNumber = clockwiseSeatNumbers.find((seatNumber) =>
-        stillOwesAction(seatNumber, transition.seats, transition.bettingRound),
-      )
-
-      if (nextActorSeatNumber !== undefined) {
-        nextHand = {
-          ...handAfterAction,
-          currentActorSeatNumber: nextActorSeatNumber,
-        }
-      } else {
-        const advanced = advanceStreet(state, handAfterAction, transition.seats)
-        seats = advanced.seats
-        nextHand = advanced.hand
-      }
+  } else if (continuation.kind === 'showdown') {
+    nextHand = terminalHand(
+      state,
+      handAfterAction,
+      'showdown',
+      continuation.forcesRunout,
+    )
+  } else if (continuation.kind === 'sameStreet') {
+    nextHand = {
+      ...handAfterAction,
+      currentActorSeatNumber: continuation.state.currentActorSeatNumber,
+      bettingRound: continuation.state.bettingRound,
     }
+  } else {
+    const advanced = advanceStreet(state, handAfterAction, continuation.state)
+    seats = advanced.seats
+    nextHand = advanced.hand
   }
 
   return createPokerTableState({

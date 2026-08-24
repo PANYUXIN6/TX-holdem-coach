@@ -912,12 +912,14 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M4.5 实现 Player 确定性决策预处理
 
+详细契约见 [M4.5 Player 确定性决策预处理设计](../specs/2026-08-23-m4-5-player-deterministic-decision-preprocessing-design.md)。设计已于 2026-08-24 确认：采用 M4.4 公共行动顺序证明联动；无授权策略数据时使用明确的 `unsupported + heuristic`；人物偏离采用设计 cap；opponent evidence v1 仅使用当前手并固定零调整。当前尚未开始 M4.5 实现。
+
 产出：
 
 - 在 `apps/server/src/poker/decision-spot.ts` 实现共享纯 `SpotNormalizer`，输出 `spotSchemaVersion` 与 `normalizerVersion`；规范化桌型、逻辑位置、逐对手位置关系、入池/待行动人数、行动顺序、Hero 后方玩家、街次、翻前节点、底池类型、翻前/当前街主动玩家、行动线及尺度、最后足额加注、是否重新开放和有效筹码档，并拒绝矛盾输入。
 - 固化首版 `pokerRuleSetVersion = nlhe-cash-6to9-10-20-v1`，并输出名义/实际盲注、短盲 all-in 与大盲行动权；固定规则为 6–9 人、10/20、无前注、无 straddle、无抽水、单牌面一次 runout。任何影响合法动作、结算、位置或策略节点解释的规则变化必须发布新版本。
-- 使用当前 `HandStartCheckpoint` 在开手时保存 `pokerRuleSetVersion`；Player 和 Coach 都从目标手牌检查点读取。代码 API 使用中性 current 命名，首发数据库行载荷版本统一从 1 起步，不新增数据库列或 migration。
-- 同步现有 Hand 审计代码：当前 Codec/Reader 更新 `hand-audit-repository`、创建场次/开始下一手 writer、恢复/中止 reader 及对应 Codec、Repository、Handler 测试；首发前数据库已重建，不保留 V1 文件、载荷或 Registry。该改动属于 M4.5 前置工作，不改 M4.1 Foundation 协议、Capability Manifest 或状态机。
+- 复用当前 `HandStartCheckpoint` 已在开手时保存的 `pokerRuleSetVersion`；Player 和 Coach 都从目标手牌检查点精确读取，不以部署时 current 常量回填。现有 current-only API 与数据库行载荷版本 `1` 保持不变，不新增数据库列或 migration。
+- 当前 Hand Codec/Reader、`hand-audit-repository`、创建场次/开始下一手 writer、恢复/中止 reader 已完成规则版本读写。M4.5 只增加不暴露完整 checkpoint 的目标 Hand 窄读取及回归；没有损坏或契约变更证据时不再设计 V1/V2、Registry、兼容 reader 或重复改写既有 writer，也不改 M4.1 Foundation 协议、Capability Manifest 或状态机。
 - Spot 规范化保留多人池、边池、limp、冷跟注、挤压、重新加注和不足额全下，不能为了命中策略模板静默折叠节点。
 - `SpotNormalizer` 分离 `heroActionCompletes`、`bettingRoundClosesImmediately`、`canFaceFurtherAction`，候选级再明确响应者与可加注者。
 - 在 `apps/server/src/poker/hand-features.ts` 实现共享纯 `HandFeatureAnalyzer`：翻前输出对子/同花、点数间隔、连张、Broadway、A-wheel 潜力；翻后输出最佳五张、比较元组、底牌使用、对子/踢脚/超牌、同花/顺子高张、听牌/后门听牌、重叠改善组、绝对 nuts、redraw、`cardRemovalFacts[]`、`counterfeitRiskFacts[]`，以及原子牌面结构和街间变化。战略 blocker 价值和实际 reverse outs 需要显式对手持牌/范围与版本化算法，否则为 `unavailable`。
@@ -930,7 +932,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 强制 runout 后 `nextStreetSpr.status=notApplicable`，不生成不存在的后续街候选；all-in 必然返还部分不计入真正风险。
 - 预计翻牌 SPR 与当前翻后 SPR 分字段；最低所需权益或即时盈亏平衡弃牌率只有在参与人数和响应假设明确时输出，否则为 `unavailable`。
 - `PersonaDeviationPolicy` 按具体 spot 有界调整，不使用全局范围乘数。
-- 对手证据包含分子、分母、过滤条件、截止事件和置信度；样本不足不做剥削调整。
+- opponent evidence v1 只包含当前手分子、分母、过滤条件、截止事件与稳定不足原因，并固定零剥削调整；跨手置信度、样本门槛与非零调整留给 M4.9 evidence v2。
 - clean outs、对手范围条件权益和 EV 只有存在显式版本化范围及算法时才能生成，否则必须 unavailable；不能交给 LLM 猜测。
 - domination 概率、fold equity、对手响应概率、隐含/反向隐含赔率单值、多街反事实收益和范围角色标签同样需要显式范围、响应模型或 Solver；`wet/dry`、`blank/scareCard` 等只能是有版本的 heuristic 派生。
 - 等价候选按标准动作语义合并，只有可证明严格支配时才删除候选。
@@ -938,7 +940,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 后端测试闭环：
 
-- Spot 键、手牌特征、结构性 outs、当前/候选结果数学、策略命中/回退、人物偏离和样本门槛都可复现。
+- Spot 键、手牌特征、结构性 outs、当前/候选结果数学、策略命中/回退和人物偏离都可复现；opponent evidence v1 的当前手统计与零调整可复现，跨手样本门槛留给 M4.9 evidence v2。
 - 覆盖 6–9 人位置关系、单挑/多人节点、公共牌成牌、底牌参与成牌、绝对 nuts、主要听牌/redraw、重复 outs 去重、river 无 outs、`cardRemovalFacts[]`、`counterfeitRiskFacts[]` 和原子牌面结构；隐藏牌、未来牌或完整牌堆不能进入分析器，缺少显式持牌/范围时实际 reverse outs 与战略 blocker 价值保持 `unavailable`。
 - 覆盖 K2s 同花但非 connector、最佳五张/比较元组、原子牌面字段、主池/多边池资格和 Hero 无资格边池不进入 pot odds。
 - 覆盖多人/不足额全下中的行动完成、本轮关闭、未来响应、候选响应者和仍可加注者。

@@ -57,6 +57,13 @@ export function createDatabaseModelAttemptControl(input: {
       }
     },
     async finishAttempt(attempt) {
+      const requiresValidatedOutput =
+        attempt.lifecycle === 'completed' &&
+        attempt.accepted &&
+        attempt.validationStatus === 'valid'
+      if ((attempt.validatedOutput !== null) !== requiresValidatedOutput) {
+        throw new TypeError('Model Attempt 验收输出与完成状态不一致。')
+      }
       try {
         const result = await runDatabaseTransaction(input.sql, (transaction) =>
           input.repository.finishAgentAttemptAudit(

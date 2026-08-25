@@ -145,7 +145,7 @@ function decodeObservationEvents(
   })
 }
 
-async function loadObservation(
+export async function loadPlayerObservationInTransaction(
   transaction: TransactionSql,
   authority: RuntimeCommitAuthority<'player'>,
   owner: Parameters<PlayerObservationPort['load']>[0]['owner'],
@@ -363,7 +363,12 @@ export function createPostgresPlayerObservationPort(input: {
         throw new RepositoryInputValidationError()
       }
       return runDatabaseTransaction(sql, (transaction) =>
-        loadObservation(transaction, authority, loadInput.owner, identity),
+        loadPlayerObservationInTransaction(
+          transaction,
+          authority,
+          loadInput.owner,
+          identity,
+        ),
       )
     },
   })

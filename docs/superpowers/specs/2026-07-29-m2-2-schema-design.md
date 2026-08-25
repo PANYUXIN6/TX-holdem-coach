@@ -106,7 +106,7 @@ Player 协调使用第二个 `DEFERRABLE INITIALLY DEFERRED CONSTRAINT TRIGGER` 
 
 `agent_capability_invocations` 关联运行，保存调用序号、能力名称/版本、授权结果、输入/输出 schema 版本与哈希、预算消耗、时长、错误分类和起止时间；脱敏输入输出详情使用 `invocation_payload_*`，并唯一 `(agent_run_id, invocation_number)`。
 
-`player_decisions` 关联 Player Run、场次、手牌、AI participant、来源状态版本、实际使用的记忆修订、提交状态和可空 `command_ledger_id`；`decision_request_id` 是结构化列，决策包/候选集合与 Validator 结果分别使用命名载荷对。它保存固定判别列 `runtime = 'player'`，并以复合外键同时匹配 Run 的 Owner、Session、Hand、participant、来源状态版本、请求 ID 与 Runtime，禁止 Decision 与 Run 字段错配。一条 Player Run 至多一份决策，并建立手牌/座位/版本读取索引。
+M4.6 实际落地的 `player_decisions` 关联 Player Run、场次、手牌、AI participant、来源状态版本和决策请求，只实现 `auditPrepared | modelPrepared | selected` 三阶段。完整审计快照、候选集合、最小模型投影、choice 与 Validator 结果使用独立命名载荷对；每个可空载荷对的非空 CHECK 分支显式要求 version/payload 双方 `IS NOT NULL`、版本为正且 JSON 为 object，拒绝 PostgreSQL 三值逻辑下的单边 NULL。`accepted_attempt_id` 复合绑定同 Run/Owner/Session 的 Attempt。首版不预建 Memory、command ledger 或 M4.7/M4.8 终态字段。它保存固定判别列 `runtime = 'player'`，并以复合外键同时匹配 Run 的完整身份；一条 Player Run 至多一份决策。
 
 `coach_reviews.id` 即公开的 `coachReviewId`。它关联 Coach Run、场次和已完成手牌，保存固定判别列 `runtime = 'coach'`、请求 ID、状态 `pending|running|completed|failed`、请求/完成时间；冻结 Context/版本、过程分析、Hindsight 和最终报告使用彼此独立的命名载荷对。复合外键保证 Review 与 Run 的 Runtime、Owner、Session 和 Hand 完全一致；一条 Coach Run 仅对应一份 Review。
 

@@ -1,6 +1,6 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2、M3.1–M3.7 与 M4.1–M4.5 已完成，M3.8 按依赖后置，M4.6 设计已确认但尚未开发，M4.7–M9 待开发，M10/M11 为分阶段后置能力
+- 状态：进行中；M0、M1、M2、M3.1–M3.7 与 M4.1–M4.6 已完成，M3.8 按依赖后置，M4.7–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
 - 最后更新：2026-08-25
 - 本文不包含工期、人数或里程碑时间估算。
@@ -897,7 +897,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 详细契约见 [M4.4 权威 Player 观察与信息防火墙设计](../specs/2026-08-23-m4-4-authoritative-player-observation-information-boundary-design.md)。三道信息防火墙仍是 Player Runtime 上线前的整体硬门禁；本里程碑完成第一道，M4.6 在最终 Packet/Context/Prompt Schema 出现后完成第二与第三道。
 
-状态：M4.4 已于 2026-08-24 完成；第一道 Guard 已通过实现与数据库验收，第二、第三道 Guard 仍归 M4.6，三道总验收保持未完成。
+状态：M4.4 已于 2026-08-24 完成；第一道 Guard 已通过实现与数据库验收，第二、第三道 Guard 已由 M4.6 交付，三道总验收已闭环。
 
 产出：
 
@@ -916,7 +916,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 详细契约见 [M4.5 Player 确定性决策预处理设计](../specs/2026-08-23-m4-5-player-deterministic-decision-preprocessing-design.md)。设计已于 2026-08-24 确认：采用 M4.4 公共行动顺序证明联动；无授权策略数据时使用明确的 `unsupported + heuristic`；人物偏离采用设计 cap；opponent evidence v1 仅使用当前手并固定零调整。
 
-状态：已完成。候选三段权重、完整 heuristic 元数据、直接来源引用、逐字段 strict Schema 与聚合 current decoder、可逆的 pinned StrategyPack data dependency，以及共享封闭 Strategy code 已落地；定向测试、`pnpm run verify`、database m45 与 PostgreSQL E2E m45 已重新通过。生产 Runtime executor、最终 Packet 与第二/第三道 Guard 仍归 M4.6–M4.10，当前未开始实现。
+状态：已完成。候选三段权重、完整 heuristic 元数据、直接来源引用、逐字段 strict Schema 与聚合 current decoder、可逆的 pinned StrategyPack data dependency，以及共享封闭 Strategy code 已落地；定向测试、`pnpm run verify`、database m45 与 PostgreSQL E2E m45 已重新通过。其 Runtime executor、最终 Packet 与第二/第三道 Guard 下游环节已由 M4.6 交付。
 
 产出：
 
@@ -955,11 +955,12 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M4.6 实现 `PlayerDecisionPacket`、第二/三道信息防火墙与 LLM Bounded Choice
 
-详细契约见 [M4.6 Player 决策包、第二/三道信息防火墙与有界选择设计](../specs/2026-08-24-m4-6-player-decision-packet-bounded-choice-design.md)。用户已于 2026-08-25 按五项推荐方案确认；状态为“已确认、尚未开始实现”，M4.5 交接前置已完成。
+详细契约见 [M4.6 Player 决策包、第二/三道信息防火墙与有界选择设计](../specs/2026-08-24-m4-6-player-decision-packet-bounded-choice-design.md)。用户已于 2026-08-25 按五项推荐方案确认并授权开发；M4.6 已完成实现与验证，M4.5 交接前置保持通过。
 
 产出：
 
 - `DecisionAuditSnapshot` 保存 `pokerRuleSetVersion`、完整安全观察、全部派生结果、策略/证据快照、最终候选和完整事实清单，永不直接发送给模型；`PlayerModelProjectionBuilder` 再生成精简决策包。
+- Provider 可见 v1 候选采用 11 项 candidate / 14 项 outcome compact tuple，Context Schema、descriptor/Guard、Codec 与 Prompt legend 共用同一 current-only 编码；只改变可见表示，不删减语义事实、当前手或候选，不改动数据库表结构。
 - 决策包组合规范 spot、必要原子手牌/牌面事实、当前指标、候选结果投影、候选来源和人物/对手调整；M4.6 v1 不读取或发送 Memory，M4.9 在真实 reader/裁剪契约出现后通过 Schema/Runtime 版本升级加入。
 - 恢复专属 `player_decisions`，M4.6 只实现 `auditPrepared | modelPrepared | selected` 三阶段；不复用 Attempt/Run config，也不预建 M4.7/M4.8 终态。
 - 同一 Run 只恢复严格持久化阶段；M4.2 接管产生的 `stale + interrupted + lease_replaced` Attempt 返回 `inflightUnknown`，不跨进程续跑或重复调用模型。
@@ -982,6 +983,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 未知候选、自由 action、自由 amount、工具调用和额外字段全部拒绝。
 - 10 手与 1,000 手牌的 Context 大小不随历史线性增长。
 - 完整审计快照无法进入 Model Adapter；模型投影不存在重复事实或“严格按频率抽样”的虚假声明。
+- 生产 Snapshot fixture 真实经过 Projection Builder，表示上界 fixture 另行覆盖所有字段同时取上限；两者均通过 `30,000 Context bytes / 33,000 initial request bytes / 12,000 Run input tokens` 原门禁。限额由单一 Player 输入政策定义，测试只验证不越界与运行时 hash 一致性，不冻结某次序列化的精确 bytes、Token estimate 或 SHA-256。
 - 三道 Guard 分别具有独立失败测试；其他座位底牌、完整牌堆、burn/future card、Coach audit truth、其他 Agent 配置/记忆、跨 Owner 数据和 authority/secret 哨兵在最终模型请求边界全部拒绝。
 
 ### M4.7 实现 Player Validator 与 Command Commit Gate

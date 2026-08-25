@@ -63,6 +63,7 @@ const finishInput = {
   validationStatus: 'valid' as const,
   usageAccounting: 'providerReported' as const,
   costAccounting: 'allInputAtCacheMiss' as const,
+  validatedOutput: { candidateActionId: 'candidate-1' } as const,
 }
 
 describe('database model attempt control', () => {

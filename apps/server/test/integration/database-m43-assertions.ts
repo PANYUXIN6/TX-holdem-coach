@@ -233,6 +233,7 @@ export async function assertM43ModelAttemptControl(
         validationStatus: 'valid',
         usageAccounting: 'providerReported',
         costAccounting: 'allInputAtCacheMiss',
+        validatedOutput: { accepted: true },
       }),
     ).resolves.toBe('budgetExceeded')
 
@@ -289,6 +290,7 @@ export async function assertM43ModelAttemptControl(
           validationStatus: 'invalid',
           usageAccounting: 'providerReported',
           costAccounting: 'allInputAtCacheMiss',
+          validatedOutput: null,
         }),
       ).resolves.toBe('recorded')
     }
@@ -348,6 +350,7 @@ export async function assertM43ModelAttemptControl(
         validationStatus: 'invalid',
         usageAccounting: 'providerReported',
         costAccounting: 'allInputAtCacheMiss',
+        validatedOutput: null,
       }),
     ).resolves.toBe('recorded')
     await coordinator.workerControl.renewLease(claim.authority)
@@ -457,6 +460,7 @@ export async function assertM43ModelAttemptControl(
       validationStatus: 'valid' as const,
       usageAccounting: 'providerReported' as const,
       costAccounting: 'allInputAtCacheMiss' as const,
+      validatedOutput: { accepted: true } as const,
     })
 
     const fencingFixture = await createStartedAttemptFixture('fencing')
@@ -646,6 +650,7 @@ export async function assertM43ModelAttemptControl(
         validationStatus: 'valid',
         usageAccounting: 'providerReported',
         costAccounting: 'allInputAtCacheMiss',
+        validatedOutput: { accepted: true },
       }),
     ).resolves.toBe('stale')
     await expect(

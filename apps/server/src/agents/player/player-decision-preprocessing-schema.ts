@@ -243,7 +243,7 @@ const UnavailableOutcomeFactSchema = z.strictObject({
   assumptionCodes: z.array(M45AssumptionCodeSchema),
 })
 
-const CandidateOutcomeDataSchema = z.strictObject({
+export const CandidateOutcomeDataSchema = z.strictObject({
   candidateOutcomeSchemaVersion: z.literal(1),
   projectorVersion: z.literal(1),
   sourceRefs: z.array(FactSourceRefSchema),
@@ -331,7 +331,7 @@ function bound<Value extends z.ZodType>(data: Value) {
   })
 }
 
-const PlayerDecisionPreprocessingResultDataSchema = z
+export const PlayerDecisionPreprocessingResultDataSchema = z
   .strictObject({
     binding: PlayerDecisionAnalysisBindingSchema,
     preprocessingResultSchemaVersion: z.literal(1),

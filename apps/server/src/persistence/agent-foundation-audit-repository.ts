@@ -51,7 +51,7 @@ const PositivePostgresIntegerSchema = z
 const StartAgentAttemptAuditInputSchema = z.strictObject({
   sessionId: z.uuid(),
   agentRunId: z.uuid(),
-  stage: StableAuditCodeSchema,
+  stage: CanonicalAuditReferenceIdSchema,
   provider: CanonicalAuditReferenceIdSchema,
   model: CanonicalAuditReferenceIdSchema,
   attemptType: StableAuditCodeSchema,
@@ -251,7 +251,7 @@ const LockedCapabilityInvocationReservationRowSchema = z.strictObject({
 const BudgetedAttemptStartInputSchema = z.strictObject({
   sessionId: z.uuid(),
   agentRunId: z.uuid(),
-  stage: StableAuditCodeSchema,
+  stage: CanonicalAuditReferenceIdSchema,
   provider: CanonicalAuditReferenceIdSchema,
   model: CanonicalAuditReferenceIdSchema,
   attemptType: z.enum(['initial', 'correction']),

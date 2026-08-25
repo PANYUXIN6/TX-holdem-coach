@@ -10,6 +10,7 @@ import type {
   RuntimeComponentReference,
   RuntimeDefinitionBase,
 } from '../foundation/runtime-definition.js'
+import { PLAYER_MODEL_INPUT_LIMITS } from './player-model-input-limits.js'
 
 const playerCommitGate = Object.freeze({
   runtimeType: 'player' as const,
@@ -49,7 +50,7 @@ export const playerRuntimeBudgetPolicy: RuntimeBudgetPolicy<'player'> =
       return createExecutionBudget({
         budgetSchemaVersion: 1,
         maxAttempts: 3,
-        maxInputTokens: 12_000,
+        maxInputTokens: PLAYER_MODEL_INPUT_LIMITS.maximumRunInputTokens,
         maxOutputTokens: 1_500,
         maxWallClockMs: parsed.decisionDeadlineSeconds * 1_000,
         maxCapabilityInvocations: 4,

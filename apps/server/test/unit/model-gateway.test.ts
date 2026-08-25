@@ -227,6 +227,9 @@ describe('single-provider model gateway', () => {
     expect(control.finishes).toMatchObject([
       { accepted: true, validationStatus: 'valid' },
     ])
+    expect(control.finishes[0]).toMatchObject({
+      validatedOutput: { choice: 'call' },
+    })
   })
 
   test('binds an accepted Attempt hash to the final semantic value', async () => {

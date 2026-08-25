@@ -21,6 +21,11 @@ export type PayloadKind =
   | 'agentRunConfiguration'
   | 'agentExecutionBudget'
   | 'agentAttempt'
+  | 'playerDecisionAuditSnapshot'
+  | 'playerDecisionCandidateSet'
+  | 'playerDecisionModelProjection'
+  | 'playerDecisionModelChoice'
+  | 'playerDecisionValidatorResult'
 
 export class UnknownPayloadVersionError extends Error {
   public constructor(public readonly payloadKind: PayloadKind) {
@@ -45,6 +50,7 @@ export type DataCorruptionKind =
   | 'invalidCapabilityInvocationAudit'
   | 'invalidPlayerObservation'
   | 'invalidPlayerDecisionReference'
+  | 'invalidPlayerDecision'
 
 export class PersistenceDataCorruptionError extends Error {
   public constructor(public readonly corruption: DataCorruptionKind) {
@@ -147,6 +153,13 @@ export class CapabilityInvocationAuditTransitionError extends Error {
   }
 }
 
+export class PlayerDecisionTransitionError extends Error {
+  public constructor() {
+    super('Player Decision 持久化状态无法推进。')
+    this.name = 'PlayerDecisionTransitionError'
+  }
+}
+
 export class DatabaseOperationError extends Error {
   public constructor() {
     super('数据库操作失败。')
@@ -173,6 +186,7 @@ export function isRepositoryDomainError(error: unknown): error is Error {
     error instanceof HandAuditTransitionError ||
     error instanceof AgentAttemptAuditTransitionError ||
     error instanceof CapabilityInvocationAuditTransitionError ||
+    error instanceof PlayerDecisionTransitionError ||
     error instanceof DatabaseOperationError
   )
 }

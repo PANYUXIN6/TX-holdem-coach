@@ -6,11 +6,11 @@
 
 远程测试按责任分成两套独立入口，不再把应用级流程混入数据库持久化验收：
 
-- `db:test:*`：只验证 migration、Schema、Repository SQL、事务原子性、级联与 PostgreSQL 锁语义；当前拥有 `m22`–`m28`、`m35` 设置持久化、`m44` Player 观察 Repository/共享锁及 `m45` 决策参考窄读，入口是 `database-infrastructure.test.ts`。
-- `postgres:e2e:*`：只验证确实需要贯穿应用服务与 PostgreSQL 的跨层流程；里程碑范围固定为 `m31`–`m37`、`m42`–`m45`，入口是 `postgres-application-e2e.test.ts`。
+- `db:test:*`：只验证 migration、Schema、Repository SQL、事务原子性、级联与 PostgreSQL 锁语义；当前拥有 `m22`–`m28`、`m35`、`m44`–`m46`，入口是 `database-infrastructure.test.ts`。
+- `postgres:e2e:*`：只验证确实需要贯穿应用服务与 PostgreSQL 的跨层流程；里程碑范围固定为 `m31`–`m37`、`m42`–`m46`，入口是 `postgres-application-e2e.test.ts`。
 - `test/unit` 与 `test/service`：领域计算、Codec、错误分类、HTTP 映射、Provider 和服务分支必须优先在离线测试中验证，不得为了复用真实数据库夹具而放入上述远程套件。
 
-两套远程入口共享 `database-test-harness.ts` 中的迁移准备、连接标签、阶段报告与连接清理，但不共享测试选择。M3.1 Session Command Executor 断言独立位于 `postgres-e2e-m31-assertions.ts`，database 入口不会加载其应用层依赖；M3.5 的持久化断言位于 `database-m35-assertions.ts`，不导入 HTTP、Persona 或设置服务，HTTP 冒烟独立位于 `postgres-e2e-m35-assertions.ts`。M4.5 database 断言只证明 Hand checkpoint、Persona snapshot、owner scope 与 session/hand 镜像支撑决策参考窄读，不导入 Player 预处理器；E2E 断言才从真实 leased/running Run 串接认证 observation、决策参考 authority、空覆盖 StrategyPack 与固定三项 Capability Plan，验证三次成功审计、最终认证聚合以及预处理阶段不提交动作或发布 SSE。CLI 计划会拒绝把应用专属里程碑交给 `db:test:*`，也会拒绝把持久化专属里程碑交给 `postgres:e2e:*`；`m45` 因分别拥有上述两类不同证据而在两套入口各注册一次。
+两套远程入口共享迁移准备、连接标签、阶段报告与连接清理，但不共享测试选择。M4.6 database 只验证专属表的复合身份、三阶段矩阵、Attempt 外键、唯一性和 Session 级联；E2E 才从真实 running Run 串接认证 observation、M4.5 Capability Plan、快照先落库、第二/第三 Guard、fake Provider、selected 原子交接、同 Run selected 恢复与 ResultPort，并证明不提交动作、不终结 Run、不发布 Session 事件。
 
 ## 固定执行顺序
 
@@ -26,7 +26,7 @@
 
 ## 进度与失败定位
 
-每套远程入口先执行迁移兼容性准备，再把其拥有的里程碑注册为独立 Vitest 测试，并在首个失败或阶段超时后停止调度同套后续里程碑。数据库套件拥有 M2.2–M2.8、M3.5 设置持久化、M4.4 观察 Repository/共享锁和 M4.5 决策参考窄读；E2E 套件拥有 M3.1–M3.7、M4.2–M4.5，其中 M3.5 只保留一次设置 HTTP→PostgreSQL 冒烟，M4.4 从 leased/running Player Run 贯穿到认证观察，M4.5 再贯穿决策参考与纯预处理。每个阶段即时输出：
+每套远程入口先执行迁移兼容性准备，再把其拥有的里程碑注册为独立 Vitest 测试，并在首个失败或阶段超时后停止调度同套后续里程碑。数据库套件拥有 M2.2–M2.8、M3.5、M4.4–M4.6；E2E 套件拥有 M3.1–M3.7、M4.2–M4.6。每个阶段即时输出：
 
 ```text
 [database-test] START M2.7 audit persistence

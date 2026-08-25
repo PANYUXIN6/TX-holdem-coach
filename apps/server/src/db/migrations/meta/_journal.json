@@ -15,6 +15,20 @@
       "when": 1787219045643,
       "tag": "0001_remove_kimi_data",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787643203761,
+      "tag": "0002_handy_marvel_apes",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787661904659,
+      "tag": "0003_funny_swarm",
+      "breakpoints": true
     }
   ]
 }

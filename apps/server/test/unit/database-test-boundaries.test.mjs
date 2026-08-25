@@ -95,6 +95,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm35',
       'm44',
       'm45',
+      'm46',
     ])
     expect(persistenceEntry).not.toContain('postgres-application-e2e')
     expect(persistenceEntry).toContain('database-repository-assertions')
@@ -145,6 +146,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm43',
       'm44',
       'm45',
+      'm46',
     ])
     expect(applicationEntry).not.toContain('database-schema-assertions')
     expect(applicationEntry).toContain('postgres-e2e-m35-assertions')
@@ -159,9 +161,7 @@ describe('remote PostgreSQL test boundaries', () => {
     expect(applicationM45Assertions).toContain(
       'createPostgresPlayerDecisionReferencePort',
     )
-    expect(applicationM45Assertions).toContain(
-      'createCapabilityExecutor',
-    )
+    expect(applicationM45Assertions).toContain('createCapabilityExecutor')
     expect(applicationM45Assertions).toContain(
       'executePlayerDecisionPreprocessingPlan',
     )

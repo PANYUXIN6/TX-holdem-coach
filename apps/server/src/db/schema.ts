@@ -691,6 +691,16 @@ export const agentRuns = appPrivateSchema.table(
       table.ownerId,
       table.sessionId,
     ),
+    unique('agent_runs_player_decision_identity_unique').on(
+      table.id,
+      table.ownerId,
+      table.sessionId,
+      table.handId,
+      table.participantId,
+      table.sourceStateVersion,
+      table.decisionRequestId,
+      table.runtime,
+    ),
     uniqueIndex('agent_runs_one_active_player_decision')
       .on(table.sessionId, table.sourceStateVersion, table.participantId)
       .where(
@@ -868,6 +878,12 @@ export const agentAttempts = appPrivateSchema.table(
       table.agentRunId,
       table.attemptNumber,
     ),
+    unique('agent_attempts_id_run_owner_session_unique').on(
+      table.id,
+      table.agentRunId,
+      table.ownerId,
+      table.sessionId,
+    ),
     index('agent_attempts_session_created_idx').on(
       table.sessionId,
       table.createdAt,
@@ -902,6 +918,188 @@ export const agentAttempts = appPrivateSchema.table(
         AND ${table.attemptPayloadVersion} > 0
         AND jsonb_typeof(${table.attemptPayload}) = 'object'
       )`,
+    ),
+  ],
+)
+
+export const playerDecisions = appPrivateSchema.table(
+  'player_decisions',
+  {
+    id: uuid('id').primaryKey(),
+    agentRunId: uuid('agent_run_id').notNull(),
+    ownerId: uuid('owner_id').notNull(),
+    sessionId: uuid('session_id').notNull(),
+    handId: uuid('hand_id').notNull(),
+    participantId: uuid('participant_id').notNull(),
+    sourceStateVersion: safeBigint('source_state_version').notNull(),
+    decisionRequestId: uuid('decision_request_id').notNull(),
+    runtime: text('runtime').notNull(),
+    recordVersion: integer('record_version').notNull(),
+    status: text('status').notNull(),
+    decisionAuditSnapshotPayloadVersion: integer(
+      'decision_audit_snapshot_payload_version',
+    ).notNull(),
+    decisionAuditSnapshotPayload: objectPayload(
+      'decision_audit_snapshot_payload',
+    ).notNull(),
+    candidateSetPayloadVersion: integer(
+      'candidate_set_payload_version',
+    ).notNull(),
+    candidateSetPayload: objectPayload('candidate_set_payload').notNull(),
+    modelProjectionPayloadVersion: integer('model_projection_payload_version'),
+    modelProjectionPayload: objectPayload('model_projection_payload'),
+    modelChoicePayloadVersion: integer('model_choice_payload_version'),
+    modelChoicePayload: objectPayload('model_choice_payload'),
+    validatorResultPayloadVersion: integer('validator_result_payload_version'),
+    validatorResultPayload: objectPayload('validator_result_payload'),
+    acceptedAttemptId: uuid('accepted_attempt_id'),
+    createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
+    modelPreparedAt: zonedTimestamp('model_prepared_at'),
+    selectedAt: zonedTimestamp('selected_at'),
+    updatedAt: zonedTimestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      name: 'player_decisions_run_identity_fk',
+      columns: [
+        table.agentRunId,
+        table.ownerId,
+        table.sessionId,
+        table.handId,
+        table.participantId,
+        table.sourceStateVersion,
+        table.decisionRequestId,
+        table.runtime,
+      ],
+      foreignColumns: [
+        agentRuns.id,
+        agentRuns.ownerId,
+        agentRuns.sessionId,
+        agentRuns.handId,
+        agentRuns.participantId,
+        agentRuns.sourceStateVersion,
+        agentRuns.decisionRequestId,
+        agentRuns.runtime,
+      ],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'player_decisions_participant_scope_fk',
+      columns: [table.participantId, table.sessionId, table.ownerId],
+      foreignColumns: [
+        sessionAgents.participantId,
+        sessionAgents.sessionId,
+        sessionAgents.ownerId,
+      ],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'player_decisions_accepted_attempt_scope_fk',
+      columns: [
+        table.acceptedAttemptId,
+        table.agentRunId,
+        table.ownerId,
+        table.sessionId,
+      ],
+      foreignColumns: [
+        agentAttempts.id,
+        agentAttempts.agentRunId,
+        agentAttempts.ownerId,
+        agentAttempts.sessionId,
+      ],
+    }),
+    unique('player_decisions_agent_run_unique').on(table.agentRunId),
+    index('player_decisions_session_status_idx').on(
+      table.sessionId,
+      table.status,
+      table.updatedAt,
+    ),
+    check(
+      'player_decisions_identity_check',
+      sql`${table.runtime} = 'player'
+        AND ${table.recordVersion} = 1
+        AND ${table.sourceStateVersion} BETWEEN 0 AND 9007199254740991`,
+    ),
+    check(
+      'player_decisions_status_check',
+      sql`${table.status} IN ('auditPrepared', 'modelPrepared', 'selected')`,
+    ),
+    check(
+      'player_decisions_required_payloads_check',
+      sql`${table.decisionAuditSnapshotPayloadVersion} > 0
+        AND jsonb_typeof(${table.decisionAuditSnapshotPayload}) = 'object'
+        AND ${table.candidateSetPayloadVersion} > 0
+        AND jsonb_typeof(${table.candidateSetPayload}) = 'object'`,
+    ),
+    check(
+      'player_decisions_optional_payload_pairs_check',
+      sql`((
+        ${table.modelProjectionPayloadVersion} IS NULL
+        AND ${table.modelProjectionPayload} IS NULL
+      ) OR (
+        ${table.modelProjectionPayloadVersion} IS NOT NULL
+        AND ${table.modelProjectionPayloadVersion} > 0
+        AND ${table.modelProjectionPayload} IS NOT NULL
+        AND jsonb_typeof(${table.modelProjectionPayload}) = 'object'
+      ))
+        AND (
+          (
+          ${table.modelChoicePayloadVersion} IS NULL
+          AND ${table.modelChoicePayload} IS NULL
+          ) OR (
+          ${table.modelChoicePayloadVersion} IS NOT NULL
+          AND ${table.modelChoicePayloadVersion} > 0
+          AND ${table.modelChoicePayload} IS NOT NULL
+          AND jsonb_typeof(${table.modelChoicePayload}) = 'object'
+          )
+        )
+        AND (
+          (
+          ${table.validatorResultPayloadVersion} IS NULL
+          AND ${table.validatorResultPayload} IS NULL
+          ) OR (
+          ${table.validatorResultPayloadVersion} IS NOT NULL
+          AND ${table.validatorResultPayloadVersion} > 0
+          AND ${table.validatorResultPayload} IS NOT NULL
+          AND jsonb_typeof(${table.validatorResultPayload}) = 'object'
+          )
+        )`,
+    ),
+    check(
+      'player_decisions_stage_matrix_check',
+      sql`(
+        ${table.status} = 'auditPrepared'
+        AND ${table.modelProjectionPayloadVersion} IS NULL
+        AND ${table.modelChoicePayloadVersion} IS NULL
+        AND ${table.validatorResultPayloadVersion} IS NULL
+        AND ${table.acceptedAttemptId} IS NULL
+        AND ${table.modelPreparedAt} IS NULL
+        AND ${table.selectedAt} IS NULL
+      ) OR (
+        ${table.status} = 'modelPrepared'
+        AND ${table.modelProjectionPayloadVersion} IS NOT NULL
+        AND ${table.modelChoicePayloadVersion} IS NULL
+        AND ${table.validatorResultPayloadVersion} IS NULL
+        AND ${table.acceptedAttemptId} IS NULL
+        AND ${table.modelPreparedAt} IS NOT NULL
+        AND ${table.selectedAt} IS NULL
+      ) OR (
+        ${table.status} = 'selected'
+        AND ${table.modelProjectionPayloadVersion} IS NOT NULL
+        AND ${table.modelChoicePayloadVersion} IS NOT NULL
+        AND ${table.validatorResultPayloadVersion} IS NOT NULL
+        AND ${table.acceptedAttemptId} IS NOT NULL
+        AND ${table.modelPreparedAt} IS NOT NULL
+        AND ${table.selectedAt} IS NOT NULL
+      )`,
+    ),
+    check(
+      'player_decisions_timestamp_order_check',
+      sql`(${table.modelPreparedAt} IS NULL OR ${table.modelPreparedAt} >= ${table.createdAt})
+        AND (${table.selectedAt} IS NULL OR ${table.selectedAt} >= ${table.createdAt})
+        AND (
+          ${table.modelPreparedAt} IS NULL
+          OR ${table.selectedAt} IS NULL
+          OR ${table.selectedAt} >= ${table.modelPreparedAt}
+        )`,
     ),
   ],
 )

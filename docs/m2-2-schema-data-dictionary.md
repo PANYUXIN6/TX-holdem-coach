@@ -1,10 +1,10 @@
 # M2.2 私有 Schema 数据字典
 
-- 适用版本：首发前唯一开发 baseline
+- 适用版本：首发 baseline + M4.6 决策持久化迁移
 - 数据库：Supabase Postgres
 - Schema：`app_private`
-- 表数量：13
-- 事实来源：`apps/server/src/db/schema.ts`、`apps/server/src/db/migrations/0000_baseline.sql`
+- 表数量：14
+- 事实来源：`apps/server/src/db/schema.ts`、`apps/server/src/db/migrations/0000_baseline.sql`、`apps/server/src/db/migrations/0002_handy_marvel_apes.sql`、`apps/server/src/db/migrations/0003_funny_swarm.sql`
 
 ## 1. 这套 Schema 解决什么问题
 
@@ -62,6 +62,8 @@ erDiagram
   sessions ||--o{ agent_runs : executes
   agent_runs ||--o{ agent_attempts : retries
   agent_runs ||--o{ agent_capability_invocations : invokes
+  agent_runs ||--o| player_decisions : decides
+  agent_attempts ||--o| player_decisions : accepted_by
 ```
 
 ## 3. 归属、场次和阵容
@@ -394,6 +396,29 @@ erDiagram
 | `started_at` | `timestamptz`，非空 | 调用开始时间。 |
 | `completed_at` | `timestamptz`，可空 | 调用结束时间；为空表示已在父 Run 锁内完成预算裁决、但尚未终结的 Invocation 票据，该行已计入 Run/Grant 调用额度。 |
 | `created_at` | `timestamptz`，非空，默认当前时间 | 审计行创建时间。 |
+
+### 5.4 `player_decisions`
+
+**作用**：保存 M4.6 Player 决策的完整审计快照、候选集合、最小模型投影和已验收 bounded choice，只表达 `auditPrepared → modelPrepared → selected` 三个 durable stage。
+
+**一行代表**：一条 Player Run 的唯一决策记录。
+
+| 字段组 | 类型与约束 | 含义 |
+| --- | --- | --- |
+| `id`、`agent_run_id` | `uuid`；PK、Run 唯一 | 一条 Run 至多一份 Decision。 |
+| `owner_id`、`session_id`、`hand_id`、`participant_id`、`source_state_version`、`decision_request_id`、`runtime` | 复合 FK → `agent_runs` | 完整镜像 Player Run 身份；`runtime` 固定为 `player`。 |
+| `record_version`、`status` | 正整数、封闭文本 | 当前 record version 为 1；status 只允许三个 durable stage。 |
+| `decision_audit_snapshot_*`、`candidate_set_*` | 必填版本/JSONB 对 | 完整安全审计事实与候选快照，创建首阶段时一次写入。 |
+| `model_projection_*` | 可空版本/JSONB 对 | `modelPrepared` 起必填的最小模型投影。 |
+| `model_choice_*`、`validator_result_*` | 可空版本/JSONB 对 | `selected` 才存在的严格输出和语义验收结果。 |
+| `accepted_attempt_id` | 可空复合 FK → `agent_attempts` | `selected` 精确绑定同 Run/Owner/Session 的 accepted Attempt。 |
+| `created_at`、`model_prepared_at`、`selected_at`、`updated_at` | `timestamptz` | 阶段时间矩阵与单调顺序由 CHECK 固定。 |
+
+**关键规则**：
+
+- 数据库 CHECK 固定 payload pair、三阶段字段矩阵和时间顺序；每个可空 pair 的非空分支显式要求 version/payload 双方 `IS NOT NULL`，避免 PostgreSQL 三值逻辑接受单边 NULL；不存在 M4.7/M4.8/M4.9 的预建终态或 Memory 字段。
+- accepted Attempt 的 `completed + accepted + valid` 语义由 Player 专属 control 在同一事务锁定 Run/Attempt/Decision 后复验，不能由跨表 CHECK 伪装。
+- 删除 Session 时 Decision 级联删除；Owner 级 `app_settings` 不受影响。
 
 ## 6. 应用设置
 

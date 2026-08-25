@@ -22,6 +22,7 @@ const BUSINESS_TABLES = [
   'command_ledger',
   'hands',
   'owners',
+  'player_decisions',
   'session_agents',
   'session_events',
   'session_participants',

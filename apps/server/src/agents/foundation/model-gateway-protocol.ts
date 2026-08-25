@@ -111,7 +111,9 @@ export type AttemptStartDecision =
         | 'local_persistence_error'
     }
 
-export interface ModelAttemptControlPort {
+export interface ModelAttemptControlPort<
+  TOutput extends JsonValue = JsonValue,
+> {
   startAttempt(input: {
     readonly attemptType: 'initial' | 'correction'
     readonly routingReasonCode: null | 'content_correction'
@@ -141,6 +143,7 @@ export interface ModelAttemptControlPort {
       | 'allInputAtCacheMiss'
       | 'reservedUpperBound'
       | 'notIncurred'
+    readonly validatedOutput: TOutput | null
   }): Promise<'recorded' | 'stale' | 'budgetExceeded' | 'authorityLost'>
 }
 
@@ -162,7 +165,7 @@ export interface StructuredGenerationInput<
   readonly signal: AbortSignal
   readonly stage: string
   readonly scanner: SensitiveValueScanner
-  readonly control: ModelAttemptControlPort
+  readonly control: ModelAttemptControlPort<TOutput>
 }
 
 export type StructuredGenerationResult<TOutput extends JsonValue> =

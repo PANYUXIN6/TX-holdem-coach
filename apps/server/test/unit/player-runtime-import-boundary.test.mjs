@@ -151,4 +151,28 @@ describe('Player runtime import boundary', () => {
       }
     }
   })
+
+  test('keeps the M4.6 executor behind the certified Player generation seam', async () => {
+    const executor = await readFile(
+      'src/agents/player/player-runtime-executor.ts',
+      'utf8',
+    )
+    const bridge = await readFile(
+      'src/agents/player/player-model-generation.ts',
+      'utf8',
+    )
+    const playerFiles = await recursiveSourceFiles('src/agents/player')
+    const structuredInputOwners = []
+    for (const file of playerFiles) {
+      const source = await readFile(file, 'utf8')
+      if (source.includes('.generateStructured('))
+        structuredInputOwners.push(file)
+    }
+    expect(executor).not.toContain('.generateStructured(')
+    expect(executor).toContain('generatePlayerBoundedChoice')
+    expect(bridge).toContain("stage: 'player.bounded-choice'")
+    expect(structuredInputOwners).toEqual([
+      'src/agents/player/player-model-generation.ts',
+    ])
+  })
 })

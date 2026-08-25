@@ -29,6 +29,7 @@ export function createPlayerObservationFixture(
   input: {
     readonly playerCount?: 6 | 7 | 8 | 9
     readonly actorSeat?: number
+    readonly actorStack?: number
     readonly withPublicAction?: boolean
     readonly publicAction?: PokerCommand['action']
   } = {},
@@ -45,15 +46,31 @@ export function createPlayerObservationFixture(
     { length: playerCount },
     (_, seatNumber) => seatNumber,
   )
-  const seats = participantSeatNumbers.map((seatNumber) => ({
-    seatNumber,
-    playerId: participantIdForSeat(seatNumber),
-    isUser: seatNumber === 0,
-    stack: seatNumber === 1 ? 1_990 : seatNumber === 2 ? 1_980 : 2_000,
-    status: 'active' as const,
-    streetContribution: seatNumber === 1 ? 10 : seatNumber === 2 ? 20 : 0,
-    totalContribution: seatNumber === 1 ? 10 : seatNumber === 2 ? 20 : 0,
-  }))
+  const actorStack = input.actorStack
+  if (
+    actorStack !== undefined &&
+    (!Number.isSafeInteger(actorStack) || actorStack <= 0)
+  ) {
+    throw new RangeError('测试行动者筹码无效。')
+  }
+  const blindContributionForSeat = (seatNumber: number) =>
+    seatNumber === 1 ? 10 : seatNumber === 2 ? 20 : 0
+  const startingStackForSeat = (seatNumber: number) =>
+    seatNumber === targetActorSeat && actorStack !== undefined
+      ? actorStack + blindContributionForSeat(seatNumber)
+      : 2_000
+  const seats = participantSeatNumbers.map((seatNumber) => {
+    const blindContribution = blindContributionForSeat(seatNumber)
+    return {
+      seatNumber,
+      playerId: participantIdForSeat(seatNumber),
+      isUser: seatNumber === 0,
+      stack: startingStackForSeat(seatNumber) - blindContribution,
+      status: 'active' as const,
+      streetContribution: blindContribution,
+      totalContribution: blindContribution,
+    }
+  })
   const holeCards = [
     ...participantSeatNumbers.slice(1),
     participantSeatNumbers[0]!,
@@ -100,7 +117,7 @@ export function createPlayerObservationFixture(
       positions: assignLogicalPositions(0, participantSeatNumbers),
       startingStacks: participantSeatNumbers.map((seatNumber) => ({
         seatNumber,
-        stack: 2_000,
+        stack: startingStackForSeat(seatNumber),
       })),
     },
   })
@@ -167,7 +184,7 @@ export function createPlayerObservationFixture(
     completedHandCount: 0,
     seatAccounting: participantSeatNumbers.map((seatNumber) => ({
       seatNumber,
-      cumulativeBuyIn: 2_000,
+      cumulativeBuyIn: startingStackForSeat(seatNumber),
     })),
     lastCompletedHandSummary: null,
   })

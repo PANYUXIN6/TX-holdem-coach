@@ -448,6 +448,7 @@ export function createModelGateway(input: {
               costAccounting: adapterInvoked
                 ? 'reservedUpperBound'
                 : 'notIncurred',
+              validatedOutput: null,
             })
             if (finish !== 'recorded') {
               return Object.freeze({
@@ -499,6 +500,7 @@ export function createModelGateway(input: {
               usageAccounting:
                 usage === null ? 'reservedUpperBound' : 'providerReported',
               costAccounting,
+              validatedOutput: null,
             })
             return Object.freeze({
               kind: 'failed',
@@ -525,6 +527,7 @@ export function createModelGateway(input: {
               validationStatus: 'notRun',
               usageAccounting: 'reservedUpperBound',
               costAccounting: 'reservedUpperBound',
+              validatedOutput: null,
             })
             if (finish !== 'recorded') {
               return Object.freeze({
@@ -565,6 +568,7 @@ export function createModelGateway(input: {
               validationStatus: 'notRun',
               usageAccounting: 'providerReported',
               costAccounting: 'reservedUpperBound',
+              validatedOutput: null,
             })
             return Object.freeze({
               kind: 'failed',
@@ -599,6 +603,7 @@ export function createModelGateway(input: {
                 usage.cacheReadInputTokens === undefined
                   ? 'allInputAtCacheMiss'
                   : 'providerReportedSplit',
+              validatedOutput: null,
             })
             return Object.freeze({
               kind: 'failed',
@@ -712,6 +717,7 @@ export function createModelGateway(input: {
                 usage.cacheReadInputTokens === undefined
                   ? 'allInputAtCacheMiss'
                   : 'providerReportedSplit',
+              validatedOutput: null,
             })
             return Object.freeze({
               kind: 'failed',
@@ -739,6 +745,7 @@ export function createModelGateway(input: {
                 usage.cacheReadInputTokens === undefined
                   ? 'allInputAtCacheMiss'
                   : 'providerReportedSplit',
+              validatedOutput: null,
             })
             return Object.freeze({
               kind: 'failed',
@@ -765,6 +772,7 @@ export function createModelGateway(input: {
               usage.cacheReadInputTokens === undefined
                 ? 'allInputAtCacheMiss'
                 : 'providerReportedSplit',
+            validatedOutput: accepted ? value! : null,
           })
           if (finish !== 'recorded') {
             return Object.freeze({

@@ -82,24 +82,123 @@ export interface BettingActionEvidence {
   readonly isFullRaise: boolean
 }
 
-export type BettingContinuationProjection =
+export type LegalCandidateId =
+  | 'fold'
+  | 'check'
+  | `call:${number}`
+  | `bet:${number}`
+  | `raise:${number}`
+  | `allIn:${number}`
+
+export type LegalCandidateTargetKind =
+  SuggestedTarget['kind'] | 'call' | 'allIn' | 'notApplicable'
+
+declare const projectedLegalCandidateBrand: unique symbol
+
+export interface ProjectedLegalCandidate {
+  readonly candidateSchemaVersion: 1
+  readonly candidateId: LegalCandidateId
+  readonly action: PokerCommand['action']
+  readonly targetStreetCommitment: number | null
+  readonly targetKind: LegalCandidateTargetKind
+  readonly [projectedLegalCandidateBrand]: never
+}
+
+type DecodedLegalCandidateId =
   | {
-      readonly kind: 'sameStreet'
-      readonly state: BettingProjectionState
+      readonly actionType: 'fold' | 'check'
+      readonly targetStreetCommitment: null
     }
   | {
-      readonly kind: 'nextStreet'
-      readonly state: BettingProjectionState
+      readonly actionType: 'call' | 'bet' | 'raise' | 'allIn'
+      readonly targetStreetCommitment: number
     }
-  | {
-      readonly kind: 'showdown'
-      readonly seats: readonly BettingProjectionSeat[]
-      readonly forcesRunout: boolean
-    }
-  | {
-      readonly kind: 'complete'
-      readonly seats: readonly BettingProjectionSeat[]
-    }
+
+function decodeLegalCandidateId(
+  candidateId: string,
+): DecodedLegalCandidateId | null {
+  if (candidateId === 'fold' || candidateId === 'check') {
+    return { actionType: candidateId, targetStreetCommitment: null }
+  }
+  const match = /^(call|bet|raise|allIn):([1-9][0-9]*)$/.exec(candidateId)
+  if (match === null) return null
+  const targetStreetCommitment = Number(match[2])
+  if (!Number.isSafeInteger(targetStreetCommitment)) return null
+  return {
+    actionType: match[1] as 'call' | 'bet' | 'raise' | 'allIn',
+    targetStreetCommitment,
+  }
+}
+
+export function isLegalCandidateSemanticallyConsistent(input: {
+  readonly candidateId: string
+  readonly action: PokerCommand['action']
+  readonly targetStreetCommitment: number | null
+  readonly targetKind: LegalCandidateTargetKind
+}): boolean {
+  const decoded = decodeLegalCandidateId(input.candidateId)
+  if (
+    decoded === null ||
+    input.action.type !== decoded.actionType ||
+    input.targetStreetCommitment !== decoded.targetStreetCommitment
+  ) {
+    return false
+  }
+  switch (decoded.actionType) {
+    case 'fold':
+    case 'check':
+      return input.targetKind === 'notApplicable'
+    case 'call':
+      return input.targetKind === 'call'
+    case 'allIn':
+      return input.targetKind === 'allIn'
+    case 'bet':
+    case 'raise':
+      return (
+        input.action.type === decoded.actionType &&
+        input.action.targetStreetCommitment ===
+          decoded.targetStreetCommitment &&
+        (input.targetKind === 'minimum' ||
+          input.targetKind === 'halfPot' ||
+          input.targetKind === 'twoThirdsPot' ||
+          input.targetKind === 'pot')
+      )
+  }
+}
+
+export interface BettingContinuationTopology {
+  readonly contenderSeatNumbers: readonly number[]
+  readonly actionableSeatNumbers: readonly number[]
+  readonly owingActionSeatNumbers: readonly number[]
+  readonly responderSeatNumbers: readonly number[]
+  readonly canRaiseSeatNumbers: readonly number[]
+  readonly handEndsByFold: boolean
+  readonly forcesRunout: boolean
+  readonly showdownForced: boolean
+  readonly remainingStreetsToDeal: 0 | 1 | 2 | 3
+  readonly bettingRoundClosesImmediately: boolean
+  readonly furtherBettingPossible: boolean
+}
+
+export type BettingContinuationProjection = BettingContinuationTopology &
+  (
+    | {
+        readonly kind: 'sameStreet'
+        readonly state: BettingProjectionState
+      }
+    | {
+        readonly kind: 'nextStreet'
+        readonly state: BettingProjectionState
+      }
+    | {
+        readonly kind: 'showdown'
+        readonly seats: readonly BettingProjectionSeat[]
+      }
+    | {
+        readonly kind: 'complete'
+        readonly seats: readonly BettingProjectionSeat[]
+      }
+  )
 
 const ACTION_STREETS = new Set<BettingProjectionStreet>([
   'preflop',
@@ -108,6 +207,7 @@ const ACTION_STREETS = new Set<BettingProjectionStreet>([
   'river',
 ])
 const committedBettingActions = new WeakSet<object>()
+const projectedLegalCandidates = new WeakSet<object>()
 
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -378,6 +478,174 @@ export function createCommittedActionProof(
   return proof
 }
 
+function candidateIdForAction(
+  action: PokerCommand['action'],
+  targetStreetCommitment: number | null,
+): LegalCandidateId {
+  switch (action.type) {
+    case 'fold':
+    case 'check':
+      return action.type
+    case 'call':
+      if (targetStreetCommitment === null) {
+        throw new RangeError('跟注候选必须有本街目标投入。')
+      }
+      return `call:${targetStreetCommitment}`
+    case 'bet':
+    case 'raise':
+      return `${action.type}:${action.targetStreetCommitment}`
+    case 'allIn':
+      if (targetStreetCommitment === null) {
+        throw new RangeError('全下候选必须有本街目标投入。')
+      }
+      return `allIn:${targetStreetCommitment}`
+  }
+}
+
+function createProjectedLegalCandidate(input: {
+  readonly action: PokerCommand['action']
+  readonly targetStreetCommitment: number | null
+  readonly targetKind: LegalCandidateTargetKind
+}): ProjectedLegalCandidate {
+  const candidateData = {
+    candidateSchemaVersion: 1 as const,
+    candidateId: candidateIdForAction(
+      input.action,
+      input.targetStreetCommitment,
+    ),
+    action: input.action,
+    targetStreetCommitment: input.targetStreetCommitment,
+    targetKind: input.targetKind,
+  }
+  if (!isLegalCandidateSemanticallyConsistent(candidateData)) {
+    throw new RangeError('有限合法候选 ID 与动作语义不一致。')
+  }
+  const candidate = deepFreeze(
+    candidateData as unknown as ProjectedLegalCandidate,
+  )
+  projectedLegalCandidates.add(candidate)
+  return candidate
+}
+
+export function createProjectedLegalCandidates(
+  state: BettingProjectionState,
+): readonly ProjectedLegalCandidate[] {
+  const actor = state.seats.find(
+    (seat) => seat.seatNumber === state.currentActorSeatNumber,
+  )
+  if (actor === undefined) {
+    throw new RangeError('下注投影缺少当前行动座位。')
+  }
+  const candidates: ProjectedLegalCandidate[] = []
+  for (const legalAction of getProjectedLegalActions(state)) {
+    switch (legalAction.type) {
+      case 'fold':
+      case 'check':
+        candidates.push(
+          createProjectedLegalCandidate({
+            action: { type: legalAction.type },
+            targetStreetCommitment: null,
+            targetKind: 'notApplicable',
+          }),
+        )
+        break
+      case 'call': {
+        const target = actor.streetContribution + legalAction.amount
+        candidates.push(
+          createProjectedLegalCandidate({
+            action: { type: 'call' },
+            targetStreetCommitment: target,
+            targetKind: 'call',
+          }),
+        )
+        break
+      }
+      case 'bet':
+      case 'raise': {
+        const byTarget = new Map<number, SuggestedTarget>()
+        for (const target of legalAction.suggestedTargets) {
+          if (!byTarget.has(target.targetStreetCommitment)) {
+            byTarget.set(target.targetStreetCommitment, target)
+          }
+        }
+        for (const target of [...byTarget.values()].sort(
+          (left, right) =>
+            left.targetStreetCommitment - right.targetStreetCommitment,
+        )) {
+          candidates.push(
+            createProjectedLegalCandidate({
+              action: {
+                type: legalAction.type,
+                targetStreetCommitment: target.targetStreetCommitment,
+              },
+              targetStreetCommitment: target.targetStreetCommitment,
+              targetKind: target.kind,
+            }),
+          )
+        }
+        break
+      }
+      case 'allIn':
+        candidates.push(
+          createProjectedLegalCandidate({
+            action: { type: 'allIn' },
+            targetStreetCommitment: legalAction.target,
+            targetKind: 'allIn',
+          }),
+        )
+        break
+    }
+  }
+
+  const ordinaryAllInEquivalent = candidates.find(
+    (candidate) =>
+      (candidate.action.type === 'bet' || candidate.action.type === 'raise') &&
+      candidate.targetStreetCommitment ===
+        actor.streetContribution + actor.stack,
+  )
+  const normalized =
+    ordinaryAllInEquivalent === undefined
+      ? candidates
+      : candidates.filter((candidate) => candidate !== ordinaryAllInEquivalent)
+  return deepFreeze(normalized)
+}
+
+export function createCandidateActionProof(
+  state: BettingProjectionState,
+  candidate: ProjectedLegalCandidate,
+): CommittedBettingActionProof {
+  if (!projectedLegalCandidates.has(candidate)) {
+    throw new RangeError('有限合法候选证明无效。')
+  }
+  const expected = createProjectedLegalCandidates(state).find(
+    (entry) => entry.candidateId === candidate.candidateId,
+  )
+  if (
+    expected === undefined ||
+    !sameJson(
+      {
+        action: expected.action,
+        targetStreetCommitment: expected.targetStreetCommitment,
+        targetKind: expected.targetKind,
+      },
+      {
+        action: candidate.action,
+        targetStreetCommitment: candidate.targetStreetCommitment,
+        targetKind: candidate.targetKind,
+      },
+    )
+  ) {
+    throw new RangeError('有限合法候选与当前下注状态不一致。')
+  }
+  return createCommittedActionProof(
+    {
+      actorSeatNumber: state.currentActorSeatNumber,
+      action: candidate.action,
+    },
+    getProjectedLegalActions(state),
+  )
+}
+
 export function projectBettingTransition(
   state: BettingProjectionState,
   proof: CommittedBettingActionProof,
@@ -540,6 +808,38 @@ function stillOwesAction(
   )
 }
 
+function remainingStreetsToDeal(
+  street: BettingProjectionStreet,
+): 0 | 1 | 2 | 3 {
+  return street === 'preflop'
+    ? 3
+    : street === 'flop'
+      ? 2
+      : street === 'turn'
+        ? 1
+        : 0
+}
+
+function canRaiseFromSeat(
+  state: BettingProjectionState,
+  seatNumber: number,
+): boolean {
+  try {
+    return getProjectedLegalActions({
+      ...state,
+      currentActorSeatNumber: seatNumber,
+    }).some(
+      (action) =>
+        action.type === 'bet' ||
+        action.type === 'raise' ||
+        (action.type === 'allIn' &&
+          action.target > state.bettingRound.currentBet),
+    )
+  } catch {
+    return false
+  }
+}
+
 export function projectActionContinuation(
   stateAfterAction: BettingProjectionState,
   actorSeatNumber: number,
@@ -558,17 +858,45 @@ export function projectActionContinuation(
       (seat.status === 'active' || seat.status === 'allIn'),
   )
   if (contenders.length === 0) throw new RangeError('手牌不得没有竞争者。')
-  if (contenders.length === 1) {
-    return deepFreeze({ kind: 'complete', seats: stateAfterAction.seats })
-  }
   const actionable = contenders.filter(
     (seat) => seat.status === 'active' && seat.stack > 0,
   )
+  const responderSeatNumbers = clockwiseParticipantSeatNumbersAfter(
+    actorSeatNumber,
+    stateAfterAction.participantSeatNumbers,
+  ).filter((seatNumber) => stillOwesAction(seatNumber, stateAfterAction))
+  const topology = {
+    contenderSeatNumbers: contenders.map((seat) => seat.seatNumber),
+    actionableSeatNumbers: actionable.map((seat) => seat.seatNumber),
+    owingActionSeatNumbers: responderSeatNumbers,
+    responderSeatNumbers,
+    canRaiseSeatNumbers: responderSeatNumbers.filter((seatNumber) =>
+      canRaiseFromSeat(stateAfterAction, seatNumber),
+    ),
+    remainingStreetsToDeal: remainingStreetsToDeal(stateAfterAction.street),
+  } as const
+  if (contenders.length === 1) {
+    return deepFreeze({
+      ...topology,
+      kind: 'complete',
+      seats: stateAfterAction.seats,
+      handEndsByFold: true,
+      forcesRunout: false,
+      showdownForced: false,
+      bettingRoundClosesImmediately: true,
+      furtherBettingPossible: false,
+    })
+  }
   if (actionable.length === 0) {
     return deepFreeze({
+      ...topology,
       kind: 'showdown',
       seats: stateAfterAction.seats,
       forcesRunout: stateAfterAction.street !== 'river',
+      handEndsByFold: false,
+      showdownForced: true,
+      bettingRoundClosesImmediately: true,
+      furtherBettingPossible: false,
     })
   }
   if (actionable.length === 1) {
@@ -580,17 +908,28 @@ export function projectActionContinuation(
     )
     if (Math.max(0, matchableLevel - onlyActor.streetContribution) > 0) {
       return deepFreeze({
+        ...topology,
         kind: 'sameStreet',
         state: {
           ...stateAfterAction,
           currentActorSeatNumber: onlyActor.seatNumber,
         },
+        handEndsByFold: false,
+        forcesRunout: false,
+        showdownForced: false,
+        bettingRoundClosesImmediately: false,
+        furtherBettingPossible: true,
       })
     }
     return deepFreeze({
+      ...topology,
       kind: 'showdown',
       seats: stateAfterAction.seats,
       forcesRunout: stateAfterAction.street !== 'river',
+      handEndsByFold: false,
+      showdownForced: true,
+      bettingRoundClosesImmediately: true,
+      furtherBettingPossible: false,
     })
   }
   const nextActorSeatNumber = clockwiseParticipantSeatNumbersAfter(
@@ -599,18 +938,29 @@ export function projectActionContinuation(
   ).find((seatNumber) => stillOwesAction(seatNumber, stateAfterAction))
   if (nextActorSeatNumber !== undefined) {
     return deepFreeze({
+      ...topology,
       kind: 'sameStreet',
       state: {
         ...stateAfterAction,
         currentActorSeatNumber: nextActorSeatNumber,
       },
+      handEndsByFold: false,
+      forcesRunout: false,
+      showdownForced: false,
+      bettingRoundClosesImmediately: false,
+      furtherBettingPossible: true,
     })
   }
   if (stateAfterAction.street === 'river') {
     return deepFreeze({
+      ...topology,
       kind: 'showdown',
       seats: stateAfterAction.seats,
       forcesRunout: false,
+      handEndsByFold: false,
+      showdownForced: true,
+      bettingRoundClosesImmediately: true,
+      furtherBettingPossible: false,
     })
   }
   const nextStreet =
@@ -633,6 +983,7 @@ export function projectActionContinuation(
   })
   if (firstActor === null) throw new RangeError('新街必须存在可行动玩家。')
   return deepFreeze({
+    ...topology,
     kind: 'nextStreet',
     state: {
       ...stateAfterAction,
@@ -650,6 +1001,11 @@ export function projectActionContinuation(
         ),
       },
     },
+    handEndsByFold: false,
+    forcesRunout: false,
+    showdownForced: false,
+    bettingRoundClosesImmediately: true,
+    furtherBettingPossible: true,
   })
 }
 

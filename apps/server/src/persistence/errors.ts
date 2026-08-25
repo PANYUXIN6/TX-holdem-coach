@@ -44,6 +44,7 @@ export type DataCorruptionKind =
   | 'invalidAgentAttemptAudit'
   | 'invalidCapabilityInvocationAudit'
   | 'invalidPlayerObservation'
+  | 'invalidPlayerDecisionReference'
 
 export class PersistenceDataCorruptionError extends Error {
   public constructor(public readonly corruption: DataCorruptionKind) {

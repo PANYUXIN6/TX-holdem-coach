@@ -1,8 +1,8 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2 与 M3.1–M3.7 已完成，M3.8 按依赖后置，M4–M9 待开发，M10/M11 为分阶段后置能力
+- 状态：进行中；M0、M1、M2、M3.1–M3.7 与 M4.1–M4.5 已完成，M3.8 按依赖后置，M4.6 设计已确认但尚未开发，M4.7–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
-- 最后更新：2026-08-16
+- 最后更新：2026-08-25
 - 本文不包含工期、人数或里程碑时间估算。
 - 2026-08-16 首发前 Schema 收敛：实际开发数据库重建后，以 14 表单一 baseline 为准；删除全局 `protocolVersion`、Settings 版本、重复 JSON 信封版本、无历史责任的 Registry/legacy 兼容、`legacyDiagnosticState` 及尚无消费者的 Coach/Statistics 预埋表。下文已完成任务中的旧字段/旧表文字仅保留实施历史，不得作为后续任务当前契约；M4 仍保留运行审计、重放/精确恢复身份，Execution Budget 直接扩充首发 current 载荷而不发布 V2，M5/M8 在真实 writer 设计确认时再创建最终统计/Coach Schema。
 - 上位文档：
@@ -914,7 +914,9 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M4.5 实现 Player 确定性决策预处理
 
-详细契约见 [M4.5 Player 确定性决策预处理设计](../specs/2026-08-23-m4-5-player-deterministic-decision-preprocessing-design.md)。设计已于 2026-08-24 确认：采用 M4.4 公共行动顺序证明联动；无授权策略数据时使用明确的 `unsupported + heuristic`；人物偏离采用设计 cap；opponent evidence v1 仅使用当前手并固定零调整。当前尚未开始 M4.5 实现。
+详细契约见 [M4.5 Player 确定性决策预处理设计](../specs/2026-08-23-m4-5-player-deterministic-decision-preprocessing-design.md)。设计已于 2026-08-24 确认：采用 M4.4 公共行动顺序证明联动；无授权策略数据时使用明确的 `unsupported + heuristic`；人物偏离采用设计 cap；opponent evidence v1 仅使用当前手并固定零调整。
+
+状态：已完成。候选三段权重、完整 heuristic 元数据、直接来源引用、逐字段 strict Schema 与聚合 current decoder、可逆的 pinned StrategyPack data dependency，以及共享封闭 Strategy code 已落地；定向测试、`pnpm run verify`、database m45 与 PostgreSQL E2E m45 已重新通过。生产 Runtime executor、最终 Packet 与第二/第三道 Guard 仍归 M4.6–M4.10，当前未开始实现。
 
 产出：
 
@@ -953,17 +955,23 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M4.6 实现 `PlayerDecisionPacket`、第二/三道信息防火墙与 LLM Bounded Choice
 
+详细契约见 [M4.6 Player 决策包、第二/三道信息防火墙与有界选择设计](../specs/2026-08-24-m4-6-player-decision-packet-bounded-choice-design.md)。用户已于 2026-08-25 按五项推荐方案确认；状态为“已确认、尚未开始实现”，M4.5 交接前置已完成。
+
 产出：
 
 - `DecisionAuditSnapshot` 保存 `pokerRuleSetVersion`、完整安全观察、全部派生结果、策略/证据快照、最终候选和完整事实清单，永不直接发送给模型；`PlayerModelProjectionBuilder` 再生成精简决策包。
-- 决策包组合规范 spot、必要原子手牌/牌面事实、当前指标、候选结果投影、候选来源、人物/对手调整和有界记忆。
+- 决策包组合规范 spot、必要原子手牌/牌面事实、当前指标、候选结果投影、候选来源和人物/对手调整；M4.6 v1 不读取或发送 Memory，M4.9 在真实 reader/裁剪契约出现后通过 Schema/Runtime 版本升级加入。
+- 恢复专属 `player_decisions`，M4.6 只实现 `auditPrepared | modelPrepared | selected` 三阶段；不复用 Attempt/Run config，也不预建 M4.7/M4.8 终态。
+- 同一 Run 只恢复严格持久化阶段；M4.2 接管产生的 `stale + interrupted + lease_replaced` Attempt 返回 `inflightUnknown`，不跨进程续跑或重复调用模型。
+- 对 M4.3 只增加泛型 `ModelAttemptControlPort<TOutput>` 的窄协议，使 Player 在 accepted Attempt 完成时原子保存已验收选择；通用 Attempt 继续只保存响应 hash。
+- Strategy assumption/abstraction loss 使用 M4.5 共享封闭 v1 code；首版 abstraction loss 仅接受 `boardTextureCollapsed`。
 - `factManifest` 记录进入模型的派生事实来源、截止点、Schema/算法/数据版本、假设、`available | unavailable | notApplicable` 状态和 `epistemicKind`；完整内部状态与无关派生事实不发送给模型。
 - `PlayerDecisionPacket` 显式携带 `pokerRuleSetVersion`，规则版本不匹配时不得复用候选或策略结果。
 - 同一概念只发送一种权威表达，不重复原始行动史与规范叙述，不让模型重算 SPR，不混用总底池和 Hero 可争夺底池。
 - 模型工具集合为空，只能输出 `candidateActionId` 和可选受限摘要。
 - 模型不能重新计算或覆盖规范 spot、成牌、听牌、outs、当前/候选结果数学、策略来源和样本判断。
 - 决策包与候选快照保存 Spot、手牌分析与候选结果的 Schema/算法版本，历史审计不得用 current 分析器覆盖旧事实。
-- 当前手牌和候选集合不因记忆上限被裁剪。
+- M4.6 v1 没有 Memory 裁剪面；M4.9 加入 Memory 后也不得裁剪当前手牌和候选集合。
 - 候选 `actionFrequency`/权重只表示参考分布；首版 LLM 选择不保证长期频率校准。精确混合策略若未来需要，由另行设计的服务端审计采样器负责。
 - 实现第二道 `PlayerDecisionPacketLeakGuard`：只接受绑定 M4.4 认证观察身份/哈希及 M4.5 版本化派生事实的最终决策包，复验事实来源、截止点、禁止字段和未知字段。
 - 实现第三道 Model Adapter Boundary Guard：只接受第二 Guard 认证的精简模型投影，在最终 Context/Prompt 序列化后再次执行严格 Player Schema、禁止来源与 M4.3 敏感扫描；完整观察和完整审计快照不能直接进入 Adapter。
@@ -1011,7 +1019,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- `player_decisions` 保存决策包和候选快照、模型选择、校验与命令结果。
+- M4.6 已建立的 `player_decisions` 在 M4.9 扩展 Replay/Memory 所需版本化审计；M4.7/M4.8 分别负责命令提交结果和失败/stale 终态，不把这些字段预建进 M4.6 三阶段写面。
 - 本场记忆确定性更新并按场次、座位隔离，最近记录和总大小有上限。
 - 按 `memoryPayloadVersion` 分派读取；发布 V2 时定义 V1 `{}` 到 V2 初始状态的确定性映射，原 revision 0 永不改写，首次持久化 V2 通过新 revision 与 `session_agents` 当前记忆镜像原子更新。
 - Audit Replay 不调用模型；历史 Re-execution 创建新运行但不能提交动作。

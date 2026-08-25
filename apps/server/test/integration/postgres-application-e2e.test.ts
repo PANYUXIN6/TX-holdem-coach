@@ -7,6 +7,7 @@ import { assertM37SessionEventReplay } from './database-m37-assertions.js'
 import { assertM42AgentRunLifecycle } from './database-m42-assertions.js'
 import { assertM43ModelAttemptControl } from './database-m43-assertions.js'
 import { assertM44PlayerObservationApplicationFlow } from './postgres-e2e-m44-assertions.js'
+import { assertM45PlayerDecisionPreprocessingApplicationFlow } from './postgres-e2e-m45-assertions.js'
 import { assertM31SessionCommandExecutor } from './postgres-e2e-m31-assertions.js'
 import {
   registerDatabaseMilestoneTest,
@@ -73,5 +74,11 @@ registerDatabaseMilestoneTest(
   'm44',
   'M4.4 leased Player Run to certified observation',
   (sql) => assertM44PlayerObservationApplicationFlow(sql),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm45',
+  'M4.5 certified observation to deterministic decision preprocessing',
+  (sql) => assertM45PlayerDecisionPreprocessingApplicationFlow(sql),
   300_000,
 )

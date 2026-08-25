@@ -1,4 +1,5 @@
 import type { Card } from '@tx-holdem-coach/contracts'
+import { projectContributionLayers } from './contribution-layers.js'
 import { handEvaluator, type HandEvaluation } from './hand-evaluator.js'
 import { clockwiseParticipantSeatNumbersAfter } from './positioning.js'
 import { createPokerTableState, type PokerTableState } from './state.js'
@@ -200,43 +201,6 @@ function createHandContext(
   }
 }
 
-function determineUncalledBetReturn(
-  seats: readonly Seat[],
-  participants: ReadonlySet<number>,
-): UncalledBetReturn | null {
-  const contributions = seats
-    .filter((seat) => participants.has(seat.seatNumber))
-    .map((seat) => seat.totalContribution)
-  const highestContribution = Math.max(...contributions)
-  const highestSeats = seats.filter(
-    (seat) =>
-      participants.has(seat.seatNumber) &&
-      seat.totalContribution === highestContribution,
-  )
-
-  if (highestSeats.length !== 1 || highestContribution === 0) {
-    return null
-  }
-
-  const returnSeat = highestSeats[0] as Seat
-  const secondHighestContribution = Math.max(
-    ...contributions.filter(
-      (contribution) => contribution !== highestContribution,
-    ),
-  )
-  const amount = highestContribution - secondHighestContribution
-
-  if (
-    !isEligible(returnSeat) ||
-    amount <= 0 ||
-    amount > returnSeat.streetContribution
-  ) {
-    throw new RangeError('终止状态包含无法合法返还的未跟注超额投入。')
-  }
-
-  return { seatNumber: returnSeat.seatNumber, amount }
-}
-
 function determineEvaluations(
   hand: Hand,
   seats: readonly Seat[],
@@ -315,18 +279,34 @@ export function settleTerminalHand(state: PokerTableState): SettlementResult {
   const inputFunds =
     state.seats.reduce((total, seat) => total + seat.stack, 0) + hand.pot
   const mutableSeats = state.seats.map((seat) => ({ ...seat }))
-  const uncalledBetReturn = determineUncalledBetReturn(
-    mutableSeats,
-    participantSet,
+  const participantSeats = mutableSeats.filter((seat) =>
+    participantSet.has(seat.seatNumber),
   )
+  const initialContributionProjection = projectContributionLayers({
+    pot: hand.pot,
+    seats: participantSeats,
+  })
+  const uncalledCandidate =
+    initialContributionProjection.uncalledContributionCandidate
+  const uncalledBetReturn =
+    uncalledCandidate === null
+      ? null
+      : {
+          seatNumber: uncalledCandidate.seatNumber,
+          amount: uncalledCandidate.amount,
+        }
   let remainingPot = hand.pot
 
   if (uncalledBetReturn !== null) {
     const seat = mutableSeats.find(
       (candidate) => candidate.seatNumber === uncalledBetReturn.seatNumber,
     )
-    if (seat === undefined) {
-      throw new RangeError('未跟注返还座位不存在。')
+    if (
+      seat === undefined ||
+      !isEligible(seat) ||
+      uncalledBetReturn.amount > seat.streetContribution
+    ) {
+      throw new RangeError('终止状态包含无法合法返还的未跟注超额投入。')
     }
 
     seat.stack += uncalledBetReturn.amount
@@ -336,42 +316,24 @@ export function settleTerminalHand(state: PokerTableState): SettlementResult {
   }
 
   const evaluations = determineEvaluations(hand, mutableSeats)
-  const levels = [
-    ...new Set(
-      mutableSeats.map((seat) => seat.totalContribution).filter(Boolean),
-    ),
-  ].sort((left, right) => left - right)
+  const contributionProjection = projectContributionLayers({
+    pot: remainingPot,
+    seats: mutableSeats.filter((seat) => participantSet.has(seat.seatNumber)),
+  })
   const participantSeatNumbersInClockwiseOrder =
     clockwiseParticipantSeatNumbersAfter(
       state.buttonSeatNumber,
       participantSeatNumbers(hand),
     )
   const pots: SettledPot[] = []
-  let previousLevel = 0
 
-  for (const level of levels) {
-    const contributors = mutableSeats
-      .filter(
-        (seat) =>
-          participantSet.has(seat.seatNumber) &&
-          seat.totalContribution >= level,
-      )
-      .sort((left, right) => left.seatNumber - right.seatNumber)
-    const eligibleSeatNumbers = contributors
-      .filter(isEligible)
-      .map((seat) => seat.seatNumber)
-    const amount = (level - previousLevel) * contributors.length
-
-    if (amount <= 0 || eligibleSeatNumbers.length === 0) {
-      throw new RangeError('每个规范池必须有金额和至少一名获胜资格者。')
-    }
-
+  for (const layer of contributionProjection.layers) {
     const winningSeatNumbers = determineWinners(
-      eligibleSeatNumbers,
+      layer.eligibleSeatNumbers,
       evaluations,
     )
-    const baseAmount = Math.floor(amount / winningSeatNumbers.length)
-    const remainder = amount % winningSeatNumbers.length
+    const baseAmount = Math.floor(layer.amount / winningSeatNumbers.length)
+    const remainder = layer.amount % winningSeatNumbers.length
     const orderedWinners = participantSeatNumbersInClockwiseOrder.filter(
       (seatNumber) => winningSeatNumbers.includes(seatNumber),
     )
@@ -396,13 +358,12 @@ export function settleTerminalHand(state: PokerTableState): SettlementResult {
     pots.push({
       potIndex: pots.length,
       kind: pots.length === 0 ? 'main' : 'side',
-      amount,
-      contributingSeatNumbers: contributors.map((seat) => seat.seatNumber),
-      eligibleSeatNumbers,
+      amount: layer.amount,
+      contributingSeatNumbers: layer.contributingSeatNumbers,
+      eligibleSeatNumbers: layer.eligibleSeatNumbers,
       winningSeatNumbers,
       awards,
     })
-    previousLevel = level
   }
 
   if (pots.reduce((total, pot) => total + pot.amount, 0) !== remainingPot) {

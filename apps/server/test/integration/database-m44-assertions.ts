@@ -517,7 +517,8 @@ export async function assertM44PlayerObservationPersistence(
 
       await sql`
         UPDATE app_private.agent_runs
-        SET lease_expires_at = clock_timestamp() - interval '1 second'
+        SET updated_at = clock_timestamp() - interval '2 seconds',
+            lease_expires_at = clock_timestamp() - interval '1 second'
         WHERE id = ${RUN_ID}::uuid
       `
       await expect(

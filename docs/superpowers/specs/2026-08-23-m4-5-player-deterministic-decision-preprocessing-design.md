@@ -2,11 +2,13 @@
 
 - 日期：2026-08-23
 - 确认日期：2026-08-24
-- 状态：已确认
+- 状态：已确认，已实现并完成 M4.6 交接收口
 - 任务来源：[项目开发任务 M4.5](../plans/2026-07-23-poker-practice-development-tasks.md#m45-实现-player-确定性决策预处理)
 - 上游契约：[M4.4 权威 Player 观察与信息防火墙设计](./2026-08-23-m4-4-authoritative-player-observation-information-boundary-design.md)
 - 共享架构：[Agent Foundation Runtime 架构](./2026-07-26-agent-foundation-runtime-architecture.md)
 - 能力基础：[M4.3 Context、Capability 与 Model Gateway 设计](./2026-08-20-m4-3-context-capability-model-gateway-design.md)
+
+实施基线修订：M4.4 随提交 `398f383` 首发时已经把完整 action 金额证明纳入 `observationSchemaVersion=1`，并抽取 `poker/betting-projection.ts`、登记 `m44`。因此 M4.5 不重复实现或升级该观察 Schema，只在现有共享内核上增加有限候选、贡献分层与确定性分析；本文第 4.2 节和实施顺序按此当前事实解释。
 
 ## 1. 设计结论
 
@@ -108,13 +110,13 @@ M4.5 完成时必须能证明：
 - M4.3 已提供严格 Capability Definition/Executor、预算预留与审计；
 - M4.1 Player Manifest 已预留 compute/strategy/opponent 三个 M4.5 能力引用。
 
-### 4.2 当前缺失
+### 4.2 实施起点缺失
 
-- M4.4 设计中的 `PlayerVisibleState` 及真实 Player 观察读取尚未实施；M4.5 实施依赖其认证实例；
-- 当前没有 `decision-spot.ts`、`hand-features.ts`、`contestable-pot.ts`、`candidate-outcomes.ts` 或预处理聚合器；
-- 当前没有 StrategyPack、策略数据 Schema/Repository 或实际数据；
-- 当前没有 Player 人物窄政策端口、对手证据 projector 或三项 Player Capability Definition；
-- 当前测试计划尚未登记 `m44/m45`。
+- `PlayerVisibleState`、真实 Player 观察读取、完整 action 金额证明和共享下注 kernel 已由 M4.4 首发完成；M4.5 直接依赖其认证实例，不升级 `observationSchemaVersion=1`；
+- 实施起点没有 `decision-spot.ts`、`hand-features.ts`、`contestable-pot.ts`、`candidate-outcomes.ts` 或预处理聚合器；
+- 实施起点没有 StrategyPack、策略数据 Schema/Repository 或实际数据；
+- 实施起点没有 Player 人物窄政策端口、对手证据 projector 或三项 Player Capability Definition；
+- `m44` 已登记，`m45` 尚未登记。
 
 ### 4.3 责任与依赖方向
 
@@ -262,6 +264,8 @@ interface PlayerVisibleAction {
 M4.5 新增只返回不在观察中的不可变参考事实的窄端口：
 
 ```ts
+type Sha256Digest = string // strict Schema: /^[0-9a-f]{64}$/
+
 type PlayerDecisionReferenceLoadResult =
   | {
       readonly kind: 'ready'
@@ -284,7 +288,7 @@ interface PlayerDecisionReference {
   readonly actorSeat: number
   readonly pokerRuleSetVersion: PokerRuleSetVersion
   readonly handNumber: number
-  readonly configSnapshotKey: string
+  readonly configSnapshotKey: Sha256Digest
   readonly personaId: AgentPersonaId
   readonly personaVersion: 1
   readonly personaPolicy: {
@@ -421,7 +425,7 @@ type FactSourceRef =
     }
   | {
       readonly kind: 'personaSnapshot'
-      readonly configSnapshotKey: string
+      readonly configSnapshotKey: Sha256Digest
       readonly personaId: AgentPersonaId
       readonly personaVersion: 1
     }
@@ -918,7 +922,7 @@ raise:<targetStreetCommitment>
 allIn:<targetStreetCommitment>
 ```
 
-候选排序固定为 fold → check → call → bet target 升序 → raise target 升序 → allIn。ID 是服务端私有业务标识，不包含 UUID、策略或人物权重。
+候选排序固定为 fold → check → call → bet target 升序 → raise target 升序 → allIn。带 target 的 ID 使用无前导零的正十进制安全整数。ID 是服务端私有业务标识，不包含 UUID、策略或人物权重。共享下注候选模块发布唯一语义校验：严格解析 ID 后绑定 action type、`targetStreetCommitment` 与 `targetKind`；fold/check 只能对应 null/`notApplicable`，call 只能对应数值/`call`，all-in 只能对应数值/`allIn`，bet/raise 只能对应相同 action target 与封闭标准尺度 kind。Factory、Capability output 和 current decoder 必须复用该校验，不能只比较 payload 内的候选副本。
 
 ### 14.2 严格支配
 
@@ -1141,7 +1145,9 @@ interface PlayerDecisionPreprocessingResultData {
   readonly binding: PlayerDecisionAnalysisBinding
   readonly preprocessingResultSchemaVersion: 1
   readonly preprocessingPipelineVersion: 1
-  readonly configSnapshotKey: string
+  readonly configSnapshotKey: Sha256Digest
+  readonly personaId: AgentPersonaId
+  readonly personaVersion: 1
   readonly strategyPackRef: StrategyPackReference
   readonly normalizedSpot: BoundAnalysis<NormalizedDecisionSpotData<FactSourceRef>>
   readonly handFeatures: BoundAnalysis<HandFeatureAnalysisData<FactSourceRef>>
@@ -1158,13 +1164,13 @@ interface PlayerDecisionPreprocessingResultData {
 }
 ```
 
-所有 `BoundAnalysis` wrapper 的 binding 必须与聚合根完全相同，其 `data` 内不得再次出现 Player binding 或 Player-only 类型。`preprocessingSha256` 覆盖不含自身哈希的 canonical data。模块返回带私有 brand 的 `PlayerDecisionPreprocessingResult`，并提供 `isPlayerDecisionPreprocessingResult()` 给 M4.6；同形或反序列化对象不能通过实时认证。
+所有 `BoundAnalysis` wrapper 的 binding 必须与聚合根完全相同，其 `data` 内不得再次出现 Player binding 或 Player-only 类型。聚合根保留最小人物快照引用，使 current decoder 能从 StrategyProjection、heuristic 元数据、人物快照、OpponentEvidence 与 ExploitAdjustment 构造唯一的直接来源集合；每个最终候选的来源必须与该集合逐值相等，不得重复或增加其他引用。聚合根和 `personaSnapshot` 来源中的 `configSnapshotKey` 必须复用同一 64 位小写 SHA-256 Schema。最终候选的 `action`、`targetStreetCommitment` 与 `contributionDelta` 还必须按 `candidateId` 与 `candidateOutcomes` 逐值一致；其中 target 必须满足 `null ↔ notApplicable/noTarget`、数值 ↔ `available/value`，且最终候选、outcome 嵌套候选与 outcome 顶层投影三者相等。CandidateOutcome 候选还必须通过第 14.1 节唯一 ID 语义校验，使同步篡改所有阶段副本和聚合哈希也不能改变 ID 所锚定的 action、target 或 target kind。`preprocessingSha256` 覆盖不含自身哈希的 canonical data。模块返回带私有 brand 的 `PlayerDecisionPreprocessingResult`，并提供 `isPlayerDecisionPreprocessingResult()` 给 M4.6；同形或反序列化对象不能通过实时认证。
 
 ### 18.2 M4.6 可以做什么
 
 M4.6：
 
-- 把完整认证观察、M4.5 完整派生结果和后续记忆事实保存到 `DecisionAuditSnapshot`；
+- 把完整认证观察和 M4.5 完整派生结果保存到 `DecisionAuditSnapshot`；M4.6 v1 不读取或发送 Memory，M4.9 通过版本升级加入真实 memory reader 与裁剪契约；
 - 从聚合结果选择模型真正需要的字段；
 - 为每个发送事实建立 fact manifest；
 - 实现第二 Guard 与 Adapter Guard；
@@ -1182,6 +1188,19 @@ M4.6 不得：
 ### 18.3 日志与错误
 
 允许记录：稳定失败码、模块/算法版本、脱敏 run/session 关联哈希、候选数量和耗时。禁止记录观察/聚合 JSON、牌张、行动线、participant UUID、人物配置、策略数据内容、SQL、authority、异常 cause 或拒绝输入。
+
+### 18.4 M4.6 开工前交接收口
+
+M4.5 核心算法、政策和 Capability Plan 不在此处改义；但在 M4.6 开始实现前，M4.5 必须完成以下严格下游契约：
+
+1. 每个最终候选显式保存 `baseWeightBasisPoints`、`personaAdjustedWeightBasisPoints` 与 `exploitAdjustedWeightBasisPoints`，M4.6 不从最终权重反推中间阶段；
+2. heuristic 候选完整保留 policy version、confidence、reason、unsupported reason 与 `commitmentRiskBand`；
+3. 候选保存可直接投影的 strategy、heuristic、persona、opponent 与 exploit 来源引用，不要求 M4.6 重建来源；
+4. Spot、hand、pot、metrics、candidate、outcome 与聚合结果发布逐字段 strict Zod Schema 和聚合 current decoder，持久化交接不以 `z.json()`、`z.unknown()` 或同形对象作为认证依据；
+5. StrategyPack 与 `RunConfigurationAudit.dataDependencies` 发布唯一、可逆、严格的引用编码，固化引用由 M4.6 以 `usage='pinnedRun'` 读取；
+6. StrategyPack、Projection 与 Capability output 共用封闭 `StrategyAssumptionCodeV1 = M45AssumptionCode` 和 `StrategyAbstractionLossCodeV1 = 'boardTextureCollapsed'`，其他 code 通过版本升级加入。
+
+以上六项是 M4.5→M4.6 的交接收口，不新增 Provider 调用、生产 Runtime executor、Worker、数据库结构或 M4.6 业务实现。
 
 ## 19. Capability Definition 组合
 
@@ -1355,8 +1374,8 @@ player_preprocessing_binding_mismatch
 
 按本文已确认的 M4.4 action projection 联动方案，依赖顺序如下：
 
-1. **安全 kernel**：先抽取下注 transition、continuation 与 contribution layer，让现有 engine/settlement 复用并证明行为不变；
-2. **M4.4 联动**：基于同一 kernel 补 action 金额证明、Guard 不变量与回归；
+1. **安全 kernel**：下注 transition/continuation 已由 M4.4 抽取；M4.5 补 contribution layer 并让 settlement 复用，继续证明行为不变；
+2. **M4.4 联动**：action 金额证明与 Guard 不变量已由 `398f383` 满足，M4.5 只补候选 adapter 和联动回归；
 3. **Hand/reference 窄读**：规则与人物白名单端口；
 4. **共享纯事实**：Spot、hand features、contestable pot、current metrics；
 5. **有限候选与 outcome**：legal candidate factory、逐候选 topology/math；
@@ -1445,6 +1464,8 @@ M4.5 只有同时满足以下条件才可标记完成：
 14. 地图、架构、任务和测试说明只同步已实现事实；
 15. 没有 Provider 调用、Runtime executor、Commit Gate、HTTP/SSE、数据库 Schema/migration 或 bootstrap 接线；
 16. 最终报告明确 M4.6–M4.10 仍是 Player Runtime 上线前硬门禁。
+17. 第 18.4 节六项严格下游契约全部落地，并完成与改动相匹配的定向、仓库及远程里程碑验证；
+18. M4.6 设计已经确认，但未在 M4.5 交接收口中提前实现。
 
 ## 26. 已确认的设计门禁
 
@@ -1455,4 +1476,4 @@ M4.5 只有同时满足以下条件才可标记完成：
 3. **人物政策门禁**：确认第 16.2 节五个配置维度的 spot 条件映射、单次最多 10% 转移与单候选累计最多 20% 改变量。它们是产品政策而非扑克事实；不同意时必须在实施前给出替代映射/cap。
 4. **对手证据门禁**：确认 M4.5 evidence v1 只输出当前手证据且 exploit 永远零调整；机会数、不同 Hand 数、置信度与非零调整 cap 延后到 M4.9 evidence v2 单独确认，不在 v1 冻结不可达常量。
 
-上述门禁均已确认。后续若改变任一政策、数据来源或跨文档契约，必须先修订设计，并按本文规定升级对应 Schema、算法或政策版本；当前尚未开始 M4.5 实现。
+上述产品门禁均已确认。用户于 2026-08-25 确认 M4.6 五项设计决策后，第 18.4 节成为 M4.5 的新增交接完成条件；候选三段权重、完整 heuristic 元数据、直接来源、逐字段 strict Schema/current decoder、可逆 pinned StrategyPack dependency 与封闭 Strategy code 均已落地，并已重新通过定向测试、`pnpm run verify`、database m45 与 PostgreSQL E2E m45。M4.5 因此完成；本次收口没有启动 M4.6 实现。后续若改变任一政策、数据来源或跨文档契约，必须先修订设计，并按本文规定升级对应 Schema、算法或政策版本。

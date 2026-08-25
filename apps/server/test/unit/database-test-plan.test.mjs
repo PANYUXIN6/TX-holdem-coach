@@ -50,6 +50,15 @@ describe('database test plan', () => {
     })
   })
 
+  test.each(['database', 'e2e'])(
+    'allows the M4.5 milestone in the %s suite',
+    (suite) => {
+      expect(
+        parseDatabaseTestArguments([`--suite=${suite}`, '--milestone=m45']),
+      ).toEqual({ kind: 'milestone', milestone: 'm45', suite })
+    },
+  )
+
   test('accepts the pnpm argument separator before one milestone', () => {
     expect(
       parseDatabaseTestArguments(['--suite=database', '--', '--milestone=m27']),

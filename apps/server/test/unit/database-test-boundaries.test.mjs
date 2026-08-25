@@ -19,6 +19,14 @@ const persistenceM35Assertions = await readFile(
   new URL('../integration/database-m35-assertions.ts', import.meta.url),
   'utf8',
 )
+const persistenceM45Assertions = await readFile(
+  new URL('../integration/database-m45-assertions.ts', import.meta.url),
+  'utf8',
+)
+const applicationM45Assertions = await readFile(
+  new URL('../integration/postgres-e2e-m45-assertions.ts', import.meta.url),
+  'utf8',
+)
 const serverPackage = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
 )
@@ -86,6 +94,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm28',
       'm35',
       'm44',
+      'm45',
     ])
     expect(persistenceEntry).not.toContain('postgres-application-e2e')
     expect(persistenceEntry).toContain('database-repository-assertions')
@@ -105,6 +114,22 @@ describe('remote PostgreSQL test boundaries', () => {
     expect(persistenceM35Assertions).not.toContain(
       'createPlayerAgentSettingsService',
     )
+    expect(persistenceM45Assertions).toContain(
+      'createPostgresPlayerDecisionReferencePort',
+    )
+    expect(persistenceM45Assertions).not.toMatch(
+      /src\/poker\/(?:hand-features|decision-metrics|decision-spot|candidate-outcomes)/,
+    )
+    expect(persistenceM45Assertions).not.toMatch(
+      /src\/agents\/player\/(?:player-decision-analysis-input|opponent-feature-projector)/,
+    )
+    expect(
+      persistenceDependencyClosure.filter((path) =>
+        /src\/(?:poker\/(?:hand-features|decision-metrics|decision-spot|candidate-outcomes)|agents\/player\/(?:player-decision-analysis-input|opponent-feature-projector))\.ts$/.test(
+          path,
+        ),
+      ),
+    ).toEqual([])
   })
 
   test('keeps application milestones in the PostgreSQL E2E entry', () => {
@@ -119,6 +144,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm42',
       'm43',
       'm44',
+      'm45',
     ])
     expect(applicationEntry).not.toContain('database-schema-assertions')
     expect(applicationEntry).toContain('postgres-e2e-m35-assertions')
@@ -126,6 +152,35 @@ describe('remote PostgreSQL test boundaries', () => {
     expect(applicationEntry).not.toContain('database-repository-assertions')
     expect(applicationDependencyClosure).toContain(
       'src/sessions/command-execution/session-command-executor.ts',
+    )
+    expect(applicationM45Assertions).toContain(
+      'createPostgresPlayerObservationPort',
+    )
+    expect(applicationM45Assertions).toContain(
+      'createPostgresPlayerDecisionReferencePort',
+    )
+    expect(applicationM45Assertions).toContain(
+      'createCapabilityExecutor',
+    )
+    expect(applicationM45Assertions).toContain(
+      'executePlayerDecisionPreprocessingPlan',
+    )
+    expect(applicationM45Assertions).toContain(
+      'isPlayerDecisionPreprocessingResult',
+    )
+    expect(applicationDependencyClosure).toEqual(
+      expect.arrayContaining([
+        'src/persistence/player-observation-authority.ts',
+        'src/persistence/player-decision-reference-authority.ts',
+        'src/agents/player/player-decision-capabilities.ts',
+        'src/agents/player/player-decision-preprocessing-plan.ts',
+        'src/agents/player/player-decision-analysis-core.ts',
+        'src/agents/player/player-decision-analysis-input.ts',
+        'src/poker/decision-spot.ts',
+        'src/poker/hand-features.ts',
+        'src/poker/decision-metrics.ts',
+        'src/poker/candidate-outcomes.ts',
+      ]),
     )
   })
 

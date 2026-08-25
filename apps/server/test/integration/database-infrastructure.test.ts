@@ -1,6 +1,7 @@
 import { assertM22DatabaseSchema } from './database-schema-assertions.js'
 import { assertM35AtomicPlayerSettingsPersistence } from './database-m35-assertions.js'
 import { assertM44PlayerObservationPersistence } from './database-m44-assertions.js'
+import { assertM45PlayerDecisionReferencePersistence } from './database-m45-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -119,6 +120,12 @@ registerDatabaseMilestoneTest(
   'm44',
   'M4.4 Player observation persistence and shared locks',
   (sql, runtimeUrl) => assertM44PlayerObservationPersistence(sql, runtimeUrl),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm45',
+  'M4.5 Player decision reference persistence',
+  (sql) => assertM45PlayerDecisionReferencePersistence(sql),
   300_000,
 )
 

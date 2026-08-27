@@ -66,7 +66,10 @@
 - 始终使用中文与用户沟通。
 
 ## 项目特定约束
-
+在跑需要联网的命令时可以连接代理
+```
+export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=http://127.0.0.1:7890
+```
 ## Git 提交
 
 - 每次使用 `git commit` 时，提交信息的具体描述必须使用中文；允许保留 Conventional Commits 的英文类型前缀，例如 `feat:实现了某个功能`。

@@ -9,6 +9,7 @@ import { assertM43ModelAttemptControl } from './database-m43-assertions.js'
 import { assertM44PlayerObservationApplicationFlow } from './postgres-e2e-m44-assertions.js'
 import { assertM45PlayerDecisionPreprocessingApplicationFlow } from './postgres-e2e-m45-assertions.js'
 import { assertM46PlayerDecisionApplicationFlow } from './postgres-e2e-m46-assertions.js'
+import { assertM47PlayerCommitApplicationFlow } from './postgres-e2e-m47-assertions.js'
 import { assertM31SessionCommandExecutor } from './postgres-e2e-m31-assertions.js'
 import {
   registerDatabaseMilestoneTest,
@@ -88,4 +89,10 @@ registerDatabaseMilestoneTest(
   'M4.6 staged Player bounded-choice decision',
   (sql) => assertM46PlayerDecisionApplicationFlow(sql),
   300_000,
+)
+registerDatabaseMilestoneTest(
+  'm47',
+  'M4.7 Player Validator and command Commit Gate',
+  (sql, runtimeUrl) => assertM47PlayerCommitApplicationFlow(sql, runtimeUrl),
+  900_000,
 )

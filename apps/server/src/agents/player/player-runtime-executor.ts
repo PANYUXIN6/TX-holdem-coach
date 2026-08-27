@@ -220,6 +220,9 @@ export function createPlayerRuntimeExecutor(
           'player_decision_resume_inflight_unknown',
         )
       }
+      if (resume.kind === 'committed') {
+        throw new PlayerRuntimeExecutionError('player_decision_resume_rejected')
+      }
       if (resume.kind === 'selected') {
         if (resume.record.choice === null) {
           throw new PlayerRuntimeExecutionError(

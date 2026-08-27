@@ -1,10 +1,13 @@
 import type { Sql, TransactionSql } from 'postgres'
 import { describe, expect, test, vi } from 'vitest'
+import * as playerCommitGateModule from '../../src/agents/player/player-commit-gate.js'
+import * as playerActionHandlerModule from '../../src/sessions/command-execution/player-action-handler.js'
 import {
   createSessionCommandHandlerMap,
   SessionCommandCompositionError,
 } from '../../src/sessions/command-execution/command-handler-map.js'
 import {
+  createPlayerCommitSessionComposition,
   createSessionCommandExecutor,
   SessionCommandInvariantError,
 } from '../../src/sessions/command-execution/session-command-executor.js'
@@ -218,6 +221,49 @@ async function createExecutionFixture(input: {
 }
 
 describe('session command execution', () => {
+  test('只经固定组合入口暴露认证 Player Commit Gate', async () => {
+    const poker = createTestPokerState()
+    const state = createPrivateTableState({
+      stateVersion: 7,
+      poker,
+      completedHandCount: 0,
+      seatAccounting: poker.seats.map((seat) => ({
+        seatNumber: seat.seatNumber,
+        cumulativeBuyIn: 2_000,
+      })),
+      lastCompletedHandSummary: null,
+    })
+    const fixture = await createExecutionFixture({
+      commandType: 'endSession',
+      state,
+      lifecycleAfter: 'ended',
+      preparedResult: {
+        kind: 'rejected',
+        rejection: {
+          kind: 'commandNotAllowedInPhase',
+          phase: 'betweenHands',
+        },
+      },
+    })
+
+    const publicExecutor = createSessionCommandExecutor(fixture.executorInput)
+    const { handlers: _handlers, ...session } = fixture.executorInput
+    const composition = createPlayerCommitSessionComposition({
+      session,
+      player: { runEventPort: { publish: async () => undefined } },
+    })
+
+    expect('executeAiAction' in publicExecutor).toBe(false)
+    expect('aiActionCommitExecutor' in publicExecutor).toBe(false)
+    expect(Object.keys(publicExecutor)).toEqual(['execute'])
+    expect(Object.keys(composition.commands)).toEqual(['execute'])
+    expect(Object.keys(composition.playerCommitGate)).toEqual(['commit'])
+    expect('createPlayerCommitGate' in playerCommitGateModule).toBe(false)
+    expect(
+      'createInternalAiActionHandlerMap' in playerActionHandlerModule,
+    ).toBe(false)
+  })
+
   test('constructs an immutable handler map with an exact enabled command set', () => {
     const binding = testBinding()
     const handlers = createSessionCommandHandlerMap({

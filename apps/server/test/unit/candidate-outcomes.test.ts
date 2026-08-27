@@ -154,6 +154,10 @@ describe('projectCandidateOutcomes', () => {
         reasonCode: 'noTarget',
       },
       heroContestablePotAfterAction: 0,
+      contestableAmountAdded: 0,
+      marginalContestablePot: {
+        contestableAmountAdded: 0,
+      },
       heroActionCompletes: true,
     })
     expect(

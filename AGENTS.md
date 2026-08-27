@@ -94,8 +94,18 @@ export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_pr
   - 多个里程碑之间存在无法由定向测试排除的影响。
 - 同一个任务中每套 full 最多主动执行一次；发布前需要两套 full 证据时必须串行执行。
 - 任一 full 失败后不得直接反复重跑；必须先用同一套命令定向诊断失败里程碑。修复仅涉及该里程碑测试或预算时，优先重跑该里程碑；只有变更可能影响同套其他阶段时才重新执行 full。
-- 所有远程 PostgreSQL 测试必须串行执行，不得并行运行 database 与 E2E，也不得并行运行 full 和 milestone。
+- 禁止多个远程 PostgreSQL 测试进程同时运行；套件级 transaction advisory lock 仅作为手动误操作的保护，不替代调用方串行执行。
 - 最终报告必须明确列出两套远程测试各自已执行和未执行的范围，不得把 milestone 通过描述为对应 full 通过，也不得把 `db:test:full` 通过描述为 PostgreSQL E2E 通过。
+
+### 远程 PostgreSQL 测试约束
+
+- 测试必须自包含，不依赖执行顺序或前序残留；共享配置必须保存并在 `finally` 恢复，fixture 和连接必须清理。
+- Worker heartbeat、业务长事务和锁竞争参与者必须使用独立连接；禁止 heartbeat 与长事务共享 `max: 1` 客户端。
+- 普通全链路测试必须显式设置并断言足够的 deadline，时间语义使用数据库时钟；短 deadline 仅用于专门的过期测试，不得通过提高 Vitest timeout 掩盖 lease、deadline 或性能问题。
+- 失败诊断必须区分资源缺失、deadline/lease 过期、fencing、Attempt 状态、锁等待和并发清理；生产错误可保持稳定，测试错误应附加安全诊断。
+- 纯逻辑、Codec、Validator 和错误映射放离线测试；Schema、Repository、事务与锁放 database milestone；只有跨应用与 PostgreSQL 的主流程放 E2E。
+- 每个里程碑的普通路径默认只保留一条完整 E2E；仅当最终状态或并发拓扑实质不同才重建全流程。多个拒绝分支应共享基准 fixture，并通过独立事务回滚隔离。
+- 普通 E2E 超过 60 秒、milestone 超过 5 分钟或耗时增长超过 20% 时，必须检查重复全流程和串行网络往返，不得直接增加 timeout。
 
 ## 代码简化
 

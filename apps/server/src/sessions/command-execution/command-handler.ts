@@ -19,16 +19,16 @@ type PokerPrivateEvent = Extract<
   }
 >
 
-type EventDraftForCommand<Type extends LedgerCommand['type']> =
-  Type extends 'playerAction'
-    ? PokerPrivateEvent
-    : Type extends 'startNextHand'
-      ? Extract<PrivateEvent, { type: 'aiAutoRebuy' | 'handStarted' }>
-      : Type extends 'rebuy'
-        ? Extract<PrivateEvent, { type: 'userRebuy' }>
-        : Type extends 'endSession'
-          ? Extract<PrivateEvent, { type: 'handAborted' | 'sessionEnded' }>
-          : never
+type EventDraftForCommand<Type extends LedgerCommand['type']> = Type extends
+  'playerAction' | 'aiAction'
+  ? PokerPrivateEvent
+  : Type extends 'startNextHand'
+    ? Extract<PrivateEvent, { type: 'aiAutoRebuy' | 'handStarted' }>
+    : Type extends 'rebuy'
+      ? Extract<PrivateEvent, { type: 'userRebuy' }>
+      : Type extends 'endSession'
+        ? Extract<PrivateEvent, { type: 'handAborted' | 'sessionEnded' }>
+        : never
 
 interface PlayerCoordinationState {
   readonly agentRunState: 'idle' | 'thinking' | 'paused'

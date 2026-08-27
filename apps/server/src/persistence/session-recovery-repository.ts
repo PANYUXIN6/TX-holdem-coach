@@ -68,6 +68,11 @@ export type SessionRecoveryTransactionResult =
       readonly diagnosedAt: string
     }
 
+export type ReadySessionRecovery = Extract<
+  SessionRecoveryTransactionResult,
+  { readonly kind: 'ready' }
+>
+
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object') {
     for (const nestedValue of Object.values(value)) {

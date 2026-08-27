@@ -156,6 +156,61 @@ describe('command event policy', () => {
     ).toBe(false)
   })
 
+  test('accepts a mirrored aiAction only while the matching Player run is thinking', () => {
+    const beforePoker = createTestBettingPokerState({
+      hand: { currentActorSeatNumber: 1 },
+    })
+    const accounting = beforePoker.seats.map((seat) => ({
+      seatNumber: seat.seatNumber,
+      cumulativeBuyIn: 2_000,
+    }))
+    const before = privateState(7, beforePoker, accounting)
+    const action = { type: 'fold' as const }
+    const applied = applyPokerAction(beforePoker, {
+      actorSeatNumber: 1,
+      action,
+    })
+    const thinkingSession = {
+      lifecycleStatus: 'active' as const,
+      currentHandId: handId,
+      agentRunState: 'thinking' as const,
+      activePlayerRunId: '40000000-0000-4000-8000-000000000001',
+      activeDecisionRequestId: '50000000-0000-4000-8000-000000000001',
+    }
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'aiAction' as const,
+        payload: {
+          decisionRequestId: thinkingSession.activeDecisionRequestId,
+          handId,
+          actorSeatNumber: 1,
+          candidateActionId: 'candidate-fold',
+          action,
+        },
+      },
+      sessionBefore: thinkingSession,
+      stateEffectKind: 'stateChanged' as const,
+      stateBefore: before,
+      stateAfter: privateState(8, applied.state, accounting),
+      lifecycleAfter: 'active' as const,
+      currentHandIdAfter: handId,
+      playerCoordinationAfter: idlePlayerCoordination,
+      events: applied.eventDrafts,
+      relationPlan: Object.freeze({ kind: 'continueHand' as const, handId }),
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(true)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        sessionBefore: activeIdleSession,
+      }),
+    ).toBe(false)
+  })
+
   test('accepts a mirrored terminal playerAction and rejects summary tampering', () => {
     const started = startPokerHand(createTestPokerState(), {
       handId,

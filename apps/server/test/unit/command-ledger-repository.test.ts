@@ -318,6 +318,24 @@ describe('command ledger repository', () => {
     }
   })
 
+  test('keeps aiAction outside the public command registration boundary', () => {
+    expect(() =>
+      prepareCommandRegistration({
+        sessionId,
+        commandId,
+        expectedStateVersion: 12,
+        type: 'aiAction',
+        payload: {
+          decisionRequestId: '50000000-0000-4000-8000-000000000001',
+          handId: '10000000-0000-4000-8000-000000000001',
+          actorSeatNumber: 1,
+          candidateActionId: 'candidate-fold',
+          action: { type: 'fold' },
+        },
+      }),
+    ).toThrow(RepositoryInputValidationError)
+  })
+
   test('replays the original uppercase response using normalized UUID equality', async () => {
     const input = {
       ...command('endSession'),

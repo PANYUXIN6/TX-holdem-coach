@@ -383,8 +383,9 @@ export function projectCandidateOutcomes(input: {
             sourceRefs: sources,
           })
       const heroContestablePotAfterAction = after?.heroContestablePotBefore ?? 0
-      const contestableAmountAdded =
-        heroContestablePotAfterAction - before.heroContestablePotBefore
+      const contestableAmountAdded = heroFolded
+        ? 0
+        : heroContestablePotAfterAction - before.heroContestablePotBefore
       const topology = {
         responders: continuation.responderSeatNumbers,
         canRaiseSeats: continuation.canRaiseSeatNumbers,

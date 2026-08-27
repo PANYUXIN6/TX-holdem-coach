@@ -35,6 +35,7 @@ import { isResolvedOwnerScope } from './owner-scope.js'
 import {
   DatabaseOperationError,
   PersistenceDataCorruptionError,
+  PlayerDecisionIntegrityError,
   PlayerDecisionTransitionError,
   RepositoryInputValidationError,
   ResourceNotFoundError,
@@ -65,7 +66,7 @@ const DecisionRowSchema = z.strictObject({
   participantId: UuidSchema,
   sourceStateVersion: SafeNonnegativeIntegerSchema,
   decisionRequestId: UuidSchema,
-  status: z.enum(['auditPrepared', 'modelPrepared', 'selected']),
+  status: z.enum(['auditPrepared', 'modelPrepared', 'selected', 'committed']),
   auditPayloadVersion: z.unknown(),
   auditPayload: z.unknown(),
   candidatePayloadVersion: z.unknown(),
@@ -77,9 +78,11 @@ const DecisionRowSchema = z.strictObject({
   validatorPayloadVersion: z.unknown(),
   validatorPayload: z.unknown(),
   acceptedAttemptId: UuidSchema.nullable(),
+  commandLedgerId: UuidSchema.nullable(),
   createdAt: z.string().datetime(),
   modelPreparedAt: z.string().datetime().nullable(),
   selectedAt: z.string().datetime().nullable(),
+  committedAt: z.string().datetime().nullable(),
 })
 const AttemptRowSchema = z.strictObject({
   attemptId: UuidSchema,
@@ -103,16 +106,33 @@ export interface DecodedPlayerDecisionRecordV1 {
   readonly participantId: string
   readonly sourceStateVersion: number
   readonly decisionRequestId: string
-  readonly status: 'auditPrepared' | 'modelPrepared' | 'selected'
+  readonly status: 'auditPrepared' | 'modelPrepared' | 'selected' | 'committed'
   readonly auditSnapshot: DecisionAuditSnapshotV1Data
   readonly candidateSet: PlayerCandidateSetSnapshotV1
   readonly projection: PlayerModelProjectionV1 | null
   readonly choice: PlayerBoundedChoiceV1 | null
   readonly validatorResult: PlayerValidatorResultV1 | null
   readonly acceptedAttemptId: string | null
+  readonly commandLedgerId: string | null
   readonly createdAt: string
   readonly modelPreparedAt: string | null
   readonly selectedAt: string | null
+  readonly committedAt: string | null
+  readonly [decodedPlayerDecisionRecordBrand]: never
+}
+
+declare const decodedPlayerDecisionRecordBrand: unique symbol
+
+const decodedPlayerDecisionRecords = new WeakSet<object>()
+
+export function isDecodedPlayerDecisionRecordV1(
+  value: unknown,
+): value is DecodedPlayerDecisionRecordV1 {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    decodedPlayerDecisionRecords.has(value)
+  )
 }
 
 declare const selectedReceiptBrand: unique symbol
@@ -141,6 +161,10 @@ export type PlayerDecisionResumeState =
     }
   | {
       readonly kind: 'selected'
+      readonly record: DecodedPlayerDecisionRecordV1
+    }
+  | {
+      readonly kind: 'committed'
       readonly record: DecodedPlayerDecisionRecordV1
     }
   | {
@@ -190,6 +214,24 @@ export interface PlayerDecisionRepository {
       readonly expectedChoice: PlayerBoundedChoiceV1
     },
   ): Promise<PlayerSelectedDecisionReceiptV1>
+  readForCommitValidation(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    input: {
+      readonly decisionRecordId: string
+      readonly agentRunId: string
+      readonly sessionId: string
+    },
+  ): Promise<DecodedPlayerDecisionRecordV1>
+  lockForCommitValidation(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    input: {
+      readonly decisionRecordId: string
+      readonly agentRunId: string
+      readonly sessionId: string
+    },
+  ): Promise<DecodedPlayerDecisionRecordV1>
   readForResume(
     transaction: TransactionSql,
     owner: ResolvedOwnerScope,
@@ -317,11 +359,14 @@ async function lockDecision(
       validator_result_payload_version AS "validatorPayloadVersion",
       validator_result_payload AS "validatorPayload",
       accepted_attempt_id::text AS "acceptedAttemptId",
+      command_ledger_id::text AS "commandLedgerId",
       to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
       CASE WHEN model_prepared_at IS NULL THEN NULL ELSE
         to_char(model_prepared_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "modelPreparedAt",
       CASE WHEN selected_at IS NULL THEN NULL ELSE
-        to_char(selected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "selectedAt"
+        to_char(selected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "selectedAt",
+      CASE WHEN committed_at IS NULL THEN NULL ELSE
+        to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt"
     FROM app_private.player_decisions
     WHERE agent_run_id = ${run.agentRunId}::uuid
       AND owner_id = ${owner.databaseOwnerId}::uuid
@@ -417,6 +462,47 @@ function decodeDecisionRow(
   const { snapshotSha256, ...snapshotWithoutHash } = auditSnapshot
   const { candidateSetSha256, ...candidateSetWithoutHash } = candidateSet
   if (
+    (row.status === 'auditPrepared' &&
+      (projection !== null ||
+        choice !== null ||
+        validatorResult !== null ||
+        row.acceptedAttemptId !== null ||
+        row.modelPreparedAt !== null ||
+        row.selectedAt !== null ||
+        row.commandLedgerId !== null ||
+        row.committedAt !== null)) ||
+    (row.status === 'modelPrepared' &&
+      (projection === null ||
+        choice !== null ||
+        validatorResult !== null ||
+        row.acceptedAttemptId !== null ||
+        row.modelPreparedAt === null ||
+        row.selectedAt !== null ||
+        row.commandLedgerId !== null ||
+        row.committedAt !== null)) ||
+    (row.status === 'selected' &&
+      (projection === null ||
+        choice === null ||
+        validatorResult === null ||
+        row.acceptedAttemptId === null ||
+        row.modelPreparedAt === null ||
+        row.selectedAt === null ||
+        row.commandLedgerId !== null ||
+        row.committedAt !== null)) ||
+    (row.status === 'committed' &&
+      (projection === null ||
+        choice === null ||
+        validatorResult === null ||
+        row.acceptedAttemptId === null ||
+        row.modelPreparedAt === null ||
+        row.selectedAt === null ||
+        row.commandLedgerId === null ||
+        row.committedAt === null ||
+        Date.parse(row.committedAt) < Date.parse(row.selectedAt)))
+  ) {
+    throw new PersistenceDataCorruptionError('invalidPlayerDecision')
+  }
+  if (
     snapshotSha256 !== sha256(snapshotWithoutHash as unknown as JsonValue) ||
     candidateSetSha256 !==
       sha256(candidateSetWithoutHash as unknown as JsonValue) ||
@@ -424,27 +510,6 @@ function decodeDecisionRow(
       candidateSet.candidateSetSha256 ||
     canonicalJson(auditSnapshot.candidates as unknown as JsonValue) !==
       canonicalJson(candidateSet as unknown as JsonValue) ||
-    (row.status === 'auditPrepared' &&
-      (projection !== null ||
-        choice !== null ||
-        validatorResult !== null ||
-        row.acceptedAttemptId !== null ||
-        row.modelPreparedAt !== null ||
-        row.selectedAt !== null)) ||
-    (row.status === 'modelPrepared' &&
-      (projection === null ||
-        choice !== null ||
-        validatorResult !== null ||
-        row.acceptedAttemptId !== null ||
-        row.modelPreparedAt === null ||
-        row.selectedAt !== null)) ||
-    (row.status === 'selected' &&
-      (projection === null ||
-        choice === null ||
-        validatorResult === null ||
-        row.acceptedAttemptId === null ||
-        row.modelPreparedAt === null ||
-        row.selectedAt === null)) ||
     (choice !== null &&
       !candidateSet.candidates.some(
         ({ candidateId }) => candidateId === choice.candidateActionId,
@@ -455,9 +520,9 @@ function decodeDecisionRow(
         validatorResult.choiceSha256 !==
           sha256(choice as unknown as JsonValue)))
   ) {
-    throw new PersistenceDataCorruptionError('invalidPlayerDecision')
+    throw new PlayerDecisionIntegrityError()
   }
-  return deepFreeze({
+  const decoded = deepFreeze({
     decisionRecordId: row.decisionRecordId,
     agentRunId: row.agentRunId,
     sessionId: row.sessionId,
@@ -472,10 +537,14 @@ function decodeDecisionRow(
     choice,
     validatorResult,
     acceptedAttemptId: row.acceptedAttemptId,
+    commandLedgerId: row.commandLedgerId,
     createdAt: row.createdAt,
     modelPreparedAt: row.modelPreparedAt,
     selectedAt: row.selectedAt,
-  })
+    committedAt: row.committedAt,
+  }) as DecodedPlayerDecisionRecordV1
+  decodedPlayerDecisionRecords.add(decoded)
+  return decoded
 }
 
 async function requireAcceptedAttempt(
@@ -719,6 +788,81 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
       return Object.freeze({ status: 'selected' as const })
     },
 
+    async readForCommitValidation(transaction, owner, input) {
+      if (!isResolvedOwnerScope(owner)) {
+        throw new RepositoryInputValidationError()
+      }
+      const parsed = z
+        .strictObject({
+          decisionRecordId: UuidSchema,
+          agentRunId: UuidSchema,
+          sessionId: UuidSchema,
+        })
+        .safeParse(input)
+      if (!parsed.success) throw new RepositoryInputValidationError()
+      const rows = await queryRows(transaction`
+        SELECT
+          id::text AS "decisionRecordId",
+          agent_run_id::text AS "agentRunId",
+          session_id::text AS "sessionId",
+          hand_id::text AS "handId",
+          participant_id::text AS "participantId",
+          source_state_version::float8 AS "sourceStateVersion",
+          decision_request_id::text AS "decisionRequestId",
+          status,
+          decision_audit_snapshot_payload_version AS "auditPayloadVersion",
+          decision_audit_snapshot_payload AS "auditPayload",
+          candidate_set_payload_version AS "candidatePayloadVersion",
+          candidate_set_payload AS "candidatePayload",
+          model_projection_payload_version AS "projectionPayloadVersion",
+          model_projection_payload AS "projectionPayload",
+          model_choice_payload_version AS "choicePayloadVersion",
+          model_choice_payload AS "choicePayload",
+          validator_result_payload_version AS "validatorPayloadVersion",
+          validator_result_payload AS "validatorPayload",
+          accepted_attempt_id::text AS "acceptedAttemptId",
+          command_ledger_id::text AS "commandLedgerId",
+          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+          CASE WHEN model_prepared_at IS NULL THEN NULL ELSE
+            to_char(model_prepared_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "modelPreparedAt",
+          CASE WHEN selected_at IS NULL THEN NULL ELSE
+            to_char(selected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "selectedAt",
+          CASE WHEN committed_at IS NULL THEN NULL ELSE
+            to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt"
+        FROM app_private.player_decisions
+        WHERE id = ${parsed.data.decisionRecordId}::uuid
+          AND agent_run_id = ${parsed.data.agentRunId}::uuid
+          AND owner_id = ${owner.databaseOwnerId}::uuid
+          AND session_id = ${parsed.data.sessionId}::uuid
+      `)
+      return decodeDecisionRow(requireSingle(rows, DecisionRowSchema))
+    },
+
+    async lockForCommitValidation(transaction, owner, input) {
+      if (!isResolvedOwnerScope(owner)) {
+        throw new RepositoryInputValidationError()
+      }
+      const parsed = z
+        .strictObject({
+          decisionRecordId: UuidSchema,
+          agentRunId: UuidSchema,
+          sessionId: UuidSchema,
+        })
+        .safeParse(input)
+      if (!parsed.success) throw new RepositoryInputValidationError()
+      const rows = await queryRows(transaction`
+        SELECT id::text AS "decisionRecordId"
+        FROM app_private.player_decisions
+        WHERE id = ${parsed.data.decisionRecordId}::uuid
+          AND agent_run_id = ${parsed.data.agentRunId}::uuid
+          AND owner_id = ${owner.databaseOwnerId}::uuid
+          AND session_id = ${parsed.data.sessionId}::uuid
+        FOR UPDATE
+      `)
+      requireSingle(rows, z.strictObject({ decisionRecordId: UuidSchema }))
+      return repository.readForCommitValidation(transaction, owner, parsed.data)
+    },
+
     async readSelectedReceipt(transaction, owner, authority, input) {
       const parsedId = UuidSchema.safeParse(input.decisionRecordId)
       if (!parsedId.success) throw new RepositoryInputValidationError()
@@ -778,11 +922,14 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
           validator_result_payload_version AS "validatorPayloadVersion",
           validator_result_payload AS "validatorPayload",
           accepted_attempt_id::text AS "acceptedAttemptId",
+          command_ledger_id::text AS "commandLedgerId",
           to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
           CASE WHEN model_prepared_at IS NULL THEN NULL ELSE
             to_char(model_prepared_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "modelPreparedAt",
           CASE WHEN selected_at IS NULL THEN NULL ELSE
-            to_char(selected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "selectedAt"
+            to_char(selected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "selectedAt",
+          CASE WHEN committed_at IS NULL THEN NULL ELSE
+            to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt"
         FROM app_private.player_decisions
         WHERE agent_run_id = ${run.agentRunId}::uuid
           AND owner_id = ${owner.databaseOwnerId}::uuid
@@ -849,7 +996,7 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
           })
         }
       }
-      if (record.status === 'selected') {
+      if (record.status === 'selected' || record.status === 'committed') {
         if (record.acceptedAttemptId === null) {
           throw new PersistenceDataCorruptionError('invalidPlayerDecision')
         }

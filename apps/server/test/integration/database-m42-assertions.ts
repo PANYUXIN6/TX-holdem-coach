@@ -12,7 +12,10 @@ import {
   type ClaimNextRepositoryResult,
 } from '../../src/persistence/agent-run-lifecycle-repository.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
-import { patchPlayerTimeoutSettings } from '../../src/persistence/player-settings-repository.js'
+import {
+  patchPlayerTimeoutSettings,
+  readResolvedPlayerTimeoutSettings,
+} from '../../src/persistence/player-settings-repository.js'
 import {
   INITIAL_AGENT_MEMORY,
   insertSessionRosterSnapshot,
@@ -29,6 +32,25 @@ import {
 import { insertCommittedM27CompletedHand } from './database-repository-assertions.js'
 
 const noopEventPort = { publish: async () => undefined }
+const DatabaseTimestampWithMicrosecondPrecisionPattern =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d{6})Z$/
+
+export function toM42TerminalRaceCompletedAt(startedAt: string): string {
+  const match = DatabaseTimestampWithMicrosecondPrecisionPattern.exec(startedAt)
+  if (match === null) {
+    throw new Error('M4.2 terminal race fixture 收到无效数据库 startedAt。')
+  }
+  const baseMilliseconds = Date.parse(`${match[1]}.000Z`)
+  if (!Number.isFinite(baseMilliseconds)) {
+    throw new Error('M4.2 terminal race fixture 无法解析数据库 startedAt。')
+  }
+  const microseconds = Number(match[2])
+
+  // 不能直接 new Date(startedAt)：JavaScript 会向下截断微秒。
+  return new Date(
+    baseMilliseconds + Math.ceil(microseconds / 1_000),
+  ).toISOString()
+}
 
 function coachCreationInput(
   runId: string,
@@ -120,6 +142,10 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
   const workerSql = createDatabaseTestSqlForRole(runtimeUrl, 'm42-player')
   const identity = await createSessionFixture(sql, 7)
   const owner = await resolveOwnerScope(sql, { ownerId: 'local-user' })
+  const originalTimeoutSettings = await readResolvedPlayerTimeoutSettings(
+    sql,
+    owner,
+  )
   const workerOwner = await resolveOwnerScope(workerSql, {
     ownerId: 'local-user',
   })
@@ -337,9 +363,15 @@ async function assertM42PlayerSettingsCapacityAndRecovery(
       settingsSql.end({ timeout: 0 }),
       workerSql.end({ timeout: 0 }),
     ])
-    await sql`
-      DELETE FROM app_private.sessions WHERE id = ${identity.sessionId}::uuid
-    `
+    try {
+      await sql.begin((transaction) =>
+        patchPlayerTimeoutSettings(transaction, owner, originalTimeoutSettings),
+      )
+    } finally {
+      await sql`
+        DELETE FROM app_private.sessions WHERE id = ${identity.sessionId}::uuid
+      `
+    }
   }
 }
 
@@ -832,8 +864,13 @@ async function assertM42TerminalRace(
     if (claimed.kind !== 'claimed') {
       throw new Error('M4.2 terminal race fixture 未领取。')
     }
-    await coordinator.workerControl.markRunning(claimed.authority)
-    const completedAt = new Date().toISOString()
+    const runningRun = await coordinator.workerControl.markRunning(
+      claimed.authority,
+    )
+    if (runningRun.startedAt === null) {
+      throw new Error('M4.2 terminal race fixture 未返回数据库 startedAt。')
+    }
+    const completedAt = toM42TerminalRaceCompletedAt(runningRun.startedAt)
     const results = await Promise.allSettled([
       sql.begin((transaction) =>
         coordinator.finalize(transaction, {

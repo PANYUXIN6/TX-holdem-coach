@@ -27,6 +27,13 @@ const applicationM45Assertions = await readFile(
   new URL('../integration/postgres-e2e-m45-assertions.ts', import.meta.url),
   'utf8',
 )
+const playerCommitGateRepository = await readFile(
+  new URL(
+    '../../src/persistence/player-commit-gate-repository.ts',
+    import.meta.url,
+  ),
+  'utf8',
+)
 const serverPackage = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
 )
@@ -96,6 +103,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm44',
       'm45',
       'm46',
+      'm47',
     ])
     expect(persistenceEntry).not.toContain('postgres-application-e2e')
     expect(persistenceEntry).toContain('database-repository-assertions')
@@ -107,6 +115,9 @@ describe('remote PostgreSQL test boundaries', () => {
     ).toEqual([])
     expect(persistenceEntry).not.toMatch(
       /database-m(?:3[2-46-7]|4[23])-assertions/,
+    )
+    expect(playerCommitGateRepository).not.toMatch(
+      /from ['"]\.\.\/agents\/player\//,
     )
     expect(persistenceM35Assertions).not.toMatch(
       /src\/(?:config|http|personas|providers|settings)\b/,
@@ -147,6 +158,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm44',
       'm45',
       'm46',
+      'm47',
     ])
     expect(applicationEntry).not.toContain('database-schema-assertions')
     expect(applicationEntry).toContain('postgres-e2e-m35-assertions')

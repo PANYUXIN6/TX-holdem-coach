@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import type { Sql } from 'postgres'
-import { expect, test } from 'vitest'
+import { afterAll, expect, test } from 'vitest'
 import {
   assertExactMigrationSequence,
   assertMigrationSequence,
@@ -12,7 +12,9 @@ import { loadTestDatabaseConnections } from '../../src/db/test-database-safety.j
 import { runManagedChildProcess } from '../../scripts/managed-child-process.mjs'
 import {
   assertNoConflictingDatabaseTestConnections,
+  acquireDatabaseTestSuiteLock,
   createDatabaseTestSql,
+  type DatabaseTestSuiteLock,
   runAbortableDatabasePhase,
   shouldRunDatabaseMilestone,
   terminateConflictingDatabaseTestConnections,
@@ -22,12 +24,38 @@ import {
 
 const databaseTestMode = loadDatabaseTestMode(process.env)
 let persistentDatabasePrepared = false
+let persistentDatabaseSuiteLock: {
+  readonly client: Sql
+  readonly lock: DatabaseTestSuiteLock
+} | null = null
+
+afterAll(async () => {
+  const lock = persistentDatabaseSuiteLock
+  persistentDatabaseSuiteLock = null
+  if (lock !== null) {
+    try {
+      await lock.lock.release()
+    } finally {
+      await lock.client.end({ timeout: 0 })
+    }
+  }
+})
 
 function requireDatabaseTestRunId(): string {
   if (databaseTestMode.runId === null) {
     throw new Error('数据库测试缺少 Run ID。')
   }
   return databaseTestMode.runId
+}
+
+function createSuiteProtectedDatabaseTestSignal(
+  signal: AbortSignal,
+): AbortSignal {
+  const suiteLock = persistentDatabaseSuiteLock
+  if (suiteLock === null) {
+    throw new Error('数据库测试全局锁未持有。')
+  }
+  return AbortSignal.any([signal, suiteLock.lock.signal])
 }
 
 async function preparePersistentTestDatabase(
@@ -93,16 +121,31 @@ export function registerPersistentDatabasePreparation(): void {
       context.skip()
       return
     }
-    context.onTestFinished(
-      () => waitForDatabaseTestAbortCleanup(context.signal),
-      30_000,
+    const { runtimeUrl } = loadTestDatabaseConnections(process.env)
+    const lock = createDatabaseTestSql(
+      runtimeUrl,
+      requireDatabaseTestRunId(),
+      'suite-lock',
     )
-    await runAbortableDatabasePhase(
-      'migration compatibility',
-      context.signal,
-      preparePersistentTestDatabase,
-    )
-    persistentDatabasePrepared = true
+    let retained = false
+    try {
+      const suiteLock = await acquireDatabaseTestSuiteLock(lock)
+      persistentDatabaseSuiteLock = { client: lock, lock: suiteLock }
+      retained = true
+      const phaseSignal = createSuiteProtectedDatabaseTestSignal(context.signal)
+      context.onTestFinished(
+        () => waitForDatabaseTestAbortCleanup(phaseSignal),
+        30_000,
+      )
+      await runAbortableDatabasePhase(
+        'migration compatibility',
+        phaseSignal,
+        preparePersistentTestDatabase,
+      )
+      persistentDatabasePrepared = true
+    } finally {
+      if (!retained) await lock.end({ timeout: 0 })
+    }
   }, 180_000)
 }
 
@@ -130,11 +173,12 @@ export function registerDatabaseMilestoneTest(
         context.skip()
         return
       }
+      const phaseSignal = createSuiteProtectedDatabaseTestSignal(context.signal)
       context.onTestFinished(
-        () => waitForDatabaseTestAbortCleanup(context.signal),
+        () => waitForDatabaseTestAbortCleanup(phaseSignal),
         30_000,
       )
-      await runAbortableDatabasePhase(label, context.signal, async (signal) => {
+      await runAbortableDatabasePhase(label, phaseSignal, async (signal) => {
         const { runtimeUrl } = loadTestDatabaseConnections(process.env)
         const runId = requireDatabaseTestRunId()
         const sql = createDatabaseTestSql(

@@ -132,10 +132,11 @@ function choosePreparationAction(
   throw new Error('M3.3 固定牌堆准备路径缺少被动合法行动。')
 }
 
-export async function prepareTerminalUserTurn(
+async function prepareTerminalTurn(
   sql: Sql,
   owner: Awaited<ReturnType<typeof resolveOwnerScope>>,
   identity: SessionCreationIdentityGraph,
+  targetActor: 'user' | 'agent',
 ): Promise<{
   readonly state: PrivateTableState
   readonly eventDrafts: readonly PrivateEvent[]
@@ -173,11 +174,27 @@ export async function prepareTerminalUserTurn(
           participantSeatNumbers.has(seat.seatNumber) &&
           (seat.status === 'active' || seat.status === 'allIn'),
       )
-      if (actorSeatNumber === 0 && contenders.length === 2) break
+      const legalActions = getLegalActions(state.poker)
+      const targetReady =
+        targetActor === 'user'
+          ? actorSeatNumber === 0
+          : actorSeatNumber !== 0 &&
+            legalActions.some((action) => action.type === 'fold')
+      if (targetReady && contenders.length === 2) {
+        break
+      }
+
+      const forcedAllIn =
+        targetActor === 'agent' &&
+        contenders.length === 2 &&
+        actorSeatNumber === 0
+          ? legalActions.find((action) => action.type === 'allIn')
+          : undefined
 
       const result = applyPokerAction(state.poker, {
         actorSeatNumber,
-        action: choosePreparationAction(state, contenders.length),
+        action:
+          forcedAllIn ?? choosePreparationAction(state, contenders.length),
       })
       if (result.completedHand !== null) {
         throw new Error('M3.3 准备阶段不得完成手牌。')
@@ -201,7 +218,12 @@ export async function prepareTerminalUserTurn(
         (seat.status === 'active' || seat.status === 'allIn'),
     )
     if (
-      terminalHand?.currentActorSeatNumber !== 0 ||
+      (targetActor === 'user'
+        ? terminalHand?.currentActorSeatNumber !== 0
+        : terminalHand?.currentActorSeatNumber === 0 ||
+          !getLegalActions(state.poker).some(
+            (action) => action.type === 'fold',
+          )) ||
       terminalContenders.length !== 2 ||
       eventDrafts.length === 0
     ) {
@@ -276,6 +298,158 @@ export async function prepareTerminalUserTurn(
       lastEventSeq,
     })
   })
+}
+
+export function prepareTerminalUserTurn(
+  sql: Sql,
+  owner: Awaited<ReturnType<typeof resolveOwnerScope>>,
+  identity: SessionCreationIdentityGraph,
+) {
+  return prepareTerminalTurn(sql, owner, identity, 'user')
+}
+
+export function prepareTerminalAgentTurn(
+  sql: Sql,
+  owner: Awaited<ReturnType<typeof resolveOwnerScope>>,
+  identity: SessionCreationIdentityGraph,
+) {
+  return prepareTerminalTurn(sql, owner, identity, 'agent')
+}
+
+/**
+ * 为需要经过 Player Observation 认证的集成场景准备终局前 Agent 行动。
+ *
+ * `prepareTerminalTurn()` 是 M3.3 的原子批量夹具：它可以把多次行动写为
+ * 一次 mutation。Player Observation 则要求 actionCommitted 事件的状态版本
+ * 严格连续，因此这里按每次扑克行动分别持久化真实的 Session mutation。
+ */
+export async function prepareObservableTerminalAgentTurn(
+  sql: Sql,
+  owner: Awaited<ReturnType<typeof resolveOwnerScope>>,
+  identity: SessionCreationIdentityGraph,
+): Promise<PrivateTableState> {
+  let state = await readPrivateState(sql, identity.sessionId)
+  for (let actionCount = 0; actionCount < 64; actionCount += 1) {
+    const hand = state.poker.hand
+    if (hand === null || hand.currentActorSeatNumber === null) {
+      throw new Error('M4.7 终局准备缺少进行中的当前行动者。')
+    }
+    const participantSeatNumbers = new Set(
+      hand.holeCards.map((holeCards) => holeCards.seatNumber),
+    )
+    const contenders = state.poker.seats.filter(
+      (seat) =>
+        participantSeatNumbers.has(seat.seatNumber) &&
+        (seat.status === 'active' || seat.status === 'allIn'),
+    )
+    const legalActions = getLegalActions(state.poker)
+    if (
+      hand.currentActorSeatNumber !== 0 &&
+      contenders.length === 2 &&
+      legalActions.some((action) => action.type === 'fold')
+    ) {
+      return state
+    }
+
+    const forcedAllIn =
+      contenders.length === 2 && hand.currentActorSeatNumber === 0
+        ? legalActions.find((action) => action.type === 'allIn')
+        : undefined
+    const transition = applyPokerAction(state.poker, {
+      actorSeatNumber: hand.currentActorSeatNumber,
+      action: forcedAllIn ?? choosePreparationAction(state, contenders.length),
+    })
+    if (
+      transition.completedHand !== null ||
+      transition.eventDrafts.length === 0
+    ) {
+      throw new Error('M4.7 终局准备不得提前完成手牌。')
+    }
+
+    state = await sql.begin(async (transaction) => {
+      const locked =
+        await productionSessionMutationRepository.lockSessionForMutation(
+          transaction,
+          owner,
+          identity.sessionId,
+        )
+      if (locked.stateVersion !== state.stateVersion) {
+        throw new Error('M4.7 终局准备的 Session 版本漂移。')
+      }
+      const nextState = createPrivateTableState({
+        ...state,
+        stateVersion: locked.stateVersion + 1,
+        poker: transition.state,
+      })
+      const eventDrafts = transition.eventDrafts.map((event) =>
+        productionSessionMutationRepository.currentPrivateEventProtocol.parseDraft(
+          event,
+        ),
+      )
+      const finalEventSeq = locked.nextEventSeq + eventDrafts.length - 1
+      const projectedSession = {
+        ...locked,
+        stateVersion: nextState.stateVersion,
+        nextEventSeq: finalEventSeq + 1,
+        currentHandId: identity.handId,
+        agentRunState: 'idle' as const,
+        activePlayerRunId: null,
+        activeDecisionRequestId: null,
+      }
+      const mutationAt = new Date().toISOString()
+      await productionSessionMutationRepository.persistSessionMutation(
+        transaction,
+        locked,
+        {
+          finalStateVersion: nextState.stateVersion,
+          lifecycleStatus: 'active',
+          currentHandId: identity.handId,
+          agentRunState: 'idle',
+          activePlayerRunId: null,
+          activeDecisionRequestId: null,
+          snapshot: encodeSnapshot(nextState),
+          events: eventDrafts.map((event, index) => {
+            const eventSeq = locked.nextEventSeq + index
+            const eventId = randomUUID()
+            const publicEvent = SseEventSchema.parse({
+              eventId,
+              sessionId: identity.sessionId,
+              eventSeq,
+              stateVersion: nextState.stateVersion,
+              type: event.type,
+              payload: {
+                snapshot: {
+                  ...projectPublicSnapshot(
+                    nextState,
+                    projectedSession,
+                    finalEventSeq,
+                  ),
+                  eventSeq,
+                },
+              },
+            })
+            return {
+              eventId,
+              eventSeq,
+              handId: getPrivateEventHandId(event),
+              commandLedgerId: null,
+              stateVersionBefore: locked.stateVersion,
+              stateVersionAfter: nextState.stateVersion,
+              privateEvent:
+                productionSessionMutationRepository.currentPrivateEventProtocol.encodeCurrent(
+                  event,
+                ),
+              publicEvent,
+              createdAt: mutationAt,
+            }
+          }),
+          mutationAt,
+        },
+      )
+      return nextState
+    })
+  }
+  throw new Error('M4.7 未能准备到合法的 Agent 终局行动。')
 }
 
 export function createM33Executor(input: {

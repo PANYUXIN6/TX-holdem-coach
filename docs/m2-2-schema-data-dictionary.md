@@ -399,7 +399,7 @@ erDiagram
 
 ### 5.4 `player_decisions`
 
-**作用**：保存 M4.6 Player 决策的完整审计快照、候选集合、最小模型投影和已验收 bounded choice，只表达 `auditPrepared → modelPrepared → selected` 三个 durable stage。
+**作用**：保存 Player 决策的完整审计快照、候选集合、最小模型投影、已验收 bounded choice 及其唯一成功命令关联，表达 `auditPrepared → modelPrepared → selected → committed` 四个 durable stage。
 
 **一行代表**：一条 Player Run 的唯一决策记录。
 
@@ -407,16 +407,17 @@ erDiagram
 | --- | --- | --- |
 | `id`、`agent_run_id` | `uuid`；PK、Run 唯一 | 一条 Run 至多一份 Decision。 |
 | `owner_id`、`session_id`、`hand_id`、`participant_id`、`source_state_version`、`decision_request_id`、`runtime` | 复合 FK → `agent_runs` | 完整镜像 Player Run 身份；`runtime` 固定为 `player`。 |
-| `record_version`、`status` | 正整数、封闭文本 | 当前 record version 为 1；status 只允许三个 durable stage。 |
+| `record_version`、`status` | 正整数、封闭文本 | 当前 record version 为 1；status 只允许四个 durable stage。 |
 | `decision_audit_snapshot_*`、`candidate_set_*` | 必填版本/JSONB 对 | 完整安全审计事实与候选快照，创建首阶段时一次写入。 |
 | `model_projection_*` | 可空版本/JSONB 对 | `modelPrepared` 起必填的最小模型投影。 |
 | `model_choice_*`、`validator_result_*` | 可空版本/JSONB 对 | `selected` 才存在的严格输出和语义验收结果。 |
 | `accepted_attempt_id` | 可空复合 FK → `agent_attempts` | `selected` 精确绑定同 Run/Owner/Session 的 accepted Attempt。 |
-| `created_at`、`model_prepared_at`、`selected_at`、`updated_at` | `timestamptz` | 阶段时间矩阵与单调顺序由 CHECK 固定。 |
+| `command_ledger_id` | 可空复合 FK → `command_ledger`，唯一 | 仅 `committed` 关联同 Owner/Session 的 completed 私有 `aiAction` 账本；一条账本不能被两份 Decision 复用。 |
+| `created_at`、`model_prepared_at`、`selected_at`、`committed_at`、`updated_at` | `timestamptz` | 阶段时间矩阵与单调顺序由 CHECK 固定；`committed_at ≥ selected_at`。 |
 
 **关键规则**：
 
-- 数据库 CHECK 固定 payload pair、三阶段字段矩阵和时间顺序；每个可空 pair 的非空分支显式要求 version/payload 双方 `IS NOT NULL`，避免 PostgreSQL 三值逻辑接受单边 NULL；不存在 M4.7/M4.8/M4.9 的预建终态或 Memory 字段。
+- 数据库 CHECK 固定 payload pair、四阶段字段矩阵和时间顺序；每个可空 pair 的非空分支显式要求 version/payload 双方 `IS NOT NULL`，避免 PostgreSQL 三值逻辑接受单边 NULL。`committed` 必须保留完整 selected 载荷、accepted Attempt、ledger 关联和提交时间；不预建 M4.8/M4.9 的失败、暂停、stale 或 Memory 字段。
 - accepted Attempt 的 `completed + accepted + valid` 语义由 Player 专属 control 在同一事务锁定 Run/Attempt/Decision 后复验，不能由跨表 CHECK 伪装。
 - 删除 Session 时 Decision 级联删除；Owner 级 `app_settings` 不受影响。
 

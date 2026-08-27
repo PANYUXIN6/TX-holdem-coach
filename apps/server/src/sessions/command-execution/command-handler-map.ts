@@ -3,9 +3,10 @@ import type { LedgerCommand } from '../../persistence/command-ledger-repository.
 import type { SessionCommandHandlerBinding } from './command-handler.js'
 import { snapshotSessionCommandHandlerBinding } from './command-handler.js'
 
-const commandTypes = new Set(
-  SessionCommandSchema.options.map((option) => option.shape.type.value),
-)
+const commandTypes: ReadonlySet<string> = new Set([
+  ...SessionCommandSchema.options.map((option) => option.shape.type.value),
+  'aiAction',
+])
 
 export class SessionCommandCompositionError extends Error {
   public constructor() {

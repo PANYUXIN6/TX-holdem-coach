@@ -87,9 +87,11 @@ function preparedRows(status: 'auditPrepared' | 'modelPrepared') {
     validatorPayloadVersion: null,
     validatorPayload: null,
     acceptedAttemptId: null,
+    commandLedgerId: null,
     createdAt: CREATED_AT,
     modelPreparedAt: status === 'modelPrepared' ? CREATED_AT : null,
     selectedAt: null,
+    committedAt: null,
   }
   return { lockedRun, decision, projection, snapshot }
 }

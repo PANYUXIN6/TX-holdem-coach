@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import type { Sql, TransactionSql } from 'postgres'
 import {
+  acquireDatabaseTestSuiteLock,
   assertNoConflictingDatabaseTestConnections,
   bindDatabaseTestClientToAbortSignal,
   createDatabaseTestConnectionOptions,
@@ -16,6 +17,47 @@ import {
 } from '../integration/database-test-runtime.js'
 
 describe('database test runtime', () => {
+  function createSuiteLockSql(acquired: boolean): Sql {
+    const transaction = (() =>
+      Promise.resolve([{ acquired }])) as unknown as TransactionSql
+    return Object.assign(() => Promise.resolve([]), {
+      begin: (operation: (transaction: TransactionSql) => Promise<unknown>) =>
+        operation(transaction),
+    }) as unknown as Sql
+  }
+
+  function createPostAcquisitionFailureSuiteLockSql(failure: Error): {
+    readonly sql: Sql
+    failTransaction(): void
+  } {
+    let rejectTransaction!: (error: Error) => void
+    const transactionFailure = new Promise<void>((_resolve, reject) => {
+      rejectTransaction = reject
+    })
+    let reportLockQuery!: () => void
+    const lockQuery = new Promise<void>((resolve) => {
+      reportLockQuery = resolve
+    })
+    const transaction = (() => {
+      reportLockQuery()
+      return Promise.resolve([{ acquired: true }])
+    }) as unknown as TransactionSql
+    const sql = Object.assign(() => Promise.resolve([]), {
+      begin: async (
+        operation: (transaction: TransactionSql) => Promise<unknown>,
+      ) => {
+        void operation(transaction)
+        await lockQuery
+        await transactionFailure
+      },
+    }) as unknown as Sql
+
+    return {
+      sql,
+      failTransaction: () => rejectTransaction(failure),
+    }
+  }
+
   test('selects every milestone for full mode and only the requested milestone otherwise', () => {
     expect(
       shouldRunDatabaseMilestone(
@@ -302,7 +344,7 @@ describe('database test runtime', () => {
     expect(
       createDatabaseTestConnectionOptions('0123456789abcdef', 'm27-primary'),
     ).toEqual({
-      connect_timeout: 10,
+      connect_timeout: 30,
       max: 1,
       prepare: false,
       ssl: 'require',
@@ -312,6 +354,69 @@ describe('database test runtime', () => {
         idle_in_transaction_session_timeout: 60_000,
       },
     })
+  })
+
+  test('acquires one suite-wide advisory lock before remote test mutation', async () => {
+    const lock = await acquireDatabaseTestSuiteLock(createSuiteLockSql(true))
+
+    await expect(lock.release()).resolves.toBeUndefined()
+  })
+
+  test('rejects a concurrent remote suite before it mutates shared fixtures', async () => {
+    await expect(
+      acquireDatabaseTestSuiteLock(createSuiteLockSql(false)),
+    ).rejects.toThrow(
+      '检测到另一套远程 PostgreSQL 测试正在运行。请等待其结束后再串行执行。',
+    )
+  })
+
+  test('aborts an active phase when the acquired suite lock transaction fails', async () => {
+    const transactionFailure = new Error(
+      'connection failed at postgresql://user:password@example.test/postgres',
+    )
+    const suiteLockSql =
+      createPostAcquisitionFailureSuiteLockSql(transactionFailure)
+    const lock = await acquireDatabaseTestSuiteLock(suiteLockSql.sql)
+    const contextController = new AbortController()
+    const phaseSignal = AbortSignal.any([contextController.signal, lock.signal])
+    let reportPhaseStarted!: () => void
+    const phaseStarted = new Promise<void>((resolve) => {
+      reportPhaseStarted = resolve
+    })
+    const closeClient = vi.fn(async () => undefined)
+    const phase = runAbortableDatabasePhase(
+      'suite lock failure',
+      phaseSignal,
+      async (signal) => {
+        bindDatabaseTestClientToAbortSignal(
+          { end: closeClient } as unknown as Pick<Sql, 'end'>,
+          signal,
+        )
+        reportPhaseStarted()
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        )
+        signal.throwIfAborted()
+      },
+      { now: () => 0, write: () => undefined },
+    )
+
+    await phaseStarted
+    suiteLockSql.failTransaction()
+
+    await expect(phase).rejects.toThrow(
+      '数据库测试全局锁已丢失，已中止后续数据库写入。',
+    )
+    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 0 })
+    const releaseFailure: unknown = await lock.release().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(releaseFailure).toMatchObject({
+      message: '数据库测试全局锁已丢失，已中止后续数据库写入。',
+    })
+    expect(releaseFailure).not.toHaveProperty('cause')
+    expect(String(releaseFailure)).not.toContain('password')
   })
 
   test('fails fast with safe diagnostics when another tagged test transaction remains', async () => {

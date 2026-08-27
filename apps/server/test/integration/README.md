@@ -6,11 +6,17 @@
 
 远程测试按责任分成两套独立入口，不再把应用级流程混入数据库持久化验收：
 
-- `db:test:*`：只验证 migration、Schema、Repository SQL、事务原子性、级联与 PostgreSQL 锁语义；当前拥有 `m22`–`m28`、`m35`、`m44`–`m46`，入口是 `database-infrastructure.test.ts`。
-- `postgres:e2e:*`：只验证确实需要贯穿应用服务与 PostgreSQL 的跨层流程；里程碑范围固定为 `m31`–`m37`、`m42`–`m46`，入口是 `postgres-application-e2e.test.ts`。
+- `db:test:*`：只验证 migration、Schema、Repository SQL、事务原子性、级联与 PostgreSQL 锁语义；当前拥有 `m22`–`m28`、`m35`、`m44`–`m47`，入口是 `database-infrastructure.test.ts`。
+- `postgres:e2e:*`：只验证确实需要贯穿应用服务与 PostgreSQL 的跨层流程；里程碑范围固定为 `m31`–`m37`、`m42`–`m47`，入口是 `postgres-application-e2e.test.ts`。
 - `test/unit` 与 `test/service`：领域计算、Codec、错误分类、HTTP 映射、Provider 和服务分支必须优先在离线测试中验证，不得为了复用真实数据库夹具而放入上述远程套件。
 
 两套远程入口共享迁移准备、连接标签、阶段报告与连接清理，但不共享测试选择。M4.6 database 只验证专属表的复合身份、三阶段矩阵、Attempt 外键、唯一性和 Session 级联；E2E 才从真实 running Run 串接认证 observation、M4.5 Capability Plan、快照先落库、第二/第三 Guard、fake Provider、selected 原子交接、同 Run selected 恢复与 ResultPort，并证明不提交动作、不终结 Run、不发布 Session 事件。
+
+每个远程测试进程从迁移准备开始在一条专用长事务中持有同一个 PostgreSQL transaction advisory lock，并每 30 秒在事务内心跳，直到该 Vitest 套件结束。该形态兼容远程 transaction pooler，不依赖逻辑连接固定到某个 session。若另一套 `db:test:*` 或 `postgres:e2e:*` 已在运行，新命令必须在任何迁移、fixture 清理或业务写入前失败；连接扫描继续负责报告历史遗留的 tagged transaction，但不能替代此原子互斥门禁。
+
+M4.7 E2E 只为成功、Hand 完成、ledger 故障注入和拒绝矩阵各构建一次完整 selected Player 流程。拒绝矩阵在同一个 selected Decision 上逐项开启事务，注入 live-fact 变化并整体回滚；每项仍独立验证错误分类、零 ledger 和 Session/Hand/Decision/Run 零写。Database `m47` 的 Repository 拒绝矩阵同样只建立一次 live fixture，再通过逐项事务回滚隔离变体；Schema、Repository capability、真实锁序及 delete/clear 竞争仍各自保留独立验收，不得重新拆成多次重复的应用全链路。
+
+会修改 owner 级 Player timeout 的远程测试必须保存并恢复原设置，不能让前序里程碑改变后续 Run 的预算。M4.6/M4.7 应用全链路显式使用 120 秒测试 deadline；该预算只隔离远程数据库往返，不替代 M4.2 对真实 deadline、lease 与 fencing 语义的验收。
 
 ## 固定执行顺序
 
@@ -26,7 +32,7 @@
 
 ## 进度与失败定位
 
-每套远程入口先执行迁移兼容性准备，再把其拥有的里程碑注册为独立 Vitest 测试，并在首个失败或阶段超时后停止调度同套后续里程碑。数据库套件拥有 M2.2–M2.8、M3.5、M4.4–M4.6；E2E 套件拥有 M3.1–M3.7、M4.2–M4.6。每个阶段即时输出：
+每套远程入口先执行迁移兼容性准备，再把其拥有的里程碑注册为独立 Vitest 测试，并在首个失败或阶段超时后停止调度同套后续里程碑。数据库套件拥有 M2.2–M2.8、M3.5、M4.4–M4.7；E2E 套件拥有 M3.1–M3.7、M4.2–M4.7。每个阶段即时输出：
 
 ```text
 [database-test] START M2.7 audit persistence

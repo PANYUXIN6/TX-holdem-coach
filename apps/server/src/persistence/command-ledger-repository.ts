@@ -4,6 +4,7 @@ import {
   CommandResponseSchema,
   CommandIdSchema,
   ErrorResponseSchema,
+  PokerActionSchema,
   PublicSessionSnapshotSchema,
   SessionCommandSchema,
   SessionIdSchema,
@@ -28,9 +29,38 @@ const SafeIntegerSchema = z
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER)
 
-export const LedgerCommandSchema = SessionCommandSchema.refine(
+const PublicLedgerCommandSchema = SessionCommandSchema.refine(
   (command) => command.expectedStateVersion <= Number.MAX_SAFE_INTEGER,
 )
+
+export type PublicLedgerCommand = z.infer<typeof PublicLedgerCommandSchema>
+
+export const AiActionLedgerCommandSchema = z.strictObject({
+  sessionId: SessionIdSchema,
+  commandId: CommandIdSchema,
+  expectedStateVersion: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(Number.MAX_SAFE_INTEGER),
+  type: z.literal('aiAction'),
+  payload: z.strictObject({
+    decisionRequestId: z.string().uuid(),
+    handId: z.string().uuid(),
+    actorSeatNumber: z.number().int().min(1).max(8),
+    candidateActionId: z.string().trim().min(1).max(128),
+    action: PokerActionSchema,
+  }),
+})
+
+export type AiActionLedgerCommand = Readonly<
+  z.infer<typeof AiActionLedgerCommandSchema>
+>
+
+export const LedgerCommandSchema = z.union([
+  PublicLedgerCommandSchema,
+  AiActionLedgerCommandSchema,
+])
 
 export type LedgerCommand = z.infer<typeof LedgerCommandSchema>
 
@@ -256,12 +286,30 @@ function assertTerminalUpdate(
 export function prepareCommandRegistration(
   input: unknown,
 ): PreparedCommandRegistration {
-  const parsed = LedgerCommandSchema.safeParse(input)
+  const parsed = PublicLedgerCommandSchema.safeParse(input)
   if (!parsed.success) {
     throw new RepositoryInputValidationError()
   }
 
-  const command = deepFreeze(normalizeLedgerCommand(parsed.data))
+  return prepareRegistration(parsed.data)
+}
+
+export function preparePrivateAiActionCommandRegistration(
+  command: AiActionLedgerCommand,
+): PreparedCommandRegistration {
+  const parsed = AiActionLedgerCommandSchema.safeParse(command)
+  if (!parsed.success) {
+    throw new RepositoryInputValidationError()
+  }
+
+  return prepareRegistration(parsed.data)
+}
+
+function prepareRegistration(
+  parsedCommand: LedgerCommand,
+): PreparedCommandRegistration {
+  const command = deepFreeze(normalizeLedgerCommand(parsedCommand))
+
   const canonicalPayload = canonicalJson({
     type: command.type,
     expectedStateVersion: command.expectedStateVersion,

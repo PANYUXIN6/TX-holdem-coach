@@ -16,6 +16,7 @@ function isEventSequenceAllowedForCommand(
   if (events.length === 0) return false
   switch (commandType) {
     case 'playerAction':
+    case 'aiAction':
       return (
         (events.length === 1 && events[0]?.type === 'actionCommitted') ||
         (events.length === 2 &&
@@ -500,25 +501,46 @@ function terminalActionSnapshotMirrors(
   )
 }
 
-function playerActionMirrors(input: CommandMutationConsistencyInput): boolean {
+function pokerActionMirrors(input: CommandMutationConsistencyInput): boolean {
   const beforeHand = input.stateBefore.poker.hand
   const actionEvent = input.events[0]
   const relationPlan = parsePlayerActionRelationPlan(input.relationPlan)
+  const actorSeatNumber =
+    input.command.type === 'playerAction'
+      ? 0
+      : input.command.type === 'aiAction'
+        ? input.command.payload.actorSeatNumber
+        : null
+  const action =
+    input.command.type === 'playerAction' || input.command.type === 'aiAction'
+      ? input.command.payload.action
+      : null
+  const validCoordinationBefore =
+    input.command.type === 'playerAction'
+      ? input.sessionBefore.agentRunState === 'idle' &&
+        input.sessionBefore.activePlayerRunId === null &&
+        input.sessionBefore.activeDecisionRequestId === null
+      : input.command.type === 'aiAction'
+        ? input.sessionBefore.agentRunState === 'thinking' &&
+          input.sessionBefore.activePlayerRunId !== null &&
+          input.sessionBefore.activeDecisionRequestId !== null
+        : false
   if (
-    input.command.type !== 'playerAction' ||
+    (input.command.type !== 'playerAction' &&
+      input.command.type !== 'aiAction') ||
     input.stateEffectKind !== 'stateChanged' ||
     input.lifecycleAfter !== 'active' ||
     input.stateBefore.poker.pokerPhase !== 'inHand' ||
     beforeHand === null ||
     actionEvent?.type !== 'actionCommitted' ||
     relationPlan === null ||
-    beforeHand.currentActorSeatNumber !== 0 ||
+    actorSeatNumber === null ||
+    action === null ||
+    beforeHand.currentActorSeatNumber !== actorSeatNumber ||
     actionEvent.actorSeatNumber !== beforeHand.currentActorSeatNumber ||
     actionEvent.handId.toLowerCase() !== beforeHand.handId.toLowerCase() ||
-    !equalValue(actionEvent.command, {
-      actorSeatNumber: 0,
-      action: input.command.payload.action,
-    }) ||
+    !equalValue(actionEvent.command, { actorSeatNumber, action }) ||
+    !validCoordinationBefore ||
     input.playerCoordinationAfter.agentRunState !== 'idle' ||
     input.playerCoordinationAfter.activePlayerRunId !== null ||
     input.playerCoordinationAfter.activeDecisionRequestId !== null ||
@@ -630,6 +652,7 @@ export function isCommandMutationConsistent(
     case 'endSession':
       return endSessionMirrors(input)
     case 'playerAction':
-      return playerActionMirrors(input)
+    case 'aiAction':
+      return pokerActionMirrors(input)
   }
 }

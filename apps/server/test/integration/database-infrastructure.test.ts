@@ -3,6 +3,7 @@ import { assertM35AtomicPlayerSettingsPersistence } from './database-m35-asserti
 import { assertM44PlayerObservationPersistence } from './database-m44-assertions.js'
 import { assertM45PlayerDecisionReferencePersistence } from './database-m45-assertions.js'
 import { assertM46PlayerDecisionPersistence } from './database-m46-assertions.js'
+import { assertM47PlayerCommitSchema } from './database-m47-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -133,6 +134,12 @@ registerDatabaseMilestoneTest(
   'm46',
   'M4.6 Player decision staged persistence',
   (sql) => assertM46PlayerDecisionPersistence(sql),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm47',
+  'M4.7 Player Commit Gate schema',
+  (sql, runtimeUrl) => assertM47PlayerCommitSchema(sql, runtimeUrl),
   300_000,
 )
 

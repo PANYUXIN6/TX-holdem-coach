@@ -59,6 +59,18 @@ export class PersistenceDataCorruptionError extends Error {
   }
 }
 
+/**
+ * Decision 的 JSON/版本均可 strict decode，但冻结的候选、choice 或
+ * Validator 事实已经不再自洽。Commit Gate 将它归类为失效选择，而非
+ * 一般的持久化读取故障。
+ */
+export class PlayerDecisionIntegrityError extends PersistenceDataCorruptionError {
+  public constructor() {
+    super('invalidPlayerDecision')
+    this.name = 'PlayerDecisionIntegrityError'
+  }
+}
+
 export class ResourceNotFoundError extends Error {
   public constructor() {
     super('目标资源未找到。')

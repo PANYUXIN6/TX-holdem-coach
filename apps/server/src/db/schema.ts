@@ -953,9 +953,11 @@ export const playerDecisions = appPrivateSchema.table(
     validatorResultPayloadVersion: integer('validator_result_payload_version'),
     validatorResultPayload: objectPayload('validator_result_payload'),
     acceptedAttemptId: uuid('accepted_attempt_id'),
+    commandLedgerId: uuid('command_ledger_id'),
     createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
     modelPreparedAt: zonedTimestamp('model_prepared_at'),
     selectedAt: zonedTimestamp('selected_at'),
+    committedAt: zonedTimestamp('committed_at'),
     updatedAt: zonedTimestamp('updated_at').notNull().defaultNow(),
   },
   (table) => [
@@ -1006,7 +1008,17 @@ export const playerDecisions = appPrivateSchema.table(
         agentAttempts.sessionId,
       ],
     }),
+    foreignKey({
+      name: 'player_decisions_command_ledger_scope_fk',
+      columns: [table.commandLedgerId, table.sessionId, table.ownerId],
+      foreignColumns: [
+        commandLedger.id,
+        commandLedger.sessionId,
+        commandLedger.ownerId,
+      ],
+    }),
     unique('player_decisions_agent_run_unique').on(table.agentRunId),
+    unique('player_decisions_command_ledger_unique').on(table.commandLedgerId),
     index('player_decisions_session_status_idx').on(
       table.sessionId,
       table.status,
@@ -1020,7 +1032,7 @@ export const playerDecisions = appPrivateSchema.table(
     ),
     check(
       'player_decisions_status_check',
-      sql`${table.status} IN ('auditPrepared', 'modelPrepared', 'selected')`,
+      sql`${table.status} IN ('auditPrepared', 'modelPrepared', 'selected', 'committed')`,
     ),
     check(
       'player_decisions_required_payloads_check',
@@ -1073,6 +1085,8 @@ export const playerDecisions = appPrivateSchema.table(
         AND ${table.acceptedAttemptId} IS NULL
         AND ${table.modelPreparedAt} IS NULL
         AND ${table.selectedAt} IS NULL
+        AND ${table.commandLedgerId} IS NULL
+        AND ${table.committedAt} IS NULL
       ) OR (
         ${table.status} = 'modelPrepared'
         AND ${table.modelProjectionPayloadVersion} IS NOT NULL
@@ -1081,6 +1095,8 @@ export const playerDecisions = appPrivateSchema.table(
         AND ${table.acceptedAttemptId} IS NULL
         AND ${table.modelPreparedAt} IS NOT NULL
         AND ${table.selectedAt} IS NULL
+        AND ${table.commandLedgerId} IS NULL
+        AND ${table.committedAt} IS NULL
       ) OR (
         ${table.status} = 'selected'
         AND ${table.modelProjectionPayloadVersion} IS NOT NULL
@@ -1089,6 +1105,18 @@ export const playerDecisions = appPrivateSchema.table(
         AND ${table.acceptedAttemptId} IS NOT NULL
         AND ${table.modelPreparedAt} IS NOT NULL
         AND ${table.selectedAt} IS NOT NULL
+        AND ${table.commandLedgerId} IS NULL
+        AND ${table.committedAt} IS NULL
+      ) OR (
+        ${table.status} = 'committed'
+        AND ${table.modelProjectionPayloadVersion} IS NOT NULL
+        AND ${table.modelChoicePayloadVersion} IS NOT NULL
+        AND ${table.validatorResultPayloadVersion} IS NOT NULL
+        AND ${table.acceptedAttemptId} IS NOT NULL
+        AND ${table.modelPreparedAt} IS NOT NULL
+        AND ${table.selectedAt} IS NOT NULL
+        AND ${table.commandLedgerId} IS NOT NULL
+        AND ${table.committedAt} IS NOT NULL
       )`,
     ),
     check(
@@ -1099,6 +1127,10 @@ export const playerDecisions = appPrivateSchema.table(
           ${table.modelPreparedAt} IS NULL
           OR ${table.selectedAt} IS NULL
           OR ${table.selectedAt} >= ${table.modelPreparedAt}
+        )
+        AND (
+          ${table.committedAt} IS NULL
+          OR (${table.selectedAt} IS NOT NULL AND ${table.committedAt} >= ${table.selectedAt})
         )`,
     ),
   ],

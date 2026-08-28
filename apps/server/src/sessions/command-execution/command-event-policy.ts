@@ -7,6 +7,7 @@ import { getPrivateEventHandId } from '../authoritative-state/private-event.js'
 import { parseEndSessionRelationPlan } from './end-session-handler.js'
 import { parsePlayerActionRelationPlan } from './player-action-handler.js'
 import { parseRebuyRelationPlan } from './rebuy-handler.js'
+import { parseRetryAgentRelationPlan } from '../../agents/player/retry-agent-handler.js'
 import { parseStartNextHandRelationPlan } from './start-next-hand-handler.js'
 
 function isEventSequenceAllowedForCommand(
@@ -45,6 +46,8 @@ function isEventSequenceAllowedForCommand(
           events[1]?.type === 'sessionEnded' &&
           events[1].reason === 'handAborted')
       )
+    case 'retryAgent':
+      return events.length === 1 && events[0]?.type === 'agentStarted'
   }
 }
 
@@ -629,6 +632,54 @@ function pokerActionMirrors(input: CommandMutationConsistencyInput): boolean {
   })
 }
 
+function retryAgentMirrors(input: CommandMutationConsistencyInput): boolean {
+  const event = input.events[0]
+  const plan = parseRetryAgentRelationPlan(input.relationPlan)
+  const hand = input.stateBefore.poker.hand
+  const actorSeatNumber = hand?.currentActorSeatNumber
+  const actor =
+    typeof actorSeatNumber === 'number'
+      ? input.stateBefore.poker.seats.find(
+          (seat) => seat.seatNumber === actorSeatNumber && !seat.isUser,
+        )
+      : undefined
+  return (
+    input.command.type === 'retryAgent' &&
+    plan !== null &&
+    input.stateEffectKind === 'stateUnchanged' &&
+    stateContentEquals(input.stateBefore, input.stateAfter) &&
+    input.lifecycleAfter === 'active' &&
+    input.stateBefore.poker.pokerPhase === 'inHand' &&
+    hand !== null &&
+    typeof actorSeatNumber === 'number' &&
+    actorSeatNumber >= 1 &&
+    actorSeatNumber <= 8 &&
+    actor !== undefined &&
+    input.sessionBefore.agentRunState === 'paused' &&
+    input.sessionBefore.activePlayerRunId === null &&
+    input.sessionBefore.activeDecisionRequestId === null &&
+    input.currentHandIdAfter?.toLowerCase() === hand.handId.toLowerCase() &&
+    input.playerCoordinationAfter.agentRunState === 'thinking' &&
+    input.playerCoordinationAfter.activePlayerRunId?.toLowerCase() ===
+      plan.agentRunId.toLowerCase() &&
+    input.playerCoordinationAfter.activeDecisionRequestId?.toLowerCase() ===
+      plan.decisionRequestId.toLowerCase() &&
+    event?.type === 'agentStarted' &&
+    event.handId.toLowerCase() === hand.handId.toLowerCase() &&
+    event.agentRunId.toLowerCase() === plan.agentRunId.toLowerCase() &&
+    event.decisionRequestId.toLowerCase() ===
+      plan.decisionRequestId.toLowerCase() &&
+    event.actorSeatNumber === actorSeatNumber &&
+    event.trigger === 'manualRetry' &&
+    event.supersedesRunId?.toLowerCase() ===
+      plan.predecessorRunId.toLowerCase() &&
+    plan.sessionId.toLowerCase() === input.command.sessionId.toLowerCase() &&
+    plan.handId.toLowerCase() === hand.handId.toLowerCase() &&
+    plan.actorParticipantId.toLowerCase() === actor.playerId.toLowerCase() &&
+    plan.sourceStateVersion === input.stateBefore.stateVersion
+  )
+}
+
 export function isCommandMutationConsistent(
   input: CommandMutationConsistencyInput,
 ): boolean {
@@ -651,6 +702,8 @@ export function isCommandMutationConsistent(
       return rebuyMirrors(input)
     case 'endSession':
       return endSessionMirrors(input)
+    case 'retryAgent':
+      return retryAgentMirrors(input)
     case 'playerAction':
     case 'aiAction':
       return pokerActionMirrors(input)

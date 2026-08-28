@@ -900,7 +900,7 @@ async function assertM31ConcurrentVersionConflict(
       expect(rows[0]).toEqual({
         stateVersion: 2,
         nextEventSeq: 2,
-        eventVersions: [1, 1],
+        eventVersions: [2, 2],
         completedLedgers: 1,
         failedLedgers: 1,
       })

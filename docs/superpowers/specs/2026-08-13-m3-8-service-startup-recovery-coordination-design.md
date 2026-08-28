@@ -29,7 +29,7 @@ M3.8 是后置集成里程碑，编号不再表示实施顺序。它不实现 Ag
 1. M4.2 拥有通用 AgentRun 生命周期、Worker、租约、fencing、领取和持久队列；M3.8 只消费 Worker 生命周期与唤醒端口。
 2. M4.3 拥有 ModelGateway 和 DeepSeek Attempt 执行。M4.8 可以原子创建处于 `queued` 的替代运行和新请求，但 M3.8 不创建 Attempt、不选择 Provider、不调用模型；Worker 领取后由 M4.3 从 DeepSeek 首次 Attempt 开始。
 3. M4.7 拥有检查点、结果和扑克命令提交前的迟到结果屏障。M3.8 不以进程内取消、AbortSignal 或“旧 Worker 已经退出”冒充 fencing 正确性。
-4. M4.8 拥有 Player `process_restart` 策略：取消旧运行、失效旧请求/attempt/租约/fencing、重新判断当前决策点、可选创建替代运行，以及协调状态和 Player 私有事件 V3 的原子写入。M3.8 不复制这些判断。
+4. M4.8 拥有 Player `process_restart` 策略：通常取消旧运行、失效旧请求/attempt/租约/fencing、重新判断当前决策点、可选创建替代运行，以及协调状态和 Player 私有事件 V3 的原子写入；若 predecessor 的 exact 配置或依赖不可用，则旧运行以稳定配置失败进入 `failed`、Session paused。M3.8 不复制这些判断。
 5. M3.8 拥有且仅拥有活动场次扫描、M2.6 恢复组合、调用 M4.8 端口、提交后 Worker 唤醒、启动就绪和进程资源关闭治理。M3.8 不进入 HTTP 请求链，也不成为普通场次读取或 Agent 恢复的转发层。
 6. Worker 在全部启动恢复候选处理完成前保持停止，Hono 在恢复完成、Worker 成功启动前不监听；只有监听端口确认绑定后才能进入 ready。外部请求不能观察或竞争半完成的本进程启动恢复。
 7. 每个 Session 使用独立短事务并按稳定 Session ID 顺序串行处理。某场进入 `readonlyDiagnostic` 是已闭合的恢复结果，不阻止服务就绪；数据库、契约或未知基础设施错误阻止监听。
@@ -42,7 +42,7 @@ M3.8 是后置集成里程碑，编号不再表示实施顺序。它不实现 Ag
 
 - 服务启动时发现当前 Owner 的活动场次，并通过 M2.6 读取、验证和必要时修复最新权威私有快照及事件链。
 - 对 M2.6 返回的 `ready` 活动场次调用 M4.8 的 Player 进程重启恢复端口。
-- 保证旧 `thinking` Player 的取消、旧能力失效和可选替代运行创建由 M4.8 在同一数据库事务内完成。
+- 保证旧 `thinking` Player 的终结、旧能力失效和可选替代运行创建由 M4.8 在同一数据库事务内完成；正常接替使用 `cancelled(process_restart)`，exact 配置或依赖不可用时使用稳定配置失败和 Session paused。
 - 保证替代运行只有在事务提交后才可被当前进程 Worker 领取。
 - 让启动失败、正常关闭、只读诊断、并发状态变化、已结束/已删除场次和提交后尽力副作用具有明确语义。
 - 把“数据库已可连接”“应用已完成恢复、Worker 可用”和“HTTP 端口已经绑定、服务 ready”区分为不同启动阶段。
@@ -346,7 +346,7 @@ type PlayerProcessRestartRecoveryResult =
 - 必须遵守 M4.8 已确认的 Session/Hand/AgentRun 锁序；M3.8 不自行锁 Agent 表；
 - `unchanged` 表示当前事实无需 Player 重启写入，例如 Session 为 `idle` 且没有需要接替的有效 Player 运行；
 - `paused` 表示当前 Session 保持 `paused`，必须零替代 Run、零新 request、零事件、零唤醒；
-- `reconciledWithoutReplacement` 表示 M4.8 已原子关闭失效旧事实，但当前状态不再需要 AI 行动；是否以及如何调整 Session 协调状态和写事件完全由 M4.8 决定；
+- `reconciledWithoutReplacement` 表示 M4.8 已原子关闭失效旧事实但没有创建 replacement，包括当前状态不再需要 AI 行动，以及本次因 exact 配置或依赖不可用而把旧 Run 写为 `failed`、Session 新进入 paused 并写入 `agentPaused`；是否以及如何调整 Session 协调状态和写事件完全由 M4.8 决定；
 - `replacementQueued` 只在新 Run、request、Session 指针、审计关联和必要 Player V3 协调事件已在同一事务写完后返回；
 - 返回的 `newlyPersistedEvents` 此时仍只是“事务内已写入候选”。只有外层 `runDatabaseTransaction()` 成功返回后，M3.8 才能发布；
 - M3.8 必须用 strict discriminated union Decoder 校验完整返回值：拒绝未知字段，校验 `replacementRunId` 为规范 UUID、每个事件通过共享 `SseEventSchema`，并校验 `kind` 与字段组合精确对应；
@@ -533,10 +533,10 @@ interface StartupCommittedEffects {
 对于 M2.6 `ready` 且 Session 为 `thinking`：
 
 - M4.8 必须验证活动指针、旧 Run、当前 Hand、actor、stateVersion 和决策点镜像；
-- 旧 Run 必须变为 `cancelled(process_restart)`，旧非终态 Attempt、租约和请求能力失效；
+- 若 exact 配置与依赖可用并进入接替路径，旧 Run 必须变为 `cancelled(process_restart)`，旧非终态 Attempt、租约和请求能力失效；若 exact 配置或依赖不可用，则适用 M4.8 已确认例外：旧 Run 以稳定配置失败进入 `failed`、Session paused、写入 `agentPaused`，并返回 `reconciledWithoutReplacement`；
 - 若当前事实仍为 `active + inHand`、仍轮到同一 AI 且不存在其他有效运行，M4.8 原子创建带旧 Run 关联的 queued 替代运行和新 request；
 - 替代运行沿用本场固化的允许版本，但其路由位置、纠错次数、输出、检查点、Attempt、租约和 fencing 从新运行初态开始；
-- M3.8 只接收 `replacementRunId`，不接收上述私有载荷。
+- replacement 路径中 M3.8 接收 `replacementRunId` 和公开事件批次；配置失败暂停路径只接收公开事件批次且没有 replacement ID。两条路径都不接收上述 Runtime 私有载荷。
 
 ### 8.2 `paused`
 
@@ -684,6 +684,7 @@ Session/Run UUID 默认不需要进入启动摘要。定向诊断若确需关联
 - 多候选乱序输入被拒绝或由 Repository 保证排序，应用按稳定顺序调用；
 - 每个候选独立事务，M2.6 先于 M4.8；
 - `ready + unchanged`、`paused`、`reconciledWithoutReplacement`、`replacementQueued` 四类结果；
+- 既有 paused 必须返回 `paused` 且零写；本次因 exact 配置或依赖不可用而新进入 paused 必须返回带 `agentPaused` 的 `reconciledWithoutReplacement`，不得混用两个 kind；
 - `ended`、`readonlyDiagnostic`、扫描后 not found 均零 M4.8，且不进入 `replacementRunIds`；
 - 事务回滚时零事件发布，replacement ID 不进入返回缓冲；
 - COMMIT 后事件才发布，replacement ID 才进入缓冲；
@@ -741,7 +742,7 @@ config
 
 这些验收由 M4.2/M4.3/M4.7/M4.8 自身拥有，M3.8 只在集成夹具复用：
 
-- `process_restart` 取消旧 Run、Attempt、租约并清除旧有效能力；
+- `process_restart` 在 replacement 前取消旧 Run、Attempt、租约并清除旧有效能力；exact 配置或依赖不可用时则以稳定配置失败终结旧 Run、暂停 Session 并返回 `reconciledWithoutReplacement`；
 - 替代 Run 使用新 request、`supersedesRunId` 和当前决策点，且不继承输出/检查点/路由位置/纠错次数；
 - Worker 第一次 Attempt 固定为 DeepSeek；
 - 旧 Worker、旧 request 或旧 fencing 写检查点/结果/扑克命令全部拒绝；
@@ -759,7 +760,7 @@ M3.8 不复制这些内部用例，只保留一条跨模块快乐路径和关键
 2. 新连接重新读取后，替代 Run 关联旧审计，旧 attempt 保留但不可继续，新 Run 没有继承的 Attempt/输出/检查点。
 3. Worker 只在恢复提交后领取，第一次 Attempt 经 M4.3 选择 DeepSeek。
 4. 使用旧 token 提交检查点、结果和 `aiAction` 均零业务写入；新 token 只能提交一次。
-5. paused 场次重启零写、零 Run、零事件；当前事实变化时取消旧 Run但不错误创建替代。
+5. 既有 paused 场次重启返回 `paused`，零写、零 Run、零事件；thinking 场次因 exact 配置或依赖不可用而本次新暂停时，旧 Run failed、写 `agentPaused` 并返回 `reconciledWithoutReplacement`；当前事实变化时终结旧 Run但不错误创建替代。
 6. 损坏快照进入 `readonlyDiagnostic` 后零 Agent 写入，服务恢复阶段仍成功；普通修改命令保持拒绝。
 7. 两连接竞争恢复同一决策点，最终最多一个有效 Run；事件和 Session 指针属于胜出的完整事务。
 8. 在替代事务回滚点证明旧取消、新 Run、Session 指针、事件全部回滚，且零 Worker wake。
@@ -816,6 +817,7 @@ M3.8 本身不新增 Schema、migration 或共享事务基础设施，因此默�
 - 必须提供第 5.2 节等价事务端口，拥有全部 Player 重启策略；
 - 必须在同一事务关闭旧能力并可选建立新 Run/请求/Session 指针/V3 事件；
 - 必须返回最小提交后效果，不向 M3.8 暴露 Runtime 私有载荷；
+- 必须严格遵守第 5.2 节 kind 映射：既有 paused 才返回 `paused`；本次新进入 paused 且写事件返回 `reconciledWithoutReplacement`；
 - 必须独立证明并发幂等和唯一有效运行。
 
 ### 14.5 对 M3.7 与前端
@@ -832,7 +834,7 @@ M3.8 只有在以下条件全部满足时才完成：
 - M4.8 完整返回联合在 COMMIT 前严格解码；非法 Run ID、事件、kind/字段组合，以及 Session 不匹配、eventId 重复、eventSeq 非连续全部回滚；
 - Worker 在全部恢复完成前不领取，Hono 在恢复和 Worker start 成功前不监听，只有 HTTP 端口确认绑定后才 ready；
 - 只有提交后的事件被发布、提交后的替代 Run 被唤醒；
-- `thinking`、`paused`、不再需要 AI、ended/missing 和 readonlyDiagnostic 都有通过证据；
+- `thinking` replacement、既有 `paused` 零写、配置/依赖不可用时新暂停并返回 `reconciledWithoutReplacement`、不再需要 AI、ended/missing 和 readonlyDiagnostic 都有通过证据；
 - 并发恢复和旧 fencing 迟到结果不能造成双 Run 或双行动；
 - 崩溃在事务前、中、后均能依靠 PostgreSQL 和下一次启动收敛；
 - `index.ts` 在 bootstrap 前锁存 `SIGINT/SIGTERM`；启动期信号和 ready 后关闭都能有界清理 HTTP/SSE、Worker 和数据库；

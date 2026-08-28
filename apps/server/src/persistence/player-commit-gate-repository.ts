@@ -171,6 +171,7 @@ const DecisionRowSchema = z.strictObject({
   decisionRequestId: z.uuid(),
   status: z.enum(['auditPrepared', 'modelPrepared', 'selected', 'committed']),
   acceptedAttemptId: z.uuid().nullable(),
+  terminalOutcome: z.enum(['failed', 'stale']).nullable(),
 })
 const ReplayRowSchema = z.strictObject({
   ledgerId: z.uuid(),
@@ -413,7 +414,8 @@ async function lockDecision(input: {
       source_state_version::float8 AS "sourceStateVersion",
       decision_request_id::text AS "decisionRequestId",
       status,
-      accepted_attempt_id::text AS "acceptedAttemptId"
+      accepted_attempt_id::text AS "acceptedAttemptId",
+      terminal_outcome AS "terminalOutcome"
     FROM app_private.player_decisions
     WHERE id = ${input.claim.decisionRecordId}::uuid
       AND agent_run_id = ${input.claim.agentRunId}::uuid
@@ -482,6 +484,7 @@ async function lockAcceptedAttempt(input: {
     audit.value.lifecycle !== 'completed' ||
     audit.value.validationStatus !== 'valid' ||
     input.decision.status !== 'selected' ||
+    input.decision.terminalOutcome !== null ||
     !uuidEquals(input.decision.acceptedAttemptId ?? '', attempt.attemptId)
   ) {
     throw new PlayerCommitGateError('player_commit_selected_decision_invalid')
@@ -651,6 +654,9 @@ export function createPlayerCommitGateRepository(): PlayerCommitGateRepository {
           AND decision.owner_id = ${metadata.owner.databaseOwnerId}::uuid
           AND decision.session_id = ${metadata.claim.binding.sessionId}::uuid
           AND decision.status = 'selected'
+          AND decision.terminal_outcome IS NULL
+          AND decision.terminal_reason IS NULL
+          AND decision.terminated_at IS NULL
           AND ledger.id = ${metadata.registration.ledgerId}::uuid
           AND ledger.session_id = decision.session_id
           AND ledger.owner_id = decision.owner_id

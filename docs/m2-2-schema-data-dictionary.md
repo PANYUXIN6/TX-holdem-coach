@@ -313,8 +313,8 @@ erDiagram
 | `participant_id` | `uuid`，可空，复合 FK → `session_agents` | Player Run 的行动 AI；Coach Run 必须为空。 |
 | `source_state_version` | `bigint`，可空 | Player Run 发起决策时读取的权威状态版本；Coach Run 必须为空。 |
 | `decision_request_id` | `uuid`，可空 | Player 决策请求 ID，在场次历史内永久唯一；Coach Run 必须为空。 |
-| `parent_run_id` | `uuid`，可空 | 逻辑父 Run ID，用于记录重试、恢复或派生关系；当前未设置外键。 |
-| `replacement_run_id` | `uuid`，可空 | 替代当前 Run 的新 Run ID，用于审计接替链；当前未设置外键。 |
+| `parent_run_id` | `uuid`，可空 | 逻辑前任 Run ID，用于记录人工重试、stale 或进程重启后的接替；当前未设置外键。非空值通过部分唯一索引保证一个 Run 最多有一个直接前任。 |
+| `replacement_run_id` | `uuid`，可空 | 替代当前 Run 的新 Run ID，用于审计接替链；当前未设置外键。非空值通过部分唯一索引保证一个 Run 最多有一个直接后继。 |
 | `lease_owner` | `text`，可空，非空白 | 当前持有执行租约的 Worker 标识。 |
 | `lease_expires_at` | `timestamptz`，可空 | 租约到期时间；必须与 `lease_owner` 同时为空或同时存在。 |
 | `fencing_token` | `bigint`，非空，默认 `0` | 单调并发围栏令牌，阻止过期 Worker 提交结果。 |
@@ -335,6 +335,7 @@ erDiagram
 - Player Run 必须同时具有 `participant_id`、`source_state_version`、`decision_request_id`；Coach Run 三者必须全为空。
 - 同一场次、来源状态版本和 AI 同时最多有一条 `queued|leased|running` 的 Player Run。
 - 活动 Player Run 必须与 `sessions` 的协调指针一致，提交时由延迟约束检查。
+- replacement 关系禁止自引用，且 repository 在同一 Session-first 事务内验证前任/后继的 Owner、Session、Hand、参与者、来源版本和 Runtime 定义版本一致后双向写入。
 - Coach Run 只能关联同 Owner、同场次的 `completed` Hand。
 
 ### 5.2 `agent_attempts`
@@ -413,11 +414,12 @@ erDiagram
 | `model_choice_*`、`validator_result_*` | 可空版本/JSONB 对 | `selected` 才存在的严格输出和语义验收结果。 |
 | `accepted_attempt_id` | 可空复合 FK → `agent_attempts` | `selected` 精确绑定同 Run/Owner/Session 的 accepted Attempt。 |
 | `command_ledger_id` | 可空复合 FK → `command_ledger`，唯一 | 仅 `committed` 关联同 Owner/Session 的 completed 私有 `aiAction` 账本；一条账本不能被两份 Decision 复用。 |
+| `terminal_outcome`、`terminal_reason`、`terminated_at` | 可空且成组出现 | M4.8 协调终态：仅 `failed|stale`，保留原有 durable stage 与已持久化审计内容；`committed` 不得设置。 |
 | `created_at`、`model_prepared_at`、`selected_at`、`committed_at`、`updated_at` | `timestamptz` | 阶段时间矩阵与单调顺序由 CHECK 固定；`committed_at ≥ selected_at`。 |
 
 **关键规则**：
 
-- 数据库 CHECK 固定 payload pair、四阶段字段矩阵和时间顺序；每个可空 pair 的非空分支显式要求 version/payload 双方 `IS NOT NULL`，避免 PostgreSQL 三值逻辑接受单边 NULL。`committed` 必须保留完整 selected 载荷、accepted Attempt、ledger 关联和提交时间；不预建 M4.8/M4.9 的失败、暂停、stale 或 Memory 字段。
+- 数据库 CHECK 固定 payload pair、四阶段字段矩阵、Decision terminal 三元组和时间顺序；每个可空 pair 的非空分支显式要求 version/payload 双方 `IS NOT NULL`，避免 PostgreSQL 三值逻辑接受单边 NULL。`committed` 必须保留完整 selected 载荷、accepted Attempt、ledger 关联和提交时间，不能写协调终态。
 - accepted Attempt 的 `completed + accepted + valid` 语义由 Player 专属 control 在同一事务锁定 Run/Attempt/Decision 后复验，不能由跨表 CHECK 伪装。
 - 删除 Session 时 Decision 级联删除；Owner 级 `app_settings` 不受影响。
 

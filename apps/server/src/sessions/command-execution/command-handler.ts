@@ -28,7 +28,9 @@ type EventDraftForCommand<Type extends LedgerCommand['type']> = Type extends
       ? Extract<PrivateEvent, { type: 'userRebuy' }>
       : Type extends 'endSession'
         ? Extract<PrivateEvent, { type: 'handAborted' | 'sessionEnded' }>
-        : never
+        : Type extends 'retryAgent'
+          ? Extract<PrivateEvent, { type: 'agentStarted' }>
+          : never
 
 interface PlayerCoordinationState {
   readonly agentRunState: 'idle' | 'thinking' | 'paused'

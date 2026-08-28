@@ -346,6 +346,11 @@ export const SessionCommandSchema = z.discriminatedUnion('type', [
     type: z.literal('endSession'),
     payload: z.strictObject({}),
   }),
+  z.strictObject({
+    ...commandBaseShape,
+    type: z.literal('retryAgent'),
+    payload: z.strictObject({}),
+  }),
 ])
 
 export const PokerPhaseSchema = z.enum(['betweenHands', 'inHand'])

@@ -409,6 +409,11 @@ export async function assertM46PlayerDecisionApplicationFlow(
           owner,
           authority: controlAuthority,
           packet,
+          correctionAttemptPort: {
+            async startCorrectionAttempt() {
+              throw new Error('M4.6 E2E 不应触发 correction Attempt。')
+            },
+          },
         }),
       resultPort: {
         publish: (published) => publishSelectedResult(published),

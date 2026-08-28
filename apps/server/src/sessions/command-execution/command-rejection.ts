@@ -20,6 +20,7 @@ export type StableCommandRejection =
   | { readonly kind: 'pokerActionTargetOutOfRange' }
   | { readonly kind: 'rebuyAmountNotAllowed' }
   | { readonly kind: 'userRebuyRequired' }
+  | { readonly kind: 'agentRetryNotAllowed' }
 
 export type StableCommandRejectionCode =
   | 'COMMAND_NOT_ALLOWED_IN_PHASE'
@@ -28,6 +29,7 @@ export type StableCommandRejectionCode =
   | 'POKER_ACTION_TARGET_OUT_OF_RANGE'
   | 'REBUY_AMOUNT_NOT_ALLOWED'
   | 'USER_REBUY_REQUIRED'
+  | 'AGENT_RETRY_NOT_ALLOWED'
 
 const StableCommandRejectionSchema = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -39,6 +41,7 @@ const StableCommandRejectionSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('pokerActionTargetOutOfRange') }),
   z.strictObject({ kind: z.literal('rebuyAmountNotAllowed') }),
   z.strictObject({ kind: z.literal('userRebuyRequired') }),
+  z.strictObject({ kind: z.literal('agentRetryNotAllowed') }),
 ])
 
 export function parseStableCommandRejection(
@@ -74,6 +77,11 @@ export function parseStableCommandRejection(
     return context.command.type === 'startNextHand' &&
       context.state.poker.pokerPhase === 'betweenHands' &&
       userSeat?.stack === 0
+      ? Object.freeze(rejection)
+      : null
+  }
+  if (rejection.kind === 'agentRetryNotAllowed') {
+    return context.command.type === 'retryAgent'
       ? Object.freeze(rejection)
       : null
   }
@@ -133,6 +141,11 @@ export function mapCommandRejectionToErrorResponse(
         return {
           code: 'USER_REBUY_REQUIRED',
           message: '筹码为零，请先补入 2,000 或结束本场。',
+        }
+      case 'agentRetryNotAllowed':
+        return {
+          code: 'AGENT_RETRY_NOT_ALLOWED',
+          message: '当前无法重试 AI 行动。',
         }
     }
   })()

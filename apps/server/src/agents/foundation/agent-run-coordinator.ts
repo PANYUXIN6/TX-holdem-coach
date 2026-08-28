@@ -105,7 +105,7 @@ function createEffect(
   })
 }
 
-function snapshotRunConfiguration(
+export function createRunConfigurationSnapshot(
   definition: AnyRuntimeDefinition,
   dataDependencies: readonly AuditVersionReference[],
 ) {
@@ -219,7 +219,7 @@ export function createAgentRunCoordinator(input: {
       if (error instanceof AgentRunCreationError) throw error
       throw new AgentRunCreationError('runtime_snapshot_unavailable')
     }
-    const runConfiguration = snapshotRunConfiguration(
+    const runConfiguration = createRunConfigurationSnapshot(
       definition,
       parsed.data.dataDependencies,
     )
@@ -298,7 +298,7 @@ export function createAgentRunCoordinator(input: {
             : 'agent_run_payload_invalid',
       }
     }
-    const expectedConfiguration = snapshotRunConfiguration(
+    const expectedConfiguration = createRunConfigurationSnapshot(
       definition,
       candidate.runConfiguration.dataDependencies,
     )

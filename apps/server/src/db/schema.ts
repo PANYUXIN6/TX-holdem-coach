@@ -836,6 +836,17 @@ export const agentRuns = appPrivateSchema.table(
         AND ${table.budgetPayloadVersion} > 0
         AND jsonb_typeof(${table.budgetPayload}) = 'object'`,
     ),
+    check(
+      'agent_runs_replacement_not_self_check',
+      sql`(${table.parentRunId} IS NULL OR ${table.parentRunId} <> ${table.id})
+        AND (${table.replacementRunId} IS NULL OR ${table.replacementRunId} <> ${table.id})`,
+    ),
+    uniqueIndex('agent_runs_parent_run_unique')
+      .on(table.parentRunId)
+      .where(sql`${table.parentRunId} IS NOT NULL`),
+    uniqueIndex('agent_runs_replacement_run_unique')
+      .on(table.replacementRunId)
+      .where(sql`${table.replacementRunId} IS NOT NULL`),
   ],
 )
 
@@ -954,6 +965,9 @@ export const playerDecisions = appPrivateSchema.table(
     validatorResultPayload: objectPayload('validator_result_payload'),
     acceptedAttemptId: uuid('accepted_attempt_id'),
     commandLedgerId: uuid('command_ledger_id'),
+    terminalOutcome: text('terminal_outcome'),
+    terminalReason: text('terminal_reason'),
+    terminatedAt: zonedTimestamp('terminated_at'),
     createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
     modelPreparedAt: zonedTimestamp('model_prepared_at'),
     selectedAt: zonedTimestamp('selected_at'),
@@ -1131,7 +1145,22 @@ export const playerDecisions = appPrivateSchema.table(
         AND (
           ${table.committedAt} IS NULL
           OR (${table.selectedAt} IS NOT NULL AND ${table.committedAt} >= ${table.selectedAt})
-        )`,
+        )
+        AND (${table.terminatedAt} IS NULL OR ${table.terminatedAt} >= ${table.createdAt})`,
+    ),
+    check(
+      'player_decisions_terminal_outcome_check',
+      sql`(
+        ${table.terminalOutcome} IS NULL
+        AND ${table.terminalReason} IS NULL
+        AND ${table.terminatedAt} IS NULL
+      ) OR (
+        ${table.terminalOutcome} IN ('failed', 'stale')
+        AND ${table.terminalReason} IS NOT NULL
+        AND length(btrim(${table.terminalReason})) > 0
+        AND ${table.terminatedAt} IS NOT NULL
+        AND ${table.status} <> 'committed'
+      )`,
     ),
   ],
 )

@@ -18,6 +18,9 @@ import {
 import { createTestCompletedPokerResult } from '../poker/create-test-completed-poker-result.js'
 
 const handId = '10000000-0000-4000-8000-000000000001'
+const agentRunId = '10000000-0000-4000-8000-000000000002'
+const decisionRequestId = '10000000-0000-4000-8000-000000000003'
+const attemptId = '10000000-0000-4000-8000-000000000004'
 
 function sessionCreatedEvent() {
   return {
@@ -116,6 +119,35 @@ const newEventCases = [
   { type: 'sessionEnded' as const, reason: 'userRequested' as const },
 ]
 
+const playerCoordinationEvents = [
+  {
+    type: 'agentStarted' as const,
+    handId,
+    agentRunId,
+    decisionRequestId,
+    actorSeatNumber: 1,
+    trigger: 'initial' as const,
+    supersedesRunId: null,
+  },
+  {
+    type: 'agentRepairAttempted' as const,
+    handId,
+    agentRunId,
+    decisionRequestId,
+    actorSeatNumber: 1,
+    attemptId,
+    repairOrdinal: 1 as const,
+  },
+  {
+    type: 'agentPaused' as const,
+    handId,
+    failedAgentRunId: agentRunId,
+    decisionRequestId,
+    actorSeatNumber: 1,
+    failureCode: 'provider_timeout' as const,
+  },
+] as const
+
 describe('private event', () => {
   test.each(newEventCases)('round-trips and freezes $type', (input) => {
     const event = createPrivateEvent(input)
@@ -166,12 +198,29 @@ describe('private event', () => {
     ).toThrow(AuthoritativeStateValidationError)
   })
 
-  test('maps structured hand ids for all nine variants', () => {
-    const events = [...pokerEvents(), ...newEventCases]
-    expect(events).toHaveLength(9)
+  test('maps structured hand ids for all twelve current variants', () => {
+    const events = [
+      ...pokerEvents(),
+      ...newEventCases,
+      ...playerCoordinationEvents,
+    ]
+    expect(events).toHaveLength(12)
     expect(
       events.map((event) => getPrivateEventHandId(createPrivateEvent(event))),
-    ).toEqual([handId, handId, handId, handId, null, null, null, handId, null])
+    ).toEqual([
+      handId,
+      handId,
+      handId,
+      handId,
+      null,
+      null,
+      null,
+      handId,
+      null,
+      handId,
+      handId,
+      handId,
+    ])
   })
 
   test('keeps all four poker variants strict in the current codec', () => {
@@ -243,16 +292,20 @@ describe('private event', () => {
     ).toThrow(AuthoritativeStateValidationError)
   })
 
-  test('publishes row payload version 1 as the only current format', () => {
+  test('writes row payload version 2 while strictly reading published v1 rows', () => {
     const current = encodeCurrentPrivateEvent(sessionCreatedEvent())
+    const legacy = {
+      payloadVersion: 1,
+      payload: { event: sessionCreatedEvent() },
+    }
 
     expect({
       payload: PRIVATE_EVENT_PAYLOAD_VERSION,
       current,
     }).toEqual({
-      payload: 1,
+      payload: 2,
       current: {
-        payloadVersion: 1,
+        payloadVersion: 2,
         payload: { event: sessionCreatedEvent() },
       },
     })
@@ -261,7 +314,35 @@ describe('private event', () => {
       currentPrivateEventReader.read(current.payloadVersion, current.payload),
     ).toEqual({ kind: 'decoded', value: sessionCreatedEvent() })
     expect(
-      currentPrivateEventReader.read(2, { event: pokerEvents()[0] }),
+      currentPrivateEventReader.read(legacy.payloadVersion, legacy.payload),
+    ).toEqual({ kind: 'decoded', value: sessionCreatedEvent() })
+    expect(
+      currentPrivateEventReader.read(3, { event: pokerEvents()[0] }),
     ).toEqual({ kind: 'unknownVersion' })
+  })
+
+  test('strictly validates Player coordination events without accepting hidden payloads', () => {
+    for (const event of playerCoordinationEvents) {
+      expect(encodeCurrentPrivateEvent(event).payload.event).toEqual(event)
+    }
+    expect(() =>
+      createPrivateEvent({
+        ...playerCoordinationEvents[0],
+        trigger: 'initial',
+        supersedesRunId: agentRunId,
+      }),
+    ).toThrow(AuthoritativeStateValidationError)
+    expect(() =>
+      createPrivateEvent({
+        ...playerCoordinationEvents[1],
+        repairOrdinal: 3,
+      }),
+    ).toThrow(AuthoritativeStateValidationError)
+    expect(() =>
+      createPrivateEvent({
+        ...playerCoordinationEvents[2],
+        failureCode: 'provider error details',
+      }),
+    ).toThrow(AuthoritativeStateValidationError)
   })
 })

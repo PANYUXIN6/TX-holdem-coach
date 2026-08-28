@@ -21,6 +21,7 @@ import { runDatabaseTransaction } from './database-transaction.js'
 import { DatabaseOperationError } from './errors.js'
 import { isResolvedOwnerScope, type ResolvedOwnerScope } from './owner-scope.js'
 import type { PlayerDecisionRepository } from './player-decision-repository.js'
+import type { SessionAgentCoordinator } from '../agents/player/session-agent-coordinator.js'
 
 declare const playerModelAttemptControlBrand: unique symbol
 
@@ -29,6 +30,10 @@ export interface PlayerModelAttemptControlV1 extends ModelAttemptControlPort<Pla
   readonly candidateSetSha256: string
   readonly authorityBindingSha256: string
   readonly [playerModelAttemptControlBrand]: never
+}
+
+export interface PlayerCorrectionAttemptStartPort {
+  startCorrectionAttempt: SessionAgentCoordinator['startCorrectionAttempt']
 }
 
 const playerControls = new WeakSet<object>()
@@ -52,11 +57,14 @@ export function createPlayerModelAttemptControlV1(input: {
   readonly owner: ResolvedOwnerScope
   readonly authority: RuntimeCommitAuthority<'player'>
   readonly packet: PlayerDecisionPacketV1
+  readonly correctionAttemptPort: PlayerCorrectionAttemptStartPort
+  readonly now?: () => string
 }): PlayerModelAttemptControlV1 {
   if (
     !isResolvedOwnerScope(input.owner) ||
     !isRuntimeCommitAuthority(input.authority, 'player') ||
-    !isPlayerDecisionPacketV1(input.packet)
+    !isPlayerDecisionPacketV1(input.packet) ||
+    typeof input.correctionAttemptPort?.startCorrectionAttempt !== 'function'
   ) {
     throw new TypeError('Player Model Attempt 控制输入无效。')
   }
@@ -84,6 +92,16 @@ export function createPlayerModelAttemptControlV1(input: {
         })
       }
       try {
+        if (attempt.attemptType === 'correction') {
+          return await input.correctionAttemptPort.startCorrectionAttempt({
+            sessionId: input.packet.binding.sessionId,
+            agentRunId: input.authority.runId,
+            decisionRequestId: input.packet.binding.decisionRequestId,
+            authority: input.authority,
+            ...attempt,
+            attemptAt: (input.now ?? (() => new Date().toISOString()))(),
+          })
+        }
         return await runDatabaseTransaction(input.sql, (transaction) =>
           input.foundationRepository.startBudgetedAgentAttemptAudit(
             transaction,

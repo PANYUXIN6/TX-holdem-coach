@@ -509,6 +509,24 @@ describe('共享外部协议', () => {
     expect(ErrorResponseSchema.safeParse(errorResponse).success).toBe(true)
   })
 
+  it('严格解析无载荷的 retryAgent 命令', () => {
+    const command = {
+      command: {
+        sessionId: ids.session,
+        commandId: ids.command,
+        expectedStateVersion: 4,
+        type: 'retryAgent',
+        payload: {},
+      },
+    }
+    expect(CommandRequestSchema.safeParse(command).success).toBe(true)
+    expect(
+      CommandRequestSchema.safeParse({
+        command: { ...command.command, payload: { unexpected: true } },
+      }).success,
+    ).toBe(false)
+  })
+
   it('拒绝负数和非整数筹码', () => {
     expect(ChipAmountSchema.safeParse(-1).success).toBe(false)
     expect(ChipAmountSchema.safeParse(10.5).success).toBe(false)

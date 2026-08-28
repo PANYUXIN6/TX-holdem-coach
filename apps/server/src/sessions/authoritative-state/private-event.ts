@@ -195,7 +195,7 @@ const SessionEndedEventSchema = z.strictObject({
   reason: z.enum(['userRequested', 'handAborted']),
 })
 
-const SessionPrivateEventSchema = z.discriminatedUnion('type', [
+const SessionPrivateEventV1Schema = z.discriminatedUnion('type', [
   SessionCreatedEventSchema,
   UserRebuyEventSchema,
   AiAutoRebuyEventSchema,
@@ -203,18 +203,106 @@ const SessionPrivateEventSchema = z.discriminatedUnion('type', [
   SessionEndedEventSchema,
 ])
 
+export const PlayerPauseReasonSchema = z.enum([
+  'provider_billing_unavailable',
+  'provider_network_error',
+  'provider_timeout',
+  'provider_service_unavailable',
+  'provider_auth_error',
+  'provider_rate_limited',
+  'provider_unknown_error',
+  'provider_usage_unavailable',
+  'content_correction_exhausted',
+  'execution_budget_exhausted',
+  'execution_deadline_exhausted',
+  'sensitive_projection_rejected',
+  'player_dependency_unavailable',
+  'player_runtime_contract_rejected',
+  'player_internal_failure',
+])
+
+const AgentStartedEventSchema = z
+  .strictObject({
+    type: z.literal('agentStarted'),
+    handId: z.uuid(),
+    agentRunId: z.uuid(),
+    decisionRequestId: z.uuid(),
+    actorSeatNumber: z.number().int().min(1).max(8),
+    trigger: z.enum([
+      'initial',
+      'manualRetry',
+      'staleReplacement',
+      'processRestartReplacement',
+    ]),
+    supersedesRunId: z.uuid().nullable(),
+  })
+  .superRefine((event, context) => {
+    const mustHaveNoPredecessor = event.trigger === 'initial'
+    if (mustHaveNoPredecessor !== (event.supersedesRunId === null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Player Run 启动事件的触发来源必须与前任 Run 成对。',
+        path: ['supersedesRunId'],
+      })
+    }
+  })
+
+const AgentRepairAttemptedEventSchema = z.strictObject({
+  type: z.literal('agentRepairAttempted'),
+  handId: z.uuid(),
+  agentRunId: z.uuid(),
+  decisionRequestId: z.uuid(),
+  actorSeatNumber: z.number().int().min(1).max(8),
+  attemptId: z.uuid(),
+  repairOrdinal: z.union([z.literal(1), z.literal(2)]),
+})
+
+const AgentPausedEventSchema = z.strictObject({
+  type: z.literal('agentPaused'),
+  handId: z.uuid(),
+  failedAgentRunId: z.uuid(),
+  decisionRequestId: z.uuid(),
+  actorSeatNumber: z.number().int().min(1).max(8),
+  failureCode: PlayerPauseReasonSchema,
+})
+
+const PlayerCoordinationPrivateEventSchema = z.discriminatedUnion('type', [
+  AgentStartedEventSchema,
+  AgentRepairAttemptedEventSchema,
+  AgentPausedEventSchema,
+])
+
+const SessionPrivateEventV2Schema = z.discriminatedUnion('type', [
+  SessionCreatedEventSchema,
+  UserRebuyEventSchema,
+  AiAutoRebuyEventSchema,
+  HandAbortedEventSchema,
+  SessionEndedEventSchema,
+  AgentStartedEventSchema,
+  AgentRepairAttemptedEventSchema,
+  AgentPausedEventSchema,
+])
+
 export type SessionCreatedEvent = z.infer<typeof SessionCreatedEventSchema>
 export type UserRebuyEvent = z.infer<typeof UserRebuyEventSchema>
 export type AiAutoRebuyEvent = z.infer<typeof AiAutoRebuyEventSchema>
 export type HandAbortedEvent = z.infer<typeof HandAbortedEventSchema>
 export type SessionEndedEvent = z.infer<typeof SessionEndedEventSchema>
-export type PrivateEvent =
+export type PlayerPauseReason = z.infer<typeof PlayerPauseReasonSchema>
+export type AgentStartedEvent = z.infer<typeof AgentStartedEventSchema>
+export type AgentRepairAttemptedEvent = z.infer<
+  typeof AgentRepairAttemptedEventSchema
+>
+export type AgentPausedEvent = z.infer<typeof AgentPausedEventSchema>
+export type PrivateEventV1 =
   | PokerPrivateEvent
   | SessionCreatedEvent
   | UserRebuyEvent
   | AiAutoRebuyEvent
   | HandAbortedEvent
   | SessionEndedEvent
+export type PrivateEvent =
+  PrivateEventV1 | z.infer<typeof PlayerCoordinationPrivateEventSchema>
 
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object') {
@@ -226,23 +314,49 @@ function deepFreeze<Value>(value: Value): Value {
   return value
 }
 
-export function createPrivateEvent(input: unknown): PrivateEvent {
+function isPokerPrivateEventInput(input: unknown): boolean {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    'type' in input &&
+    typeof input.type === 'string' &&
+    [
+      'handStarted',
+      'actionCommitted',
+      'uncalledBetReturned',
+      'handCompleted',
+    ].includes(input.type)
+  )
+}
+
+function parseNonPokerPrivateEvent(
+  input: unknown,
+  schema:
+    typeof SessionPrivateEventV1Schema | typeof SessionPrivateEventV2Schema,
+): PrivateEvent {
+  return deepFreeze(structuredClone(schema.parse(input))) as PrivateEvent
+}
+
+export function createPrivateEventV1(input: unknown): PrivateEventV1 {
   try {
-    if (
-      typeof input === 'object' &&
-      input !== null &&
-      'type' in input &&
-      typeof input.type === 'string' &&
-      [
-        'handStarted',
-        'actionCommitted',
-        'uncalledBetReturned',
-        'handCompleted',
-      ].includes(input.type)
-    ) {
+    if (isPokerPrivateEventInput(input)) {
       return createPokerPrivateEvent(input)
     }
-    return deepFreeze(structuredClone(SessionPrivateEventSchema.parse(input)))
+    return parseNonPokerPrivateEvent(
+      input,
+      SessionPrivateEventV1Schema,
+    ) as PrivateEventV1
+  } catch {
+    throw new AuthoritativeStateValidationError()
+  }
+}
+
+export function createPrivateEvent(input: unknown): PrivateEvent {
+  try {
+    if (isPokerPrivateEventInput(input)) {
+      return createPokerPrivateEvent(input)
+    }
+    return parseNonPokerPrivateEvent(input, SessionPrivateEventV2Schema)
   } catch {
     throw new AuthoritativeStateValidationError()
   }
@@ -256,6 +370,9 @@ export function getPrivateEventHandId(event: PrivateEvent): string | null {
     case 'uncalledBetReturned':
     case 'handCompleted':
     case 'handAborted':
+    case 'agentStarted':
+    case 'agentRepairAttempted':
+    case 'agentPaused':
       return event.handId
     case 'sessionCreated':
     case 'userRebuy':

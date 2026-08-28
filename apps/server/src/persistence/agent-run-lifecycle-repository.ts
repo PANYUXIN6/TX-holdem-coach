@@ -183,6 +183,39 @@ export interface AgentRunLifecycleRepository {
     owner: ResolvedOwnerScope,
     input: AgentRunFinalizationInput,
   ): Promise<{ readonly run: PersistedAgentRun; readonly changed: boolean }>
+  lockPlayerRunForCoordination(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    runId: string,
+  ): Promise<PersistedAgentRun<'player'>>
+  loadFailedPlayerLeafForRetry(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    input: {
+      readonly sessionId: string
+      readonly handId: string
+      readonly participantId: string
+      readonly sourceStateVersion: number
+    },
+  ): Promise<PersistedAgentRun<'player'> | null>
+  terminateForCoordination(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    input: {
+      readonly runId: string
+      readonly lifecycle: 'failed' | 'cancelled' | 'stale'
+      readonly terminationReason: string
+      readonly completedAt: string
+    },
+  ): Promise<PersistedAgentRun<'player'>>
+  linkReplacement(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    input: {
+      readonly predecessorRunId: string
+      readonly replacementRunId: string
+    },
+  ): Promise<void>
 }
 
 function deepFreeze<Value>(value: Value): Value {
@@ -379,7 +412,7 @@ async function terminateStartedAttempts(
   owner: ResolvedOwnerScope,
   input: {
     readonly runId: string
-    readonly lifecycle: 'cancelled' | 'stale'
+    readonly lifecycle: 'failed' | 'cancelled' | 'stale'
     readonly errorCategory: string
     readonly completedAt: string
   },
@@ -1205,6 +1238,192 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
         run: requireDecodedRow(rows[0], owner),
         changed: true,
       })
+    },
+
+    async lockPlayerRunForCoordination(transaction, owner, runId) {
+      assertRepositoryInput(transaction, owner)
+      if (!z.uuid().safeParse(runId).success) {
+        throw new RepositoryInputValidationError()
+      }
+      const run = await readExactRun(transaction, owner, runId, true)
+      if (run.runtimeType !== 'player') {
+        throw new AgentRunTransitionError('agent_run_transition_rejected')
+      }
+      return run
+    },
+
+    async loadFailedPlayerLeafForRetry(transaction, owner, input) {
+      assertRepositoryInput(transaction, owner)
+      const parsed = z
+        .strictObject({
+          sessionId: z.uuid(),
+          handId: z.uuid(),
+          participantId: z.uuid(),
+          sourceStateVersion: SafeIntegerSchema,
+        })
+        .safeParse(input)
+      if (!parsed.success) throw new RepositoryInputValidationError()
+      let rows: readonly unknown[]
+      try {
+        rows = await transaction.unsafe(
+          `SELECT ${RUN_COLUMNS}
+           FROM app_private.agent_runs AS run
+           WHERE run.owner_id = $1::uuid
+             AND run.runtime = 'player'
+             AND run.lifecycle = 'failed'
+             AND run.replacement_run_id IS NULL
+             AND run.session_id = $2::uuid
+             AND run.hand_id = $3::uuid
+             AND run.participant_id = $4::uuid
+             AND run.source_state_version = $5::bigint
+           ORDER BY run.id
+           FOR UPDATE`,
+          [
+            owner.databaseOwnerId,
+            parsed.data.sessionId,
+            parsed.data.handId,
+            parsed.data.participantId,
+            parsed.data.sourceStateVersion,
+          ],
+        )
+      } catch {
+        throw new DatabaseOperationError()
+      }
+      if (rows.length === 0) return null
+      if (rows.length !== 1) {
+        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
+      }
+      const run = requireDecodedRow(rows[0], owner)
+      if (run.runtimeType !== 'player') {
+        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
+      }
+      return run
+    },
+
+    async terminateForCoordination(transaction, owner, input) {
+      assertRepositoryInput(transaction, owner)
+      const parsed = z
+        .strictObject({
+          runId: z.uuid(),
+          lifecycle: z.enum(['failed', 'cancelled', 'stale']),
+          terminationReason: StableCodeSchema,
+          completedAt: CanonicalTimestampSchema,
+        })
+        .safeParse(input)
+      if (!parsed.success) throw new RepositoryInputValidationError()
+      const locked = await repository.lockPlayerRunForCoordination(
+        transaction,
+        owner,
+        parsed.data.runId,
+      )
+      if (!['queued', 'leased', 'running'].includes(locked.lifecycle)) {
+        throw new AgentRunTransitionError('agent_run_already_terminal')
+      }
+      await terminateStartedAttempts(transaction, owner, {
+        runId: locked.runId,
+        lifecycle: parsed.data.lifecycle,
+        errorCategory: parsed.data.terminationReason,
+        completedAt: parsed.data.completedAt,
+      })
+      let rows: readonly unknown[]
+      try {
+        rows = await transaction.unsafe(
+          `UPDATE app_private.agent_runs AS run
+           SET lifecycle = $1, lease_owner = NULL, lease_expires_at = NULL,
+               termination_reason = $2, completed_at = $3::timestamptz,
+               updated_at = $3::timestamptz
+           WHERE run.id = $4::uuid AND run.owner_id = $5::uuid
+             AND run.runtime = 'player'
+             AND run.lifecycle IN ('queued', 'leased', 'running')
+           RETURNING ${RUN_COLUMNS}`,
+          [
+            parsed.data.lifecycle,
+            parsed.data.terminationReason,
+            parsed.data.completedAt,
+            locked.runId,
+            owner.databaseOwnerId,
+          ],
+        )
+      } catch {
+        throw new DatabaseOperationError()
+      }
+      if (rows.length !== 1) {
+        throw new AgentRunTransitionError('agent_run_transition_rejected')
+      }
+      const run = requireDecodedRow(rows[0], owner)
+      if (run.runtimeType !== 'player') {
+        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
+      }
+      return run
+    },
+
+    async linkReplacement(transaction, owner, input) {
+      assertRepositoryInput(transaction, owner)
+      const parsed = z
+        .strictObject({
+          predecessorRunId: z.uuid(),
+          replacementRunId: z.uuid(),
+        })
+        .safeParse(input)
+      if (
+        !parsed.success ||
+        parsed.data.predecessorRunId === parsed.data.replacementRunId
+      ) {
+        throw new RepositoryInputValidationError()
+      }
+      const predecessor = await repository.lockPlayerRunForCoordination(
+        transaction,
+        owner,
+        parsed.data.predecessorRunId,
+      )
+      const replacement = await repository.lockPlayerRunForCoordination(
+        transaction,
+        owner,
+        parsed.data.replacementRunId,
+      )
+      if (
+        predecessor.replacementRunId === replacement.runId &&
+        replacement.parentRunId === predecessor.runId
+      ) {
+        return
+      }
+      if (
+        predecessor.sessionId !== replacement.sessionId ||
+        predecessor.handId !== replacement.handId ||
+        predecessor.participantId !== replacement.participantId ||
+        predecessor.sourceStateVersion !== replacement.sourceStateVersion ||
+        predecessor.runtimeDefinitionVersion !==
+          replacement.runtimeDefinitionVersion ||
+        predecessor.replacementRunId !== null ||
+        replacement.parentRunId !== predecessor.runId ||
+        replacement.replacementRunId !== null
+      ) {
+        throw new AgentRunTransitionError('agent_run_transition_rejected')
+      }
+      let rows: readonly unknown[]
+      try {
+        rows = await transaction`
+          UPDATE app_private.agent_runs
+          SET replacement_run_id = ${replacement.runId}::uuid,
+              updated_at = clock_timestamp()
+          WHERE id = ${predecessor.runId}::uuid
+            AND owner_id = ${owner.databaseOwnerId}::uuid
+            AND replacement_run_id IS NULL
+          RETURNING id::text AS "runId"
+        `
+      } catch {
+        throw new DatabaseOperationError()
+      }
+      const updated = z
+        .array(z.strictObject({ runId: z.uuid() }))
+        .safeParse(rows)
+      if (
+        !updated.success ||
+        updated.data.length !== 1 ||
+        updated.data[0]?.runId !== predecessor.runId
+      ) {
+        throw new AgentRunTransitionError('agent_run_transition_rejected')
+      }
     },
   }
   return Object.freeze(repository)

@@ -54,6 +54,84 @@ function privateState(
 }
 
 describe('command event policy', () => {
+  test('accepts a state-unchanged retryAgent transition only when its replacement event mirrors the paused AI turn', () => {
+    const poker = createTestBettingPokerState({
+      hand: { currentActorSeatNumber: 3 },
+    })
+    const before = privateState(
+      7,
+      poker,
+      poker.seats.map((seat) => ({
+        seatNumber: seat.seatNumber,
+        cumulativeBuyIn: 2_000,
+      })),
+    )
+    const actor = poker.seats.find((seat) => seat.seatNumber === 3)
+    if (actor === undefined) throw new Error('Expected AI actor.')
+    const predecessorRunId = '40000000-0000-4000-8000-000000000001'
+    const replacementRunId = '40000000-0000-4000-8000-000000000002'
+    const decisionRequestId = '50000000-0000-4000-8000-000000000001'
+    const input = {
+      command: {
+        sessionId,
+        commandId,
+        expectedStateVersion: 7,
+        type: 'retryAgent' as const,
+        payload: {},
+      },
+      sessionBefore: {
+        lifecycleStatus: 'active' as const,
+        currentHandId: handId,
+        agentRunState: 'paused' as const,
+        activePlayerRunId: null,
+        activeDecisionRequestId: null,
+      },
+      stateEffectKind: 'stateUnchanged' as const,
+      stateBefore: before,
+      stateAfter: before,
+      lifecycleAfter: 'active' as const,
+      currentHandIdAfter: handId,
+      playerCoordinationAfter: {
+        agentRunState: 'thinking' as const,
+        activePlayerRunId: replacementRunId,
+        activeDecisionRequestId: decisionRequestId,
+      },
+      events: [
+        {
+          type: 'agentStarted' as const,
+          handId,
+          agentRunId: replacementRunId,
+          decisionRequestId,
+          actorSeatNumber: 3,
+          trigger: 'manualRetry' as const,
+          supersedesRunId: predecessorRunId,
+        },
+      ],
+      relationPlan: {
+        kind: 'retryAgent' as const,
+        sessionId,
+        handId,
+        actorParticipantId: actor.playerId,
+        sourceStateVersion: 7,
+        predecessorRunId,
+        agentRunId: replacementRunId,
+        decisionRequestId,
+        idempotencyKey: `retry-agent:${commandId}`,
+      },
+    }
+
+    expect(isCommandMutationConsistent(input)).toBe(true)
+    expect(
+      isCommandMutationConsistent({
+        ...input,
+        playerCoordinationAfter: {
+          ...input.playerCoordinationAfter,
+          activeDecisionRequestId: predecessorRunId,
+        },
+      }),
+    ).toBe(false)
+  })
+
   test('accepts a mirrored normal playerAction and rejects plan tampering', () => {
     const beforePoker = createTestBettingPokerState({
       hand: { currentActorSeatNumber: 0 },

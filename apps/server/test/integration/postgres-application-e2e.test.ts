@@ -10,6 +10,7 @@ import { assertM44PlayerObservationApplicationFlow } from './postgres-e2e-m44-as
 import { assertM45PlayerDecisionPreprocessingApplicationFlow } from './postgres-e2e-m45-assertions.js'
 import { assertM46PlayerDecisionApplicationFlow } from './postgres-e2e-m46-assertions.js'
 import { assertM47PlayerCommitApplicationFlow } from './postgres-e2e-m47-assertions.js'
+import { assertM48PlayerCoordinationApplicationFlow } from './postgres-e2e-m48-assertions.js'
 import { assertM31SessionCommandExecutor } from './postgres-e2e-m31-assertions.js'
 import {
   registerDatabaseMilestoneTest,
@@ -94,5 +95,11 @@ registerDatabaseMilestoneTest(
   'm47',
   'M4.7 Player Validator and command Commit Gate',
   (sql, runtimeUrl) => assertM47PlayerCommitApplicationFlow(sql, runtimeUrl),
+  900_000,
+)
+registerDatabaseMilestoneTest(
+  'm48',
+  'M4.8 Player pause and retry coordination',
+  (sql) => assertM48PlayerCoordinationApplicationFlow(sql),
   900_000,
 )

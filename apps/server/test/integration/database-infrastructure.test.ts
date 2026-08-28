@@ -4,6 +4,7 @@ import { assertM44PlayerObservationPersistence } from './database-m44-assertions
 import { assertM45PlayerDecisionReferencePersistence } from './database-m45-assertions.js'
 import { assertM46PlayerDecisionPersistence } from './database-m46-assertions.js'
 import { assertM47PlayerCommitSchema } from './database-m47-assertions.js'
+import { assertM48PlayerCoordinationSchema } from './database-m48-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -140,6 +141,12 @@ registerDatabaseMilestoneTest(
   'm47',
   'M4.7 Player Commit Gate schema',
   (sql, runtimeUrl) => assertM47PlayerCommitSchema(sql, runtimeUrl),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm48',
+  'M4.8 Player coordination schema and lineage constraints',
+  (sql) => assertM48PlayerCoordinationSchema(sql),
   300_000,
 )
 

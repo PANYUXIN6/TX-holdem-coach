@@ -21,6 +21,7 @@ import {
   type SensitiveValueScanner,
 } from '../foundation/context-envelope.js'
 import type { ModelGateway } from '../foundation/model-gateway-protocol.js'
+import type { ModelGatewayFailure } from '../foundation/errors.js'
 import type { ModelRoutePolicy } from '../foundation/model-route-policy.js'
 import { prepareModelRequest } from '../foundation/prompt-module.js'
 import {
@@ -80,6 +81,7 @@ export type PlayerRuntimeFailureCode =
   | 'player_decision_resume_inflight_unknown'
   | 'player_bounded_choice_failed'
   | 'player_decision_authority_lost'
+  | ModelGatewayFailure
 
 export class PlayerRuntimeExecutionError extends Error {
   public constructor(public readonly code: PlayerRuntimeFailureCode) {
@@ -220,7 +222,7 @@ export function createPlayerRuntimeExecutor(
           'player_decision_resume_inflight_unknown',
         )
       }
-      if (resume.kind === 'committed') {
+      if (resume.kind === 'committed' || resume.kind === 'terminal') {
         throw new PlayerRuntimeExecutionError('player_decision_resume_rejected')
       }
       if (resume.kind === 'selected') {
@@ -435,7 +437,7 @@ export function createPlayerRuntimeExecutor(
         control,
       })
       if (generated.kind !== 'accepted') {
-        throw new PlayerRuntimeExecutionError('player_bounded_choice_failed')
+        throw new PlayerRuntimeExecutionError(generated.failure)
       }
       const receipt = await runDatabaseTransaction(
         dependencies.database.sql,

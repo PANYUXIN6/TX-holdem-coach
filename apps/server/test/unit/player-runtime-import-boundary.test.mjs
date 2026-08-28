@@ -29,12 +29,37 @@ describe('Player runtime import boundary', () => {
     expect(source).toContain('PlayerObservationAuthorityPort')
   })
 
-  test('keeps private table facts and PostgreSQL adapters out of agents/player', async () => {
-    const source = await combinedSource(['src/agents/player'])
+  test('keeps private table facts and PostgreSQL adapters out of the M4.6 Player execution seam', async () => {
+    const files = (await recursiveSourceFiles('src/agents/player')).filter(
+      (file) =>
+        !file.endsWith('session-agent-coordinator.ts') &&
+        !file.endsWith('retry-agent-handler.ts'),
+    )
+    const source = (
+      await Promise.all(files.map((file) => readFile(file, 'utf8')))
+    ).join('\n')
     expect(source).not.toMatch(
       /private-table-state|poker\/state|private-event(?:-codec)?|player-(?:observation|decision-reference)-authority/,
     )
     expect(source).toContain('player-visible-state')
+  })
+
+  test('allows the Player-owned Session coordinator to depend on Session-first persistence only', async () => {
+    const source = await readFile(
+      'src/agents/player/session-agent-coordinator.ts',
+      'utf8',
+    )
+    expect(source).toContain('persistCoordinationEvents')
+    expect(source).not.toContain("from '../foundation/agent-worker.js'")
+  })
+
+  test('allows the Player-owned retry handler to bind public commands to Session-first lineage writes', async () => {
+    const source = await readFile(
+      'src/agents/player/retry-agent-handler.ts',
+      'utf8',
+    )
+    expect(source).toContain("commandType: 'retryAgent'")
+    expect(source).not.toContain("from '../foundation/agent-worker.js'")
   })
 
   test('keeps Foundation and ModelGateway independent from Player observations', async () => {

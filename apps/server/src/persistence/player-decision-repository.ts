@@ -49,6 +49,11 @@ const SafeNonnegativeIntegerSchema = z
   .int()
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER)
+const StableAuditCodeSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/)
 const LockedRunSchema = z.strictObject({
   agentRunId: UuidSchema,
   sessionId: UuidSchema,
@@ -79,6 +84,9 @@ const DecisionRowSchema = z.strictObject({
   validatorPayload: z.unknown(),
   acceptedAttemptId: UuidSchema.nullable(),
   commandLedgerId: UuidSchema.nullable(),
+  terminalOutcome: z.enum(['failed', 'stale']).nullable().default(null),
+  terminalReason: StableAuditCodeSchema.nullable().default(null),
+  terminatedAt: z.string().datetime().nullable().default(null),
   createdAt: z.string().datetime(),
   modelPreparedAt: z.string().datetime().nullable(),
   selectedAt: z.string().datetime().nullable(),
@@ -114,6 +122,9 @@ export interface DecodedPlayerDecisionRecordV1 {
   readonly validatorResult: PlayerValidatorResultV1 | null
   readonly acceptedAttemptId: string | null
   readonly commandLedgerId: string | null
+  readonly terminalOutcome: 'failed' | 'stale' | null
+  readonly terminalReason: string | null
+  readonly terminatedAt: string | null
   readonly createdAt: string
   readonly modelPreparedAt: string | null
   readonly selectedAt: string | null
@@ -165,6 +176,10 @@ export type PlayerDecisionResumeState =
     }
   | {
       readonly kind: 'committed'
+      readonly record: DecodedPlayerDecisionRecordV1
+    }
+  | {
+      readonly kind: 'terminal'
       readonly record: DecodedPlayerDecisionRecordV1
     }
   | {
@@ -237,6 +252,17 @@ export interface PlayerDecisionRepository {
     owner: ResolvedOwnerScope,
     authority: RuntimeCommitAuthority<'player'>,
   ): Promise<PlayerDecisionResumeState>
+  markTerminalForCoordination(
+    transaction: TransactionSql,
+    owner: ResolvedOwnerScope,
+    input: {
+      readonly agentRunId: string
+      readonly sessionId: string
+      readonly outcome: 'failed' | 'stale'
+      readonly reason: string
+      readonly terminatedAt: string
+    },
+  ): Promise<{ readonly kind: 'none' | 'terminalized' }>
 }
 
 function deepFreeze<Value>(value: Value): Value {
@@ -366,7 +392,11 @@ async function lockDecision(
       CASE WHEN selected_at IS NULL THEN NULL ELSE
         to_char(selected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "selectedAt",
       CASE WHEN committed_at IS NULL THEN NULL ELSE
-        to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt"
+        to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt",
+      terminal_outcome AS "terminalOutcome",
+      terminal_reason AS "terminalReason",
+      CASE WHEN terminated_at IS NULL THEN NULL ELSE
+        to_char(terminated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "terminatedAt"
     FROM app_private.player_decisions
     WHERE agent_run_id = ${run.agentRunId}::uuid
       AND owner_id = ${owner.databaseOwnerId}::uuid
@@ -461,7 +491,19 @@ function decodeDecisionRow(
         })
   const { snapshotSha256, ...snapshotWithoutHash } = auditSnapshot
   const { candidateSetSha256, ...candidateSetWithoutHash } = candidateSet
+  const hasTerminalOutcome =
+    row.terminalOutcome !== null &&
+    row.terminalReason !== null &&
+    row.terminatedAt !== null
+  const hasNoTerminalOutcome =
+    row.terminalOutcome === null &&
+    row.terminalReason === null &&
+    row.terminatedAt === null
   if (
+    (!hasTerminalOutcome && !hasNoTerminalOutcome) ||
+    (row.status === 'committed' && !hasNoTerminalOutcome) ||
+    (row.terminatedAt !== null &&
+      Date.parse(row.terminatedAt) < Date.parse(row.createdAt)) ||
     (row.status === 'auditPrepared' &&
       (projection !== null ||
         choice !== null ||
@@ -538,6 +580,9 @@ function decodeDecisionRow(
     validatorResult,
     acceptedAttemptId: row.acceptedAttemptId,
     commandLedgerId: row.commandLedgerId,
+    terminalOutcome: row.terminalOutcome,
+    terminalReason: row.terminalReason,
+    terminatedAt: row.terminatedAt,
     createdAt: row.createdAt,
     modelPreparedAt: row.modelPreparedAt,
     selectedAt: row.selectedAt,
@@ -828,7 +873,11 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
           CASE WHEN selected_at IS NULL THEN NULL ELSE
             to_char(selected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "selectedAt",
           CASE WHEN committed_at IS NULL THEN NULL ELSE
-            to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt"
+            to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt",
+          terminal_outcome AS "terminalOutcome",
+          terminal_reason AS "terminalReason",
+          CASE WHEN terminated_at IS NULL THEN NULL ELSE
+            to_char(terminated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "terminatedAt"
         FROM app_private.player_decisions
         WHERE id = ${parsed.data.decisionRecordId}::uuid
           AND agent_run_id = ${parsed.data.agentRunId}::uuid
@@ -929,7 +978,11 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
           CASE WHEN selected_at IS NULL THEN NULL ELSE
             to_char(selected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "selectedAt",
           CASE WHEN committed_at IS NULL THEN NULL ELSE
-            to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt"
+            to_char(committed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "committedAt",
+          terminal_outcome AS "terminalOutcome",
+          terminal_reason AS "terminalReason",
+          CASE WHEN terminated_at IS NULL THEN NULL ELSE
+            to_char(terminated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "terminatedAt"
         FROM app_private.player_decisions
         WHERE agent_run_id = ${run.agentRunId}::uuid
           AND owner_id = ${owner.databaseOwnerId}::uuid
@@ -939,6 +992,9 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
       if (rows.length === 0) return Object.freeze({ kind: 'none' as const })
       const row = requireSingle(rows, DecisionRowSchema)
       const record = decodeDecisionRow(row)
+      if (record.terminalOutcome !== null) {
+        return Object.freeze({ kind: 'terminal' as const, record })
+      }
       if (
         record.projection !== null &&
         canonicalJson(record.projection as unknown as JsonValue) !==
@@ -1008,6 +1064,76 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
         )
       }
       return Object.freeze({ kind: record.status, record })
+    },
+
+    async markTerminalForCoordination(transaction, owner, input) {
+      if (!isResolvedOwnerScope(owner)) {
+        throw new RepositoryInputValidationError()
+      }
+      const parsed = z
+        .strictObject({
+          agentRunId: UuidSchema,
+          sessionId: UuidSchema,
+          outcome: z.enum(['failed', 'stale']),
+          reason: StableAuditCodeSchema,
+          terminatedAt: z.string().datetime({ precision: 3 }),
+        })
+        .safeParse(input)
+      if (!parsed.success) throw new RepositoryInputValidationError()
+      const rows = await queryRows(transaction`
+        SELECT id::text AS "decisionRecordId", status,
+               terminal_outcome AS "terminalOutcome",
+               terminal_reason AS "terminalReason",
+               CASE WHEN terminated_at IS NULL THEN NULL ELSE
+                 to_char(terminated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS "terminatedAt"
+        FROM app_private.player_decisions
+        WHERE agent_run_id = ${parsed.data.agentRunId}::uuid
+          AND session_id = ${parsed.data.sessionId}::uuid
+          AND owner_id = ${owner.databaseOwnerId}::uuid
+        FOR UPDATE
+      `)
+      if (rows.length === 0) return Object.freeze({ kind: 'none' as const })
+      const row = requireSingle(
+        rows,
+        z.strictObject({
+          decisionRecordId: UuidSchema,
+          status: z.enum([
+            'auditPrepared',
+            'modelPrepared',
+            'selected',
+            'committed',
+          ]),
+          terminalOutcome: z.enum(['failed', 'stale']).nullable(),
+          terminalReason: StableAuditCodeSchema.nullable(),
+          terminatedAt: z.string().datetime().nullable(),
+        }),
+      )
+      if (
+        row.status === 'committed' ||
+        row.terminalOutcome !== null ||
+        row.terminalReason !== null ||
+        row.terminatedAt !== null
+      ) {
+        throw new PlayerDecisionTransitionError()
+      }
+      const updated = await queryRows(transaction`
+        UPDATE app_private.player_decisions
+        SET terminal_outcome = ${parsed.data.outcome},
+            terminal_reason = ${parsed.data.reason},
+            terminated_at = ${parsed.data.terminatedAt}::timestamptz,
+            updated_at = ${parsed.data.terminatedAt}::timestamptz
+        WHERE id = ${row.decisionRecordId}::uuid
+          AND terminal_outcome IS NULL
+          AND terminal_reason IS NULL
+          AND terminated_at IS NULL
+        RETURNING id::text AS "decisionRecordId"
+      `)
+      requireSingle(
+        updated,
+        z.strictObject({ decisionRecordId: UuidSchema }),
+        'transition',
+      )
+      return Object.freeze({ kind: 'terminalized' as const })
     },
   }
   return Object.freeze(repository)

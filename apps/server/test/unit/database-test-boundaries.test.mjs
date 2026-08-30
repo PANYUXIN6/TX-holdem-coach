@@ -34,6 +34,14 @@ const playerCommitGateRepository = await readFile(
   ),
   'utf8',
 )
+const rebaselineScript = await readFile(
+  new URL('../../scripts/rebaseline-test-database.mjs', import.meta.url),
+  'utf8',
+)
+const suiteLockSource = await readFile(
+  new URL('../../src/db/database-test-suite-lock.ts', import.meta.url),
+  'utf8',
+)
 const serverPackage = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
 )
@@ -205,5 +213,38 @@ describe('remote PostgreSQL test boundaries', () => {
     expect(coverageConfig).toContain("'test/unit/**/*.{test,spec}.{ts,mjs}'")
     expect(coverageConfig).toContain("'test/service/**/*.{test,spec}.{ts,mjs}'")
     expect(coverageConfig).not.toContain('test/integration')
+  })
+
+  test('gates destructive rebaseline locally and aborts migration when the suite lock is lost', () => {
+    expect(serverPackage.scripts['db:test:rebaseline']).toBe(
+      'pnpm run build && pnpm run verify:migration-assets && node scripts/rebaseline-test-database.mjs',
+    )
+
+    const preflightPosition = rebaselineScript.indexOf(
+      'const expected = await verifySingleBaselineMigrationAssets(',
+    )
+    const environmentPosition = rebaselineScript.indexOf(
+      'const testEnvironment = await loadTestEnvironment()',
+    )
+    expect(preflightPosition).toBeGreaterThanOrEqual(0)
+    expect(environmentPosition).toBeGreaterThan(preflightPosition)
+    expect(rebaselineScript).toContain(
+      "from '../dist/db/database-test-suite-lock.js'",
+    )
+    const lockAcquisitionPosition = rebaselineScript.indexOf(
+      'const suiteLock = await acquireDatabaseTestSuiteLock(lockSql)',
+    )
+    const clientBindingPosition = rebaselineScript.indexOf(
+      'const unbindMigrationSql = bindDatabaseTestClientToSuiteLock(',
+    )
+    const firstDatabaseQueryPosition = rebaselineScript.indexOf(
+      'const conflictingRows = await migrationSql',
+    )
+    expect(clientBindingPosition).toBeGreaterThan(lockAcquisitionPosition)
+    expect(firstDatabaseQueryPosition).toBeGreaterThan(clientBindingPosition)
+    expect(rebaselineScript).toContain('signal: suiteLock.signal')
+    expect(rebaselineScript).not.toContain('pg_try_advisory_xact_lock')
+    expect(suiteLockSource).toContain('delay(30_000, false, { ref: false })')
+    expect(suiteLockSource).toContain('await transaction`SELECT 1`')
   })
 })

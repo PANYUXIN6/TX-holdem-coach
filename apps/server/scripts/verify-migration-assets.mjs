@@ -1,7 +1,9 @@
 import { access, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { verifyDatabaseTargetsManifest } from '../dist/db/migration-artifact.js'
-import { buildExpectedMigrationSequence } from '../dist/db/migration-compatibility.js'
+import {
+  verifyDatabaseTargetsManifest,
+  verifySingleBaselineMigrationAssets,
+} from '../dist/db/migration-artifact.js'
 
 const sourceDirectory = 'src/db/migrations'
 const distDirectory = 'dist/db/migrations'
@@ -22,7 +24,7 @@ async function listFiles(directory, prefix = '') {
     }
   }
 
-  return files.sort()
+  return files.sort((left, right) => left.localeCompare(right))
 }
 
 await access(join(distDirectory, 'meta', '_journal.json'))
@@ -48,7 +50,7 @@ await Promise.all(
   }),
 )
 
-await buildExpectedMigrationSequence(distDirectory)
+await verifySingleBaselineMigrationAssets(distDirectory)
 
 const [sourceTargetsContents, distTargetsContents, manifestContents] =
   await Promise.all([

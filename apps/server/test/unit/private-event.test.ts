@@ -292,20 +292,16 @@ describe('private event', () => {
     ).toThrow(AuthoritativeStateValidationError)
   })
 
-  test('writes row payload version 2 while strictly reading published v1 rows', () => {
+  test('writes and strictly reads the only current row payload version', () => {
     const current = encodeCurrentPrivateEvent(sessionCreatedEvent())
-    const legacy = {
-      payloadVersion: 1,
-      payload: { event: sessionCreatedEvent() },
-    }
 
     expect({
       payload: PRIVATE_EVENT_PAYLOAD_VERSION,
       current,
     }).toEqual({
-      payload: 2,
+      payload: 1,
       current: {
-        payloadVersion: 2,
+        payloadVersion: 1,
         payload: { event: sessionCreatedEvent() },
       },
     })
@@ -314,10 +310,7 @@ describe('private event', () => {
       currentPrivateEventReader.read(current.payloadVersion, current.payload),
     ).toEqual({ kind: 'decoded', value: sessionCreatedEvent() })
     expect(
-      currentPrivateEventReader.read(legacy.payloadVersion, legacy.payload),
-    ).toEqual({ kind: 'decoded', value: sessionCreatedEvent() })
-    expect(
-      currentPrivateEventReader.read(3, { event: pokerEvents()[0] }),
+      currentPrivateEventReader.read(2, { event: pokerEvents()[0] }),
     ).toEqual({ kind: 'unknownVersion' })
   })
 

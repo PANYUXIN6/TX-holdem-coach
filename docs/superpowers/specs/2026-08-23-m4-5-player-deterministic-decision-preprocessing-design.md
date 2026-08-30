@@ -1039,7 +1039,7 @@ revoked pack 不能开始或继续该阶段，返回稳定失败；deprecated �
 
 `opponentEvidenceSchemaVersion=1` 的合法来源上限就是一个 Hand，因此只发布当前手的分子/分母与 `insufficientEvidence(crossHandEvidenceUnavailable)`，不冻结一个在 v1 永远不可达的多手达标分支。
 
-M4.9 若提供认证、Owner/Session/participant/cutoff-scoped 历史记忆，必须发布 `opponentEvidenceSchemaVersion=2`，届时再由产品明确确认机会数、不同 Hand 数、置信度方法和调整上限，扩展泄露哨兵；不能把记忆偷偷塞进 v1 observation，也不能让 v2 证据伪装成 v1。
+M4.9 若提供认证、Owner/Session/participant/cutoff-scoped 历史记忆，必须显式扩展 current `opponentEvidenceSchemaVersion=1` 的机会数、不同 Hand 数、置信度方法、调整上限和泄露哨兵；该原位扩展只因仍处于首发前开发阶段而允许，并要求重建旧开发数据，不能在运行时同时接受 M4.5 旧 shape 与 M4.9 current shape。
 
 ### 16.4 `ExploitAdjustmentPolicyV1`
 
@@ -1048,7 +1048,7 @@ M4.9 若提供认证、Owner/Session/participant/cutoff-scoped 历史记忆，�
 - 输出引用当前手证据 ID、截止点、`exploitAdjustmentPolicyVersion=1` 与零调整原因；
 - 候选 ID 集合、action、target、合法来源保持不变。
 
-M4.5 v1 的生产路径与测试路径都稳定零剥削调整。跨手达门槛与有界调整分支属于 M4.9 的 v2 设计和测试，本里程碑不得用绕过来源认证的多手 fixture 冒充 v1 生产证据。
+M4.5 实现时的生产路径与测试路径都稳定零剥削调整。跨手门槛属于 M4.9 对 current v1 契约的首发前原位扩展，本里程碑不得用绕过来源认证的多手 fixture 冒充生产证据。
 
 ## 17. `CandidateOutcomeProjector`
 
@@ -1170,7 +1170,7 @@ interface PlayerDecisionPreprocessingResultData {
 
 M4.6：
 
-- 把完整认证观察和 M4.5 完整派生结果保存到 `DecisionAuditSnapshot`；M4.6 v1 不读取或发送 Memory，M4.9 通过版本升级加入真实 memory reader 与裁剪契约；
+- 把完整认证观察和 M4.5 完整派生结果保存到 `DecisionAuditSnapshot`；M4.6 实现时不读取或发送 Memory，M4.9 在首发前原位扩展 current v1，加入真实 memory reader 与裁剪契约；
 - 从聚合结果选择模型真正需要的字段；
 - 为每个发送事实建立 fact manifest；
 - 实现第二 Guard 与 Adapter Guard；
@@ -1312,7 +1312,7 @@ player_preprocessing_binding_mismatch
 - 人物政策每个允许 spot 条件各一个代表例，候选 ID 集合不变且 cap 生效；
 - bluffTendency 无范围分类时不生效；
 - 当前手 opponent evidence 因 `crossHandEvidenceUnavailable` 始终零剥削调整；
-- v1 拒绝注入跨 Hand fixture 或伪造达标来源；多手阈值与非零调整测试留给 M4.9 的 evidence v2。
+- M4.5 shape 拒绝注入跨 Hand fixture 或伪造达标来源；多手阈值测试留给 M4.9 的 current evidence v1 原位扩展，非零调整继续后置。
 
 ### 21.7 聚合与 Capability
 
@@ -1417,7 +1417,7 @@ M4.4 + M4.5 targeted unit
 | 伪造 GTO/最近邻策略 | strict 来源/授权/覆盖/抽象，缺数据只返回 unsupported |
 | 空策略包被误报为生产策略完成 | 最终报告区分合约路径与真实生产数据覆盖门禁 |
 | 人物全局乘数改变所有 spot | 只允许列出的 spot 条件与候选间有界守恒转移 |
-| 少量动作形成虚假对手画像 | v1 只发布 current-hand 证据并强制零调整；M4.9 v2 再确认跨手阈值与 cap |
+| 少量动作形成虚假对手画像 | M4.5 只发布 current-hand 证据并强制零调整；M4.9 原位扩展 current v1 的跨手阈值并继续保持 cap 0 |
 | 分析器依赖 Player 类型导致 Coach 不能复用 | Player/Coach 独立 facade + 同一纯核心 DTO/版本 |
 | current 规则/策略覆盖历史 Hand/Run | 目标 Hand 窄读 + Run 固化 StrategyPack reference + 完整 binding |
 | Capability clone/hash 丢失认证关系 | parseInput 先认证，输出 strict binding；最终聚合重新私有认证 |
@@ -1474,6 +1474,6 @@ M4.5 只有同时满足以下条件才可标记完成：
 1. **M4.4 action Schema/证明联动**：允许在 M4.4 尚未实施前补入第 5 节公开金额证明，并以共享 kernel 的顺序证明协议同步修订第一 Guard；这不扩大隐藏信息范围，也不修改既有私有事件持久化格式，但修订已确认的上游观察字段与算法。
 2. **策略数据与 heuristic 门禁**：M4.5 纳入最小静态 A5；无来源/授权数据时生产明确全量 `unsupported`，按第 16.1 节 action-family 后尺度归一化、低置信度 heuristic 工作，不能宣称真实策略覆盖。若生产必须有 `exact/referenceOnly` 命中，用户须先提供或确认首版 StrategyPack 来源、授权和内容。
 3. **人物政策门禁**：确认第 16.2 节五个配置维度的 spot 条件映射、单次最多 10% 转移与单候选累计最多 20% 改变量。它们是产品政策而非扑克事实；不同意时必须在实施前给出替代映射/cap。
-4. **对手证据门禁**：确认 M4.5 evidence v1 只输出当前手证据且 exploit 永远零调整；机会数、不同 Hand 数、置信度与非零调整 cap 延后到 M4.9 evidence v2 单独确认，不在 v1 冻结不可达常量。
+4. **对手证据门禁**：确认 M4.5 实现时 evidence v1 只输出当前手证据且 exploit 永远零调整；机会数、不同 Hand 数与置信度延后到 M4.9 对 current v1 的首发前原位扩展，非零调整 cap 继续后置。
 
 上述产品门禁均已确认。用户于 2026-08-25 确认 M4.6 五项设计决策后，第 18.4 节成为 M4.5 的新增交接完成条件；候选三段权重、完整 heuristic 元数据、直接来源、逐字段 strict Schema/current decoder、可逆 pinned StrategyPack dependency 与封闭 Strategy code 均已落地，并已重新通过定向测试、`pnpm run verify`、database m45 与 PostgreSQL E2E m45。M4.5 因此完成；本次收口没有启动 M4.6 实现。后续若改变任一政策、数据来源或跨文档契约，必须先修订设计，并按本文规定升级对应 Schema、算法或政策版本。

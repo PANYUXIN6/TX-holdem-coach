@@ -1,10 +1,10 @@
 # M2.2 私有 Schema 数据字典
 
-- 适用版本：首发 baseline + M4.6 决策持久化迁移
+- 适用版本：首发前破坏性重基线后的唯一 baseline
 - 数据库：Supabase Postgres
 - Schema：`app_private`
 - 表数量：14
-- 事实来源：`apps/server/src/db/schema.ts`、`apps/server/src/db/migrations/0000_baseline.sql`、`apps/server/src/db/migrations/0002_handy_marvel_apes.sql`、`apps/server/src/db/migrations/0003_funny_swarm.sql`
+- 事实来源：`apps/server/src/db/schema.ts`、`apps/server/src/db/migrations/0000_baseline.sql`
 
 ## 1. 这套 Schema 解决什么问题
 

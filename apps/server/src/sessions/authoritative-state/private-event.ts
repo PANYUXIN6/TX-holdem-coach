@@ -195,14 +195,6 @@ const SessionEndedEventSchema = z.strictObject({
   reason: z.enum(['userRequested', 'handAborted']),
 })
 
-const SessionPrivateEventV1Schema = z.discriminatedUnion('type', [
-  SessionCreatedEventSchema,
-  UserRebuyEventSchema,
-  AiAutoRebuyEventSchema,
-  HandAbortedEventSchema,
-  SessionEndedEventSchema,
-])
-
 export const PlayerPauseReasonSchema = z.enum([
   'provider_billing_unavailable',
   'provider_network_error',
@@ -266,13 +258,7 @@ const AgentPausedEventSchema = z.strictObject({
   failureCode: PlayerPauseReasonSchema,
 })
 
-const PlayerCoordinationPrivateEventSchema = z.discriminatedUnion('type', [
-  AgentStartedEventSchema,
-  AgentRepairAttemptedEventSchema,
-  AgentPausedEventSchema,
-])
-
-const SessionPrivateEventV2Schema = z.discriminatedUnion('type', [
+const SessionPrivateEventSchema = z.discriminatedUnion('type', [
   SessionCreatedEventSchema,
   UserRebuyEventSchema,
   AiAutoRebuyEventSchema,
@@ -294,15 +280,8 @@ export type AgentRepairAttemptedEvent = z.infer<
   typeof AgentRepairAttemptedEventSchema
 >
 export type AgentPausedEvent = z.infer<typeof AgentPausedEventSchema>
-export type PrivateEventV1 =
-  | PokerPrivateEvent
-  | SessionCreatedEvent
-  | UserRebuyEvent
-  | AiAutoRebuyEvent
-  | HandAbortedEvent
-  | SessionEndedEvent
 export type PrivateEvent =
-  PrivateEventV1 | z.infer<typeof PlayerCoordinationPrivateEventSchema>
+  PokerPrivateEvent | z.infer<typeof SessionPrivateEventSchema>
 
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object') {
@@ -329,26 +308,10 @@ function isPokerPrivateEventInput(input: unknown): boolean {
   )
 }
 
-function parseNonPokerPrivateEvent(
-  input: unknown,
-  schema:
-    typeof SessionPrivateEventV1Schema | typeof SessionPrivateEventV2Schema,
-): PrivateEvent {
-  return deepFreeze(structuredClone(schema.parse(input))) as PrivateEvent
-}
-
-export function createPrivateEventV1(input: unknown): PrivateEventV1 {
-  try {
-    if (isPokerPrivateEventInput(input)) {
-      return createPokerPrivateEvent(input)
-    }
-    return parseNonPokerPrivateEvent(
-      input,
-      SessionPrivateEventV1Schema,
-    ) as PrivateEventV1
-  } catch {
-    throw new AuthoritativeStateValidationError()
-  }
+function parseNonPokerPrivateEvent(input: unknown): PrivateEvent {
+  return deepFreeze(
+    structuredClone(SessionPrivateEventSchema.parse(input)),
+  ) as PrivateEvent
 }
 
 export function createPrivateEvent(input: unknown): PrivateEvent {
@@ -356,7 +319,7 @@ export function createPrivateEvent(input: unknown): PrivateEvent {
     if (isPokerPrivateEventInput(input)) {
       return createPokerPrivateEvent(input)
     }
-    return parseNonPokerPrivateEvent(input, SessionPrivateEventV2Schema)
+    return parseNonPokerPrivateEvent(input)
   } catch {
     throw new AuthoritativeStateValidationError()
   }

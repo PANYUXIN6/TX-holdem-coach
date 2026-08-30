@@ -90,7 +90,7 @@ M4.7 完成时必须证明：
 ### 3.2 明确不负责
 
 - Provider 调用、Prompt、Context、三道 Guard、bounded choice 或 M4.6 候选算法变更；
-- Player 失败、暂停、stale 接替、replacement Run、进程重启恢复和 Player 私有协调事件 V3；这些属于 M4.8；
+- Player 失败、暂停、stale 接替、replacement Run、进程重启恢复和 Player 私有协调事件；这些属于 M4.8，并写入唯一 Private Event current v1；
 - Session memory、跨手对手证据、Replay/Re-execution 和调试投影；这些属于 M4.9；
 - `bootstrap.ts`、Worker 启动、下一位 AI 连续调度和 Eval；这些属于 M4.10；
 - 公开 Contracts、HTTP 路由或前端命令新增 `aiAction`；
@@ -598,12 +598,12 @@ M4.9 审计读取可通过 `command_ledger_id` 联结 ledger，重建同一私�
 
 ### 11.3 migration
 
-M4.7 使用 `0004_flaky_betty_brant.sql` migration：
+2026-08-30 首发前破坏性重基线后，M4.7 的 Schema 直接合入唯一 `0000_baseline.sql`：
 
 - 先添加 nullable 列；
 - 扩展 status/stage/timestamp CHECK；
 - 增加复合 FK 与 nullable unique；
-- 不重写 M4.6 `0002`；
+- 不保留 M4.6/M4.7 的中间 migration；
 - 不为尚未实现的 M4.8 状态预留字符串；
 - migration、Drizzle Schema、snapshot/journal 和数据字典必须同一变更同步。
 
@@ -688,7 +688,7 @@ M4.7 对所有失败只回滚并抛稳定分类。M4.8 后续负责：
 - 把可收敛失败映射为 Run failed/Session paused；
 - 对真实 stale 重新读取权威状态并决定是否 replacement；
 - 对 deleted/ended/aborted/resourceMissing 明确禁止 replacement；
-- 写 Player 私有协调事件 V3。
+- 写 Player 私有协调事件；三种协调事件与 Poker、Session/Accounting 事件共用唯一 Private Event current v1。
 
 M4.7 不在 M4.8 实现前伪造这些终态。
 
@@ -845,7 +845,7 @@ B 先冻结私有命令摘要，D/E/F 都依赖它。C 先把行动语义收敛�
 | **B private ledger** | **目标**：定义私有 `aiAction` strict command、canonical digest、确定性 command ID 与 public isolation。**非目标**：不接 handler/Gate，不改公开 Schema 或数据库 Schema | A 已冻结 validated decision 的输入事实；现有 command ledger 契约可复用 | `persistence/command-ledger-repository.ts` 的私有命令解码/摘要边界与既有 HTTP/Contracts 边界 | I1、I2、I8、I12、I13 | 私有 Schema/helper 的内部位置、摘要 helper 组织、测试 fixture 和断言分组 | payload 任一权威字段变化均改变 digest；strict 输入边界和 replay/conflict 通过；公开 Contracts/HTTP 拒绝 `aiAction`；`playerAction` 形状保持 |
 | **C shared action core** | **目标**：把现有 user handler 收敛为支持动态 actor 的唯一扑克行动核心与 verifier，user wrapper 仍固定 seat 0。**非目标**：不读 Run/Decision，不注册 ledger，不 finalize Run，不改 Schema | B 已冻结 private command 语义；M3.3 user action 基线通过 | 既有 `sessions/command-execution` 所拥有的 Handler、event policy、relation plan 与 `poker-engine` 调用边界 | I1、I3、I7、I12、I13 | 共享核心留在既有 handler 或提取新模块、函数/工厂名、wrapper 的私有组织和测试文件拆分 | user 原回归；AI seat 1–8 与六类行动；continue/complete Hand；错误 actor/target/phase；协调清理；事件、关系计划与 snapshot verifier 一致 |
 | **D live Gate repository** | **目标**：按固定顺序锁 live Session/Hand/Run/Decision/Attempt，复验 Owner/身份/authority/deadline 并签发一次性 capability。**非目标**：不调用 engine、不 publish、不定义失败状态，尚不完成 committed writer | A/B 的认证结果与命令身份已冻结；M4.6 selected reader 和 M4.2 authority 可用 | `persistence` 的 transaction-bound live authority/identity 验证；不吸收 Player 候选政策或 Session 行动语义 | I2、I4、I5、I7、I11、I12、I13 | 参数化 SQL 的具体形状与选取列、query helper、一次性 capability 的 WeakSet/WeakMap/闭包实现、私有错误布局 | 可观察 SQL 证明精确锁序；所有拒绝零后续 SQL；伪造/跨事务/重复消费 capability 拒绝；调用图无 Run/Decision→Session 反向入口 |
-| **E Decision committed persistence** | **目标**：扩展 `player_decisions` 成功终态、strict Codec/writer、completed ledger 一对一约束并登记 database `m47`。**非目标**：不组合 Session 命令、不增加 M4.8 状态、不修改旧 migration | D 的 live Gate/capability 协议稳定；开工时确认下一连续 migration 号 | `db/schema.ts`、新 migration 与 `persistence/player-decision-repository.ts` 的持久化责任；database 套件只证明 Schema/Repository/事务/锁 | I2、I4–I6、I8、I12、I13 | migration 描述性后缀、约束/索引名、Codec/query helper、database 断言与 fixture 的文件组织 | Schema/Codec/repository 与 migration asset 验证；database `m47` 证明 CHECK/FK/unique、selected→committed 一次转换、payload 保留、capability、ledger 一对一和受控回滚 |
+| **E Decision committed persistence** | **目标**：扩展 `player_decisions` 成功终态、strict Codec/writer、completed ledger 一对一约束并登记 database `m47`。**非目标**：不组合 Session 命令、不增加 M4.8 状态、不建立 legacy migration | D 的 live Gate/capability 协议稳定；当前 Schema 直接进入首发唯一 baseline | `db/schema.ts`、`0000_baseline.sql` 与 `persistence/player-decision-repository.ts` 的持久化责任；database 套件只证明 Schema/Repository/事务/锁 | I2、I4–I6、I8、I12、I13 | 约束/索引名、Codec/query helper、database 断言与 fixture 的文件组织 | Schema/Codec/repository 与 migration asset 验证；database `m47` 证明 CHECK/FK/unique、selected→committed 一次转换、payload 保留、capability、ledger 一对一和受控回滚 |
 | **F single transaction** | **目标**：组合 private entry、ledger、Gate、共享 action core、Session/Hand mutation、Decision committed 与 transaction-bound Run finalize，并实现 new/replay 分支。**非目标**：不接生产 ResultPort/Worker、不创建 replacement | B–E 全部直接证据通过 | 既有 `session-command-executor.ts` 仍拥有唯一 Session command transaction；Player/persistence 只通过窄端口加入已冻结成功面 | I1–I8、I11–I13 | 内部 composition helper、transaction hook/port 命名、私有返回类型与错误类布局，以及不改变单事务的调用分解 | 单元/数据库故障注入证明全成功面原子性；database `m47`；E2E `m47` 覆盖 continue/complete、duplicate/replay、stale/late/删除竞态和真实锁证据 |
 | **G production ResultPort** | **目标**：唯一生产 `PlayerRuntimeResultPort` 组合 Validator/Gate；COMMIT 后 best-effort 发布 Session 与 Run completed 事件。**非目标**：不接 bootstrap/Worker、不实现 M4.8 失败收敛、不调度下一 Run | F 的 new/replay 事务结果稳定 | 既有 `player-runtime-result-port.ts`/`player-runtime-executor.ts` 边界；发布只消费已提交结果 | I4、I7–I10、I12、I13 | 生产 adapter 的内部模块边界、publisher helper、私有结果/错误组织和测试拆分 | 普通对象拒绝；成功只调用一次 Gate；replay 不发布；publish 失败不重提；terminal settlement 不返回 `runtimeSettlementRequired`；E2E `m47` 通过 |
 | **H 验收与文档** | **目标**：补齐 database/E2E/并发矩阵、相邻回归、地图/架构/数据字典/任务状态。**非目标**：不增加业务能力、不借验收扩大重构、不把 milestone 描述为 full | A–G 全部直接证据通过 | 现有 database/E2E 分层、测试计划和“文档与地图同步”章节定义的文档责任 | I1–I13 | `m47` 断言模块、fixture/builder 与测试文件分组；现有测试计划/README 内的机械注册方式；文档表述 | 第 15.6 节完整顺序；两套 full 各最多主动一次且串行；最终证据分别列出 offline、database milestone/full、PostgreSQL E2E milestone/full 和未验证项 |
@@ -873,7 +873,7 @@ E 在定向测试后依次执行 `pnpm run build:server`、`verify:migration-ass
 | `apps/server/src/agents/player/` | `player-runtime-result-port.ts`、`player-runtime-executor.ts` | Validator、Commit Gate 业务组合、唯一生产 ResultPort | Validator/Gate 是否各自新建模块、私有 helper/symbol/error 的文件名与拆分方式 |
 | `apps/server/src/sessions/command-execution/` | `player-action-handler.ts`、`command-event-policy.ts`、`session-command-executor.ts` | user/AI 双 wrapper、共享扑克行动核心、动态 actor verifier、唯一命令事务 | 共享核心保留在既有 handler 或提取新模块；AI wrapper 的文件名和私有工厂组织 |
 | `apps/server/src/persistence/` | `command-ledger-repository.ts`、`player-decision-repository.ts`、`agent-run-lifecycle-repository.ts` | 私有 ledger、live authority/capability、Decision committed、复用 Run finalize | Gate repository 是否独立成文件、SQL/query/Codec helper 的命名与拆分 |
-| `apps/server/src/db/` | `schema.ts`、`migrations/meta/_journal.json` | 下一个连续 migration、Schema/constraint | migration 描述性后缀和新约束/索引名称；旧 migration 不可改写 |
+| `apps/server/src/db/` | `schema.ts`、`migrations/0000_baseline.sql`、`migrations/meta/` | 首发唯一 baseline、Schema/constraint | 约束/索引名称；首发后才恢复向前 migration 规则 |
 | `apps/server/test/` | 现有 unit/service/integration 分层与 database/E2E 入口 | 为 A–H 完成证据增加最窄测试，并登记 `m47` | 新测试文件名、fixture/builder、断言模块数量与内部组织；database/E2E 职责分层不可混合 |
 
 无论局部文件如何组织，Gate 业务验证不得进入通用 Foundation 或纯 poker 模块，不得出现第二个 Session executor、第二个 poker engine path 或第二个 Session mutation writer。
@@ -928,7 +928,7 @@ E 在定向测试后依次执行 `pnpm run build:server`、`verify:migration-ass
 7. 正确数据库约束需要超出 `committed + commandLedgerId + committedAt`，或必须提前引入 M4.8 失败/stale 状态；
 8. 正确实现需要升级 `playerRuntimeDefinition@1`、改变 `player.commit-poker-decision@1`、接入 Worker/bootstrap 或创建 replacement；
 9. 既有有效测试证明共享核心会改变 user `playerAction`、公开响应/稳定错误、事件/快照或 M4.6 恢复行为；
-10. 已执行 migration 历史与本文状态扩展不兼容，且不能通过新的向前 migration 保持已确认数据语义；
+10. 已上线或不可重建的数据与本文状态扩展不兼容，无法再使用首发前破坏性重基线；
 11. 用户确认、`AGENTS.md`、本文、上游 governing contract 与当前权威代码/测试之间出现会改变实现结果且无法通过只读调查消解的矛盾。
 
 局部类型错误、切片新增测试失败、helper/文件命名、fixture 组织、参数化 SQL 形状或在稳定责任目录内调整私有模块，不构成设计失效；应在该切片允许的实现自由内解决。

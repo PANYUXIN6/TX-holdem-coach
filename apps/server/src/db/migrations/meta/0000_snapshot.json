@@ -1,5 +1,5 @@
 {
-  "id": "e9fdd630-773e-44b9-80e7-f7967378de9d",
+  "id": "c2e26f75-b007-4303-90eb-d34930dd1f0c",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -207,6 +207,11 @@
           "name": "agent_attempts_run_number_unique",
           "nullsNotDistinct": false,
           "columns": ["agent_run_id", "attempt_number"]
+        },
+        "agent_attempts_id_run_owner_session_unique": {
+          "name": "agent_attempts_id_run_owner_session_unique",
+          "nullsNotDistinct": false,
+          "columns": ["id", "agent_run_id", "owner_id", "session_id"]
         }
       },
       "policies": {},
@@ -864,6 +869,38 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "agent_runs_parent_run_unique": {
+          "name": "agent_runs_parent_run_unique",
+          "columns": [
+            {
+              "expression": "parent_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"app_private\".\"agent_runs\".\"parent_run_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_runs_replacement_run_unique": {
+          "name": "agent_runs_replacement_run_unique",
+          "columns": [
+            {
+              "expression": "replacement_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"app_private\".\"agent_runs\".\"replacement_run_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -929,6 +966,20 @@
           "name": "agent_runs_id_owner_session_unique",
           "nullsNotDistinct": false,
           "columns": ["id", "owner_id", "session_id"]
+        },
+        "agent_runs_player_decision_identity_unique": {
+          "name": "agent_runs_player_decision_identity_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "owner_id",
+            "session_id",
+            "hand_id",
+            "participant_id",
+            "source_state_version",
+            "decision_request_id",
+            "runtime"
+          ]
         }
       },
       "policies": {},
@@ -972,6 +1023,10 @@
         "agent_runs_required_payloads_check": {
           "name": "agent_runs_required_payloads_check",
           "value": "\"app_private\".\"agent_runs\".\"run_config_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"agent_runs\".\"run_config_payload\") = 'object'\n        AND \"app_private\".\"agent_runs\".\"budget_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"agent_runs\".\"budget_payload\") = 'object'"
+        },
+        "agent_runs_replacement_not_self_check": {
+          "name": "agent_runs_replacement_not_self_check",
+          "value": "(\"app_private\".\"agent_runs\".\"parent_run_id\" IS NULL OR \"app_private\".\"agent_runs\".\"parent_run_id\" <> \"app_private\".\"agent_runs\".\"id\")\n        AND (\"app_private\".\"agent_runs\".\"replacement_run_id\" IS NULL OR \"app_private\".\"agent_runs\".\"replacement_run_id\" <> \"app_private\".\"agent_runs\".\"id\")"
         }
       },
       "isRLSEnabled": false
@@ -1491,6 +1546,339 @@
         "owners_identity_key_not_blank": {
           "name": "owners_identity_key_not_blank",
           "value": "length(btrim(\"app_private\".\"owners\".\"identity_key\")) > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app_private.player_decisions": {
+      "name": "player_decisions",
+      "schema": "app_private",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "agent_run_id": {
+          "name": "agent_run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hand_id": {
+          "name": "hand_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "participant_id": {
+          "name": "participant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_state_version": {
+          "name": "source_state_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_request_id": {
+          "name": "decision_request_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "runtime": {
+          "name": "runtime",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "record_version": {
+          "name": "record_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_audit_snapshot_payload_version": {
+          "name": "decision_audit_snapshot_payload_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_audit_snapshot_payload": {
+          "name": "decision_audit_snapshot_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "candidate_set_payload_version": {
+          "name": "candidate_set_payload_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "candidate_set_payload": {
+          "name": "candidate_set_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model_projection_payload_version": {
+          "name": "model_projection_payload_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "model_projection_payload": {
+          "name": "model_projection_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "model_choice_payload_version": {
+          "name": "model_choice_payload_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "model_choice_payload": {
+          "name": "model_choice_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "validator_result_payload_version": {
+          "name": "validator_result_payload_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "validator_result_payload": {
+          "name": "validator_result_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accepted_attempt_id": {
+          "name": "accepted_attempt_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "command_ledger_id": {
+          "name": "command_ledger_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terminal_outcome": {
+          "name": "terminal_outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terminal_reason": {
+          "name": "terminal_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terminated_at": {
+          "name": "terminated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "model_prepared_at": {
+          "name": "model_prepared_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "selected_at": {
+          "name": "selected_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "committed_at": {
+          "name": "committed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "player_decisions_session_status_idx": {
+          "name": "player_decisions_session_status_idx",
+          "columns": [
+            {
+              "expression": "session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "player_decisions_run_identity_fk": {
+          "name": "player_decisions_run_identity_fk",
+          "tableFrom": "player_decisions",
+          "tableTo": "agent_runs",
+          "schemaTo": "app_private",
+          "columnsFrom": [
+            "agent_run_id",
+            "owner_id",
+            "session_id",
+            "hand_id",
+            "participant_id",
+            "source_state_version",
+            "decision_request_id",
+            "runtime"
+          ],
+          "columnsTo": [
+            "id",
+            "owner_id",
+            "session_id",
+            "hand_id",
+            "participant_id",
+            "source_state_version",
+            "decision_request_id",
+            "runtime"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "player_decisions_participant_scope_fk": {
+          "name": "player_decisions_participant_scope_fk",
+          "tableFrom": "player_decisions",
+          "tableTo": "session_agents",
+          "schemaTo": "app_private",
+          "columnsFrom": ["participant_id", "session_id", "owner_id"],
+          "columnsTo": ["participant_id", "session_id", "owner_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "player_decisions_accepted_attempt_scope_fk": {
+          "name": "player_decisions_accepted_attempt_scope_fk",
+          "tableFrom": "player_decisions",
+          "tableTo": "agent_attempts",
+          "schemaTo": "app_private",
+          "columnsFrom": [
+            "accepted_attempt_id",
+            "agent_run_id",
+            "owner_id",
+            "session_id"
+          ],
+          "columnsTo": ["id", "agent_run_id", "owner_id", "session_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "player_decisions_command_ledger_scope_fk": {
+          "name": "player_decisions_command_ledger_scope_fk",
+          "tableFrom": "player_decisions",
+          "tableTo": "command_ledger",
+          "schemaTo": "app_private",
+          "columnsFrom": ["command_ledger_id", "session_id", "owner_id"],
+          "columnsTo": ["id", "session_id", "owner_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "player_decisions_agent_run_unique": {
+          "name": "player_decisions_agent_run_unique",
+          "nullsNotDistinct": false,
+          "columns": ["agent_run_id"]
+        },
+        "player_decisions_command_ledger_unique": {
+          "name": "player_decisions_command_ledger_unique",
+          "nullsNotDistinct": false,
+          "columns": ["command_ledger_id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "player_decisions_identity_check": {
+          "name": "player_decisions_identity_check",
+          "value": "\"app_private\".\"player_decisions\".\"runtime\" = 'player'\n        AND \"app_private\".\"player_decisions\".\"record_version\" = 1\n        AND \"app_private\".\"player_decisions\".\"source_state_version\" BETWEEN 0 AND 9007199254740991"
+        },
+        "player_decisions_status_check": {
+          "name": "player_decisions_status_check",
+          "value": "\"app_private\".\"player_decisions\".\"status\" IN ('auditPrepared', 'modelPrepared', 'selected', 'committed')"
+        },
+        "player_decisions_required_payloads_check": {
+          "name": "player_decisions_required_payloads_check",
+          "value": "\"app_private\".\"player_decisions\".\"decision_audit_snapshot_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"player_decisions\".\"decision_audit_snapshot_payload\") = 'object'\n        AND \"app_private\".\"player_decisions\".\"candidate_set_payload_version\" > 0\n        AND jsonb_typeof(\"app_private\".\"player_decisions\".\"candidate_set_payload\") = 'object'"
+        },
+        "player_decisions_optional_payload_pairs_check": {
+          "name": "player_decisions_optional_payload_pairs_check",
+          "value": "((\n        \"app_private\".\"player_decisions\".\"model_projection_payload_version\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"model_projection_payload\" IS NULL\n      ) OR (\n        \"app_private\".\"player_decisions\".\"model_projection_payload_version\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"model_projection_payload_version\" > 0\n        AND \"app_private\".\"player_decisions\".\"model_projection_payload\" IS NOT NULL\n        AND jsonb_typeof(\"app_private\".\"player_decisions\".\"model_projection_payload\") = 'object'\n      ))\n        AND (\n          (\n          \"app_private\".\"player_decisions\".\"model_choice_payload_version\" IS NULL\n          AND \"app_private\".\"player_decisions\".\"model_choice_payload\" IS NULL\n          ) OR (\n          \"app_private\".\"player_decisions\".\"model_choice_payload_version\" IS NOT NULL\n          AND \"app_private\".\"player_decisions\".\"model_choice_payload_version\" > 0\n          AND \"app_private\".\"player_decisions\".\"model_choice_payload\" IS NOT NULL\n          AND jsonb_typeof(\"app_private\".\"player_decisions\".\"model_choice_payload\") = 'object'\n          )\n        )\n        AND (\n          (\n          \"app_private\".\"player_decisions\".\"validator_result_payload_version\" IS NULL\n          AND \"app_private\".\"player_decisions\".\"validator_result_payload\" IS NULL\n          ) OR (\n          \"app_private\".\"player_decisions\".\"validator_result_payload_version\" IS NOT NULL\n          AND \"app_private\".\"player_decisions\".\"validator_result_payload_version\" > 0\n          AND \"app_private\".\"player_decisions\".\"validator_result_payload\" IS NOT NULL\n          AND jsonb_typeof(\"app_private\".\"player_decisions\".\"validator_result_payload\") = 'object'\n          )\n        )"
+        },
+        "player_decisions_stage_matrix_check": {
+          "name": "player_decisions_stage_matrix_check",
+          "value": "(\n        \"app_private\".\"player_decisions\".\"status\" = 'auditPrepared'\n        AND \"app_private\".\"player_decisions\".\"model_projection_payload_version\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"model_choice_payload_version\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"validator_result_payload_version\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"accepted_attempt_id\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"model_prepared_at\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"selected_at\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"command_ledger_id\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"committed_at\" IS NULL\n      ) OR (\n        \"app_private\".\"player_decisions\".\"status\" = 'modelPrepared'\n        AND \"app_private\".\"player_decisions\".\"model_projection_payload_version\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"model_choice_payload_version\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"validator_result_payload_version\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"accepted_attempt_id\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"model_prepared_at\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"selected_at\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"command_ledger_id\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"committed_at\" IS NULL\n      ) OR (\n        \"app_private\".\"player_decisions\".\"status\" = 'selected'\n        AND \"app_private\".\"player_decisions\".\"model_projection_payload_version\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"model_choice_payload_version\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"validator_result_payload_version\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"accepted_attempt_id\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"model_prepared_at\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"selected_at\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"command_ledger_id\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"committed_at\" IS NULL\n      ) OR (\n        \"app_private\".\"player_decisions\".\"status\" = 'committed'\n        AND \"app_private\".\"player_decisions\".\"model_projection_payload_version\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"model_choice_payload_version\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"validator_result_payload_version\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"accepted_attempt_id\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"model_prepared_at\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"selected_at\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"command_ledger_id\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"committed_at\" IS NOT NULL\n      )"
+        },
+        "player_decisions_timestamp_order_check": {
+          "name": "player_decisions_timestamp_order_check",
+          "value": "(\"app_private\".\"player_decisions\".\"model_prepared_at\" IS NULL OR \"app_private\".\"player_decisions\".\"model_prepared_at\" >= \"app_private\".\"player_decisions\".\"created_at\")\n        AND (\"app_private\".\"player_decisions\".\"selected_at\" IS NULL OR \"app_private\".\"player_decisions\".\"selected_at\" >= \"app_private\".\"player_decisions\".\"created_at\")\n        AND (\n          \"app_private\".\"player_decisions\".\"model_prepared_at\" IS NULL\n          OR \"app_private\".\"player_decisions\".\"selected_at\" IS NULL\n          OR \"app_private\".\"player_decisions\".\"selected_at\" >= \"app_private\".\"player_decisions\".\"model_prepared_at\"\n        )\n        AND (\n          \"app_private\".\"player_decisions\".\"committed_at\" IS NULL\n          OR (\"app_private\".\"player_decisions\".\"selected_at\" IS NOT NULL AND \"app_private\".\"player_decisions\".\"committed_at\" >= \"app_private\".\"player_decisions\".\"selected_at\")\n        )\n        AND (\"app_private\".\"player_decisions\".\"terminated_at\" IS NULL OR \"app_private\".\"player_decisions\".\"terminated_at\" >= \"app_private\".\"player_decisions\".\"created_at\")"
+        },
+        "player_decisions_terminal_outcome_check": {
+          "name": "player_decisions_terminal_outcome_check",
+          "value": "(\n        \"app_private\".\"player_decisions\".\"terminal_outcome\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"terminal_reason\" IS NULL\n        AND \"app_private\".\"player_decisions\".\"terminated_at\" IS NULL\n      ) OR (\n        \"app_private\".\"player_decisions\".\"terminal_outcome\" IN ('failed', 'stale')\n        AND \"app_private\".\"player_decisions\".\"terminal_reason\" IS NOT NULL\n        AND length(btrim(\"app_private\".\"player_decisions\".\"terminal_reason\")) > 0\n        AND \"app_private\".\"player_decisions\".\"terminated_at\" IS NOT NULL\n        AND \"app_private\".\"player_decisions\".\"status\" <> 'committed'\n      )"
         }
       },
       "isRLSEnabled": false

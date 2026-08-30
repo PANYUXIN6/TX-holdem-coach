@@ -4,6 +4,7 @@ import {
   acquireDatabaseTestSuiteLock,
   assertNoConflictingDatabaseTestConnections,
   bindDatabaseTestClientToAbortSignal,
+  bindDatabaseTestClientToSuiteLock,
   createDatabaseTestConnectionOptions,
   readTransactionBackendPid,
   runAbortableDatabasePhase,
@@ -417,6 +418,28 @@ describe('database test runtime', () => {
     })
     expect(releaseFailure).not.toHaveProperty('cause')
     expect(String(releaseFailure)).not.toContain('password')
+  })
+
+  test('terminates a protected database client when the suite lock is lost', async () => {
+    const suiteLockSql = createPostAcquisitionFailureSuiteLockSql(
+      new Error('suite lock connection failed'),
+    )
+    const lock = await acquireDatabaseTestSuiteLock(suiteLockSql.sql)
+    const endClient = vi.fn(async () => undefined)
+    const unbind = bindDatabaseTestClientToSuiteLock(
+      { end: endClient } as unknown as Pick<Sql, 'end'>,
+      lock,
+    )
+
+    suiteLockSql.failTransaction()
+
+    await vi.waitFor(() => {
+      expect(endClient).toHaveBeenCalledExactlyOnceWith({ timeout: 0 })
+    })
+    await expect(lock.release()).rejects.toThrow(
+      '数据库测试全局锁已丢失，已中止后续数据库写入。',
+    )
+    unbind()
   })
 
   test('fails fast with safe diagnostics when another tagged test transaction remains', async () => {

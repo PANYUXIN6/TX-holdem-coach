@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-08-28（M0–M2、M3.1–M3.7、M4.1–M4.6 与 M4.8 已完成；M4.7 主体实现与验收根因修复中；M4.8 database milestone 与 PostgreSQL E2E milestone 已通过）
+更新时间：2026-08-30（M0–M2、M3.1–M3.7、M4.1–M4.6 与 M4.8 已完成；M4.7 主体实现与验收根因修复中；M4.8 已完成 Private Event v1 与远程测试库破坏性重基线）
 
 ## 当前目录与职责
 
@@ -47,7 +47,7 @@
 
 - 根 `package.json`：pnpm workspace 的开发、构建、类型检查和测试编排入口。
 - `apps/web/`：React/Vite 手机竖屏 Web 客户端入口；目标可玩宽度为 360–430px，宽屏只居中承载手机画布。其 `public/poker/` 是唯一牌面资源位置，后续只负责前端展示和调用服务端 API。
-- `apps/server/`：Node/Hono 本地服务入口；`src/db/schema.ts` 是 14 张 `app_private` 业务表、普通约束、复合外键与查询索引的唯一 Drizzle 入口。`src/db/migrations/0000_baseline.sql` 是首发基线，`0002_handy_marvel_apes.sql` 增加 M4.6 三阶段 `player_decisions` 及 Run/Attempt 复合唯一键，`0004_flaky_betty_brant.sql` 增加 M4.7 committed 成功面与命令账本关联。运行时仍只使用参数化 `postgres.js`，不安装 `supabase-js`；迁移兼容、测试数据库安全和发布制品校验继续复用既有边界。
+- `apps/server/`：Node/Hono 本地服务入口；`src/db/schema.ts` 是 14 张 `app_private` 业务表及 Drizzle 可表达约束/索引的唯一入口。首发前全部 Schema 演进已压入唯一 `src/db/migrations/0000_baseline.sql`，journal/snapshot 也只保留该基线；baseline 另保留延迟循环外键、约束触发器、默认 Owner 与权限收紧，`verify:migration-assets` 会阻止这些手工不变量被重新生成覆盖。运行时仍只使用参数化 `postgres.js`，不安装 `supabase-js`；迁移兼容、测试数据库安全和发布制品校验继续复用既有边界。
 - `apps/server/.env.example` 与 `.env.test.example`：前者只描述线上运行/迁移 URL 与 DeepSeek Provider Key，后者只描述两条测试 URL；project ref 只存在于非秘密注册表，不接受环境覆盖，真实 `.env.test.local` 被 Git 忽略。
 - `apps/server/scripts/run-database-integration-tests.mjs`：本地只解析 `.env.test.local`，CI 只接受已注入的两条测试 URL；构造子进程 allowlist，剔除线上 URL 和 ref 环境变量，并按纯计划选择数据库持久化或 PostgreSQL E2E 入口、注入 Run ID 及迁移-only、单里程碑、full 或 cleanup scope；Vitest 子进程在首个失败或阶段超时后停止调度同套后续里程碑。
 - `apps/server/scripts/database-test-plan.mjs`：远程 PostgreSQL 测试 CLI 的纯计划边界；`database` suite 只接受迁移、cleanup、full 或 `m22…m28`/`m35`/`m44…m48`，`e2e` suite 只接受 full 或 `m31…m37`/`m42…m48`，并拒绝未归属的里程碑。计划分别选择 `database-infrastructure.test.ts` 或 `postgres-application-e2e.test.ts`，再生成唯一 Run ID、显式 scope 与失败即停的 Vitest 参数。
@@ -74,7 +74,7 @@
 - `apps/server/src/persistence/`：PostgreSQL Repository 落点；`agent-run-lifecycle-repository.ts` 提供 M4.2 Run 生命周期、队列、租约/fencing 与 M4.8 replacement lineage/终结原语；`agent-foundation-audit-repository.ts` 原子裁决 M4.3 Attempt/Invocation 预算；`player-observation-authority.ts` 为单个已领取 Player Run 捕获认证 authority，在短事务中按 `Session → AgentRun` 共享锁顺序读取当前快照、actor 与当前手事件，并只返回认证观察或 `stale | authorityLost | resourceMissing`。Repository 不决定 Player/Coach 业务终态。
 - `apps/server/src/sessions/command-execution/`：M3.1 Session 命令编排与 M3.3/M3.4 生产 Handler 落点；包含由 Handler bindings 构造的不可变查找映射、两阶段候选/capability、命令级 verifier、投影端口、每场尾队列和单事务执行器。M4.7 的 `createPlayerCommitSessionComposition()` 是唯一 AI 组合入口：Gate 工厂、私有 `aiAction` executor 与 Player/Repository 装配都局限于同一模块；M4.8 可装配 `retryAgent` binding，使公开命令复用相同 ledger、verifier、投影和事务链。该目录不含 HTTP/SSE 路由或内存业务状态缓存。
 - `apps/server/src/sessions/session-creation/`：M3.2 创建编排边界；一次生成身份图与首手领域计划，读取固定 Provider 创建能力，在外层事务中组合创建 Repository、M2.7 Hand writer、M2.5 mutation writer 和测试投影端口，并只在 COMMIT 后返回快照与两条 SSE 信封；latest-ended 的通用 Repository 失败在此转换为 `ROSTER_SOURCE_NOT_FOUND|ROSTER_SOURCE_CHANGED|ROSTER_MODEL_INACTIVE` 稳定服务错误。该目录不登记命令账本，也不安装 Hono 路由。
-- `apps/server/src/sessions/authoritative-state/poker-private-event.ts`、`private-event.ts`、`private-event-codec.ts`、`current-private-event-protocol.ts`：Poker 私有事件子集、当前累积私有事件、严格 Codec 和组合期协议对象；当前 row payload v2 统一写入既有事件和 `agentStarted|agentRepairAttempted|agentPaused`，严格 v1 reader 保留已发布的九种历史事件，JSON 不重复保存信封版本。
+- `apps/server/src/sessions/authoritative-state/poker-private-event.ts`、`private-event.ts`、`private-event-codec.ts`、`current-private-event-protocol.ts`：Poker 私有事件子集、当前累积私有事件、严格 Codec 和组合期协议对象；十二种事件统一以唯一 row payload v1 读写，只保留 current reader，JSON 不重复保存信封版本。
 - `apps/server/src/sessions/authoritative-state/player-visible-state.ts`、`player-observation-builder.ts`、`player-information-boundary-guard.ts`：M4.4 纯权威观察边界；Builder 从 `handStarted` 公开种子逐事件调用共享下注内核，复验 action before/after、金额证明与最终 Snapshot 后只复制白名单公开事实和唯一 Hero 底牌；第一 Guard 独立重放金额/街道链，再以 strict Schema、不变量、规范 SHA-256、递归冻结和模块私有认证身份签发 `PlayerVisibleState`。该边界不读取 SQL、人物、记忆、Coach 或 Provider。
 - `apps/server/src/sessions/hand-audit/`：M2.7/M4.5 纯 Hand 审计边界；当前 `HandStartCheckpoint` 绑定 `pokerRuleSetVersion` 并只读取首发行载荷版本 1，旧 reader 已删除；`CompletedHandResult` 同样保留行载荷版本 1。检查点仍允许同命令自动买入造成起始筹码差异。
 - `apps/server/src/agents/audit/`：M2.7 Foundation 审计纯模块；定义规范引用，以及 Run Configuration、Execution Budget 与 Attempt 的 current-only codecs；现存载荷不提供 legacy 注册或迁移。

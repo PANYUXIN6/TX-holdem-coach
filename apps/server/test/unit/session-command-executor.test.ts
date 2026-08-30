@@ -686,7 +686,7 @@ describe('session command execution', () => {
           eventSeq: 20,
           stateVersionBefore: 7,
           stateVersionAfter: 8,
-          privateEvent: { payloadVersion: 2 },
+          privateEvent: { payloadVersion: 1 },
         },
       ],
     })
@@ -770,7 +770,7 @@ describe('session command execution', () => {
         {
           handId: null,
           privateEvent: {
-            payloadVersion: 2,
+            payloadVersion: 1,
             payload: { event: { type: 'sessionEnded' } },
           },
         },

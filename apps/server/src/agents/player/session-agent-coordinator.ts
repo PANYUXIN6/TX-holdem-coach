@@ -52,7 +52,6 @@ import { readPinnedStrategyPackReference } from './player-strategy-pack-audit-re
 import type { PlayerStaleReason } from './player-execution-settlement.js'
 
 const CanonicalTimestampSchema = z.iso.datetime({ precision: 3 })
-const UuidSchema = z.uuid()
 
 export interface PlayerCoordinationEffects {
   readonly sessionEvents: readonly SseEvent[]
@@ -927,10 +926,7 @@ export function createSessionAgentCoordinator(
             run.leaseOwner !== input.authority.leaseOwner ||
             run.fencingToken !== input.authority.fencingToken ||
             run.leaseExpiresAt === null ||
-            Date.parse(run.leaseExpiresAt) <= Date.parse(input.settledAt) ||
-            (input.reason === 'execution_deadline_exhausted'
-              ? Date.parse(run.deadlineAt) > Date.parse(input.settledAt)
-              : Date.parse(run.deadlineAt) <= Date.parse(input.settledAt))
+            Date.parse(run.leaseExpiresAt) <= Date.parse(input.settledAt)
           ) {
             return { kind: 'noTarget' as const, effects: noEffects() }
           }

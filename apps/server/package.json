@@ -19,6 +19,7 @@
     "db:test:full": "node scripts/run-database-integration-tests.mjs --suite=database --full",
     "postgres:e2e:milestone": "node scripts/run-database-integration-tests.mjs --suite=e2e",
     "postgres:e2e:full": "node scripts/run-database-integration-tests.mjs --suite=e2e --full",
+    "db:test:rebaseline": "pnpm run build && pnpm run verify:migration-assets && node scripts/rebaseline-test-database.mjs",
     "db:test:cleanup": "node scripts/run-database-integration-tests.mjs --suite=database --cleanup-stale",
     "verify:migration-assets": "node scripts/verify-migration-assets.mjs"
   },

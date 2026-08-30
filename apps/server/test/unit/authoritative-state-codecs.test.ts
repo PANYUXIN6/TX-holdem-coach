@@ -137,7 +137,7 @@ describe('current authoritative-state codecs', () => {
       privateEventPayload: PRIVATE_EVENT_PAYLOAD_VERSION,
     }).toEqual({
       privateTableStatePayload: 1,
-      privateEventPayload: 2,
+      privateEventPayload: 1,
     })
   })
 
@@ -221,7 +221,7 @@ describe('current authoritative-state codecs', () => {
     const encoded = encodeCurrentPrivateEvent(event)
 
     expect(encoded).toEqual({
-      payloadVersion: 2,
+      payloadVersion: 1,
       payload: { event },
     })
     expect(decodeCurrentPrivateEvent(structuredClone(encoded))).toEqual(encoded)

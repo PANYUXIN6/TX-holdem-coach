@@ -293,6 +293,30 @@ describe('SessionAgentCoordinator M4.8 settlement', () => {
     ])
   })
 
+  test('pauses a final provider failure that settles at the execution deadline', async () => {
+    const run = createRun({ deadlineAt: settledAt })
+    const { coordinator, runRepository } = createCoordinator({ run })
+
+    await expect(
+      coordinator.pauseAfterFailure({
+        sessionId,
+        agentRunId: runId,
+        decisionRequestId,
+        authority: authority(),
+        reason: 'provider_timeout',
+        settledAt,
+      }),
+    ).resolves.toMatchObject({ kind: 'paused' })
+    expect(runRepository.terminateForCoordination).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        lifecycle: 'failed',
+        terminationReason: 'provider_timeout',
+      }),
+    )
+  })
+
   test('records the correction Attempt and its strict repair event in one coordinator transaction', async () => {
     const { coordinator, persistedBatches, foundationRepository } =
       createCoordinator()

@@ -5,7 +5,6 @@ import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime
 import { createPostgresPlayerObservationPort } from '../../src/persistence/player-observation-authority.js'
 import {
   DatabaseOperationError,
-  PersistenceDataCorruptionError,
   RepositoryInputValidationError,
 } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'

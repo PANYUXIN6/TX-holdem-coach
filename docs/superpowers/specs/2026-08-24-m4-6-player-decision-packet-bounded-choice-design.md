@@ -80,7 +80,7 @@ M4.6 完成时必须证明：
 
 - M4.7 的权威状态复验、标准扑克命令、command ledger 与 Commit Gate；
 - M4.8 的 failed/paused/stale/replacement 和 Session 协调事件；
-- M4.9 的 Session memory、跨手证据 v2、Replay/调试投影；
+- M4.9 的 Session memory、current v1 跨手证据原位扩展、Replay/调试投影；
 - M4.10 的 Run 创建、active StrategyPack 选择和 Worker/bootstrap 接线；
 - 策略数据生产内容、在线 Solver、权益/EV/范围推断、精确频率采样；
 - 公共 Contracts、HTTP/SSE、前端 UI 或 Coach Runtime；
@@ -781,7 +781,7 @@ player_decisions
 - participant 复合外键指向同场同 Owner 的 `session_agents`；accepted Attempt 复合外键指向同 Run、Owner、Session 的 `agent_attempts`；
 - 一 Run 最多一 Decision；
 - 所有 payload pair 同空同非空；非空分支显式要求 version 与 payload 双方 `IS NOT NULL`、版本为正且 JSON 为 object，不能依赖 PostgreSQL `CHECK` 的 NULL 三值结果；
-- 已登记的 `0002` 保持不可变；上述 CHECK 收紧通过追加 `0003_funny_swarm.sql` 前向迁移 drop/re-add 同名约束，避免破坏迁移 hash 兼容门禁；
+- 2026-08-30 首发前破坏性重基线后，上述表与 CHECK 直接进入唯一 `0000_baseline.sql`；旧 `0002/0003`、snapshot 和 journal 记录不再保留；
 - `auditPrepared` 只有 Snapshot/Candidate；`modelPrepared` 再要求 Projection；`selected` 再要求 Choice/Validator/accepted Attempt，且该 Attempt 必须 `completed + accepted + valid`；
 - 时间字段与 status 矩阵一致；
 - 不提前加入 `committed|rejected|stale`、command ledger、submitted time 或 memory revision。M4.7、M4.8、M4.9 分别在其 writer/状态矩阵冻结后升级 Schema/migration；M4.6 不替未来里程碑预建宽松写面。
@@ -1045,7 +1045,7 @@ apps/server/src/
 │   └── player-decision-repository.ts
 └── db/
     ├── schema.ts
-    └── migrations/<next>_player_decisions.sql
+    └── migrations/0000_baseline.sql
 
 apps/server/test/
 ├── helpers/player-decision-packet-fixture.ts
@@ -1149,7 +1149,7 @@ M4.6 只有同时满足以下条件才可标记完成：
 批准本文即确认五项会影响实现的决策：
 
 1. **恢复 `player_decisions` 专属表，但只建当前三阶段**：采用第 13 节 `auditPrepared | modelPrepared | selected` 模型，不复用 Attempt 或 Run config，也不预建 M4.7/M4.8 终态；M4.6 同步交付 migration、Codec、Repository 和 E2E。
-2. **M4.6 不发送 Memory，并同步修正任务源**：M4.9 真实 reader/裁剪契约出现前，Context 完全没有 Memory section；批准后把 M4.6 主计划的“有界记忆”改为明确延期，并由 M4.9 通过 Schema/Runtime 版本升级加入。
+2. **M4.6 不发送 Memory，并同步修正任务源**：M4.9 真实 reader/裁剪契约出现前，Context 完全没有 Memory section；批准后把 M4.6 主计划的“有界记忆”改为明确延期，并由 M4.9 在首发前原位扩展 current v1 Schema/Runtime 加入。
 3. **只恢复 durable stage，跨进程不续**：同一 Run 新 fencing 可从严格 Decision 阶段恢复；M4.2 接管产生的 `stale + interrupted + lease_replaced` Attempt 返回 `inflightUnknown` 而不重复调用；进程重启继续由 M4.8 取消旧 Run 并建 replacement。
 4. **接受 M4.3 的窄协议增强**：`ModelAttemptControlPort<TOutput>` 接收已验收 output，通用 Attempt 仍只存 hash；Player control 用它原子提交 accepted Attempt 与 selected Decision。
 5. **先冻结 Strategy v1 code**：M4.5 把 Strategy assumption/abstraction loss 从任意字符串收口为共享封闭枚举；首版 abstraction loss 只接受 `boardTextureCollapsed`，其他语义通过版本升级加入。

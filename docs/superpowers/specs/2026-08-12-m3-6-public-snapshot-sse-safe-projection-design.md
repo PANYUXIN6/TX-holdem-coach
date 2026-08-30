@@ -112,7 +112,7 @@ M3.5 设计曾以“恢复 Facade + Session + 私有快照 + 当前手事件”�
 
 - 普通 GET 不调用会写入指针修复或诊断状态的 mutation recovery capability；
 - 一条 PostgreSQL 语句在同一个 MVCC 读取视图内返回投影所需事实；
-- 使用生产快照/私有事件版本注册表解码；
+- 使用生产快照/私有事件 strict current reader 解码；
 - 只读取当前手事件，不在每次 GET 重扫整场历史；
 - 完整恢复、可修复指针和进入 `readonlyDiagnostic` 仍由 M2.6/M3.8 所有。
 
@@ -527,7 +527,7 @@ COMMIT 与内存 publish 之间存在进程崩溃窗口。首版明确接受该�
 
 - 同步 Projector 不接收 ReadPort、Promise、transaction、`ServerConfig`、API Key、Provider transport 或完整 Agent audit 对象；
 - 外层异步事实读取端口不选择人物完整 config、memory、Prompt、模型与 Agent attempt payload；
-- 私有事件先通过版本注册表，再按显式字段映射；禁止对象 spread 到公开 DTO；
+- 私有事件先通过 strict current reader，再按显式字段映射；禁止对象 spread 到公开 DTO；
 - 所有公开对象经过 strict Zod Schema；
 - 日志不记录动态资源 ID、正文、响应、底牌、模型内容或原始错误；
 - 测试不得读取真实 API Key 或调用真实 Provider。

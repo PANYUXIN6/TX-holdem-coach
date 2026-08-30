@@ -2,9 +2,10 @@
 
 - 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.6 与 M4.8 已完成，M3.8 按依赖后置，M4.7 主体实现与验收根因修复中，M4.9–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
-- 最后更新：2026-08-28
+- 最后更新：2026-08-30
 - 本文不包含工期、人数或里程碑时间估算。
 - 2026-08-16 首发前 Schema 收敛：实际开发数据库重建后，以 14 表单一 baseline 为准；删除全局 `protocolVersion`、Settings 版本、重复 JSON 信封版本、无历史责任的 Registry/legacy 兼容、`legacyDiagnosticState` 及尚无消费者的 Coach/Statistics 预埋表。下文已完成任务中的旧字段/旧表文字仅保留实施历史，不得作为后续任务当前契约；M4 仍保留运行审计、重放/精确恢复身份，Execution Budget 直接扩充首发 current 载荷而不发布 V2，M5/M8 在真实 writer 设计确认时再创建最终统计/Coach Schema。
+- 2026-08-30 M4.8 破坏性重基线：首发前开发数据不承担兼容责任，私有事件的 Poker、Session/Accounting 与 Player 协调事件合并为唯一 current `v1`；旧 V1/V2/V3 分派和中间 migration 由唯一 `0000_baseline.sql` 覆盖，远程测试 schema 通过受控重建后只接受该 baseline journal。
 - 上位文档：
   - [产品需求文档](../specs/2026-07-23-poker-practice-prd.md)
   - [前端交互与页面设计](../specs/2026-07-23-poker-practice-frontend-design.md)
@@ -599,7 +600,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 - M2.5a 定义会话层 `PrivateTableState`、运行时构造边界、精确资金守恒、最近完成手摘要私有 Schema，以及首个可写快照/事件 Codec；金额按各自领域取值域验证，合法负 `netChange` 不得被误判为损坏。
 - 私有快照的数据库行载荷版本与 `snapshotSchemaVersion`、私有事件的数据库行载荷版本与 `eventSchemaVersion` 是四条独立版本序列，不共享常量或相互比较。
-- 私有事件 V1 只包含 M1.9 已冻结的 `handStarted | actionCommitted | uncalledBetReturned | handCompleted`；后续版本为累积联合，M3 发布 Session/Accounting V2，M4 发布 Player 协调 V3。
+- 私有事件 current `v1` 是首发前唯一累积联合：包含 M1.9 的四种 Poker 事件、M3 的五种 Session/Accounting 事件和 M4.8 的三种 Player 协调事件；开发阶段直接覆盖扩充该契约，不发布 V2/V3 或保留兼容 reader。
 - M2.5b 只消费调用方现有 `TransactionSql`，通过 Owner-scoped `SELECT ... FOR UPDATE` 返回事务绑定、不可伪造、一次性的 Session 锁 capability；它不自行开启、提交事务或执行领域回调。
 - M2.5b 校验但不决定状态转换：无快照时批次最终版本不变且关系指针不变，有快照时批次最终版本恰好加一并与私有快照镜像一致；M3 决定最终领域状态、事件和是否写快照。
 - 每场 `eventSeq` 从锁定行的 `nextEventSeq` 开始连续，使用精确安全整数检查；失败或回滚不产生新的已提交序号。
@@ -617,12 +618,12 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 - 两个连接竞争同一 Session 时只能基于一次锁定镜像成功推进；一次性 capability 不能重复写入。
 - M3 负责验收终态命令重放跳过 M2.5b 且不增加序号；M4 负责验收 Player 协调事件在同一状态版本下增加序号且不重写快照；Coach 不占场次序号在 Agent 集成阶段验收。
 
-### M2.6 实现多版本识别、迁移与诊断恢复
+### M2.6 实现当前版本识别与诊断恢复
 
 产出：
 
-- 复用 M2.5a 已发布的当前快照/事件契约，并为这两类载荷建立独立的多版本注册与分派；它们不使用对外 `protocolVersion`，也不把持久化版本写入纯 M1 类型。
-- 已知当前版本进入当前 Decoder，已知旧版本进入对应旧版 Decoder 与确定性迁移，无注册版本进入未知版本诊断；版本格式正确但载荷损坏与未知版本必须分类不同。
+- 复用 M2.5a 已发布的当前快照/事件契约，并为这两类载荷建立独立的 current reader；它们不使用对外 `protocolVersion`，也不把持久化版本写入纯 M1 类型。
+- 唯一 current `v1` 进入严格 Decoder；其他正整数版本进入未知版本诊断。版本格式正确但载荷损坏与未知版本必须分类不同，不为未上线开发数据保留旧版 Decoder 或迁移链。
 - 私有快照信封中的 `PrivateTableState` 继续由纯 `PokerTableState`、`stateVersion`、`completedHandCount`、累计买入及最近完成手摘要组成。
 - `PokerTableState` 包含扑克阶段、座位筹码、按钮和当前手牌，是引擎与恢复的唯一纯扑克状态输入；最近结果摘要不放入纯引擎状态。
 - 未知版本或损坏数据进入只读诊断状态。
@@ -631,8 +632,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 后端测试闭环：
 
-- 分别覆盖快照与私有事件信封的当前版本、每个受支持旧版本、未知版本和损坏负载。
-- 验证迁移后的领域状态与预期一致。
+- 分别覆盖快照与私有事件信封的 current `v1`、未知版本和损坏负载。
 - 覆盖 `sessions.stateVersion` 与快照版本不一致时进入只读诊断。
 - 覆盖有效快照与 `currentHandId` 不一致时从快照重建指针并记录诊断。
 - 验证引擎和恢复代码不从关系表拼装筹码、按钮、累计买入或结果摘要；`session_events` 仅在公开投影/历史查询时提供已提交行动序列。
@@ -642,7 +642,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 产出：
 
-- 作为开手检查点和完成手结果载荷的首个 writer，同时为两者发布各自独立的数据库行载荷版本、`checkpointSchemaVersion | handResultSchemaVersion`、严格当前 Codec 和测试；不得由 M2.6 预建无人写入的当前 Schema，后续版本读取沿用 M2.6 的分派规则。
+- 作为开手检查点和完成手结果载荷的首个 writer，同时为两者发布各自独立的数据库行载荷版本、`checkpointSchemaVersion | handResultSchemaVersion`、严格 current Codec 和测试；不得由 M2.6 预建无人写入的 Schema，首发前契约变化直接覆盖 current `v1`。
 - 非 Agent 部分直接持久化 M1.9 的 `CompletedHandResult`，保存完整牌堆可重建事实、burn card、全部底牌、公共牌、起止筹码和结算，不重新运行牌型或底池算法；中止手只保存恢复所需检查点、最小中止元数据和关联失败运行，不伪造结算。
 - 保存 AgentRun、尝试、固定能力调用、Player 决策、Coach assessment、记忆版本、实际超时、路由、校验结果、Token 和延迟。
 - 丢弃隐藏推理和 `reasoning_content`。
@@ -679,7 +679,7 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 产出：
 
-- 在首次写入 Session/Accounting 私有事件前发布累积事件 V2：完整保留 M2.5 V1 的四种 Poker 事件，并为 `sessionCreated`、`userRebuy`、`aiAutoRebuy`、`handAborted`、`sessionEnded` 定义严格私有内容契约、当前 Codec、多版本读取注册和兼容测试；发布后所有新事件统一使用 V2。
+- 把 `sessionCreated`、`userRebuy`、`aiAutoRebuy`、`handAborted`、`sessionEnded` 加入唯一私有事件 current `v1`，完整保留四种 Poker 事件；使用严格 current Codec，不新增行版本或兼容 reader。
 - 同一场次一次只提交一个状态修改命令；进程内串行器可降低竞争，但数据库正确性必须由 PostgreSQL 事务、`SELECT ... FOR UPDATE` 和唯一约束保证。
 - 不同读请求不绕过权威快照。
 - 牌局引擎的当前状态输入只能来自通过私有 Zod Schema 校验及迁移的 `PrivateTableState.poker`。
@@ -938,7 +938,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 强制 runout 后 `nextStreetSpr.status=notApplicable`，不生成不存在的后续街候选；all-in 必然返还部分不计入真正风险。
 - 预计翻牌 SPR 与当前翻后 SPR 分字段；最低所需权益或即时盈亏平衡弃牌率只有在参与人数和响应假设明确时输出，否则为 `unavailable`。
 - `PersonaDeviationPolicy` 按具体 spot 有界调整，不使用全局范围乘数。
-- opponent evidence v1 只包含当前手分子、分母、过滤条件、截止事件与稳定不足原因，并固定零剥削调整；跨手置信度、样本门槛与非零调整留给 M4.9 evidence v2。
+- opponent evidence v1 在 M4.5 只包含当前手分子、分母、过滤条件、截止事件与稳定不足原因，并固定零剥削调整；M4.9 以 current-only 方式原位扩展同一 v1 契约，加入跨手置信度与样本门槛，非零调整继续后置。
 - clean outs、对手范围条件权益和 EV 只有存在显式版本化范围及算法时才能生成，否则必须 unavailable；不能交给 LLM 猜测。
 - domination 概率、fold equity、对手响应概率、隐含/反向隐含赔率单值、多街反事实收益和范围角色标签同样需要显式范围、响应模型或 Solver；`wet/dry`、`blank/scareCard` 等只能是有版本的 heuristic 派生。
 - 等价候选按标准动作语义合并，只有可证明严格支配时才删除候选。
@@ -946,7 +946,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 后端测试闭环：
 
-- Spot 键、手牌特征、结构性 outs、当前/候选结果数学、策略命中/回退和人物偏离都可复现；opponent evidence v1 的当前手统计与零调整可复现，跨手样本门槛留给 M4.9 evidence v2。
+- Spot 键、手牌特征、结构性 outs、当前/候选结果数学、策略命中/回退和人物偏离都可复现；opponent evidence v1 的当前手统计与零调整可复现，M4.9 在同一 current v1 契约中补入跨手样本门槛。
 - 覆盖 6–9 人位置关系、单挑/多人节点、公共牌成牌、底牌参与成牌、绝对 nuts、主要听牌/redraw、重复 outs 去重、river 无 outs、`cardRemovalFacts[]`、`counterfeitRiskFacts[]` 和原子牌面结构；隐藏牌、未来牌或完整牌堆不能进入分析器，缺少显式持牌/范围时实际 reverse outs 与战略 blocker 价值保持 `unavailable`。
 - 覆盖 K2s 同花但非 connector、最佳五张/比较元组、原子牌面字段、主池/多边池资格和 Hero 无资格边池不进入 pot odds。
 - 覆盖多人/不足额全下中的行动完成、本轮关闭、未来响应、候选响应者和仍可加注者。
@@ -963,7 +963,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 - `DecisionAuditSnapshot` 保存 `pokerRuleSetVersion`、完整安全观察、全部派生结果、策略/证据快照、最终候选和完整事实清单，永不直接发送给模型；`PlayerModelProjectionBuilder` 再生成精简决策包。
 - Provider 可见 v1 候选采用 11 项 candidate / 14 项 outcome compact tuple，Context Schema、descriptor/Guard、Codec 与 Prompt legend 共用同一 current-only 编码；只改变可见表示，不删减语义事实、当前手或候选，不改动数据库表结构。
-- 决策包组合规范 spot、必要原子手牌/牌面事实、当前指标、候选结果投影、候选来源和人物/对手调整；M4.6 v1 不读取或发送 Memory，M4.9 在真实 reader/裁剪契约出现后通过 Schema/Runtime 版本升级加入。
+- 决策包组合规范 spot、必要原子手牌/牌面事实、当前指标、候选结果投影、候选来源和人物/对手调整；M4.6 实现时不读取或发送 Memory，M4.9 在首发前以 current-only 方式原位扩展同一 v1 Schema/Runtime 契约。
 - 恢复专属 `player_decisions`，M4.6 只实现 `auditPrepared | modelPrepared | selected` 三阶段；不复用 Attempt/Run config，也不预建 M4.7/M4.8 终态。
 - 同一 Run 只恢复严格持久化阶段；M4.2 接管产生的 `stale + interrupted + lease_replaced` Attempt 返回 `inflightUnknown`，不跨进程续跑或重复调用模型。
 - 对 M4.3 只增加泛型 `ModelAttemptControlPort<TOutput>` 的窄协议，使 Player 在 accepted Attempt 完成时原子保存已验收选择；通用 Attempt 继续只保存响应 hash。
@@ -1010,7 +1010,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- 在首次写入 Player 协调私有事件前发布累积事件 V3：完整保留 V2，并为 `agentStarted`、`agentRepairAttempted`、`agentPaused` 定义严格私有内容契约、当前 Codec、多版本读取注册和兼容测试；发布后所有新事件统一使用 V3。
+- 把 `agentStarted`、`agentRepairAttempted`、`agentPaused` 加入唯一私有事件 current `v1`；12 种事件共用严格 current Codec，数据库行 `payloadVersion` 固定为 `1`，未知版本拒绝读取，不保留 V2/V3 分派。
 - 最终失败使牌桌保持 `inHand` 并进入 `paused`，不自动 fold。
 - stale 后 SessionAgentCoordinator 重新读取权威状态；仍需 AI 时创建带 `supersedesRunId` 的新运行并重建决策包。
 - 服务重启取消旧 Player 运行并创建新运行；不复用旧 attempts 或执行检查点。
@@ -1027,15 +1027,15 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 产出：
 
-- M4.6 已建立的 `player_decisions` 在 M4.9 扩展 Replay/Memory 所需版本化审计；M4.7/M4.8 分别负责命令提交结果和失败/stale 终态，不把这些字段预建进 M4.6 三阶段写面。
+- M4.6 已建立的 `player_decisions` 在 M4.9 直接扩展 Replay/Memory 审计；当前仍处于首发前开发阶段，Memory、Decision 审计载荷、Projection、Packet、Context、Prompt 与 Player Runtime 统一覆盖为单一 `v1` 契约，不保留 M4.9 前开发数据的兼容 reader。M4.7/M4.8 分别负责命令提交结果和失败/stale 终态，不把这些字段预建进 M4.6 三阶段写面。
 - 本场记忆确定性更新并按场次、座位隔离，最近记录和总大小有上限。
-- 按 `memoryPayloadVersion` 分派读取；发布 V2 时定义 V1 `{}` 到 V2 初始状态的确定性映射，原 revision 0 永不改写，首次持久化 V2 通过新 revision 与 `session_agents` 当前记忆镜像原子更新。
+- `memoryPayloadVersion`、Decision payload version 与 Runtime version 均固定为 `1`，只做严格单版本校验，不做版本分派或迁移映射；新场次的 revision 0 直接写入结构化空 Memory v1，既有开发数据库通过重建测试数据进入 M4.9，不承诺兼容旧 `{}` 或旧审计载荷。
 - Audit Replay 不调用模型；历史 Re-execution 创建新运行但不能提交动作。
 
 后端测试闭环：
 
 - 调试投影可追踪 run → attempt/capability → player decision。
-- V1 revision 0 可被 V2 Runtime 读取；首次 V2 更新写入 revision 1 并原子切换当前镜像，失败时两处都不变化。
+- 结构化 Memory v1 revision 0 可直接读取；首次 live Run 更新写入 revision 1 并原子切换当前镜像，失败时两处都不变化。
 - 历史回放和重新执行都无法二次提交扑克命令。
 
 ### M4.10 接入会话并完成 Player Eval

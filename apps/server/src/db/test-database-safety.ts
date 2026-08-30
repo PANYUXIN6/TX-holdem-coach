@@ -1,6 +1,10 @@
 import { loadDatabaseTargets } from './database-targets.js'
 import { parseSupabaseDatabaseUrl } from './database-url-policy.js'
 
+export const DATABASE_TEST_APPLICATION_PREFIX = 'txhc-dbtest'
+export const DATABASE_TEST_SUITE_LOCK_NAME =
+  'txhc-remote-database-test-suite-v1'
+
 export interface TestDatabaseConnections {
   readonly runtimeUrl: string
   readonly migrationUrl: string

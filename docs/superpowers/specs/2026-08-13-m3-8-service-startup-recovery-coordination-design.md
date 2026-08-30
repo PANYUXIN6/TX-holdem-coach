@@ -29,12 +29,12 @@ M3.8 是后置集成里程碑，编号不再表示实施顺序。它不实现 Ag
 1. M4.2 拥有通用 AgentRun 生命周期、Worker、租约、fencing、领取和持久队列；M3.8 只消费 Worker 生命周期与唤醒端口。
 2. M4.3 拥有 ModelGateway 和 DeepSeek Attempt 执行。M4.8 可以原子创建处于 `queued` 的替代运行和新请求，但 M3.8 不创建 Attempt、不选择 Provider、不调用模型；Worker 领取后由 M4.3 从 DeepSeek 首次 Attempt 开始。
 3. M4.7 拥有检查点、结果和扑克命令提交前的迟到结果屏障。M3.8 不以进程内取消、AbortSignal 或“旧 Worker 已经退出”冒充 fencing 正确性。
-4. M4.8 拥有 Player `process_restart` 策略：通常取消旧运行、失效旧请求/attempt/租约/fencing、重新判断当前决策点、可选创建替代运行，以及协调状态和 Player 私有事件 V3 的原子写入；若 predecessor 的 exact 配置或依赖不可用，则旧运行以稳定配置失败进入 `failed`、Session paused。M3.8 不复制这些判断。
+4. M4.8 拥有 Player `process_restart` 策略：通常取消旧运行、失效旧请求/attempt/租约/fencing、重新判断当前决策点、可选创建替代运行，以及协调状态和 Player current v1 私有事件的原子写入；若 predecessor 的 exact 配置或依赖不可用，则旧运行以稳定配置失败进入 `failed`、Session paused。M3.8 不复制这些判断。
 5. M3.8 拥有且仅拥有活动场次扫描、M2.6 恢复组合、调用 M4.8 端口、提交后 Worker 唤醒、启动就绪和进程资源关闭治理。M3.8 不进入 HTTP 请求链，也不成为普通场次读取或 Agent 恢复的转发层。
 6. Worker 在全部启动恢复候选处理完成前保持停止，Hono 在恢复完成、Worker 成功启动前不监听；只有监听端口确认绑定后才能进入 ready。外部请求不能观察或竞争半完成的本进程启动恢复。
 7. 每个 Session 使用独立短事务并按稳定 Session ID 顺序串行处理。某场进入 `readonlyDiagnostic` 是已闭合的恢复结果，不阻止服务就绪；数据库、契约或未知基础设施错误阻止监听。
 8. 每个恢复事务提交后才允许发布其已持久化 Player 协调事件或唤醒对应运行。发布失败不撤销数据库事实；Worker 唤醒只是持久队列的低延迟提示，不是任务事实源。
-9. M3.8 不新增 Contracts、数据库表、迁移、事件类型或公开错误。M4.8 必须先发布 Player 私有事件 V3 和对应 mutation/投影 writer，M3.8 才能实施。
+9. M3.8 不新增 Contracts、数据库表、迁移、事件类型或公开错误。M4.8 必须先把三种 Player 协调事件纳入唯一 current v1 联合并发布对应 mutation/投影 writer，M3.8 才能实施。
 
 ## 1. 目标、成功标准与非目标
 
@@ -75,7 +75,7 @@ M3.8 不负责：
 - 定义 DeepSeek Route Policy、创建/结束 Attempt、模型请求、纠错、预算或 deadline；
 - 定义 Player `process_restart`、stale、暂停、人工重试或替代运行的业务决策；
 - 实现 Player Commit Gate、`aiAction`、迟到结果判断或扑克命令提交；
-- 发布私有事件 V3、增加 `agentStarted|agentRepairAttempted|agentPaused` 内容契约，或修改 M3.6/M3.7 SSE 协议；
+- 改写 current v1 私有事件联合、增加 `agentStarted|agentRepairAttempted|agentPaused` 内容契约，或修改 M3.6/M3.7 SSE 协议；
 - 恢复 Coach Runtime。Coach 的可恢复运行由 M4 Foundation/Coach Recovery Policy 和 Worker 自身处理，不经 Session Player 启动协调；
 - 扫描全部历史 ended Session、主动重试既有 `readonlyDiagnostic`、修复损坏 Agent 审计或重新投影历史公开事件；
 - 提供 HTTP 手工恢复端点、管理 API、健康状态新字段或浏览器启动恢复 UI；
@@ -94,7 +94,7 @@ M3.8 不负责：
 | 从 DeepSeek 创建第一次 Attempt | M4.3 |
 | 旧请求/旧 token 的迟到提交屏障 | M4.7 |
 | `process_restart` 判定、`supersedesRunId`、新请求与替代运行 | M4.8 |
-| Player 协调私有事件 V3、协调状态 mutation 与公开投影 | M4.8 |
+| Player 协调私有事件 current v1、协调状态 mutation 与公开投影 | M4.8 |
 
 因此 M3.8 必须调整为 M4.2/M4.3/M4.7/M4.8 之后的集成里程碑。编号仅保留需求追踪身份，不再表达执行顺序。
 
@@ -106,7 +106,7 @@ M3.8 开始实现前必须同时满足：
 2. M4.2 已提供持久化 Worker、Player 独立槽位、停止态构造、显式 `start/stop/wake/fatal` 生命周期端口、租约和 fencing writer；可恢复循环错误由 M4.2 内部监督，不可恢复退出通过稳定 fatal 上报。
 3. M4.3 已证明 Worker 领取新 Player Run 后从运行固化路由起点创建 DeepSeek Attempt；唤醒端口本身不调用 Provider。
 4. M4.7 已在写检查点、写结果和提交标准扑克命令时复验 Owner、Session、Run、request、租约、fencing、行动者和当前状态版本。
-5. M4.8 已提供本文第 5 节的进程重启事务端口，并完成 Player 私有事件 V3、Session 协调 mutation、替代运行唯一约束和严格审计 Decoder。
+5. M4.8 已提供本文第 5 节的进程重启事务端口，并完成 Player 私有事件 current v1、Session 协调 mutation、替代运行唯一约束和严格审计 Decoder。
 6. M4.8 已证明同一 `(sessionId, stateVersion, actorParticipantId)` 最多一个有效 Player Run，且并发/重复 `process_restart` 调用可收敛。
 7. M2.6 普通恢复入口仍以 Session 行锁为首个 Session-scoped 锁，并只在事务提交后宣称指针修复或诊断转换成功。
 8. `docs/REPO_MAP.md`、`docs/ARCHITECTURE.md` 和数据库测试里程碑已经同步 M4 的最终文件、端口、锁序与测试命令。
@@ -123,7 +123,7 @@ M3.8 开始实现前必须同时满足：
 | AgentRun 生命周期、租约、fencing、Worker | M4.2 | 组合 Worker 控制端口 |
 | Provider/ModelGateway/Attempt | M4.3 | 不直接依赖；只验证 Worker 可最终消费 queued Run |
 | Player Commit Gate | M4.7 | 不调用；作为迟到结果安全前置 |
-| Player 重启取消、替代运行、V3 事件 | M4.8 | 在 M2.6 锁定事务内调用窄端口 |
+| Player 重启取消、替代运行、current v1 协调事件 | M4.8 | 在 M2.6 锁定事务内调用窄端口 |
 | 当前公开投影、提交后 Hub | M3.6 | 发布 M4.8 返回的已提交事件批次 |
 | SSE transport/replay | M3.7 | 不直接调用；读取相同 PostgreSQL 事实 |
 | 启动扫描、顺序、就绪、资源清理 | M3.8 | 完整拥有 |
@@ -347,7 +347,7 @@ type PlayerProcessRestartRecoveryResult =
 - `unchanged` 表示当前事实无需 Player 重启写入，例如 Session 为 `idle` 且没有需要接替的有效 Player 运行；
 - `paused` 表示当前 Session 保持 `paused`，必须零替代 Run、零新 request、零事件、零唤醒；
 - `reconciledWithoutReplacement` 表示 M4.8 已原子关闭失效旧事实但没有创建 replacement，包括当前状态不再需要 AI 行动，以及本次因 exact 配置或依赖不可用而把旧 Run 写为 `failed`、Session 新进入 paused 并写入 `agentPaused`；是否以及如何调整 Session 协调状态和写事件完全由 M4.8 决定；
-- `replacementQueued` 只在新 Run、request、Session 指针、审计关联和必要 Player V3 协调事件已在同一事务写完后返回；
+- `replacementQueued` 只在新 Run、request、Session 指针、审计关联和必要 Player current v1 协调事件已在同一事务写完后返回；
 - 返回的 `newlyPersistedEvents` 此时仍只是“事务内已写入候选”。只有外层 `runDatabaseTransaction()` 成功返回后，M3.8 才能发布；
 - M3.8 必须用 strict discriminated union Decoder 校验完整返回值：拒绝未知字段，校验 `replacementRunId` 为规范 UUID、每个事件通过共享 `SseEventSchema`，并校验 `kind` 与字段组合精确对应；
 - `unchanged|paused` 必须没有事件或 replacement 字段，`reconciledWithoutReplacement` 必须没有 replacement ID，`replacementQueued` 必须同时包含有效 replacement ID 和非空事件批次；
@@ -549,12 +549,12 @@ interface StartupCommittedEffects {
 
 - M4.8 以锁内当前事实决定是否需要清理孤立旧 Run，以及是否允许替代；
 - 当前不需要 AI 行动就不得为了“恢复完整性”伪造 AI 请求；
-- 若需要调整协调状态或产生事件，必须由 M4.8 的 V3 writer 原子完成；M3.8 不自行把 Session 改为 `idle` 或 `thinking`。
+- 若需要调整协调状态或产生事件，必须由 M4.8 的 current v1 writer 原子完成；M3.8 不自行把 Session 改为 `idle` 或 `thinking`。
 
 ### 8.4 只读诊断
 
 - M2.6 一旦返回 `readonlyDiagnostic`，M3.8 不调用任何 M4 运行端口；
-- 不取消或新建 Run，不写 Player V3 事件，不唤醒 Worker；
+- 不取消或新建 Run，不写 Player 协调事件，不唤醒 Worker；
 - M4.7 对任何迟到结果仍须因 Session 生命周期/诊断状态拒绝；
 - 既有只读诊断不在活动扫描中，保持零写。
 
@@ -610,7 +610,7 @@ M3.8 的正确性依赖 PostgreSQL，不依赖进程内互斥：
 
 ### 10.2 Player 协调事件
 
-- M4.8 在首次写 Player 协调事件前发布累积私有事件 V3；M3.8 不接受 V2 临时事件或只写公开 payload 的旁路；
+- M4.8 在首次写 Player 协调事件前把三种事件纳入唯一 current v1 联合；M3.8 不接受临时事件版本或只写公开 payload 的旁路；
 - Player 重启协调不改变扑克内容时保持同一 `stateVersion`，但每条已持久化协调事件递增 `eventSeq`；
 - 是否写一条或多条事件及其类型由 M4.8 决定；同一事务批次必须使用最终协调状态的公开快照；
 - M3.8 在事务 callback 返回前按第 5.2 节 strict decode 完整 M4.8 联合、共享 `SseEventSchema` 及当前候选的 Session/eventId/eventSeq 关系；它不重建私有事件或最新投影；
@@ -748,7 +748,7 @@ config
 - 旧 Worker、旧 request 或旧 fencing 写检查点/结果/扑克命令全部拒绝；
 - 同一决策点并发恢复最多一个有效 Run；
 - paused 零替代，状态变化零替代；
-- Player V3 事件与 Session 指针、公开快照、`eventSeq` 精确镜像。
+- Player current v1 协调事件与 Session 指针、公开快照、`eventSeq` 精确镜像。
 
 M3.8 不复制这些内部用例，只保留一条跨模块快乐路径和关键迟到屏障证明。
 
@@ -756,7 +756,7 @@ M3.8 不复制这些内部用例，只保留一条跨模块快乐路径和关键
 
 新增受控 `m38` 集成阶段，使用生产 Repository、真实事务、M4 恢复端口和 Worker 测试 seam 验收：
 
-1. 构造 `active + inHand + thinking` 及旧 leased/running Run，模拟新进程启动；旧 Run 取消、替代 Run queued、Session 指针和 V3 事件原子提交。
+1. 构造 `active + inHand + thinking` 及旧 leased/running Run，模拟新进程启动；旧 Run 取消、替代 Run queued、Session 指针和 current v1 协调事件原子提交。
 2. 新连接重新读取后，替代 Run 关联旧审计，旧 attempt 保留但不可继续，新 Run 没有继承的 Attempt/输出/检查点。
 3. Worker 只在恢复提交后领取，第一次 Attempt 经 M4.3 选择 DeepSeek。
 4. 使用旧 token 提交检查点、结果和 `aiAction` 均零业务写入；新 token 只能提交一次。
@@ -815,7 +815,7 @@ M3.8 本身不新增 Schema、migration 或共享事务基础设施，因此默�
 ### 14.4 对 M4.8
 
 - 必须提供第 5.2 节等价事务端口，拥有全部 Player 重启策略；
-- 必须在同一事务关闭旧能力并可选建立新 Run/请求/Session 指针/V3 事件；
+- 必须在同一事务关闭旧能力并可选建立新 Run/请求/Session 指针/current v1 协调事件；
 - 必须返回最小提交后效果，不向 M3.8 暴露 Runtime 私有载荷；
 - 必须严格遵守第 5.2 节 kind 映射：既有 paused 才返回 `paused`；本次新进入 paused 且写事件返回 `reconciledWithoutReplacement`；
 - 必须独立证明并发幂等和唯一有效运行。

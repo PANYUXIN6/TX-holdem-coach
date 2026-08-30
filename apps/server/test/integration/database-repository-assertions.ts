@@ -71,7 +71,6 @@ import { createDatabaseFixtureContext } from './database-fixture-context.js'
 import {
   createDatabaseTestSqlForRole,
   readTransactionBackendPid,
-  runDatabaseTestWithCleanup,
   serializeJsonbFixture,
 } from './database-test-runtime.js'
 

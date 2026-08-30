@@ -1,7 +1,7 @@
 # M4.8 Player 失败、暂停、stale 接替与人工重试设计
 
 - 日期：2026-08-28
-- 状态：已确认，待实现；2026-08-28 已按 M3.8 冻结端口修正重启返回联合
+- 状态：已实现；2026-08-30 已确认首发前破坏性重基线为唯一 current v1 与单一 `0000_baseline`
 - 任务来源：[项目开发任务 M4.8](../plans/2026-07-23-poker-practice-development-tasks.md#m48-实现-player-失败暂停与-stale-接替)
 - 产品约束：[Poker Practice PRD](./2026-07-23-poker-practice-prd.md)
 - 上位架构：[Agent Foundation Runtime 架构](./2026-07-26-agent-foundation-runtime-architecture.md)
@@ -31,7 +31,7 @@ SessionAgentCoordinator
      → 按固定顺序锁 Run / Decision / Attempt
      → 原子终结旧 Run/Decision
      → 可选创建 replacement Run 并建立双向替代关系
-     → 写 Session 协调状态与私有事件 V3
+     → 写 Session 协调状态与当前私有事件
      → stateVersion 保持不变，eventSeq 连续递增，snapshot 不重写
   → COMMIT
   → best-effort 发布 Session/Run 事件并提示 Worker
@@ -42,7 +42,7 @@ SessionAgentCoordinator
 1. **唯一业务 Owner**：`SessionAgentCoordinator` 位于 `apps/server/src/agents/player/` 的 Player 业务边界，拥有初始启动、纠错事件、最终暂停、stale 接替、进程重启和人工重试的业务决策；`persistence/` 只提供 transaction-bound 锁与写原语，通用 Foundation 不解释扑克 Session 状态。
 2. **Supervisor 不吞分类**：M4.8 用一个生产 `RuntimeExecutionPort<'player'>` supervisor 包装 M4.6 executor。它保留经过白名单归一化的失败分类和当前 authority；不得继续使用 Worker 目前仅报告 `runtimeSettlementRequired` 且丢弃具体错误的结果作为 Player 业务终态依据。
 3. **协调不是扑克 mutation**：只改变 `agentRunState`、有效 Run/request 指针或 Player 运行摘要时，`PrivateTableState`、筹码、当前 actor、街道、牌面和 `stateVersion` 全部不变；每条已提交协调事件只递增 `eventSeq`，`session_snapshots` 不重写。
-4. **发布概念联合 V3、行载荷版本 2**：当前仓库的首发行载荷版本 `1` 已承载概念上的 V2（四种 Poker + 五种 Session/Accounting 事件）。M4.8 将当前写入版本升级为 `2`，其联合是概念 V3；保留严格的 v1 reader，所有新事件（包括旧 variant）统一写 row payload v2。概念版本与数据库行版本不得混用。
+4. **原位扩展唯一 current v1**：项目仍处于首发前开发阶段，远程测试数据通过破坏性重建退出。四种 Poker、五种 Session/Accounting 与三种 Player 协调事件共同组成唯一 Private Event v1；行载荷版本固定为 `1`，只保留严格 current reader，不保留概念 V2/V3、legacy reader 或版本分派。
 5. **三种新事件语义固定**：`agentStarted` 表示一个新 Player Run 已与当前决策点原子绑定；`agentRepairAttempted` 表示一次 correction Attempt 已被预算控制原子接受并开始；`agentPaused` 表示当前有效 Run 已最终失败且 Session 已进入暂停。事件不保存 Prompt、模型原文、隐藏推理、牌局私有载荷或供应商异常。
 6. **最终失败单事务暂停**：只有当前 Session 仍精确指向失败 Run/request，当前扑克状态仍为同一 `active + inHand + AI actor + sourceStateVersion`，且 authority 仍可终结该 Run 时，才允许原子执行 `Run → failed`、可选 Decision terminal outcome `failed`、Session `thinking → paused`、清空活动指针和追加 `agentPaused`。不自动 fold/check，不调用 poker engine。
 7. **stale 先重读、后决定**：stale/authority lost/迟到 Commit Gate 结果不能直接创建 replacement。Coordinator 必须在 Session 锁内重读权威状态；若已有更高 fencing 或更新 Run 正在负责同一指针则零写，若当前不再需要该 AI 决策则不创建，只有旧 Run 仍是活动指针且当前决策点仍需同一 AI 时才终结旧 Run 并创建 replacement。
@@ -59,7 +59,7 @@ SessionAgentCoordinator
 
 M4.8 完成时必须证明：
 
-- 概念 V2 的全部旧事件可继续从 row payload v1 严格读取，概念 V3 的全部新写入统一使用 row payload v2；未知版本与损坏载荷仍被区分；
+- 全部十二种当前事件统一以 row payload v1 严格读写；未知正整数版本与损坏载荷仍被区分；
 - `agentStarted`、`agentRepairAttempted`、`agentPaused` 的私有内容、行 `handId`、Run/request/Attempt 和最终公开快照一一对应；
 - 纯协调批次可以在同一 `stateVersion` 下连续写多条事件，并且不执行 snapshot UPSERT；
 - 最终模型/Validator/依赖失败不会移动筹码、改变 actor、生成 action、完成 Hand 或写 command ledger；
@@ -81,7 +81,7 @@ M4.8 完成时必须证明：
 - Player failure/stale/deferred 的稳定分类器和生产 execution supervisor；
 - `SessionAgentCoordinator` 纯决策、transaction-bound writer 与应用服务 façade；
 - 最终失败暂停、stale 接替、进程重启、人工重试和初始 Run 启动的统一协调协议；
-- 概念私有事件 V3、row payload v2、v1/v2 多版本 reader 和当前 writer；
+- 十二种 Private Event 的唯一 row payload v1、严格 current reader 和 writer；
 - `agentStarted | agentRepairAttempted | agentPaused` 严格私有事件契约；
 - correction Attempt 开始与 `agentRepairAttempted` 的 Session-first 原子组合；
 - `player_decisions` 正交 terminal outcome；
@@ -138,33 +138,23 @@ M4.7 设计文档和地图中仍有“验收修复中”的历史状态文字，
 
 ### 4.3 事件版本现状
 
-仓库历史设计曾用“V1 Poker、V2 Session、V3 Player”描述累积联合，但首发前重基线后实际数据库只发布了一个行载荷版本：
+仓库历史设计曾用“V1 Poker、V2 Session、V3 Player”描述累积联合，并短暂实现 row payload v1/v2 分派。该实现从未上线，2026-08-30 的破坏性重基线明确退出全部开发数据兼容责任。当前契约固定为：
 
 ```text
-row payload version 1
-  = concept V2
-  = Poker 4 variants + Session/Accounting 5 variants
+row payload version 1 (only current reader/writer)
+  = Poker 4 variants
+  + Session/Accounting 5 variants
+  + agentStarted + agentRepairAttempted + agentPaused
 ```
 
-M4.8 是首个真实历史兼容需求。设计固定：
-
-```text
-row payload version 1 (legacy reader, no new writes)
-  = concept V2
-
-row payload version 2 (current reader/writer)
-  = concept V3
-  = concept V2 + agentStarted + agentRepairAttempted + agentPaused
-```
-
-不得把当前常量直接改成 `3`，也不得继续用 current-only reader 拒绝真实 v1 行。
+行上的 `private_event_payload_version` 继续作为持久化身份存在；非法版本格式属于损坏，非 `1` 的正整数属于未知版本。不得恢复 legacy reader、版本 Registry 或概念联合版本。
 
 ### 4.4 地图可信度与放置结论
 
 `docs/REPO_MAP.md` 和 `docs/ARCHITECTURE.md` 对 M4.7 的责任落点、Session mutation、Player/Foundation/Persistence 依赖方向和当前主链与代码一致，可用于 M4.8 placement；状态描述稍旧，但不影响模块所有权：
 
 - `agents/player/` 拥有 Player supervisor、失败政策和 SessionAgentCoordinator；
-- `sessions/authoritative-state/` 拥有累积私有事件及版本 reader；
+- `sessions/authoritative-state/` 拥有累积私有事件及 strict current reader；
 - `sessions/command-execution/` 拥有公开 `retryAgent` 的命令事务与 Handler；
 - `persistence/` 拥有 Session-first transaction-bound Run/Decision/Attempt 写原语；
 - `agents/foundation/` 只保留通用 Run/Worker 协议，不导入扑克状态或 Player failure matrix；
@@ -194,7 +184,7 @@ M4.10 / M3.8 / retryAgent / Player supervisor
         → persistence/agent-foundation-audit-repository
         → persistence/session-mutation-repository
      → sessions/public-projection binding
-     → sessions/authoritative-state PrivateEvent V3
+     → sessions/authoritative-state PrivateEvent current v1
 
 Player bounded-choice
   → PlayerModelAttemptControl
@@ -242,8 +232,8 @@ interface PlayerProcessRestartRecoveryPort {
 - **I1 单一扑克事实源**：协调写入不得调用 poker engine 或构造 PokerAction；
 - **I2 状态版本正交**：纯协调 `finalStateVersion = locked.stateVersion`，`snapshot = null`；
 - **I3 事件游标**：事件从锁定的 `nextEventSeq` 连续分配，每条 before/after 均等于当前 `stateVersion`；
-- **I4 V3 当前写入**：M4.8 发布后全部新私有事件统一 row payload v2，旧 variant 也不再写 v1；
-- **I5 历史兼容**：v1 reader 永久严格读取已发布联合，v2 decoder 不替代或放宽 v1；
+- **I4 唯一 current v1**：全部十二种私有事件统一写 row payload v1；
+- **I5 严格版本身份**：current reader 只接受 row payload v1，并稳定区分未知正整数版本与损坏载荷；
 - **I6 Session-first**：任何 Player 协调写入先锁 Session，再锁 Run/Decision/Attempt；
 - **I7 精确活动身份**：`thinking` 必须同时匹配 Run ID、request ID、Session/Hand/participant/sourceStateVersion/actor；
 - **I8 单有效运行**：同一 `(sessionId, stateVersion, actorParticipantId)` 最多一个 `queued|leased|running` Player Run；
@@ -256,12 +246,12 @@ interface PlayerProcessRestartRecoveryPort {
 - **I15 删除屏障**：Session/Hand/Run 根不存在时零 replacement，不能靠旧内存对象重建；
 - **I16 COMMIT 后效果**：事件发布、Run event 和 wake hint 都不能反向决定事务是否成功。
 
-## 7. 私有事件 V3 与多版本读取
+## 7. 私有事件 current v1
 
 ### 7.1 事件内容契约
 
 ```ts
-interface AgentStartedEventV3 {
+interface AgentStartedEvent {
   readonly type: 'agentStarted'
   readonly handId: string
   readonly agentRunId: string
@@ -275,7 +265,7 @@ interface AgentStartedEventV3 {
   readonly supersedesRunId: string | null
 }
 
-interface AgentRepairAttemptedEventV3 {
+interface AgentRepairAttemptedEvent {
   readonly type: 'agentRepairAttempted'
   readonly handId: string
   readonly agentRunId: string
@@ -285,7 +275,7 @@ interface AgentRepairAttemptedEventV3 {
   readonly repairOrdinal: 1 | 2
 }
 
-interface AgentPausedEventV3 {
+interface AgentPausedEvent {
   readonly type: 'agentPaused'
   readonly handId: string
   readonly failedAgentRunId: string
@@ -306,26 +296,24 @@ interface AgentPausedEventV3 {
 
 ### 7.2 Codec 结构
 
-推荐保留不可变的两个联合：
+唯一联合固定为：
 
 ```text
-PrivateEventV1RowSchema
-  = 当前已发布的九种事件，不修改
-
-PrivateEventV2RowSchema
-  = PrivateEventV1RowSchema + 三种 Player 事件
+PrivateEvent
+  = Poker 4 variants
+  + Session/Accounting 5 variants
+  + Player coordination 3 variants
 ```
 
 提供：
 
-- `decodePrivateEventV1Row()`：只接受 row payload version 1；
-- `decodeCurrentPrivateEvent()`：只接受 row payload version 2；
-- `encodeCurrentPrivateEvent()`：只写 row payload version 2；
-- `privateEventReader`：按行版本分派 v1/v2；
-- `currentPrivateEventProtocol`：只暴露当前 v2 parse/encode/decode 给 writer；
-- 未知正整数版本继续返回 `unknownVersion`，非法版本格式或对应版本载荷错误返回 `invalidPayload`。
+- `decodeCurrentPrivateEvent()`：只接受 row payload version 1；
+- `encodeCurrentPrivateEvent()`：只写 row payload version 1；
+- `currentPrivateEventReader`：通过统一 current-only reader 读取 v1；
+- `currentPrivateEventProtocol`：只暴露当前 v1 parse/encode/decode 给 writer；
+- 未知正整数版本返回 `unknownVersion`，非法版本格式或载荷错误返回 `invalidPayload`。
 
-不得把 v1 载荷先宽松解析为 v2，也不得在读取时改写数据库行。
+不得增加 legacy 分派、宽松解析或读取时改写数据库行。
 
 ### 7.3 公开事件
 
@@ -475,7 +463,7 @@ Session lock/recovery
 
 ### 10.3 replacement 关系约束
 
-向前 migration 增加：
+唯一 `0000_baseline` 直接包含：
 
 - `parent_run_id IS NULL OR parent_run_id <> id`；
 - `replacement_run_id IS NULL OR replacement_run_id <> id`；
@@ -781,13 +769,12 @@ type PlayerCoordinationFailure =
 
 ### 19.1 私有事件与恢复
 
-- row v1 九种 variant 全量兼容读取；
-- row v2 十二种 variant 全量 round-trip；
-- v1 writer 不再可达，current writer 对旧 variant 也写 v2；
-- 未知版本与 v1/v2 损坏载荷分类；
+- row v1 十二种 variant 全量 round-trip；
+- current writer 对全部 variant 都写 v1；
+- 未知版本与 v1 损坏载荷分类；
 - 三种新事件 strict unknown-key、UUID、seat、trigger/supersedes、repair ordinal、stable code；
 - `getPrivateEventHandId` 精确镜像；
-- M2.6 读取 v1/v2 混合历史并接受同版本连续协调事件；
+- M2.6 读取唯一 v1 历史并接受同版本连续协调事件；
 - corrupted Player event 进入现有 event payload/row mismatch 诊断。
 
 ### 19.2 failure classifier/supervisor
@@ -860,7 +847,7 @@ type PlayerCoordinationFailure =
 4. 新 database `m48` milestone：Schema、Codec/Repository、lineage、Decision terminal、事务/锁；
 5. 新 PostgreSQL E2E `m48` milestone：真实 Session → Run → Attempt → pause/replacement/retry/事件/Gate；
 6. `pnpm run verify`；
-7. 因新增 migration、修改共享 Schema/事务/锁与数据库测试基础设施，`db:test:full` 最多主动一次；
+7. 因重建唯一 migration、修改共享 Schema/事务/锁与数据库测试基础设施，`db:test:full` 最多主动一次；
 8. 因贯穿 Session 命令、Agent 协调、HTTP/SSE 和 PostgreSQL，`postgres:e2e:full` 最多主动一次；两套 full 严格串行；
 9. full 失败先用对应 milestone 定向诊断，不直接重跑 full；
 10. 文档、地图、数据字典、任务状态和测试 README 最终同步检查。
@@ -874,7 +861,7 @@ type PlayerCoordinationFailure =
 ```text
 A failure/outcome contract
   ↓
-B Private Event V3 + v1/v2 reader
+B Private Event current v1
   ↓
 C coordination mutation/projection core
   ├── D replacement lifecycle + schema constraints
@@ -898,7 +885,7 @@ K database/E2E/concurrency acceptance + docs
 | 切片 | 目标与非目标 | 前置依赖 | 责任边界 | 继承不变量 | 完成证据 |
 | --- | --- | --- | --- | --- | --- |
 | **A outcome** | 冻结 Player terminal/stale/deferred 分类和安全 reason；不写 DB | M4.6/M4.7 code 集 | `agents/player` 纯分类 | I1、I7、I13、I15 | 穷尽映射、未知/abort/DB 分类、脱敏测试 |
-| **B event V3** | row v2 当前联合 + v1 reader；不接业务 writer | 当前九 variant | `sessions/authoritative-state` | I2–I5 | v1/v2 全量兼容、未知/损坏、current writer |
+| **B event v1** | 十二种事件的唯一 current v1；不接业务 writer | 当前九 variant | `sessions/authoritative-state` | I2–I5 | v1 全量读写、未知/损坏、current writer |
 | **C coordination core** | Session-first、stateUnchanged、多事件、公开投影和 effects；不决定 pause/replacement政策 | B | Player 应用 core + persistence mutation | I1–I7、I16 | 同版本多事件、snapshot 零写、COMMIT 后 effects |
 | **D replacement lifecycle** | exact clone、双向 lineage、唯一约束；不判定何时替换 | C + M4.2 | Foundation coordinator/persistence | I6、I8–I11、I15 | migration/database、竞争、配置等值、新执行隔离 |
 | **E Decision terminal** | 正交 outcome 列和 writer；不改变 JSON payload | C | schema + decision repository | I6、I12、I13、I15 | 阶段矩阵、committed 拒绝、无 Decision 分支 |
@@ -921,8 +908,8 @@ K database/E2E/concurrency acceptance + docs
 - **replacement 使用 current Runtime/StrategyPack**：覆盖旧 Run 固化依赖，审计和行为不可重现。
 - **复制旧 Decision/Attempt 到新 Run**：让新 fencing 继承旧外部调用和纠错位置，破坏执行隔离。
 - **Decision status 展开为每阶段 failed/stale 枚举**：组合爆炸并丢失最后 durable stage；正交 terminal outcome 更清晰。
-- **把 Player 事件继续写 row v1**：真实历史出现后修改已发布联合，旧 reader 无法严格解释。
-- **把 row 版本直接叫 V3/写数字 3**：混淆概念累计联合与已发布行版本，跳过实际 v2。
+- **为未上线开发数据发布 row v2**：制造没有真实消费者的兼容责任，并让同一首发契约出现两套 reader。
+- **按里程碑把累积联合命名成 V2/V3**：把功能阶段误当成已发布的行版本，并制造没有上线消费者的兼容责任。
 - **repair event 在 Provider 返回无效时单独 best-effort 写**：可能有 Attempt 无事件或事件无 Attempt，且无法严格表示“已开始纠错”。
 - **M4.8 自建 Session UPDATE/事件 INSERT 旁路**：复制 M2.5 的版本、投影和恢复不变量。
 - **人工重试专用 HTTP endpoint**：绕过现有命令账本、Session scheduler 和统一错误/SSE 边界。
@@ -942,7 +929,7 @@ K database/E2E/concurrency acceptance + docs
 | Decision 终态丢失最后阶段 | 正交 terminal columns，不改 payload/阶段字段 |
 | repair 事件与 Attempt 分叉 | Session-first 单事务开始 |
 | 纯协调重写快照 | `snapshot=null` 强约束与数据库断言 |
-| 同 stateVersion 事件被恢复误判 | v1/v2 reader + event version chain 回归 |
+| 同 stateVersion 事件被恢复误判 | current v1 reader + event version chain 回归 |
 | retry 双运行 | command ledger + failed leaf + Run unique |
 | 删除后重建 Session | Session 根首锁/不存在即零写 |
 | 发布失败导致重做事务 | committed effects + best-effort publish/wake |
@@ -955,7 +942,7 @@ K database/E2E/concurrency acceptance + docs
 
 1. M4.7 成功 Commit 无法与 M4.8 failure settlement 共享 Session-first 锁序；
 2. `SessionMutationRepository` 无法在不重写 snapshot 的情况下持久化同 stateVersion 多事件；
-3. 当前数据库已经存在 row payload version > 1 的私有事件，或 v1 内容与本文认定的九 variant 不一致；
+3. 已上线环境或不可重建数据中出现 row payload version > 1 的私有事件，或现有 v1 内容与本文十二种 variant 契约不一致；
 4. correction Attempt 无法在 Session-first 事务中复用现有预算/authority writer，且只能通过 Provider 调用后补事件；
 5. replacement 必须切换 current Runtime/Prompt/StrategyPack 才能执行，且 exact predecessor version 无法保留；
 6. PostgreSQL 真实锁图证明 `Session → Run → Decision → Attempt` 与现有 M4.2/M4.7 存在不可消解反序；
@@ -976,7 +963,7 @@ K database/E2E/concurrency acceptance + docs
 
 实现完成后同步：
 
-- `docs/REPO_MAP.md`：事件 v1/v2 reader、SessionAgentCoordinator、supervisor、retry、replacement/Decision terminal 流；
+- `docs/REPO_MAP.md`：事件 current v1 reader、SessionAgentCoordinator、supervisor、retry、replacement/Decision terminal 流；
 - `docs/ARCHITECTURE.md`：Player 主链补齐 failure/stale/restart/retry，更新 M4.7 已完成状态；
 - `docs/m2-2-schema-data-dictionary.md`：Decision terminal columns、Run lineage constraints 和状态矩阵；
 - 开发任务总表：M4.8 实现与测试证据、M3.8/M4.10 后续门禁；
@@ -990,7 +977,7 @@ M4.8 只有同时满足以下条件才能标记完成：
 1. 本文经人工确认；
 2. M4.7 上游 targeted regression 通过；
 3. failure classifier 穷尽且不丢失安全稳定分类；
-4. Private Event row v2 发布，v1/v2 reader 和兼容测试通过；
+4. Private Event 唯一 row v1、strict current reader 和十二种事件测试通过；
 5. 三种 Player 事件内容、公开 snapshot 和持久关系严格一致；
 6. 纯协调 stateVersion 不变、eventSeq 连续、snapshot 零重写；
 7. final failure 的 Run/Decision/Session/event 单事务；
@@ -1015,7 +1002,7 @@ M4.8 只有同时满足以下条件才能标记完成：
 本文推荐一次确认以下十项高影响决策：
 
 1. 使用 Player 专属 supervisor 保留安全失败分类，不把业务映射塞进通用 Worker；
-2. 概念事件 V3 对应真实 row payload v2，并永久保留 v1 reader；
+2. 十二种 Private Event 原位扩展为唯一 row payload v1，只保留 strict current reader；
 3. 三种事件采用第 7.1 节最小可追踪内容；
 4. 最终失败原子写 Run failed + Decision failed outcome + Session paused + event；
 5. Decision terminal outcome 与 durable stage 正交；
@@ -1025,4 +1012,4 @@ M4.8 只有同时满足以下条件才能标记完成：
 9. 人工重试恢复为 `retryAgent` 公开命令并复用 command ledger/Session executor；
 10. M4.8 不接 bootstrap/Worker，继续把生产启动和连续 AI 行动留给 M3.8/M4.10。
 
-以上十项已于 2026-08-28 获得人工确认。确认同时冻结 M3.8 端口映射：`unchangedIdle/noTarget → unchanged`、`unchangedPaused → paused`、本次新进入 paused 且有事件 `→ reconciledWithoutReplacement`、`replacementQueued → replacementQueued`；`recoveryAt` 保持 `CanonicalUtcTimestamp`。后续按第 21 节切片进入开发；若需调整其中任一项，应先修订 governing contract，再开始相关切片。
+以上十项最初于 2026-08-28 获得人工确认；第 2 项已由用户于 2026-08-30 明确授权以破坏性重基线覆盖，远程测试 Schema 与 Drizzle journal 同步重建。M3.8 端口映射继续冻结为：`unchangedIdle/noTarget → unchanged`、`unchangedPaused → paused`、本次新进入 paused 且有事件 `→ reconciledWithoutReplacement`、`replacementQueued → replacementQueued`；`recoveryAt` 保持 `CanonicalUtcTimestamp`。

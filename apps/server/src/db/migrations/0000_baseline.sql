@@ -27,6 +27,7 @@ CREATE TABLE "app_private"."agent_attempts" (
 	"completed_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "agent_attempts_run_number_unique" UNIQUE("agent_run_id","attempt_number"),
+	CONSTRAINT "agent_attempts_id_run_owner_session_unique" UNIQUE("id","agent_run_id","owner_id","session_id"),
 	CONSTRAINT "agent_attempts_attempt_number_check" CHECK ("app_private"."agent_attempts"."attempt_number" >= 0
         AND "app_private"."agent_attempts"."fencing_token" BETWEEN 1 AND 9007199254740991),
 	CONSTRAINT "agent_attempts_lifecycle_check" CHECK ("app_private"."agent_attempts"."lifecycle" IN ('started', 'completed', 'failed', 'cancelled', 'stale')),
@@ -139,6 +140,7 @@ CREATE TABLE "app_private"."agent_runs" (
 	CONSTRAINT "agent_runs_session_request_unique" UNIQUE("session_id","decision_request_id"),
 	CONSTRAINT "agent_runs_id_session_owner_request_unique" UNIQUE("id","session_id","owner_id","decision_request_id"),
 	CONSTRAINT "agent_runs_id_owner_session_unique" UNIQUE("id","owner_id","session_id"),
+	CONSTRAINT "agent_runs_player_decision_identity_unique" UNIQUE("id","owner_id","session_id","hand_id","participant_id","source_state_version","decision_request_id","runtime"),
 	CONSTRAINT "agent_runs_runtime_check" CHECK ("app_private"."agent_runs"."runtime" IN ('player', 'coach')),
 	CONSTRAINT "agent_runs_lifecycle_check" CHECK ("app_private"."agent_runs"."lifecycle" IN (
         'queued', 'leased', 'running', 'completed', 'failed', 'cancelled', 'stale'
@@ -217,7 +219,9 @@ CREATE TABLE "app_private"."agent_runs" (
 	CONSTRAINT "agent_runs_required_payloads_check" CHECK ("app_private"."agent_runs"."run_config_payload_version" > 0
         AND jsonb_typeof("app_private"."agent_runs"."run_config_payload") = 'object'
         AND "app_private"."agent_runs"."budget_payload_version" > 0
-        AND jsonb_typeof("app_private"."agent_runs"."budget_payload") = 'object')
+        AND jsonb_typeof("app_private"."agent_runs"."budget_payload") = 'object'),
+	CONSTRAINT "agent_runs_replacement_not_self_check" CHECK (("app_private"."agent_runs"."parent_run_id" IS NULL OR "app_private"."agent_runs"."parent_run_id" <> "app_private"."agent_runs"."id")
+        AND ("app_private"."agent_runs"."replacement_run_id" IS NULL OR "app_private"."agent_runs"."replacement_run_id" <> "app_private"."agent_runs"."id"))
 );
 --> statement-breakpoint
 CREATE TABLE "app_private"."app_settings" (
@@ -347,7 +351,145 @@ CREATE TABLE "app_private"."owners" (
 	CONSTRAINT "owners_identity_key_not_blank" CHECK (length(btrim("app_private"."owners"."identity_key")) > 0)
 );
 --> statement-breakpoint
-
+CREATE TABLE "app_private"."player_decisions" (
+	"id" uuid PRIMARY KEY NOT NULL,
+	"agent_run_id" uuid NOT NULL,
+	"owner_id" uuid NOT NULL,
+	"session_id" uuid NOT NULL,
+	"hand_id" uuid NOT NULL,
+	"participant_id" uuid NOT NULL,
+	"source_state_version" bigint NOT NULL,
+	"decision_request_id" uuid NOT NULL,
+	"runtime" text NOT NULL,
+	"record_version" integer NOT NULL,
+	"status" text NOT NULL,
+	"decision_audit_snapshot_payload_version" integer NOT NULL,
+	"decision_audit_snapshot_payload" jsonb NOT NULL,
+	"candidate_set_payload_version" integer NOT NULL,
+	"candidate_set_payload" jsonb NOT NULL,
+	"model_projection_payload_version" integer,
+	"model_projection_payload" jsonb,
+	"model_choice_payload_version" integer,
+	"model_choice_payload" jsonb,
+	"validator_result_payload_version" integer,
+	"validator_result_payload" jsonb,
+	"accepted_attempt_id" uuid,
+	"command_ledger_id" uuid,
+	"terminal_outcome" text,
+	"terminal_reason" text,
+	"terminated_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"model_prepared_at" timestamp with time zone,
+	"selected_at" timestamp with time zone,
+	"committed_at" timestamp with time zone,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "player_decisions_agent_run_unique" UNIQUE("agent_run_id"),
+	CONSTRAINT "player_decisions_command_ledger_unique" UNIQUE("command_ledger_id"),
+	CONSTRAINT "player_decisions_identity_check" CHECK ("app_private"."player_decisions"."runtime" = 'player'
+        AND "app_private"."player_decisions"."record_version" = 1
+        AND "app_private"."player_decisions"."source_state_version" BETWEEN 0 AND 9007199254740991),
+	CONSTRAINT "player_decisions_status_check" CHECK ("app_private"."player_decisions"."status" IN ('auditPrepared', 'modelPrepared', 'selected', 'committed')),
+	CONSTRAINT "player_decisions_required_payloads_check" CHECK ("app_private"."player_decisions"."decision_audit_snapshot_payload_version" > 0
+        AND jsonb_typeof("app_private"."player_decisions"."decision_audit_snapshot_payload") = 'object'
+        AND "app_private"."player_decisions"."candidate_set_payload_version" > 0
+        AND jsonb_typeof("app_private"."player_decisions"."candidate_set_payload") = 'object'),
+	CONSTRAINT "player_decisions_optional_payload_pairs_check" CHECK (((
+        "app_private"."player_decisions"."model_projection_payload_version" IS NULL
+        AND "app_private"."player_decisions"."model_projection_payload" IS NULL
+      ) OR (
+        "app_private"."player_decisions"."model_projection_payload_version" IS NOT NULL
+        AND "app_private"."player_decisions"."model_projection_payload_version" > 0
+        AND "app_private"."player_decisions"."model_projection_payload" IS NOT NULL
+        AND jsonb_typeof("app_private"."player_decisions"."model_projection_payload") = 'object'
+      ))
+        AND (
+          (
+          "app_private"."player_decisions"."model_choice_payload_version" IS NULL
+          AND "app_private"."player_decisions"."model_choice_payload" IS NULL
+          ) OR (
+          "app_private"."player_decisions"."model_choice_payload_version" IS NOT NULL
+          AND "app_private"."player_decisions"."model_choice_payload_version" > 0
+          AND "app_private"."player_decisions"."model_choice_payload" IS NOT NULL
+          AND jsonb_typeof("app_private"."player_decisions"."model_choice_payload") = 'object'
+          )
+        )
+        AND (
+          (
+          "app_private"."player_decisions"."validator_result_payload_version" IS NULL
+          AND "app_private"."player_decisions"."validator_result_payload" IS NULL
+          ) OR (
+          "app_private"."player_decisions"."validator_result_payload_version" IS NOT NULL
+          AND "app_private"."player_decisions"."validator_result_payload_version" > 0
+          AND "app_private"."player_decisions"."validator_result_payload" IS NOT NULL
+          AND jsonb_typeof("app_private"."player_decisions"."validator_result_payload") = 'object'
+          )
+        )),
+	CONSTRAINT "player_decisions_stage_matrix_check" CHECK ((
+        "app_private"."player_decisions"."status" = 'auditPrepared'
+        AND "app_private"."player_decisions"."model_projection_payload_version" IS NULL
+        AND "app_private"."player_decisions"."model_choice_payload_version" IS NULL
+        AND "app_private"."player_decisions"."validator_result_payload_version" IS NULL
+        AND "app_private"."player_decisions"."accepted_attempt_id" IS NULL
+        AND "app_private"."player_decisions"."model_prepared_at" IS NULL
+        AND "app_private"."player_decisions"."selected_at" IS NULL
+        AND "app_private"."player_decisions"."command_ledger_id" IS NULL
+        AND "app_private"."player_decisions"."committed_at" IS NULL
+      ) OR (
+        "app_private"."player_decisions"."status" = 'modelPrepared'
+        AND "app_private"."player_decisions"."model_projection_payload_version" IS NOT NULL
+        AND "app_private"."player_decisions"."model_choice_payload_version" IS NULL
+        AND "app_private"."player_decisions"."validator_result_payload_version" IS NULL
+        AND "app_private"."player_decisions"."accepted_attempt_id" IS NULL
+        AND "app_private"."player_decisions"."model_prepared_at" IS NOT NULL
+        AND "app_private"."player_decisions"."selected_at" IS NULL
+        AND "app_private"."player_decisions"."command_ledger_id" IS NULL
+        AND "app_private"."player_decisions"."committed_at" IS NULL
+      ) OR (
+        "app_private"."player_decisions"."status" = 'selected'
+        AND "app_private"."player_decisions"."model_projection_payload_version" IS NOT NULL
+        AND "app_private"."player_decisions"."model_choice_payload_version" IS NOT NULL
+        AND "app_private"."player_decisions"."validator_result_payload_version" IS NOT NULL
+        AND "app_private"."player_decisions"."accepted_attempt_id" IS NOT NULL
+        AND "app_private"."player_decisions"."model_prepared_at" IS NOT NULL
+        AND "app_private"."player_decisions"."selected_at" IS NOT NULL
+        AND "app_private"."player_decisions"."command_ledger_id" IS NULL
+        AND "app_private"."player_decisions"."committed_at" IS NULL
+      ) OR (
+        "app_private"."player_decisions"."status" = 'committed'
+        AND "app_private"."player_decisions"."model_projection_payload_version" IS NOT NULL
+        AND "app_private"."player_decisions"."model_choice_payload_version" IS NOT NULL
+        AND "app_private"."player_decisions"."validator_result_payload_version" IS NOT NULL
+        AND "app_private"."player_decisions"."accepted_attempt_id" IS NOT NULL
+        AND "app_private"."player_decisions"."model_prepared_at" IS NOT NULL
+        AND "app_private"."player_decisions"."selected_at" IS NOT NULL
+        AND "app_private"."player_decisions"."command_ledger_id" IS NOT NULL
+        AND "app_private"."player_decisions"."committed_at" IS NOT NULL
+      )),
+	CONSTRAINT "player_decisions_timestamp_order_check" CHECK (("app_private"."player_decisions"."model_prepared_at" IS NULL OR "app_private"."player_decisions"."model_prepared_at" >= "app_private"."player_decisions"."created_at")
+        AND ("app_private"."player_decisions"."selected_at" IS NULL OR "app_private"."player_decisions"."selected_at" >= "app_private"."player_decisions"."created_at")
+        AND (
+          "app_private"."player_decisions"."model_prepared_at" IS NULL
+          OR "app_private"."player_decisions"."selected_at" IS NULL
+          OR "app_private"."player_decisions"."selected_at" >= "app_private"."player_decisions"."model_prepared_at"
+        )
+        AND (
+          "app_private"."player_decisions"."committed_at" IS NULL
+          OR ("app_private"."player_decisions"."selected_at" IS NOT NULL AND "app_private"."player_decisions"."committed_at" >= "app_private"."player_decisions"."selected_at")
+        )
+        AND ("app_private"."player_decisions"."terminated_at" IS NULL OR "app_private"."player_decisions"."terminated_at" >= "app_private"."player_decisions"."created_at")),
+	CONSTRAINT "player_decisions_terminal_outcome_check" CHECK ((
+        "app_private"."player_decisions"."terminal_outcome" IS NULL
+        AND "app_private"."player_decisions"."terminal_reason" IS NULL
+        AND "app_private"."player_decisions"."terminated_at" IS NULL
+      ) OR (
+        "app_private"."player_decisions"."terminal_outcome" IN ('failed', 'stale')
+        AND "app_private"."player_decisions"."terminal_reason" IS NOT NULL
+        AND length(btrim("app_private"."player_decisions"."terminal_reason")) > 0
+        AND "app_private"."player_decisions"."terminated_at" IS NOT NULL
+        AND "app_private"."player_decisions"."status" <> 'committed'
+      ))
+);
+--> statement-breakpoint
 CREATE TABLE "app_private"."session_agents" (
 	"participant_id" uuid PRIMARY KEY NOT NULL,
 	"session_id" uuid NOT NULL,
@@ -493,6 +635,10 @@ ALTER TABLE "app_private"."command_ledger" ADD CONSTRAINT "command_ledger_sessio
 ALTER TABLE "app_private"."command_ledger" ADD CONSTRAINT "command_ledger_session_owner_fk" FOREIGN KEY ("session_id","owner_id") REFERENCES "app_private"."sessions"("id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."hands" ADD CONSTRAINT "hands_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "app_private"."sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."hands" ADD CONSTRAINT "hands_session_owner_fk" FOREIGN KEY ("session_id","owner_id") REFERENCES "app_private"."sessions"("id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "app_private"."player_decisions" ADD CONSTRAINT "player_decisions_run_identity_fk" FOREIGN KEY ("agent_run_id","owner_id","session_id","hand_id","participant_id","source_state_version","decision_request_id","runtime") REFERENCES "app_private"."agent_runs"("id","owner_id","session_id","hand_id","participant_id","source_state_version","decision_request_id","runtime") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "app_private"."player_decisions" ADD CONSTRAINT "player_decisions_participant_scope_fk" FOREIGN KEY ("participant_id","session_id","owner_id") REFERENCES "app_private"."session_agents"("participant_id","session_id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "app_private"."player_decisions" ADD CONSTRAINT "player_decisions_accepted_attempt_scope_fk" FOREIGN KEY ("accepted_attempt_id","agent_run_id","owner_id","session_id") REFERENCES "app_private"."agent_attempts"("id","agent_run_id","owner_id","session_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "app_private"."player_decisions" ADD CONSTRAINT "player_decisions_command_ledger_scope_fk" FOREIGN KEY ("command_ledger_id","session_id","owner_id") REFERENCES "app_private"."command_ledger"("id","session_id","owner_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."session_agents" ADD CONSTRAINT "session_agents_participant_id_session_participants_id_fk" FOREIGN KEY ("participant_id") REFERENCES "app_private"."session_participants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."session_agents" ADD CONSTRAINT "session_agents_participant_scope_fk" FOREIGN KEY ("participant_id","session_id","owner_id") REFERENCES "app_private"."session_participants"("id","session_id","owner_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app_private"."session_events" ADD CONSTRAINT "session_events_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "app_private"."sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -509,14 +655,17 @@ CREATE INDEX "agent_capability_invocations_capability_idx" ON "app_private"."age
 CREATE INDEX "agent_memory_revisions_session_idx" ON "app_private"."agent_memory_revisions" USING btree ("session_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "agent_runs_one_active_player_decision" ON "app_private"."agent_runs" USING btree ("session_id","source_state_version","participant_id") WHERE "app_private"."agent_runs"."runtime" = 'player'
           AND "app_private"."agent_runs"."lifecycle" IN ('queued', 'leased', 'running');--> statement-breakpoint
-CREATE INDEX "agent_runs_runtime_concurrency_idx" ON "app_private"."agent_runs" USING btree ("runtime","lifecycle","owner_id","lease_expires_at") WHERE "app_private"."agent_runs"."lifecycle" IN ('leased', 'running');--> statement-breakpoint
 CREATE INDEX "agent_runs_worker_claim_idx" ON "app_private"."agent_runs" USING btree ("runtime","lifecycle","lease_expires_at","deadline_at","created_at","id");--> statement-breakpoint
+CREATE INDEX "agent_runs_runtime_concurrency_idx" ON "app_private"."agent_runs" USING btree ("runtime","lifecycle","owner_id","lease_expires_at") WHERE "app_private"."agent_runs"."lifecycle" IN ('leased', 'running');--> statement-breakpoint
 CREATE INDEX "agent_runs_session_created_idx" ON "app_private"."agent_runs" USING btree ("session_id","created_at");--> statement-breakpoint
 CREATE INDEX "agent_runs_hand_runtime_idx" ON "app_private"."agent_runs" USING btree ("hand_id","runtime");--> statement-breakpoint
 CREATE INDEX "agent_runs_participant_created_idx" ON "app_private"."agent_runs" USING btree ("participant_id","created_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "agent_runs_parent_run_unique" ON "app_private"."agent_runs" USING btree ("parent_run_id") WHERE "app_private"."agent_runs"."parent_run_id" IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "agent_runs_replacement_run_unique" ON "app_private"."agent_runs" USING btree ("replacement_run_id") WHERE "app_private"."agent_runs"."replacement_run_id" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "command_ledger_session_status_idx" ON "app_private"."command_ledger" USING btree ("session_id","processing_status","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "hands_one_in_progress_per_session" ON "app_private"."hands" USING btree ("session_id") WHERE "app_private"."hands"."status" = 'inProgress';--> statement-breakpoint
 CREATE INDEX "hands_session_status_started_idx" ON "app_private"."hands" USING btree ("session_id","status","started_at");--> statement-breakpoint
+CREATE INDEX "player_decisions_session_status_idx" ON "app_private"."player_decisions" USING btree ("session_id","status","updated_at");--> statement-breakpoint
 CREATE INDEX "session_agents_session_idx" ON "app_private"."session_agents" USING btree ("session_id");--> statement-breakpoint
 CREATE INDEX "session_agents_persona_config_idx" ON "app_private"."session_agents" USING btree ("persona_id","persona_version","config_snapshot_key");--> statement-breakpoint
 CREATE INDEX "session_events_session_created_idx" ON "app_private"."session_events" USING btree ("session_id","created_at");--> statement-breakpoint

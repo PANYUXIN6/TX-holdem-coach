@@ -34,3 +34,15 @@ pnpm --filter @tx-holdem-coach/server run db:test:cleanup
 - `db:test:cleanup` 仅用于确认没有其他任务运行后的遗留测试连接；它不得删除业务行，也不得用于生产数据库。
 - `ENOTFOUND` 属于网络或沙箱 DNS 问题；恢复联网后只重跑当前 milestone。
 - 发生 timeout、authority/fencing 异常或未观察到预期锁等待时，先检查并发测试进程、连接隔离、数据库锁事实、lease 和 deadline。
+
+## 首发前破坏性重基线
+
+只有在明确放弃全部远程测试数据兼容责任、并已把本地 migration 收敛为唯一 baseline 后，才允许执行：
+
+```bash
+pnpm --filter @tx-holdem-coach/server run db:test:rebaseline -- --confirm-test-schema-reset
+```
+
+该入口先通过 `database-targets.json` 同时验证 runtime/migration URL 都指向登记的测试项目且不等于生产项目，再取得与数据库测试相同的 suite advisory lock、拒绝并行测试事务；随后只删除 `app_private` schema，立即应用本地 migration，并要求远程 `__drizzle_migrations` 与本地唯一 journal 精确一致。它不删除 Supabase 项目、认证 schema 或其他非应用 schema。普通 migration 不兼容不得自动调用该入口。
+
+唯一 baseline 由 Drizzle 可表达结构与必须手工保留的延迟循环外键、约束触发器、默认 Owner、权限收紧共同组成；`verify:migration-assets` 会在联网前验证这些不变量。重新执行 `drizzle-kit generate` 后必须先合并并通过该门禁，不能直接以生成文件覆盖 baseline。

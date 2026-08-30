@@ -142,7 +142,7 @@ export function runManagedChildProcess(
         forceKillTimer = null
         if (child.pid !== undefined) {
           if (process.platform === 'win32') {
-            terminateWindowsTree(child.pid, true)
+            void terminateWindowsTree(child.pid, true)
             await Promise.all(windowsTerminationTasks)
           } else {
             forwardUnixSignal('SIGKILL')

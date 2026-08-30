@@ -612,7 +612,7 @@ M3.6 提供生产实现；M3.2 用测试实现验证结果状态机。损坏或�
 - `sessionId` 为新 Session；
 - `eventSeq = 0 | 1`；
 - `stateVersion = 1`；
-- `type` 与对应 V2 私有事件一致；
+- `type` 与对应 current v1 私有事件一致；
 - `payload.snapshot` 使用最终快照，仅覆盖对应 `eventSeq`；
 - `commandLedgerId = null`。
 

@@ -309,7 +309,7 @@ export async function assertM48PlayerCoordinationApplicationFlow(
           activeDecisionRequestId: null,
           lifecycle: 'failed',
           terminationReason: 'provider_timeout',
-          privatePayloadVersion: 2,
+          privatePayloadVersion: 1,
         },
       ])
 

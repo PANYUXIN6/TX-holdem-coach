@@ -7,6 +7,10 @@ import {
   playerModelProjectionCodec,
 } from '../../src/agents/player/player-decision-audit-codec.js'
 import { buildPlayerModelProjectionV1 } from '../../src/agents/player/player-model-projection.js'
+import {
+  createFrozenPlayerModelInputV1,
+  hashFrozenPlayerModelInputV1,
+} from '../../src/agents/player/player-frozen-model-input.js'
 import { AgentRunTransitionError } from '../../src/agents/foundation/agent-run-lifecycle.js'
 import {
   PersistenceDataCorruptionError,
@@ -21,6 +25,29 @@ const RUN_ID = '60000000-0000-4000-8000-000000000046'
 const DECISION_ID = '70000000-0000-4000-8000-000000000046'
 const ATTEMPT_ID = '80000000-0000-4000-8000-000000000046'
 const CREATED_AT = '2026-08-25T08:00:00.000Z'
+
+function frozenModelInput() {
+  return createFrozenPlayerModelInputV1({
+    contextSha256: 'a'.repeat(64),
+    messages: [{ role: 'system', content: '系统约束。' }],
+    maximumRequestBytes: 16_384,
+    estimatedInputTokens: 12,
+    routePolicy: {
+      policy: { id: 'player.route-policy', version: 1 },
+      pricingPolicy: { id: 'foundation.deepseek-pricing-cny', version: 1 },
+      provider: 'deepseek',
+      maximumContentCorrections: 2,
+    },
+    modelSelection: {
+      modelId: 'deepseek-v4-flash',
+      temperature: 0.2,
+      maxOutputTokens: 256,
+      thinkingMode: 'disabled',
+    },
+    outputSchema: { id: 'player.output.decision', version: 1 },
+    validator: { id: 'player.validator.decision', version: 1 },
+  })
+}
 
 function createSqlMock(responses: readonly unknown[]): Sql {
   const pending = [...responses]
@@ -55,6 +82,7 @@ function preparedRows(status: 'auditPrepared' | 'modelPrepared') {
   const audit = playerDecisionAuditSnapshotCodec.encode(snapshot)
   const candidates = playerCandidateSetSnapshotCodec.encode(snapshot.candidates)
   const model = playerModelProjectionCodec.encode(projection)
+  const frozen = frozenModelInput()
   const binding = snapshot.binding
   const lockedRun = {
     agentRunId: RUN_ID,
@@ -78,10 +106,18 @@ function preparedRows(status: 'auditPrepared' | 'modelPrepared') {
     auditPayload: structuredClone(audit.payload),
     candidatePayloadVersion: candidates.payloadVersion,
     candidatePayload: structuredClone(candidates.payload),
+    memoryRevision: snapshot.sessionMemory.memoryRevision,
+    memoryPayloadVersion: snapshot.sessionMemory.payloadVersion,
+    memorySha256: snapshot.sessionMemory.memorySha256,
     projectionPayloadVersion:
       status === 'modelPrepared' ? model.payloadVersion : null,
     projectionPayload:
       status === 'modelPrepared' ? structuredClone(model.payload) : null,
+    frozenModelInputPayloadVersion: status === 'modelPrepared' ? 1 : null,
+    frozenModelInputPayload:
+      status === 'modelPrepared' ? structuredClone(frozen) : null,
+    frozenModelInputSha256:
+      status === 'modelPrepared' ? hashFrozenPlayerModelInputV1(frozen) : null,
     choicePayloadVersion: null,
     choicePayload: null,
     validatorPayloadVersion: null,
@@ -218,6 +254,7 @@ describe('M4.6 Player Decision durable-stage recovery', () => {
           snapshotSha256: audit.snapshot.snapshotSha256,
           candidateSetSha256: audit.snapshot.candidates.candidateSetSha256,
           projection: driftedProjection,
+          frozenModelInput: frozenModelInput(),
         },
       ),
     ).rejects.toBeInstanceOf(PlayerDecisionTransitionError)

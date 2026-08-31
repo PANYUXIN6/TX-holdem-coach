@@ -702,6 +702,7 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
             `SELECT ${RUN_COLUMNS} FROM app_private.agent_runs AS run
              WHERE run.owner_id = $1::uuid AND run.session_id = $2::uuid
                AND run.runtime = 'player'
+               AND run.execution_mode = 'live'
                AND run.source_state_version = $3::bigint
                AND run.participant_id = $4::uuid
                AND run.lifecycle IN ('queued', 'leased', 'running')

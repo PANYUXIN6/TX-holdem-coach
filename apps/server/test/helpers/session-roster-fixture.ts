@@ -2,15 +2,20 @@ import type { PersonaCatalog } from '../../src/personas/catalog.js'
 import type { Sql, TransactionSql } from 'postgres'
 import { z } from 'zod'
 import {
-  AgentMemoryPayloadSchema,
   createConfigSnapshotKey,
   deepFreeze,
-  MEMORY_PAYLOAD_VERSION,
   PERSONA_CONFIG_PAYLOAD_VERSION,
   PersonaConfigPayloadSchema,
-  type AgentMemoryPayload,
+  type DeepReadonly,
   type PersonaConfigPayload,
 } from '../../src/personas/config.js'
+import {
+  AgentMemoryPayloadV1Schema,
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+  PLAYER_SESSION_MEMORY_PAYLOAD_VERSION,
+  type AgentMemoryPayloadV1,
+} from '../../src/agents/player/player-session-memory.js'
 import { canonicalJson } from '../../src/persisted-json.js'
 import {
   ActiveSessionConflictError,
@@ -42,10 +47,10 @@ const UuidSchema = z.string().uuid()
 export interface InitialAgentMemoryInput {
   readonly currentRevision: number
   readonly currentPayloadVersion: number
-  readonly currentPayload: AgentMemoryPayload
+  readonly currentPayload: DeepReadonly<AgentMemoryPayloadV1>
   readonly revision: number
   readonly revisionPayloadVersion: number
-  readonly revisionPayload: AgentMemoryPayload
+  readonly revisionPayload: DeepReadonly<AgentMemoryPayloadV1>
 }
 
 export interface SessionRosterAgentInput {
@@ -70,21 +75,21 @@ export interface InsertSessionRosterSnapshotInput {
 
 export const INITIAL_AGENT_MEMORY: InitialAgentMemoryInput = deepFreeze({
   currentRevision: 0,
-  currentPayloadVersion: MEMORY_PAYLOAD_VERSION,
-  currentPayload: {},
+  currentPayloadVersion: PLAYER_SESSION_MEMORY_PAYLOAD_VERSION,
+  currentPayload: PLAYER_EMPTY_SESSION_MEMORY_V1,
   revision: 0,
-  revisionPayloadVersion: MEMORY_PAYLOAD_VERSION,
-  revisionPayload: {},
+  revisionPayloadVersion: PLAYER_SESSION_MEMORY_PAYLOAD_VERSION,
+  revisionPayload: PLAYER_EMPTY_SESSION_MEMORY_V1,
 })
 
 function validateInitialMemory(memory: InitialAgentMemoryInput): void {
-  const current = AgentMemoryPayloadSchema.safeParse(memory.currentPayload)
-  const revision = AgentMemoryPayloadSchema.safeParse(memory.revisionPayload)
+  const current = AgentMemoryPayloadV1Schema.safeParse(memory.currentPayload)
+  const revision = AgentMemoryPayloadV1Schema.safeParse(memory.revisionPayload)
   if (
     memory.currentRevision !== 0 ||
     memory.revision !== 0 ||
-    memory.currentPayloadVersion !== MEMORY_PAYLOAD_VERSION ||
-    memory.revisionPayloadVersion !== MEMORY_PAYLOAD_VERSION ||
+    memory.currentPayloadVersion !== PLAYER_SESSION_MEMORY_PAYLOAD_VERSION ||
+    memory.revisionPayloadVersion !== PLAYER_SESSION_MEMORY_PAYLOAD_VERSION ||
     !current.success ||
     !revision.success ||
     canonicalJson(current.data) !== canonicalJson(revision.data)
@@ -206,6 +211,14 @@ export async function insertSessionRosterSnapshot(
     revision: agent.initialMemory.revision,
     memory_payload_version: agent.initialMemory.revisionPayloadVersion,
     memory_payload: agent.initialMemory.revisionPayload,
+    source_agent_run_id: null,
+    source_hand_id: null,
+    source_state_version: null,
+    decision_request_id: null,
+    as_of_event_seq: null,
+    memory_sha256: hashPlayerSessionMemoryV1(
+      agent.initialMemory.revisionPayload,
+    ),
   }))
   const agentRowsJson = transaction.json(agentRows)
   const memoryRowsJson = transaction.json(memoryRows)
@@ -288,7 +301,13 @@ export async function insertSessionRosterSnapshot(
         owner_id,
         revision,
         memory_payload_version,
-        memory_payload
+        memory_payload,
+        source_agent_run_id,
+        source_hand_id,
+        source_state_version,
+        decision_request_id,
+        as_of_event_seq,
+        memory_sha256
       )
       SELECT
         participant_id,
@@ -296,7 +315,13 @@ export async function insertSessionRosterSnapshot(
         owner_id,
         revision,
         memory_payload_version,
-        memory_payload
+        memory_payload,
+        source_agent_run_id,
+        source_hand_id,
+        source_state_version,
+        decision_request_id,
+        as_of_event_seq,
+        memory_sha256
       FROM jsonb_populate_recordset(
         NULL::app_private.agent_memory_revisions,
         ${memoryRowsJson}

@@ -442,7 +442,7 @@ export async function assertM46PlayerDecisionApplicationFlow(
     })
 
     expect(adapter.calls).toBe(1)
-    expect(reservationSequence).toBe(3)
+    expect(reservationSequence).toBe(4)
     expect(publishedResults).toHaveLength(1)
     // M4.6 自身验证 selected resume；M4.7 已由成功场景中的真实 Worker
     // 重领并恢复 selected Run，无需在每个 Commit Gate 场景前重复一次完整执行。
@@ -455,7 +455,7 @@ export async function assertM46PlayerDecisionApplicationFlow(
         renewLease: () => workerControl.renewLease(authority),
       })
       expect(adapter.calls).toBe(1)
-      expect(reservationSequence).toBe(3)
+      expect(reservationSequence).toBe(4)
       expect(publishedResults).toHaveLength(2)
     }
     const decisions = await sql<

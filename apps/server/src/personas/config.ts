@@ -4,7 +4,6 @@ import { z } from 'zod'
 import { canonicalJson } from '../persisted-json.js'
 
 export const PERSONA_CONFIG_PAYLOAD_VERSION = 1
-export const MEMORY_PAYLOAD_VERSION = 1
 
 export const PublishedPersonaModelBundleSchema = z.strictObject({
   deepSeek: z.strictObject({
@@ -49,9 +48,6 @@ export const PersonaConfigPayloadSchema = z.strictObject({
 })
 
 export type PersonaConfigPayload = z.infer<typeof PersonaConfigPayloadSchema>
-
-export const AgentMemoryPayloadSchema = z.strictObject({})
-export type AgentMemoryPayload = z.infer<typeof AgentMemoryPayloadSchema>
 
 export function createConfigSnapshotKey(
   configPayloadVersion: number,

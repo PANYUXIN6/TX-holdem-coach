@@ -11,6 +11,7 @@ import {
   PLAYER_FACT_MANIFEST_DESCRIPTOR_V1,
   isDecisionAuditSnapshotV1,
   type DecisionAuditSnapshotV1,
+  type PlayerSessionMemorySnapshotV1,
   type ModelFactReasonCodeV1,
 } from './player-decision-audit.js'
 import type { PlayerDecisionPreprocessingResultData } from './player-decision-preprocessor.js'
@@ -322,12 +323,116 @@ const ModelDecisionPoliciesV1Schema = z.strictObject({
   opponentEvidence: z.strictObject({
     policyVersion: z.literal(1),
     asOfEventSeq: SafeNonnegativeIntegerSchema,
-    status: z.literal('insufficientCurrentHandEvidence'),
+    status: z.enum(['insufficientEvidence', 'available']),
     exploitAdjustmentBasisPoints: z.literal(0),
-    reasonCode: z.literal('crossHandEvidenceUnavailable'),
+    reasonCode: z.literal('noApprovedExploitBaseline'),
     factIds: FactIdsSchema,
   }),
 })
+
+const ModelMemoryMetricTupleV1Schema = z.tuple([
+  z.number().int().min(0).max(5),
+  SafeNonnegativeIntegerSchema,
+  SafeNonnegativeIntegerSchema,
+  SafeNonnegativeIntegerSchema,
+])
+const ModelMemoryOpponentTupleV1Schema = z.tuple([
+  z.number().int().min(1).max(8),
+  SafeNonnegativeIntegerSchema,
+  SafeNonnegativeIntegerSchema,
+  z.array(ModelMemoryMetricTupleV1Schema).length(6),
+])
+const ModelRecentMemoryHandTupleV1Schema = z.tuple([
+  SafePositiveIntegerSchema,
+  z.number().int().min(0).max(8),
+  SafeNonnegativeIntegerSchema,
+  SafeNonnegativeIntegerSchema,
+  SafeNonnegativeIntegerSchema,
+])
+
+const ModelSessionMemoryV1Schema = z.tuple([
+  SafePositiveIntegerSchema,
+  SafeNonnegativeIntegerSchema,
+  SafeNonnegativeIntegerSchema,
+  SafeNonnegativeIntegerSchema,
+  z.array(ModelMemoryOpponentTupleV1Schema).max(8),
+  z.array(ModelRecentMemoryHandTupleV1Schema).max(5),
+])
+
+export const PLAYER_MODEL_MEMORY_MAX_BYTES = 2_048
+
+function modelMemoryByteLength(memory: unknown): number {
+  return Buffer.byteLength(canonicalJson(memory as JsonValue), 'utf8')
+}
+
+export function projectSessionMemoryForModelV1(
+  sessionMemory: PlayerSessionMemorySnapshotV1,
+) {
+  const payload = sessionMemory.payload
+  const memory: [
+    number,
+    number,
+    number,
+    number,
+    Array<[number, number, number, Array<[number, number, number, number]>]>,
+    Array<[number, number, number, number, number]>,
+  ] = [
+    sessionMemory.memoryRevision,
+    sessionMemory.asOfEventSeq,
+    payload.sessionSummary.completedHandsObserved,
+    payload.sessionSummary.showdownHandsObserved,
+    [],
+    [],
+  ]
+  for (const opponent of payload.opponents) {
+    const candidate: [
+      number,
+      number,
+      number,
+      Array<[number, number, number, number]>,
+    ] = [
+      opponent.seatNumber,
+      opponent.completedHandsObserved,
+      opponent.showdownHandsObserved,
+      opponent.metrics.map((metric, index) => [
+        index,
+        metric.numerator,
+        metric.denominator,
+        metric.distinctHandCount,
+      ]),
+    ]
+    if (
+      modelMemoryByteLength([
+        ...memory.slice(0, 4),
+        [...memory[4], candidate],
+        memory[5],
+      ]) > PLAYER_MODEL_MEMORY_MAX_BYTES
+    )
+      break
+    memory[4].push(candidate)
+  }
+  for (const hand of [...payload.recentHands].reverse()) {
+    const candidate: [number, number, number, number, number] = [
+      hand.handNumber,
+      hand.buttonSeatNumber,
+      hand.participantSeatNumbers.length,
+      hand.actions.length,
+      hand.showdown?.revealedHands.length ?? 0,
+    ]
+    if (
+      modelMemoryByteLength([
+        ...memory.slice(0, 5),
+        [...memory[5], candidate],
+      ]) > PLAYER_MODEL_MEMORY_MAX_BYTES
+    )
+      break
+    memory[5].push(candidate)
+  }
+  if (modelMemoryByteLength(memory) > PLAYER_MODEL_MEMORY_MAX_BYTES) {
+    throw new RangeError('模型可见 Session Memory 超过 2 KiB。')
+  }
+  return ModelSessionMemoryV1Schema.parse(memory)
+}
 
 const ModelCandidateSemanticV1Schema = z.strictObject({
   candidateActionId: z.string().trim().min(1).max(128),
@@ -535,6 +640,7 @@ export const PlayerModelProjectionV1Schema = z
     hand: ModelHandV1Schema,
     metrics: ModelMetricsV1Schema,
     policies: ModelDecisionPoliciesV1Schema,
+    memory: ModelSessionMemoryV1Schema,
     candidates: z.array(PlayerModelCandidateTupleV1Schema).min(1).max(7),
     candidateLimitations: ModelCandidateLimitationsV1Schema,
     versionCatalog: z.array(RuntimeComponentReferenceSchema).min(1).max(16),
@@ -1316,12 +1422,13 @@ export function buildPlayerModelProjectionV1(
       opponentEvidence: {
         policyVersion: 1,
         asOfEventSeq: preprocessing.opponentEvidence.data.asOfEventSeq,
-        status: 'insufficientCurrentHandEvidence',
+        status: preprocessing.opponentEvidence.data.status,
         exploitAdjustmentBasisPoints: 0,
-        reasonCode: preprocessing.opponentEvidence.data.reasonCode,
+        reasonCode: 'noApprovedExploitBaseline',
         factIds: [factCode('opponentEvidence'), factCode('exploitPolicy')],
       },
     },
+    memory: projectSessionMemoryForModelV1(snapshot.sessionMemory),
     candidates,
     candidateLimitations: {
       appliesToAllCandidateActionIds: true,

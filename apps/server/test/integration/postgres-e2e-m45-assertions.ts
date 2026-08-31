@@ -19,6 +19,10 @@ import {
 } from '../../src/agents/player/player-decision-preprocessing-plan.js'
 import { isPlayerDecisionPreprocessingResult } from '../../src/agents/player/player-decision-preprocessor.js'
 import { playerRuntimeDefinition } from '../../src/agents/player/foundation-definition.js'
+import {
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
 import type { DatabaseClient } from '../../src/db/client.js'
 import { createPostgresPlayerDecisionReferencePort } from '../../src/persistence/player-decision-reference-authority.js'
 import { createPostgresPlayerObservationPort } from '../../src/persistence/player-observation-authority.js'
@@ -205,6 +209,17 @@ export async function assertM45PlayerDecisionPreprocessingApplicationFlow(
       observation,
       reference: referenceResult.reference,
       strategyPack: pinnedStrategyPack,
+      sessionMemory: {
+        revision: 1,
+        payloadVersion: 1,
+        payload: PLAYER_EMPTY_SESSION_MEMORY_V1,
+        sha256: hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1),
+        sourceAgentRunId: runId,
+        sourceHandId: identityGraph.handId,
+        sourceStateVersion: state.stateVersion,
+        decisionRequestId,
+        asOfEventSeq: observation.identity.asOfEventSeq,
+      },
     })
 
     expect(preprocessing.binding).toMatchObject({
@@ -243,9 +258,9 @@ export async function assertM45PlayerDecisionPreprocessingApplicationFlow(
       opponentEvidence: {
         data: {
           opponentEvidenceSchemaVersion: 1,
-          sourceScope: 'currentHand',
+          sourceScope: 'currentHandAndSessionMemory',
           status: 'insufficientEvidence',
-          reasonCode: 'crossHandEvidenceUnavailable',
+          reasonCode: 'insufficientEvidence',
         },
       },
     })

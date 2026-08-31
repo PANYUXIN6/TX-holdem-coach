@@ -30,6 +30,10 @@ import { certifyPlayerVisibleState } from '../../src/sessions/authoritative-stat
 import type { PlayerVisibleState } from '../../src/sessions/authoritative-state/player-visible-state.js'
 import { createPlayerObservationFixture } from './player-observation-fixture.js'
 import { canonicalJson, type JsonValue } from '../../src/persisted-json.js'
+import {
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
 
 function referenceFor(
   observation: PlayerVisibleState,
@@ -90,6 +94,13 @@ export function createPlayerDecisionAuditFixture(
   const opponentEvidence = buildPlayerOpponentEvidence({
     observation,
     reference,
+    sessionMemory: {
+      revision: 1,
+      payloadVersion: 1,
+      payload: PLAYER_EMPTY_SESSION_MEMORY_V1,
+      sha256: hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1),
+      asOfEventSeq: observation.identity.asOfEventSeq,
+    },
   })
   const preprocessing = composePlayerDecisionPreprocessingResult({
     observation,
@@ -108,6 +119,17 @@ export function createPlayerDecisionAuditFixture(
       observation,
       preprocessing,
       strategyPackRef: preprocessing.strategyPackRef,
+      sessionMemory: {
+        memoryRevision: 1,
+        payloadVersion: 1,
+        payload: PLAYER_EMPTY_SESSION_MEMORY_V1,
+        memorySha256: hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1),
+        sourceAgentRunId: '11111111-1111-4111-8111-111111111149',
+        sourceHandId: observation.identity.handId,
+        sourceStateVersion: observation.identity.stateVersion,
+        decisionRequestId: observation.identity.decisionRequestId,
+        asOfEventSeq: observation.identity.asOfEventSeq,
+      },
     }),
   }
 }
@@ -393,9 +415,9 @@ export function createPlayerDecisionProjectionRepresentationalUpperBoundFixtureV
       opponentEvidence: {
         policyVersion: 1,
         asOfEventSeq: MAXIMUM_SAFE_INTEGER,
-        status: 'insufficientCurrentHandEvidence',
+        status: 'insufficientEvidence',
         exploitAdjustmentBasisPoints: 0,
-        reasonCode: 'crossHandEvidenceUnavailable',
+        reasonCode: 'noApprovedExploitBaseline',
         factIds: [...factIds],
       },
     },

@@ -8,10 +8,17 @@ import {
   sessions,
 } from '../../src/db/schema.js'
 import {
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
+import {
   createDatabaseFixtureContext,
   type DatabaseFixtureContext,
 } from './database-fixture-context.js'
-import { createDatabaseTestSqlForRole } from './database-test-runtime.js'
+import {
+  createDatabaseTestSqlForRole,
+  serializeJsonbFixture,
+} from './database-test-runtime.js'
 
 const BUSINESS_TABLES = [
   'agent_attempts',
@@ -32,6 +39,9 @@ const BUSINESS_TABLES = [
 
 const CONFIG_SNAPSHOT_KEY = 'a'.repeat(64)
 const PAYLOAD_DIGEST = 'b'.repeat(64)
+const EMPTY_SESSION_MEMORY_JSON = serializeJsonbFixture(
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+)
 
 interface SessionGraph {
   readonly sessionId: string
@@ -208,7 +218,7 @@ async function insertSessionAgent(
       1,
       '{}'::jsonb,
       1,
-      '{}'::jsonb
+      ${EMPTY_SESSION_MEMORY_JSON}::text::jsonb
     )
   `
 
@@ -219,7 +229,8 @@ async function insertSessionAgent(
       owner_id,
       revision,
       memory_payload_version,
-      memory_payload
+      memory_payload,
+      memory_sha256
     )
     VALUES (
       ${input.participantId},
@@ -227,7 +238,8 @@ async function insertSessionAgent(
       ${input.ownerId},
       0,
       1,
-      '{}'::jsonb
+      ${EMPTY_SESSION_MEMORY_JSON}::text::jsonb,
+      ${hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1)}
     )
   `
 }

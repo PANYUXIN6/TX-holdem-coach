@@ -6,6 +6,7 @@ import {
 import type { BoundAnalysis } from './player-decision-analysis-input.js'
 import { createPlayerDecisionAnalysisBinding } from './player-decision-analysis-input.js'
 import type { PlayerDecisionReference } from './player-decision-reference.js'
+import type { PlayerSessionMemoryEvidenceInputV1 } from './opponent-feature-projector.js'
 
 declare const playerOpponentEvidenceBrand: unique symbol
 
@@ -27,11 +28,12 @@ function deepFreeze<Value>(value: Value): Value {
 export function buildPlayerOpponentEvidence(input: {
   readonly observation: PlayerVisibleState
   readonly reference: PlayerDecisionReference
+  readonly sessionMemory: PlayerSessionMemoryEvidenceInputV1
 }): PlayerOpponentEvidence {
   const binding = createPlayerDecisionAnalysisBinding(input)
   const result = deepFreeze({
     binding,
-    data: projectOpponentFeaturesV1(input.observation),
+    data: projectOpponentFeaturesV1(input.observation, input.sessionMemory),
   } as unknown as PlayerOpponentEvidence)
   certifiedOpponentEvidence.add(result)
   return result

@@ -24,6 +24,11 @@ import {
 import { createPlayerDecisionAnalysisBinding } from './player-decision-analysis-input.js'
 import { FactSourceRefSchema } from './player-fact-sources.js'
 import { buildPlayerOpponentEvidence } from './player-opponent-evidence.js'
+import {
+  AgentMemoryPayloadV1Schema,
+  decodePlayerSessionMemoryV1,
+  hashPlayerSessionMemoryV1,
+} from './player-session-memory.js'
 import { buildPlayerStrategyProjection } from './player-strategy-projection.js'
 
 const SafePositiveIntegerSchema = z
@@ -686,10 +691,23 @@ export const PlayerProjectStrategyCapabilityOutputSchema = z.strictObject({
   data: StrategyProjectionDataSchema,
 })
 
+export const PlayerReadSessionMemoryCapabilityInputSchema = z.strictObject({
+  binding: PlayerDecisionAnalysisBindingSchema,
+  revision: SafeNonnegativeIntegerSchema.positive(),
+  payloadVersion: z.literal(1),
+  payload: AgentMemoryPayloadV1Schema,
+  sha256: Sha256DigestSchema,
+  asOfEventSeq: SafeNonnegativeIntegerSchema,
+})
+
+export const PlayerReadSessionMemoryCapabilityOutputSchema =
+  PlayerReadSessionMemoryCapabilityInputSchema
+
 export const PlayerProjectOpponentFeaturesCapabilityInputSchema =
   z.strictObject({
     observation: z.unknown(),
     reference: PlayerDecisionReferenceSchema,
+    sessionMemory: PlayerReadSessionMemoryCapabilityOutputSchema,
   })
 
 export const OpponentRateEvidenceSchema = z.strictObject({
@@ -703,6 +721,12 @@ export const OpponentRateEvidenceSchema = z.strictObject({
   ]),
   numerator: SafeNonnegativeIntegerSchema,
   denominator: SafeNonnegativeIntegerSchema,
+  distinctHandCount: SafeNonnegativeIntegerSchema,
+  source: z.literal('currentHandAndSessionMemory'),
+  memoryRevision: SafeNonnegativeIntegerSchema.positive(),
+  historyAsOfEventSeq: SafeNonnegativeIntegerSchema,
+  currentHandAsOfEventSeq: SafeNonnegativeIntegerSchema,
+  confidence: z.enum(['insufficient', 'low', 'medium', 'high']),
   filterCode: z.string().trim().min(1),
   firstEventSeq: SafeNonnegativeIntegerSchema.nullable(),
   lastEventSeq: SafeNonnegativeIntegerSchema.nullable(),
@@ -710,11 +734,13 @@ export const OpponentRateEvidenceSchema = z.strictObject({
 
 export const OpponentEvidenceProjectionDataSchema = z.strictObject({
   opponentEvidenceSchemaVersion: z.literal(1),
-  sourceScope: z.literal('currentHand'),
+  sourceScope: z.literal('currentHandAndSessionMemory'),
+  memoryRevision: SafeNonnegativeIntegerSchema.positive(),
+  historyAsOfEventSeq: SafeNonnegativeIntegerSchema,
   asOfEventSeq: SafeNonnegativeIntegerSchema,
   evidenceId: Sha256DigestSchema,
-  status: z.literal('insufficientEvidence'),
-  reasonCode: z.literal('crossHandEvidenceUnavailable'),
+  status: z.enum(['insufficientEvidence', 'available']),
+  reasonCode: z.literal('insufficientEvidence').nullable(),
   opponents: z.array(
     z.strictObject({
       participantId: z.string().uuid(),
@@ -732,6 +758,11 @@ export const PlayerProjectOpponentFeaturesCapabilityOutputSchema =
 
 export const PLAYER_COMPUTE_DECISION_METRICS_CAPABILITY = Object.freeze({
   id: 'player.compute-decision-metrics',
+  version: 1,
+} as const satisfies RuntimeComponentReference)
+
+export const PLAYER_READ_SESSION_MEMORY_CAPABILITY = Object.freeze({
+  id: 'player.read-session-memory',
   version: 1,
 } as const satisfies RuntimeComponentReference)
 
@@ -768,13 +799,31 @@ function parseObservationInput(input: unknown): JsonValue {
   )
 }
 
+function parseMemoryInput(input: unknown): JsonValue {
+  const parsed = PlayerReadSessionMemoryCapabilityInputSchema.parse(input)
+  if (hashPlayerSessionMemoryV1(parsed.payload) !== parsed.sha256) {
+    throw new RangeError('Session Memory digest 与 payload 不一致。')
+  }
+  return canonical(deepFreeze(parsed) as unknown as JsonValue)
+}
+
 function parseOpponentInput(input: unknown): JsonValue {
   const parsed = PlayerProjectOpponentFeaturesCapabilityInputSchema.parse(input)
   const observation = parsed.observation as PlayerVisibleState
   const reference = deepFreeze(parsed.reference)
   createPlayerDecisionAnalysisBinding({ observation, reference })
+  if (
+    hashPlayerSessionMemoryV1(parsed.sessionMemory.payload) !==
+    parsed.sessionMemory.sha256
+  ) {
+    throw new RangeError('Session Memory digest 与 payload 不一致。')
+  }
   return canonical(
-    deepFreeze({ observation, reference }) as unknown as JsonValue,
+    deepFreeze({
+      observation,
+      reference,
+      sessionMemory: parsed.sessionMemory,
+    }) as unknown as JsonValue,
   )
 }
 
@@ -794,11 +843,40 @@ function parseOutput(
   schema:
     | typeof PlayerComputeDecisionMetricsCapabilityOutputSchema
     | typeof PlayerProjectStrategyCapabilityOutputSchema
-    | typeof PlayerProjectOpponentFeaturesCapabilityOutputSchema,
+    | typeof PlayerProjectOpponentFeaturesCapabilityOutputSchema
+    | typeof PlayerReadSessionMemoryCapabilityOutputSchema,
   input: unknown,
 ): JsonValue {
   return canonical(schema.parse(input) as unknown as JsonValue)
 }
+
+export const playerReadSessionMemoryCapabilityDefinition = Object.freeze({
+  runtimeType: 'player',
+  capability: PLAYER_READ_SESSION_MEMORY_CAPABILITY,
+  mode: 'readOnly',
+  inputSchema: Object.freeze({
+    id: 'player.capability.read-session-memory.input',
+    version: 1,
+  }),
+  outputSchema: Object.freeze({
+    id: 'player.capability.read-session-memory.output',
+    version: 1,
+  }),
+  timeoutMs: 1_000,
+  parseInput: parseMemoryInput,
+  parseOutput: (input: unknown) =>
+    parseOutput(PlayerReadSessionMemoryCapabilityOutputSchema, input),
+  execute: async (input: JsonValue, signal: AbortSignal) => {
+    throwIfAborted(signal)
+    const parsed = PlayerReadSessionMemoryCapabilityInputSchema.parse(input)
+    const payload = decodePlayerSessionMemoryV1(parsed.payload)
+    if (hashPlayerSessionMemoryV1(payload) !== parsed.sha256) {
+      throw new RangeError('Session Memory digest 与 payload 不一致。')
+    }
+    throwIfAborted(signal)
+    return parsed as unknown as JsonValue
+  },
+} as const satisfies CapabilityDefinition<'player'>)
 
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new Error('player_capability_cancelled')
@@ -896,6 +974,7 @@ export const playerProjectOpponentFeaturesCapabilityDefinition = Object.freeze({
     const output = buildPlayerOpponentEvidence({
       observation: parsed.observation as PlayerVisibleState,
       reference: parsed.reference,
+      sessionMemory: parsed.sessionMemory,
     })
     throwIfAborted(signal)
     return output as unknown as JsonValue
@@ -903,6 +982,7 @@ export const playerProjectOpponentFeaturesCapabilityDefinition = Object.freeze({
 } as const satisfies CapabilityDefinition<'player'>)
 
 export const playerDecisionCapabilityDefinitions = Object.freeze([
+  playerReadSessionMemoryCapabilityDefinition,
   playerComputeDecisionMetricsCapabilityDefinition,
   playerProjectStrategyCapabilityDefinition,
   playerProjectOpponentFeaturesCapabilityDefinition,

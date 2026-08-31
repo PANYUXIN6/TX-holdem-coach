@@ -10,6 +10,7 @@ import {
   PLAYER_COMPUTE_DECISION_METRICS_CAPABILITY,
   PLAYER_PROJECT_OPPONENT_FEATURES_CAPABILITY,
   PLAYER_PROJECT_STRATEGY_CAPABILITY,
+  PLAYER_READ_SESSION_MEMORY_CAPABILITY,
   playerComputeDecisionMetricsCapabilityDefinition,
   playerDecisionCapabilityDefinitions,
 } from '../../src/agents/player/player-decision-capabilities.js'
@@ -37,6 +38,12 @@ import { buildPlayerObservationDraft } from '../../src/sessions/authoritative-st
 import { certifyPlayerVisibleState } from '../../src/sessions/authoritative-state/player-information-boundary-guard.js'
 import type { PlayerVisibleState } from '../../src/sessions/authoritative-state/player-visible-state.js'
 import { createPlayerObservationFixture } from '../helpers/player-observation-fixture.js'
+import {
+  decodePlayerSessionMemoryV1,
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
+import type { CertifiedPlayerMemoryRevisionV1 } from '../../src/persistence/player-memory-repository.js'
 
 type PlayerCapabilityInvocation = Parameters<
   CapabilityExecutor<'player'>['invoke']
@@ -127,6 +134,7 @@ function planInput(
   harness: ReturnType<typeof createHarness>,
   inputs: ReturnType<typeof createInputs>,
   executor: CapabilityExecutor<'player'> = harness.executor,
+  sessionMemory: CertifiedPlayerMemoryRevisionV1 = memoryFor(inputs),
 ) {
   return {
     executor,
@@ -136,7 +144,25 @@ function planInput(
     observation: inputs.observation,
     reference: inputs.reference,
     strategyPack: EMPTY_AUTHORIZED_STRATEGY_PACK,
+    sessionMemory,
   }
+}
+
+function memoryFor(
+  inputs: ReturnType<typeof createInputs>,
+  payload = PLAYER_EMPTY_SESSION_MEMORY_V1,
+): CertifiedPlayerMemoryRevisionV1 {
+  return Object.freeze({
+    revision: 1,
+    payloadVersion: 1,
+    payload,
+    sha256: hashPlayerSessionMemoryV1(payload),
+    sourceAgentRunId: '11111111-1111-4111-8111-111111111148',
+    sourceHandId: inputs.observation.identity.handId,
+    sourceStateVersion: inputs.observation.identity.stateVersion,
+    decisionRequestId: inputs.observation.identity.decisionRequestId,
+    asOfEventSeq: inputs.observation.identity.asOfEventSeq,
+  })
 }
 
 describe('Player decision capability definitions and plan', () => {
@@ -150,6 +176,19 @@ describe('Player decision capability definitions and plan', () => {
         timeoutMs: definition.timeoutMs,
       })),
     ).toEqual([
+      {
+        capability: PLAYER_READ_SESSION_MEMORY_CAPABILITY,
+        inputSchema: {
+          id: 'player.capability.read-session-memory.input',
+          version: 1,
+        },
+        outputSchema: {
+          id: 'player.capability.read-session-memory.output',
+          version: 1,
+        },
+        mode: 'readOnly',
+        timeoutMs: 1_000,
+      },
       {
         capability: PLAYER_COMPUTE_DECISION_METRICS_CAPABILITY,
         inputSchema: {
@@ -191,6 +230,7 @@ describe('Player decision capability definitions and plan', () => {
       },
     ])
     expect(PLAYER_DECISION_PREPROCESSING_CAPABILITY_ORDER).toEqual([
+      PLAYER_READ_SESSION_MEMORY_CAPABILITY,
       PLAYER_COMPUTE_DECISION_METRICS_CAPABILITY,
       PLAYER_PROJECT_STRATEGY_CAPABILITY,
       PLAYER_PROJECT_OPPONENT_FEATURES_CAPABILITY,
@@ -201,7 +241,7 @@ describe('Player decision capability definitions and plan', () => {
     ).toBe(true)
   })
 
-  test('executes compute then strategy then opponent and records three audits', async () => {
+  test('executes Memory, compute, strategy and opponent capabilities in fixed order', async () => {
     const inputs = createInputs()
     const harness = createHarness()
     const cloneBrandChecks: boolean[] = []
@@ -230,17 +270,18 @@ describe('Player decision capability definitions and plan', () => {
     }
 
     const result = await executePlayerDecisionPreprocessingPlan(
-      planInput(harness, inputs, observingExecutor),
+      planInput(harness, inputs, observingExecutor, memoryFor(inputs)),
     )
 
     expect(isPlayerDecisionPreprocessingResult(result)).toBe(true)
     expect(cloneBrandChecks).toEqual([false, false, false])
     expect(harness.reservedCapabilityIds).toEqual([
+      'player.read-session-memory',
       'player.compute-decision-metrics',
       'player.project-strategy',
       'player.project-opponent-features',
     ])
-    expect(harness.audits).toHaveLength(3)
+    expect(harness.audits).toHaveLength(4)
     expect(harness.audits).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -251,6 +292,67 @@ describe('Player decision capability definitions and plan', () => {
           errorCode: null,
         }),
       ]),
+    )
+  })
+
+  test('将 Memory 的跨手样本合并到对手证据与置信度', async () => {
+    const inputs = createInputs()
+    const harness = createHarness()
+    const opponent = inputs.observation.table.seats.find(
+      ({ seatNumber }) => seatNumber !== inputs.observation.identity.actorSeat,
+    )
+    if (opponent === undefined) throw new Error('测试缺少对手座位。')
+    const payload = {
+      ...PLAYER_EMPTY_SESSION_MEMORY_V1,
+      scannedThrough: {
+        handNumber: inputs.observation.hand.handNumber,
+        eventSeq: inputs.observation.identity.asOfEventSeq - 1,
+      },
+      lastCompletedHandNumber: inputs.observation.hand.handNumber,
+      sessionSummary: { completedHandsObserved: 10, showdownHandsObserved: 0 },
+      opponents: [
+        {
+          participantId: opponent.participantId,
+          seatNumber: opponent.seatNumber,
+          completedHandsObserved: 10,
+          showdownHandsObserved: 0,
+          metrics: [
+            'preflopVoluntaryParticipation',
+            'preflopFullRaise',
+            'facingAggressionFold',
+            'facingAggressionCall',
+            'facingAggressionRaise',
+            'currentStreetAggression',
+          ].map((metric) => ({
+            metric,
+            numerator: metric === 'facingAggressionFold' ? 6 : 0,
+            denominator: 10,
+            distinctHandCount: 5,
+          })),
+        },
+      ],
+    }
+
+    const result = await executePlayerDecisionPreprocessingPlan(
+      planInput(
+        harness,
+        inputs,
+        undefined,
+        memoryFor(inputs, decodePlayerSessionMemoryV1(payload)),
+      ),
+    )
+    const evidence = result.opponentEvidence.data.opponents
+      .find(({ participantId }) => participantId === opponent.participantId)
+      ?.evidence.find(({ metric }) => metric === 'facingAggressionFold')
+
+    expect(evidence).toMatchObject({
+      numerator: 6,
+      denominator: 10,
+      distinctHandCount: 5,
+      confidence: 'low',
+    })
+    expect(result.opponentEvidence.data.sourceScope).toBe(
+      'currentHandAndSessionMemory',
     )
   })
 
@@ -326,6 +428,7 @@ describe('Player decision capability definitions and plan', () => {
       ),
     ).rejects.toThrow(/Capability/)
     expect(harness.reservedCapabilityIds).toEqual([
+      'player.read-session-memory',
       'player.compute-decision-metrics',
     ])
   })

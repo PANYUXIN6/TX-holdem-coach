@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto'
 import type { Sql } from 'postgres'
 import { expect } from 'vitest'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
+import {
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
 import { runDatabaseTestWithCleanup } from './database-test-runtime.js'
 
 const SESSION_ID = '20000000-0000-4000-8000-000000000046'
@@ -10,6 +14,7 @@ const PARTICIPANT_ID = '40000000-0000-4000-8000-000000000046'
 const DECISION_REQUEST_ID = '50000000-0000-4000-8000-000000000046'
 const OPTIONAL_PAYLOAD_PAIR_CONSTRAINT =
   'player_decisions_optional_payload_pairs_check'
+const FROZEN_MODEL_INPUT_SHA256 = 'a'.repeat(64)
 const ROSTER_IDS = [
   '40000000-0000-4000-8000-000000000040',
   PARTICIPANT_ID,
@@ -60,17 +65,18 @@ export async function assertM46PlayerDecisionPersistence(
                 ${`M46 Agent ${String(seatNumber)}`}, '#000000',
                 ${`m46-persona-${String(seatNumber)}`}, 1,
                 ${'0'.repeat(64)}, 1, ${transaction.json({})},
-                1, ${transaction.json({})}
+                1, ${transaction.json(PLAYER_EMPTY_SESSION_MEMORY_V1)}
               )
             `
             await transaction`
               INSERT INTO app_private.agent_memory_revisions (
                 participant_id, session_id, owner_id, revision,
-                memory_payload_version, memory_payload
+                memory_payload_version, memory_payload, memory_sha256
               ) VALUES (
                 ${participantId}::uuid, ${SESSION_ID}::uuid,
                 ${owner.databaseOwnerId}::uuid, 0, 1,
-                ${transaction.json({})}
+                ${transaction.json(PLAYER_EMPTY_SESSION_MEMORY_V1)},
+                ${hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1)}
               )
             `
           }
@@ -122,14 +128,16 @@ export async function assertM46PlayerDecisionPersistence(
             source_state_version, decision_request_id, runtime, record_version,
             status, decision_audit_snapshot_payload_version,
             decision_audit_snapshot_payload, candidate_set_payload_version,
-            candidate_set_payload
+            candidate_set_payload, memory_revision, memory_payload_version,
+            memory_sha256
           ) VALUES (
             ${decisionId}::uuid, ${runId}::uuid,
             ${owner.databaseOwnerId}::uuid, ${SESSION_ID}::uuid,
             ${HAND_ID}::uuid, ${PARTICIPANT_ID}::uuid, 7,
             ${DECISION_REQUEST_ID}::uuid, 'player', 1, 'auditPrepared',
             1, ${transaction.json({ audit: 1 })},
-            1, ${transaction.json({ candidates: 1 })}
+            1, ${transaction.json({ candidates: 1 })}, 0, 1,
+            ${hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1)}
           )
         `
       })
@@ -140,19 +148,30 @@ export async function assertM46PlayerDecisionPersistence(
           source_state_version, decision_request_id, runtime, record_version,
           status, decision_audit_snapshot_payload_version,
           decision_audit_snapshot_payload, candidate_set_payload_version,
-          candidate_set_payload
+          candidate_set_payload, memory_revision, memory_payload_version,
+          memory_sha256
         ) SELECT
           ${randomUUID()}::uuid, agent_run_id, owner_id, session_id, hand_id,
           participant_id, source_state_version, decision_request_id, runtime,
           record_version, status, decision_audit_snapshot_payload_version,
           decision_audit_snapshot_payload, candidate_set_payload_version,
-          candidate_set_payload
+          candidate_set_payload, memory_revision, memory_payload_version,
+          memory_sha256
         FROM app_private.player_decisions WHERE id = ${decisionId}::uuid
       `).rejects.toMatchObject({ code: '23505' })
 
       await expect(sql`
         UPDATE app_private.player_decisions
         SET status = 'modelPrepared', model_prepared_at = clock_timestamp()
+        WHERE id = ${decisionId}::uuid
+      `).rejects.toMatchObject({ code: '23514' })
+
+      await expect(sql`
+        UPDATE app_private.player_decisions
+        SET status = 'modelPrepared',
+            model_projection_payload_version = 1,
+            model_projection_payload = ${sql.json({ projection: 1 })},
+            model_prepared_at = clock_timestamp()
         WHERE id = ${decisionId}::uuid
       `).rejects.toMatchObject({ code: '23514' })
 
@@ -178,6 +197,9 @@ export async function assertM46PlayerDecisionPersistence(
         SET status = 'modelPrepared',
             model_projection_payload_version = 1,
             model_projection_payload = ${sql.json({ projection: 1 })},
+            frozen_model_input_payload_version = 1,
+            frozen_model_input_payload = ${sql.json({ frozen: 1 })},
+            frozen_model_input_sha256 = ${FROZEN_MODEL_INPUT_SHA256},
             model_prepared_at = clock_timestamp()
         WHERE id = ${decisionId}::uuid
       `

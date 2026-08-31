@@ -24,6 +24,10 @@ import {
   SessionDeletionTransitionError,
 } from '../../src/persistence/errors.js'
 import { issueRuntimeCommitAuthority } from '../../src/agents/foundation/runtime-ports.js'
+import {
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
 import { createAgentFoundationAuditRepository as createRawAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
 import {
   abortHandAudit,
@@ -309,6 +313,7 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
         readonly revision: number
         readonly revisionVersion: number
         readonly revisionPayload: Record<string, unknown>
+        readonly revisionSha256: string
       }[]
     >`
       SELECT
@@ -317,7 +322,8 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
         agent.memory_payload AS "currentPayload",
         revision.revision::int AS "revision",
         revision.memory_payload_version AS "revisionVersion",
-        revision.memory_payload AS "revisionPayload"
+        revision.memory_payload AS "revisionPayload",
+        revision.memory_sha256 AS "revisionSha256"
       FROM app_private.session_agents AS agent
       JOIN app_private.agent_memory_revisions AS revision
         ON revision.participant_id = agent.participant_id
@@ -329,6 +335,9 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
       ORDER BY agent.participant_id
     `
     expect(memoryRows).toHaveLength(5)
+    const emptyMemorySha256 = hashPlayerSessionMemoryV1(
+      PLAYER_EMPTY_SESSION_MEMORY_V1,
+    )
     expect(
       memoryRows.every(
         (row) =>
@@ -336,8 +345,10 @@ async function assertRosterAndSettings(sql: Sql): Promise<void> {
           row.currentVersion === 1 &&
           row.revision === 0 &&
           row.revisionVersion === 1 &&
-          JSON.stringify(row.currentPayload) === '{}' &&
-          JSON.stringify(row.revisionPayload) === '{}',
+          hashPlayerSessionMemoryV1(row.currentPayload) === emptyMemorySha256 &&
+          hashPlayerSessionMemoryV1(row.revisionPayload) ===
+            emptyMemorySha256 &&
+          row.revisionSha256 === emptyMemorySha256,
       ),
     ).toBe(true)
 
@@ -3706,16 +3717,18 @@ async function insertM28DiagnosticSessionForOwner(
           ${participantId}::uuid, ${sessionId}::uuid,
           ${databaseOwnerId}::uuid, ${`Other Agent ${seatNumber}`}, '#0f766e',
           ${`other-agent-${seatNumber}`}, 1, ${'a'.repeat(64)},
-          1, '{}'::jsonb, 1, '{}'::jsonb
+          1, '{}'::jsonb, 1, ${transaction.json(PLAYER_EMPTY_SESSION_MEMORY_V1)}
         )
       `
       await transaction`
         INSERT INTO app_private.agent_memory_revisions (
           participant_id, session_id, owner_id, revision,
-          memory_payload_version, memory_payload
+          memory_payload_version, memory_payload, memory_sha256
         ) VALUES (
           ${participantId}::uuid, ${sessionId}::uuid,
-          ${databaseOwnerId}::uuid, 0, 1, '{}'::jsonb
+          ${databaseOwnerId}::uuid, 0, 1,
+          ${transaction.json(PLAYER_EMPTY_SESSION_MEMORY_V1)},
+          ${hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1)}
         )
       `
     }

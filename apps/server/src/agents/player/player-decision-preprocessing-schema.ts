@@ -96,7 +96,7 @@ const ExploitAdjustmentResultSchema = z.strictObject({
   evidenceId: Sha256DigestSchema,
   asOfEventSeq: SafeNonnegativeIntegerSchema,
   status: z.literal('insufficientEvidence'),
-  reasonCode: z.literal('crossHandEvidenceUnavailable'),
+  reasonCode: z.literal('noApprovedExploitBaseline'),
   candidates: z.array(WeightedPolicyCandidateSchema),
 })
 
@@ -447,10 +447,8 @@ export const PlayerDecisionPreprocessingResultDataSchema = z
         result.opponentEvidence.data.evidenceId ||
       result.exploitAdjustment.data.asOfEventSeq !==
         result.opponentEvidence.data.asOfEventSeq ||
-      result.exploitAdjustment.data.status !==
-        result.opponentEvidence.data.status ||
-      result.exploitAdjustment.data.reasonCode !==
-        result.opponentEvidence.data.reasonCode
+      result.exploitAdjustment.data.status !== 'insufficientEvidence' ||
+      result.exploitAdjustment.data.reasonCode !== 'noApprovedExploitBaseline'
     ) {
       context.addIssue({
         code: 'custom',

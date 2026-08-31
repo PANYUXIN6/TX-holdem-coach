@@ -19,12 +19,12 @@ import {
 } from '../../persistence/player-model-attempt-control.js'
 import type { PlayerBoundedChoiceV1 } from './player-bounded-choice.js'
 import {
-  isPlayerPreparedGenerationBundleV1,
-  type PlayerPreparedGenerationBundleV1,
+  isPlayerGenerationBundleV1,
+  type PlayerGenerationBundleV1,
 } from './player-model-adapter-boundary-guard.js'
 
 function controlAuthorityHash(input: {
-  readonly bundle: PlayerPreparedGenerationBundleV1
+  readonly bundle: PlayerGenerationBundleV1
   readonly authority: RuntimeCommitAuthority<'player'>
 }): string {
   return createHash('sha256')
@@ -52,7 +52,7 @@ function controlAuthorityHash(input: {
 
 export async function generatePlayerBoundedChoice(input: {
   readonly gateway: ModelGateway
-  readonly bundle: PlayerPreparedGenerationBundleV1
+  readonly bundle: PlayerGenerationBundleV1
   readonly authority: RuntimeCommitAuthority<'player'>
   readonly budget: ExecutionBudget
   readonly routePolicy: ModelRoutePolicy<'player'>
@@ -63,7 +63,7 @@ export async function generatePlayerBoundedChoice(input: {
   readonly control: PlayerModelAttemptControlV1
 }): Promise<StructuredGenerationResult<PlayerBoundedChoiceV1>> {
   if (
-    !isPlayerPreparedGenerationBundleV1(input.bundle) ||
+    !isPlayerGenerationBundleV1(input.bundle) ||
     !isRuntimeCommitAuthority(input.authority, 'player') ||
     !isPlayerModelAttemptControlV1(input.control) ||
     input.control.decisionRecordId !== input.bundle.packet.decisionRecordId ||

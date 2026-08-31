@@ -202,7 +202,7 @@ function sourceRefsForCandidate(input: {
       evidenceId: input.opponentEvidence.data.evidenceId,
       asOfEventSeq: input.opponentEvidence.data.asOfEventSeq,
       status: 'insufficientEvidence',
-      reasonCode: 'crossHandEvidenceUnavailable',
+      reasonCode: 'noApprovedExploitBaseline',
     },
   )
   return policySources

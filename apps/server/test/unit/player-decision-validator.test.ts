@@ -20,6 +20,10 @@ import {
   validatePlayerDecisionV1,
 } from '../../src/agents/player/player-decision-validator.js'
 import { buildPlayerModelProjectionV1 } from '../../src/agents/player/player-model-projection.js'
+import {
+  createFrozenPlayerModelInputV1,
+  hashFrozenPlayerModelInputV1,
+} from '../../src/agents/player/player-frozen-model-input.js'
 import { certifyPlayerRuntimeCandidateResultV1 } from '../../src/agents/player/player-runtime-result-port.js'
 import { PlayerDecisionIntegrityError } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
@@ -116,6 +120,26 @@ function selectedFixture(
   const audit = playerDecisionAuditSnapshotCodec.encode(snapshot)
   const candidates = playerCandidateSetSnapshotCodec.encode(snapshot.candidates)
   const model = playerModelProjectionCodec.encode(projection)
+  const frozenModelInput = createFrozenPlayerModelInputV1({
+    contextSha256: 'a'.repeat(64),
+    messages: [{ role: 'system', content: '固定系统消息。' }],
+    maximumRequestBytes: 33_000,
+    estimatedInputTokens: 32,
+    routePolicy: {
+      policy: { id: 'player.route-policy', version: 1 },
+      pricingPolicy: { id: 'foundation.deepseek-pricing-cny', version: 1 },
+      provider: 'deepseek',
+      maximumContentCorrections: 2,
+    },
+    modelSelection: {
+      modelId: 'deepseek-v4-flash',
+      temperature: 0.2,
+      maxOutputTokens: 256,
+      thinkingMode: 'disabled',
+    },
+    outputSchema: { id: 'player.output.decision', version: 1 },
+    validator: { id: 'player.validator.decision', version: 1 },
+  })
   const encodedChoice = playerModelChoiceCodec.encode(choice)
   const encodedValidator = playerValidatorResultCodec.encode(validator)
   const binding = snapshot.binding
@@ -141,8 +165,14 @@ function selectedFixture(
     auditPayload: audit.payload,
     candidatePayloadVersion: candidates.payloadVersion,
     candidatePayload: candidates.payload,
+    memoryRevision: snapshot.sessionMemory.memoryRevision,
+    memoryPayloadVersion: snapshot.sessionMemory.payloadVersion,
+    memorySha256: snapshot.sessionMemory.memorySha256,
     projectionPayloadVersion: model.payloadVersion,
     projectionPayload: model.payload,
+    frozenModelInputPayloadVersion: 1,
+    frozenModelInputPayload: frozenModelInput,
+    frozenModelInputSha256: hashFrozenPlayerModelInputV1(frozenModelInput),
     choicePayloadVersion: encodedChoice.payloadVersion,
     choicePayload: encodedChoice.payload,
     validatorPayloadVersion: encodedValidator.payloadVersion,

@@ -326,6 +326,7 @@ async function lockRun(input: {
     WHERE id = ${input.authority.runId}::uuid
       AND owner_id = ${input.owner.databaseOwnerId}::uuid
       AND runtime = 'player'
+      AND execution_mode = 'live'
     FOR UPDATE
   `)
   const run = requireOne(rows, RunRowSchema, 'player_commit_resource_missing')

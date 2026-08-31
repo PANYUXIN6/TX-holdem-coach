@@ -3,13 +3,17 @@ import type { Sql } from 'postgres'
 import { z } from 'zod'
 import type { PersonaCatalog } from '../personas/catalog.js'
 import {
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+  PLAYER_SESSION_MEMORY_PAYLOAD_VERSION,
+  type AgentMemoryPayloadV1,
+} from '../agents/player/player-session-memory.js'
+import {
   ActiveModelConfigurationSchema,
   createConfigSnapshotKey,
   deepFreeze,
-  MEMORY_PAYLOAD_VERSION,
   PERSONA_CONFIG_PAYLOAD_VERSION,
   PersonaConfigPayloadSchema,
-  type AgentMemoryPayload,
+  type DeepReadonly,
   type PersonaConfigPayload,
 } from '../personas/config.js'
 import {
@@ -43,10 +47,10 @@ export type StableIdentityGraph = z.infer<typeof StableIdentityGraphSchema>
 export interface InitialAgentMemoryInput {
   readonly currentRevision: number
   readonly currentPayloadVersion: number
-  readonly currentPayload: AgentMemoryPayload
+  readonly currentPayload: DeepReadonly<AgentMemoryPayloadV1>
   readonly revision: number
   readonly revisionPayloadVersion: number
-  readonly revisionPayload: AgentMemoryPayload
+  readonly revisionPayload: DeepReadonly<AgentMemoryPayloadV1>
 }
 
 export interface SessionRosterAgentInput {
@@ -64,11 +68,11 @@ export interface SessionRosterAgentInput {
 
 export const INITIAL_AGENT_MEMORY: InitialAgentMemoryInput = deepFreeze({
   currentRevision: 0,
-  currentPayloadVersion: MEMORY_PAYLOAD_VERSION,
-  currentPayload: {},
+  currentPayloadVersion: PLAYER_SESSION_MEMORY_PAYLOAD_VERSION,
+  currentPayload: PLAYER_EMPTY_SESSION_MEMORY_V1,
   revision: 0,
-  revisionPayloadVersion: MEMORY_PAYLOAD_VERSION,
-  revisionPayload: {},
+  revisionPayloadVersion: PLAYER_SESSION_MEMORY_PAYLOAD_VERSION,
+  revisionPayload: PLAYER_EMPTY_SESSION_MEMORY_V1,
 })
 
 export interface CurrentCatalogRosterSelection {

@@ -32,6 +32,10 @@ import {
   FactSourceRefSchema,
   type FactSourceRef,
 } from '../../src/agents/player/player-fact-sources.js'
+import {
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
 
 function referenceFor(
   observation: PlayerVisibleState,
@@ -52,6 +56,16 @@ function referenceFor(
     personaVersion: 1,
     personaPolicy: { ...persona.style },
   })
+}
+
+function emptyMemoryFor(observation: PlayerVisibleState) {
+  return {
+    revision: 1,
+    payloadVersion: 1 as const,
+    payload: PLAYER_EMPTY_SESSION_MEMORY_V1,
+    sha256: hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1),
+    asOfEventSeq: observation.identity.asOfEventSeq,
+  }
 }
 
 function exactStrategyPackFor(
@@ -129,6 +143,7 @@ function build(
   const opponentEvidence = buildPlayerOpponentEvidence({
     observation,
     reference,
+    sessionMemory: emptyMemoryFor(observation),
   })
   return {
     observation,
@@ -248,7 +263,7 @@ describe('Player decision preprocessor', () => {
     })
     expect(result.opponentEvidence.data).toMatchObject({
       status: 'insufficientEvidence',
-      reasonCode: 'crossHandEvidenceUnavailable',
+      reasonCode: 'insufficientEvidence',
     })
     expect(
       result.candidates.data.reduce(
@@ -609,6 +624,7 @@ describe('Player decision preprocessor', () => {
     const otherEvidence = buildPlayerOpponentEvidence({
       observation: otherObservation,
       reference: otherReference,
+      sessionMemory: emptyMemoryFor(otherObservation),
     })
     const analysisCore = buildPlayerDecisionAnalysisCore({
       observation: prepared.observation,

@@ -11,6 +11,7 @@ import { assertM45PlayerDecisionPreprocessingApplicationFlow } from './postgres-
 import { assertM46PlayerDecisionApplicationFlow } from './postgres-e2e-m46-assertions.js'
 import { assertM47PlayerCommitApplicationFlow } from './postgres-e2e-m47-assertions.js'
 import { assertM48PlayerCoordinationApplicationFlow } from './postgres-e2e-m48-assertions.js'
+import { assertM49PlayerAuditReplayApplicationFlow } from './postgres-e2e-m49-assertions.js'
 import { assertM31SessionCommandExecutor } from './postgres-e2e-m31-assertions.js'
 import {
   registerDatabaseMilestoneTest,
@@ -102,4 +103,10 @@ registerDatabaseMilestoneTest(
   'M4.8 Player pause and retry coordination',
   (sql) => assertM48PlayerCoordinationApplicationFlow(sql),
   900_000,
+)
+registerDatabaseMilestoneTest(
+  'm49',
+  'M4.9 Player Memory 与 Replay application flow',
+  (sql) => assertM49PlayerAuditReplayApplicationFlow(sql),
+  300_000,
 )

@@ -22,6 +22,11 @@ import {
 } from './player-decision-packet-leak-guard.js'
 import { PlayerDecisionContextSectionV1Schema } from './player-model-projection.js'
 import { PLAYER_STATIC_PROMPT_MESSAGES_V1 } from './player-prompt-modules.js'
+import {
+  decodeFrozenPlayerModelInputV1,
+  restoreFrozenPlayerModelRequestV1,
+  type FrozenPlayerModelInputV1,
+} from './player-frozen-model-input.js'
 
 export const PLAYER_OUTPUT_SCHEMA_REFERENCE = Object.freeze({
   id: 'player.output.decision',
@@ -33,6 +38,16 @@ export const PLAYER_VALIDATOR_REFERENCE = Object.freeze({
 } as const satisfies RuntimeComponentReference)
 
 declare const playerPreparedGenerationBundleBrand: unique symbol
+declare const playerFrozenGenerationBundleBrand: unique symbol
+interface PlayerGenerationBundleCommonV1 {
+  readonly packet: PlayerDecisionPacketV1
+  readonly request: PreparedModelRequest<'player'>
+  readonly outputSchemaReference: typeof PLAYER_OUTPUT_SCHEMA_REFERENCE
+  readonly outputSchema: typeof PlayerBoundedChoiceSchema
+  readonly validatorReference: typeof PLAYER_VALIDATOR_REFERENCE
+  readonly validate: CertifiedPlayerBoundedChoiceValidatorV1
+}
+
 export interface PlayerPreparedGenerationBundleV1 {
   readonly packet: PlayerDecisionPacketV1
   readonly context: PreparedContextEnvelope<'player'>
@@ -43,6 +58,18 @@ export interface PlayerPreparedGenerationBundleV1 {
   readonly validate: CertifiedPlayerBoundedChoiceValidatorV1
   readonly [playerPreparedGenerationBundleBrand]: never
 }
+
+/**
+ * modelPrepared 恢复的 bundle 不携带新生成的 Context：Provider request 只能来自
+ * 持久化的冻结输入，避免 Prompt 或上下文代码变化重写已承诺的首次调用。
+ */
+export interface PlayerFrozenGenerationBundleV1 extends PlayerGenerationBundleCommonV1 {
+  readonly frozenModelInput: FrozenPlayerModelInputV1
+  readonly [playerFrozenGenerationBundleBrand]: never
+}
+
+export type PlayerGenerationBundleV1 =
+  PlayerPreparedGenerationBundleV1 | PlayerFrozenGenerationBundleV1
 
 const certifiedBundles = new WeakSet<object>()
 const ContextEnvelopeProjectionSchema = z.strictObject({
@@ -192,9 +219,63 @@ export function certifyPlayerPreparedGenerationBundleV1(input: {
   return bundle
 }
 
+export function certifyPlayerFrozenGenerationBundleV1(input: {
+  readonly packet: PlayerDecisionPacketV1
+  readonly frozenModelInput: unknown
+  readonly outputSchemaReference: RuntimeComponentReference
+  readonly outputSchema: typeof PlayerBoundedChoiceSchema
+  readonly validatorReference: RuntimeComponentReference
+  readonly validate: CertifiedPlayerBoundedChoiceValidatorV1
+}): PlayerFrozenGenerationBundleV1 {
+  let frozen: FrozenPlayerModelInputV1
+  let request: PreparedModelRequest<'player'>
+  try {
+    frozen = decodeFrozenPlayerModelInputV1(input.frozenModelInput)
+    request = restoreFrozenPlayerModelRequestV1(frozen)
+  } catch {
+    throw new RangeError('Player 冻结 request 无效。')
+  }
+  if (
+    !isPlayerDecisionPacketV1(input.packet) ||
+    input.outputSchema !== PlayerBoundedChoiceSchema ||
+    !sameReference(
+      input.outputSchemaReference,
+      PLAYER_OUTPUT_SCHEMA_REFERENCE,
+    ) ||
+    !sameReference(input.validatorReference, PLAYER_VALIDATOR_REFERENCE) ||
+    !sameReference(frozen.outputSchema, PLAYER_OUTPUT_SCHEMA_REFERENCE) ||
+    !sameReference(frozen.validator, PLAYER_VALIDATOR_REFERENCE) ||
+    !isCertifiedPlayerBoundedChoiceValidatorV1({
+      value: input.validate,
+      packet: input.packet,
+    })
+  ) {
+    throw new RangeError('Player 冻结 Adapter 边界认证失败。')
+  }
+  const bundle = deepFreeze({
+    packet: input.packet,
+    request,
+    frozenModelInput: frozen,
+    outputSchemaReference: PLAYER_OUTPUT_SCHEMA_REFERENCE,
+    outputSchema: PlayerBoundedChoiceSchema,
+    validatorReference: PLAYER_VALIDATOR_REFERENCE,
+    validate: input.validate,
+  }) as PlayerFrozenGenerationBundleV1
+  certifiedBundles.add(bundle)
+  return bundle
+}
+
 export function isPlayerPreparedGenerationBundleV1(
   value: unknown,
 ): value is PlayerPreparedGenerationBundleV1 {
+  return (
+    typeof value === 'object' && value !== null && certifiedBundles.has(value)
+  )
+}
+
+export function isPlayerGenerationBundleV1(
+  value: unknown,
+): value is PlayerGenerationBundleV1 {
   return (
     typeof value === 'object' && value !== null && certifiedBundles.has(value)
   )

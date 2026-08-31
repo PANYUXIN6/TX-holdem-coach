@@ -302,7 +302,9 @@ export function applyExploitAdjustmentPolicyV1(input: {
     evidenceId: input.evidenceId,
     asOfEventSeq: input.asOfEventSeq,
     status: 'insufficientEvidence' as const,
-    reasonCode: 'crossHandEvidenceUnavailable' as const,
+    // M4.9 已把跨手统计纳入 evidence；v1 仍没有获准将统计转换为权重偏移的
+    // exploit baseline，因此保持零偏移并明确该边界。
+    reasonCode: 'noApprovedExploitBaseline' as const,
     candidates: input.candidates.map((candidate) => ({ ...candidate })),
   })
 }

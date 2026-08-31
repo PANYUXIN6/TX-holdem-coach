@@ -15,7 +15,10 @@ import {
   PLAYER_COMPUTE_DECISION_METRICS_CAPABILITY,
   PLAYER_PROJECT_OPPONENT_FEATURES_CAPABILITY,
   PLAYER_PROJECT_STRATEGY_CAPABILITY,
+  PLAYER_READ_SESSION_MEMORY_CAPABILITY,
+  PlayerReadSessionMemoryCapabilityOutputSchema,
 } from './player-decision-capabilities.js'
+import type { CertifiedPlayerMemoryRevisionV1 } from '../../persistence/player-memory-repository.js'
 import {
   buildPlayerDecisionAnalysisCore,
   type PlayerDecisionAnalysisCore,
@@ -40,6 +43,7 @@ import {
 } from './player-strategy-projection.js'
 
 export const PLAYER_DECISION_PREPROCESSING_CAPABILITY_ORDER = Object.freeze([
+  PLAYER_READ_SESSION_MEMORY_CAPABILITY,
   PLAYER_COMPUTE_DECISION_METRICS_CAPABILITY,
   PLAYER_PROJECT_STRATEGY_CAPABILITY,
   PLAYER_PROJECT_OPPONENT_FEATURES_CAPABILITY,
@@ -53,6 +57,7 @@ export interface ExecutePlayerDecisionPreprocessingPlanInput {
   readonly observation: PlayerVisibleState
   readonly reference: PlayerDecisionReference
   readonly strategyPack: StrategyPack
+  readonly sessionMemory: CertifiedPlayerMemoryRevisionV1
 }
 
 export interface PlayerDecisionPreprocessingPlan {
@@ -205,6 +210,35 @@ export async function executePlayerDecisionPreprocessingPlan(
     reference: input.reference,
   })
 
+  const memoryOutput = await input.executor.invoke<JsonValue>({
+    runtimeType: 'player',
+    authority: input.authority,
+    capability: PLAYER_READ_SESSION_MEMORY_CAPABILITY,
+    payload: {
+      binding: expectedBinding,
+      revision: input.sessionMemory.revision,
+      payloadVersion: input.sessionMemory.payloadVersion,
+      payload: input.sessionMemory.payload,
+      sha256: input.sessionMemory.sha256,
+      asOfEventSeq: input.sessionMemory.asOfEventSeq,
+    },
+    signal: input.signal,
+    control: input.control,
+  })
+  throwIfAborted(input.signal)
+  const parsedMemory =
+    PlayerReadSessionMemoryCapabilityOutputSchema.safeParse(memoryOutput)
+  if (
+    !parsedMemory.success ||
+    !samePlayerDecisionBinding(expectedBinding, parsedMemory.data.binding) ||
+    parsedMemory.data.revision !== input.sessionMemory.revision ||
+    parsedMemory.data.sha256 !== input.sessionMemory.sha256
+  ) {
+    throw new RangeError(
+      'Session Memory Capability 返回值与本次 revision 不一致。',
+    )
+  }
+
   const computeOutput = await input.executor.invoke<JsonValue>({
     runtimeType: 'player',
     authority: input.authority,
@@ -245,7 +279,11 @@ export async function executePlayerDecisionPreprocessingPlan(
     runtimeType: 'player',
     authority: input.authority,
     capability: PLAYER_PROJECT_OPPONENT_FEATURES_CAPABILITY,
-    payload: { observation: input.observation, reference: input.reference },
+    payload: {
+      observation: input.observation,
+      reference: input.reference,
+      sessionMemory: parsedMemory.data,
+    },
     signal: input.signal,
     control: input.control,
   })
@@ -257,6 +295,7 @@ export async function executePlayerDecisionPreprocessingPlan(
       buildPlayerOpponentEvidence({
         observation: input.observation,
         reference: input.reference,
+        sessionMemory: parsedMemory.data,
       }),
   })
 

@@ -6,6 +6,10 @@ import {
   issueRuntimeCommitAuthority,
   type RuntimeCommitAuthority,
 } from '../../src/agents/foundation/runtime-ports.js'
+import {
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
 import { encodeExecutionBudgetAudit } from '../../src/agents/audit/execution-budget-audit-codec.js'
 import { encodeRunConfigurationAudit } from '../../src/agents/audit/run-configuration-audit-codec.js'
 import {
@@ -53,6 +57,7 @@ const SESSION_ID = '20000000-0000-4000-8000-000000000047'
 const HAND_ID = '30000000-0000-4000-8000-000000000047'
 const PARTICIPANT_ID = '40000000-0000-4000-8000-000000000049'
 const DECISION_REQUEST_ID = '50000000-0000-4000-8000-000000000047'
+const FROZEN_MODEL_INPUT_SHA256 = 'a'.repeat(64)
 const ROSTER_IDS = [
   '40000000-0000-4000-8000-000000000040',
   '40000000-0000-4000-8000-000000000047',
@@ -572,16 +577,18 @@ async function insertSelectedDecisionFixture(
             ${owner.databaseOwnerId}::uuid, ${`M47 Agent ${seatNumber}`},
             '#000000', ${`m47-persona-${seatNumber}`}, 1,
             ${'0'.repeat(64)}, 1, ${transaction.json({})},
-            1, ${transaction.json({})}
+            1, ${transaction.json(PLAYER_EMPTY_SESSION_MEMORY_V1)}
           )
         `
         await transaction`
           INSERT INTO app_private.agent_memory_revisions (
             participant_id, session_id, owner_id, revision,
-            memory_payload_version, memory_payload
+            memory_payload_version, memory_payload, memory_sha256
           ) VALUES (
             ${participantId}::uuid, ${SESSION_ID}::uuid,
-            ${owner.databaseOwnerId}::uuid, 0, 1, ${transaction.json({})}
+            ${owner.databaseOwnerId}::uuid, 0, 1,
+            ${transaction.json(PLAYER_EMPTY_SESSION_MEMORY_V1)},
+            ${hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1)}
           )
         `
       }
@@ -737,8 +744,11 @@ async function insertSelectedDecisionFixture(
         source_state_version, decision_request_id, runtime, record_version,
         status, decision_audit_snapshot_payload_version,
         decision_audit_snapshot_payload, candidate_set_payload_version,
-        candidate_set_payload, model_projection_payload_version,
-        model_projection_payload, model_choice_payload_version,
+        candidate_set_payload, memory_revision, memory_payload_version,
+        memory_sha256, model_projection_payload_version,
+        model_projection_payload, frozen_model_input_payload_version,
+        frozen_model_input_payload, frozen_model_input_sha256,
+        model_choice_payload_version,
         model_choice_payload, validator_result_payload_version,
         validator_result_payload, accepted_attempt_id, model_prepared_at,
         selected_at
@@ -750,7 +760,10 @@ async function insertSelectedDecisionFixture(
         'player', 1, 'selected',
         1, ${transaction.json({ audit: 1 })},
         1, ${transaction.json({ candidates: 1 })},
+        0, 1, ${hashPlayerSessionMemoryV1(PLAYER_EMPTY_SESSION_MEMORY_V1)},
         1, ${transaction.json({ projection: 1 })},
+        1, ${transaction.json({ frozen: 1 })},
+        ${FROZEN_MODEL_INPUT_SHA256},
         1, ${transaction.json({ candidateActionId: 'fold' })},
         1, ${transaction.json({ valid: true })}, ${attemptId}::uuid,
         clock_timestamp(), clock_timestamp()

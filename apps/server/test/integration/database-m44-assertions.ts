@@ -14,6 +14,7 @@ import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { createPlayerDecisionIdentity } from '../../src/sessions/authoritative-state/decision-identity.js'
 import { encodeCurrentPrivateEvent } from '../../src/sessions/authoritative-state/private-event-codec.js'
 import { isPlayerVisibleState } from '../../src/sessions/authoritative-state/player-information-boundary-guard.js'
+import { hashPlayerSessionMemoryV1 } from '../../src/agents/player/player-session-memory.js'
 import { encodeSnapshot } from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import {
   INITIAL_AGENT_MEMORY,
@@ -89,16 +90,19 @@ async function insertSecondOwnerSession(sql: Sql): Promise<void> {
             ${participantId}::uuid, ${SECOND_SESSION_ID}::uuid,
             ${SECOND_OWNER_ID}::uuid, ${`M44 Agent ${seatNumber}`}, '#000000',
             ${`m44-persona-${seatNumber}`}, 1, ${'0'.repeat(64)},
-            1, ${transaction.json({})}, 1, ${transaction.json({})}
+            1, ${transaction.json({})}, 1,
+            ${transaction.json(INITIAL_AGENT_MEMORY.currentPayload)}
           )
         `
         await transaction`
           INSERT INTO app_private.agent_memory_revisions (
             participant_id, session_id, owner_id, revision,
-            memory_payload_version, memory_payload
+            memory_payload_version, memory_payload, memory_sha256
           ) VALUES (
             ${participantId}::uuid, ${SECOND_SESSION_ID}::uuid,
-            ${SECOND_OWNER_ID}::uuid, 0, 1, ${transaction.json({})}
+            ${SECOND_OWNER_ID}::uuid, 0, 1,
+            ${transaction.json(INITIAL_AGENT_MEMORY.revisionPayload)},
+            ${hashPlayerSessionMemoryV1(INITIAL_AGENT_MEMORY.revisionPayload)}
           )
         `
       }

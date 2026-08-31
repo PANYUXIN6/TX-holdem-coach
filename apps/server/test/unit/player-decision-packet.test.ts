@@ -4,6 +4,7 @@ import {
   DecisionAuditSnapshotV1Schema,
   MODEL_FACT_REASON_CODES_V1,
   PLAYER_FACT_MANIFEST_DESCRIPTOR_V1,
+  PlayerSessionMemorySnapshotV1Schema,
   isDecisionAuditSnapshotV1,
 } from '../../src/agents/player/player-decision-audit.js'
 import {
@@ -18,7 +19,10 @@ import {
   encodePlayerModelCandidateTupleV1,
   PlayerModelProjectionV1Schema,
   PLAYER_MODEL_CANDIDATE_TUPLE_DESCRIPTOR_V1,
+  PLAYER_MODEL_MEMORY_MAX_BYTES,
+  projectSessionMemoryForModelV1,
 } from '../../src/agents/player/player-model-projection.js'
+import { hashPlayerSessionMemoryV1 } from '../../src/agents/player/player-session-memory.js'
 import { PLAYER_MODEL_INPUT_LIMITS } from '../../src/agents/player/player-model-input-limits.js'
 import {
   certifyPlayerDecisionPacketV1,
@@ -39,9 +43,12 @@ import {
 import {
   PLAYER_OUTPUT_SCHEMA_REFERENCE,
   PLAYER_VALIDATOR_REFERENCE,
+  certifyPlayerFrozenGenerationBundleV1,
   certifyPlayerPreparedGenerationBundleV1,
+  isPlayerGenerationBundleV1,
   isPlayerPreparedGenerationBundleV1,
 } from '../../src/agents/player/player-model-adapter-boundary-guard.js'
+import { createFrozenPlayerModelInputV1 } from '../../src/agents/player/player-frozen-model-input.js'
 import { prepareContextEnvelope } from '../../src/agents/foundation/context-envelope.js'
 import {
   createPromptModuleDefinition,
@@ -128,6 +135,55 @@ function prepared() {
 }
 
 describe('M4.6 Player decision packet', () => {
+  test('将最坏存储 Memory 截断为不超过 2 KiB 的模型投影', () => {
+    const { snapshot } = createPlayerDecisionAuditFixture()
+    const maximum = Number.MAX_SAFE_INTEGER
+    const payload = {
+      ...snapshot.sessionMemory.payload,
+      scannedThrough: { handNumber: maximum, eventSeq: maximum },
+      lastCompletedHandNumber: maximum,
+      sessionSummary: {
+        completedHandsObserved: maximum,
+        showdownHandsObserved: maximum,
+      },
+      opponents: Array.from({ length: 8 }, (_, opponentIndex) => ({
+        participantId: `10000000-0000-4000-8000-${String(opponentIndex + 1).padStart(12, '0')}`,
+        seatNumber: opponentIndex + 1,
+        completedHandsObserved: maximum,
+        showdownHandsObserved: maximum,
+        metrics: Array.from({ length: 6 }, (_, metric) => ({
+          metric: [
+            'preflopVoluntaryParticipation',
+            'preflopFullRaise',
+            'facingAggressionFold',
+            'facingAggressionCall',
+            'facingAggressionRaise',
+            'currentStreetAggression',
+          ][metric]!,
+          numerator: maximum,
+          denominator: maximum,
+          distinctHandCount: maximum,
+        })),
+      })),
+      detailLevel: 'compact' as const,
+    }
+    const memory = PlayerSessionMemorySnapshotV1Schema.parse({
+      ...snapshot.sessionMemory,
+      payload,
+      memorySha256: hashPlayerSessionMemoryV1(payload),
+    })
+
+    const projected = projectSessionMemoryForModelV1(memory)
+
+    expect(
+      Buffer.byteLength(
+        canonicalJson(projected as unknown as JsonValue),
+        'utf8',
+      ),
+    ).toBeLessThanOrEqual(PLAYER_MODEL_MEMORY_MAX_BYTES)
+    expect(projected[4].length).toBeLessThan(8)
+  })
+
   test('builds deterministic strict audit and minimum projection with 32 facts', () => {
     const first = createPlayerDecisionAuditFixture().snapshot
     const second = createPlayerDecisionAuditFixture().snapshot
@@ -287,6 +343,46 @@ describe('M4.6 Player decision packet', () => {
         validate: ((value) => validate(value)) as typeof validate,
       }),
     ).toThrow()
+  })
+
+  test('modelPrepared 恢复只采用冻结 Provider messages，不重新绑定当前 Prompt', () => {
+    const { packet, validate } = prepared()
+    const frozen = createFrozenPlayerModelInputV1({
+      contextSha256: 'a'.repeat(64),
+      messages: [
+        { role: 'system', content: '历史系统提示词，不应被当前模块重渲染。' },
+        { role: 'user', content: '历史冻结上下文。' },
+      ],
+      maximumRequestBytes: PLAYER_MODEL_INPUT_LIMITS.maximumRequestBytes,
+      estimatedInputTokens: 16,
+      routePolicy: {
+        policy: { id: 'player.route-policy', version: 1 },
+        pricingPolicy: { id: 'foundation.deepseek-pricing-cny', version: 1 },
+        provider: 'deepseek',
+        maximumContentCorrections: 2,
+      },
+      modelSelection: {
+        modelId: 'deepseek-v4-flash',
+        temperature: 0.2,
+        maxOutputTokens: 256,
+        thinkingMode: 'disabled',
+      },
+      outputSchema: PLAYER_OUTPUT_SCHEMA_REFERENCE,
+      validator: PLAYER_VALIDATOR_REFERENCE,
+    })
+
+    const bundle = certifyPlayerFrozenGenerationBundleV1({
+      packet,
+      frozenModelInput: frozen,
+      outputSchemaReference: PLAYER_OUTPUT_SCHEMA_REFERENCE,
+      outputSchema: PlayerBoundedChoiceSchema,
+      validatorReference: PLAYER_VALIDATOR_REFERENCE,
+      validate,
+    })
+
+    expect(isPlayerGenerationBundleV1(bundle)).toBe(true)
+    expect(bundle.request.messages).toEqual(frozen.messages)
+    expect(bundle.request.sha256).toBe(frozen.requestSha256)
   })
 
   test('rejects a branded prompt module that reuses the official reference with different text', () => {

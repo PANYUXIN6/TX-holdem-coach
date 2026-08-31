@@ -10,6 +10,7 @@ import type {
 } from '../../persistence/player-decision-repository.js'
 import type { PlayerModelAttemptControlV1 } from '../../persistence/player-model-attempt-control.js'
 import type { PlayerRunObservationPortFactory } from '../../persistence/player-run-observation-port.js'
+import { createPlayerMemoryRepository } from '../../persistence/player-memory-repository.js'
 import type { LeasedAgentRun } from '../foundation/agent-run-types.js'
 import type { RuntimeExecutionPort } from '../foundation/agent-worker-ports.js'
 import type {
@@ -31,6 +32,10 @@ import {
 import type { RuntimeRegistry } from '../foundation/runtime-registry.js'
 import type { ModelPricingPolicy } from '../model-gateway/model-pricing-policy.js'
 import { playerRuntimeDefinition } from './foundation-definition.js'
+import {
+  createPlayerMemoryService,
+  type PlayerMemoryService,
+} from './player-memory-service.js'
 import {
   buildDecisionAuditSnapshotV1,
   certifyPersistedDecisionAuditSnapshotV1,
@@ -54,11 +59,14 @@ import {
 import {
   PLAYER_OUTPUT_SCHEMA_REFERENCE,
   PLAYER_VALIDATOR_REFERENCE,
+  certifyPlayerFrozenGenerationBundleV1,
   certifyPlayerPreparedGenerationBundleV1,
+  type PlayerGenerationBundleV1,
 } from './player-model-adapter-boundary-guard.js'
 import { generatePlayerBoundedChoice } from './player-model-generation.js'
 import { PLAYER_MODEL_INPUT_LIMITS } from './player-model-input-limits.js'
 import { buildPlayerModelProjectionV1 } from './player-model-projection.js'
+import { createFrozenPlayerModelInputV1 } from './player-frozen-model-input.js'
 import {
   createPlayerPromptInvocations,
   playerPromptModules,
@@ -95,6 +103,7 @@ export interface PlayerRuntimeExecutorDependencies {
   readonly owner: ResolvedOwnerScope
   readonly registry: RuntimeRegistry
   readonly observationPortFactory: PlayerRunObservationPortFactory
+  readonly memoryService?: PlayerMemoryService
   readonly referencePort: PlayerDecisionReferencePort
   readonly strategyPackRepository: StrategyPackRepository
   readonly capabilityExecutor: CapabilityExecutor<'player'>
@@ -268,6 +277,25 @@ export function createPlayerRuntimeExecutor(
               : 'player_decision_snapshot_rejected',
           )
         }
+        let sessionMemory
+        try {
+          const memoryService =
+            dependencies.memoryService ??
+            createPlayerMemoryService({
+              database: dependencies.database,
+              repository: createPlayerMemoryRepository(),
+            })
+          sessionMemory = await memoryService.materializeForRun({
+            owner: dependencies.owner,
+            run,
+            authority,
+            observation: observationResult.observation,
+          })
+        } catch {
+          throw new PlayerRuntimeExecutionError(
+            'player_decision_persistence_rejected',
+          )
+        }
         const referenceResult = await dependencies.referencePort.load({
           owner: dependencies.owner,
           observation: observationResult.observation,
@@ -300,12 +328,35 @@ export function createPlayerRuntimeExecutor(
           observation: observationResult.observation,
           reference: referenceResult.reference,
           strategyPack,
+          sessionMemory,
         })
         try {
+          if (
+            sessionMemory.sourceAgentRunId === null ||
+            sessionMemory.sourceHandId === null ||
+            sessionMemory.sourceStateVersion === null ||
+            sessionMemory.decisionRequestId === null ||
+            sessionMemory.asOfEventSeq === null
+          ) {
+            throw new RangeError(
+              'Live Player Run 必须使用本次物化的 Memory revision。',
+            )
+          }
           snapshot = buildDecisionAuditSnapshotV1({
             observation: observationResult.observation,
             preprocessing,
             strategyPackRef: pinnedReference,
+            sessionMemory: {
+              memoryRevision: sessionMemory.revision,
+              payloadVersion: sessionMemory.payloadVersion,
+              payload: sessionMemory.payload,
+              memorySha256: sessionMemory.sha256,
+              sourceAgentRunId: sessionMemory.sourceAgentRunId,
+              sourceHandId: sessionMemory.sourceHandId,
+              sourceStateVersion: sessionMemory.sourceStateVersion,
+              decisionRequestId: sessionMemory.decisionRequestId,
+              asOfEventSeq: sessionMemory.asOfEventSeq,
+            },
           })
         } catch {
           throw new PlayerRuntimeExecutionError(
@@ -351,73 +402,123 @@ export function createPlayerRuntimeExecutor(
           'player_decision_packet_leak_rejected',
         )
       }
-      if (resume.kind !== 'modelPrepared') {
-        await runDatabaseTransaction(dependencies.database.sql, (transaction) =>
-          dependencies.decisionRepository.markModelPrepared(
-            transaction,
-            dependencies.owner,
-            authority,
-            {
-              decisionRecordId,
-              snapshotSha256: snapshot.snapshotSha256,
-              candidateSetSha256: snapshot.candidates.candidateSetSha256,
-              projection,
-            },
-          ),
-        )
-      }
-      const context = prepareContextEnvelope({
-        envelope: {
-          runtimeType: 'player',
-          runtimeDefinitionVersion: 1,
-          contextSchemaVersion: 1,
-          contextKind: 'decision',
-          promptModules: playerRuntimeDefinition.promptModules,
-          sourceVersions: [
-            {
-              source: PLAYER_DECISION_CONTEXT_SECTION_REFERENCE,
-              contentVersion: packet.projectionSha256,
-            },
-          ],
-          sections: [
-            {
-              sectionId: 'playerDecision',
-              schema: PLAYER_DECISION_CONTEXT_SECTION_REFERENCE,
-              payload: packet as unknown as JsonValue,
-            },
-          ],
-        },
-        policy: playerContextPolicy,
-        registry: dependencies.registry,
-        budget: run.budget,
-        scanner: dependencies.scanner,
-      })
-      const request = prepareModelRequest({
-        runtimeType: 'player',
-        runtimeDefinitionVersion: 1,
-        context,
-        modules: playerPromptModules,
-        invocations: createPlayerPromptInvocations(),
-        registry: dependencies.registry,
-        scanner: dependencies.scanner,
-        maximumRequestBytes: PLAYER_MODEL_INPUT_LIMITS.maximumRequestBytes,
-        maximumInputTokens: run.budget.maxInputTokens,
-      })
       const validate = createPlayerBoundedChoiceValidator({
         packet,
         scanner: dependencies.scanner,
       })
-      let bundle
+      let bundle: PlayerGenerationBundleV1
+      let modelSelection = PERSONA_MODEL_BUNDLE_DEFAULTS
       try {
-        bundle = certifyPlayerPreparedGenerationBundleV1({
-          packet,
-          context,
-          request,
-          outputSchemaReference: PLAYER_OUTPUT_SCHEMA_REFERENCE,
-          outputSchema: PlayerBoundedChoiceSchema,
-          validatorReference: PLAYER_VALIDATOR_REFERENCE,
-          validate,
-        })
+        if (resume.kind === 'modelPrepared') {
+          const frozenModelInput = resume.record.frozenModelInput
+          if (
+            frozenModelInput === null ||
+            frozenModelInput.routePolicy.policy.id !==
+              dependencies.routePolicy.policy.id ||
+            frozenModelInput.routePolicy.policy.version !==
+              dependencies.routePolicy.policy.version ||
+            frozenModelInput.routePolicy.pricingPolicy.id !==
+              dependencies.routePolicy.pricingPolicy.id ||
+            frozenModelInput.routePolicy.pricingPolicy.version !==
+              dependencies.routePolicy.pricingPolicy.version ||
+            frozenModelInput.routePolicy.provider !==
+              dependencies.routePolicy.provider ||
+            frozenModelInput.routePolicy.maximumContentCorrections !==
+              dependencies.routePolicy.maximumContentCorrections
+          ) {
+            throw new RangeError('冻结模型路由与当前可用实现不一致。')
+          }
+          bundle = certifyPlayerFrozenGenerationBundleV1({
+            packet,
+            frozenModelInput,
+            outputSchemaReference: PLAYER_OUTPUT_SCHEMA_REFERENCE,
+            outputSchema: PlayerBoundedChoiceSchema,
+            validatorReference: PLAYER_VALIDATOR_REFERENCE,
+            validate,
+          })
+          modelSelection = {
+            deepSeek: frozenModelInput.modelSelection,
+          }
+        } else {
+          const context = prepareContextEnvelope({
+            envelope: {
+              runtimeType: 'player',
+              runtimeDefinitionVersion: 1,
+              contextSchemaVersion: 1,
+              contextKind: 'decision',
+              promptModules: playerRuntimeDefinition.promptModules,
+              sourceVersions: [
+                {
+                  source: PLAYER_DECISION_CONTEXT_SECTION_REFERENCE,
+                  contentVersion: packet.projectionSha256,
+                },
+              ],
+              sections: [
+                {
+                  sectionId: 'playerDecision',
+                  schema: PLAYER_DECISION_CONTEXT_SECTION_REFERENCE,
+                  payload: packet as unknown as JsonValue,
+                },
+              ],
+            },
+            policy: playerContextPolicy,
+            registry: dependencies.registry,
+            budget: run.budget,
+            scanner: dependencies.scanner,
+          })
+          const request = prepareModelRequest({
+            runtimeType: 'player',
+            runtimeDefinitionVersion: 1,
+            context,
+            modules: playerPromptModules,
+            invocations: createPlayerPromptInvocations(),
+            registry: dependencies.registry,
+            scanner: dependencies.scanner,
+            maximumRequestBytes: PLAYER_MODEL_INPUT_LIMITS.maximumRequestBytes,
+            maximumInputTokens: run.budget.maxInputTokens,
+          })
+          bundle = certifyPlayerPreparedGenerationBundleV1({
+            packet,
+            context,
+            request,
+            outputSchemaReference: PLAYER_OUTPUT_SCHEMA_REFERENCE,
+            outputSchema: PlayerBoundedChoiceSchema,
+            validatorReference: PLAYER_VALIDATOR_REFERENCE,
+            validate,
+          })
+          const frozenModelInput = createFrozenPlayerModelInputV1({
+            contextSha256: context.sha256,
+            messages: request.messages,
+            maximumRequestBytes: request.maximumRequestBytes,
+            estimatedInputTokens: request.estimatedInputTokens,
+            routePolicy: {
+              policy: dependencies.routePolicy.policy,
+              pricingPolicy: dependencies.routePolicy.pricingPolicy,
+              provider: dependencies.routePolicy.provider,
+              maximumContentCorrections:
+                dependencies.routePolicy.maximumContentCorrections,
+            },
+            modelSelection: PERSONA_MODEL_BUNDLE_DEFAULTS.deepSeek,
+            outputSchema: PLAYER_OUTPUT_SCHEMA_REFERENCE,
+            validator: PLAYER_VALIDATOR_REFERENCE,
+          })
+          await runDatabaseTransaction(
+            dependencies.database.sql,
+            (transaction) =>
+              dependencies.decisionRepository.markModelPrepared(
+                transaction,
+                dependencies.owner,
+                authority,
+                {
+                  decisionRecordId,
+                  snapshotSha256: snapshot.snapshotSha256,
+                  candidateSetSha256: snapshot.candidates.candidateSetSha256,
+                  projection,
+                  frozenModelInput,
+                },
+              ),
+          )
+        }
       } catch {
         throw new PlayerRuntimeExecutionError(
           'player_model_adapter_boundary_rejected',
@@ -431,7 +532,7 @@ export function createPlayerRuntimeExecutor(
         budget: run.budget,
         routePolicy: dependencies.routePolicy,
         pricingPolicy: dependencies.pricingPolicy,
-        modelSelection: PERSONA_MODEL_BUNDLE_DEFAULTS,
+        modelSelection,
         signal,
         scanner: dependencies.scanner,
         control,

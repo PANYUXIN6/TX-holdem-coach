@@ -234,6 +234,58 @@ export function prepareModelRequest<TRuntime extends RuntimeType>(input: {
   return prepared
 }
 
+/**
+ * 将已在 durable Decision 中认证并冻结的 Provider request 恢复为受品牌保护
+ * 的请求对象。它只校验冻结 messages 的规范字节和边界，不调用 Prompt 或
+ * Context builder，因此恢复不得随当前代码文本变化而改变 Provider 输入。
+ */
+export function restorePreparedModelRequest<
+  TRuntime extends RuntimeType,
+>(input: {
+  readonly runtimeType: TRuntime
+  readonly messages: readonly ModelMessage[]
+  readonly maximumRequestBytes: number
+  readonly sha256: string
+  readonly estimatedInputTokens: number
+}): PreparedModelRequest<TRuntime> {
+  const messages = input.messages.map((message) => ({ ...message }))
+  if (
+    messages.length === 0 ||
+    messages.some(
+      (message) =>
+        (message.role !== 'system' && message.role !== 'user') ||
+        typeof message.content !== 'string' ||
+        message.content.length === 0 ||
+        Object.keys(message).sort().join(',') !== 'content,role',
+    )
+  ) {
+    throw new FoundationProtocolError('invalidPromptModule')
+  }
+  const serialized = canonicalJson({ messages } as JsonValue)
+  const byteLength = Buffer.byteLength(serialized, 'utf8')
+  const sha256 = createHash('sha256').update(serialized, 'utf8').digest('hex')
+  if (
+    !Number.isSafeInteger(input.maximumRequestBytes) ||
+    input.maximumRequestBytes <= 0 ||
+    byteLength > input.maximumRequestBytes ||
+    !Number.isSafeInteger(input.estimatedInputTokens) ||
+    input.estimatedInputTokens < 0 ||
+    sha256 !== input.sha256
+  ) {
+    throw new FoundationProtocolError('promptSizeExhausted')
+  }
+  const prepared = deepFreeze({
+    runtimeType: input.runtimeType,
+    messages,
+    byteLength,
+    maximumRequestBytes: input.maximumRequestBytes,
+    sha256,
+    estimatedInputTokens: input.estimatedInputTokens,
+  }) as unknown as PreparedModelRequest<TRuntime>
+  preparedRequests.add(prepared)
+  return prepared
+}
+
 export function isPreparedModelRequest<TRuntime extends RuntimeType>(
   value: unknown,
   runtimeType: TRuntime,

@@ -7,12 +7,15 @@ import {
 } from '../sessions/roster-preparation.js'
 import {
   ActiveModelConfigurationSchema,
-  AgentMemoryPayloadSchema,
   createConfigSnapshotKey,
-  MEMORY_PAYLOAD_VERSION,
   PERSONA_CONFIG_PAYLOAD_VERSION,
   PersonaConfigPayloadSchema,
 } from '../personas/config.js'
+import {
+  AgentMemoryPayloadV1Schema,
+  hashPlayerSessionMemoryV1,
+  PLAYER_SESSION_MEMORY_PAYLOAD_VERSION,
+} from '../agents/player/player-session-memory.js'
 import { canonicalJson } from '../persisted-json.js'
 import {
   ActiveSessionConflictError,
@@ -127,13 +130,13 @@ interface InsertSessionRosterSnapshotInput {
 function validateInitialMemory(
   memory: SessionRosterAgentInput['initialMemory'],
 ): void {
-  const current = AgentMemoryPayloadSchema.safeParse(memory.currentPayload)
-  const revision = AgentMemoryPayloadSchema.safeParse(memory.revisionPayload)
+  const current = AgentMemoryPayloadV1Schema.safeParse(memory.currentPayload)
+  const revision = AgentMemoryPayloadV1Schema.safeParse(memory.revisionPayload)
   if (
     memory.currentRevision !== 0 ||
     memory.revision !== 0 ||
-    memory.currentPayloadVersion !== MEMORY_PAYLOAD_VERSION ||
-    memory.revisionPayloadVersion !== MEMORY_PAYLOAD_VERSION ||
+    memory.currentPayloadVersion !== PLAYER_SESSION_MEMORY_PAYLOAD_VERSION ||
+    memory.revisionPayloadVersion !== PLAYER_SESSION_MEMORY_PAYLOAD_VERSION ||
     !current.success ||
     !revision.success ||
     canonicalJson(current.data) !== canonicalJson(revision.data)
@@ -251,6 +254,14 @@ async function insertSessionRosterSnapshot(
     revision: agent.initialMemory.revision,
     memory_payload_version: agent.initialMemory.revisionPayloadVersion,
     memory_payload: agent.initialMemory.revisionPayload,
+    source_agent_run_id: null,
+    source_hand_id: null,
+    source_state_version: null,
+    decision_request_id: null,
+    as_of_event_seq: null,
+    memory_sha256: hashPlayerSessionMemoryV1(
+      agent.initialMemory.revisionPayload,
+    ),
   }))
   const agentRowsJson = transaction.json(agentRows)
   const memoryRowsJson = transaction.json(memoryRows)
@@ -333,7 +344,13 @@ async function insertSessionRosterSnapshot(
         owner_id,
         revision,
         memory_payload_version,
-        memory_payload
+        memory_payload,
+        source_agent_run_id,
+        source_hand_id,
+        source_state_version,
+        decision_request_id,
+        as_of_event_seq,
+        memory_sha256
       )
       SELECT
         participant_id,
@@ -341,7 +358,13 @@ async function insertSessionRosterSnapshot(
         owner_id,
         revision,
         memory_payload_version,
-        memory_payload
+        memory_payload,
+        source_agent_run_id,
+        source_hand_id,
+        source_state_version,
+        decision_request_id,
+        as_of_event_seq,
+        memory_sha256
       FROM jsonb_populate_recordset(
         NULL::app_private.agent_memory_revisions,
         ${memoryRowsJson}

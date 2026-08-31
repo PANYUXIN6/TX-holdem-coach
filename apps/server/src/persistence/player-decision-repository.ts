@@ -30,6 +30,11 @@ import {
   buildPlayerModelProjectionV1,
   type PlayerModelProjectionV1,
 } from '../agents/player/player-model-projection.js'
+import {
+  decodeFrozenPlayerModelInputV1,
+  hashFrozenPlayerModelInputV1,
+  type FrozenPlayerModelInputV1,
+} from '../agents/player/player-frozen-model-input.js'
 import type { ResolvedOwnerScope } from './owner-scope.js'
 import { isResolvedOwnerScope } from './owner-scope.js'
 import {
@@ -76,8 +81,14 @@ const DecisionRowSchema = z.strictObject({
   auditPayload: z.unknown(),
   candidatePayloadVersion: z.unknown(),
   candidatePayload: z.unknown(),
+  memoryRevision: SafeNonnegativeIntegerSchema,
+  memoryPayloadVersion: z.literal(1),
+  memorySha256: Sha256Schema,
   projectionPayloadVersion: z.unknown(),
   projectionPayload: z.unknown(),
+  frozenModelInputPayloadVersion: z.literal(1).nullable(),
+  frozenModelInputPayload: z.unknown().nullable(),
+  frozenModelInputSha256: Sha256Schema.nullable(),
   choicePayloadVersion: z.unknown(),
   choicePayload: z.unknown(),
   validatorPayloadVersion: z.unknown(),
@@ -114,10 +125,13 @@ export interface DecodedPlayerDecisionRecordV1 {
   readonly participantId: string
   readonly sourceStateVersion: number
   readonly decisionRequestId: string
+  readonly memoryRevision: number
+  readonly memorySha256: string
   readonly status: 'auditPrepared' | 'modelPrepared' | 'selected' | 'committed'
   readonly auditSnapshot: DecisionAuditSnapshotV1Data
   readonly candidateSet: PlayerCandidateSetSnapshotV1
   readonly projection: PlayerModelProjectionV1 | null
+  readonly frozenModelInput: FrozenPlayerModelInputV1 | null
   readonly choice: PlayerBoundedChoiceV1 | null
   readonly validatorResult: PlayerValidatorResultV1 | null
   readonly acceptedAttemptId: string | null
@@ -206,6 +220,7 @@ export interface PlayerDecisionRepository {
       readonly snapshotSha256: string
       readonly candidateSetSha256: string
       readonly projection: PlayerModelProjectionV1
+      readonly frozenModelInput: FrozenPlayerModelInputV1
     },
   ): Promise<{ readonly status: 'modelPrepared' }>
   markSelected(
@@ -348,6 +363,7 @@ async function lockRun(
     WHERE id = ${authority.runId}::uuid
       AND owner_id = ${owner.databaseOwnerId}::uuid
       AND runtime = 'player'
+      AND execution_mode = 'live'
       AND lifecycle = 'running'
       AND lease_owner = ${authority.leaseOwner}
       AND fencing_token = ${authority.fencingToken}::bigint
@@ -378,8 +394,14 @@ async function lockDecision(
       decision_audit_snapshot_payload AS "auditPayload",
       candidate_set_payload_version AS "candidatePayloadVersion",
       candidate_set_payload AS "candidatePayload",
+      memory_revision::float8 AS "memoryRevision",
+      memory_payload_version AS "memoryPayloadVersion",
+      memory_sha256 AS "memorySha256",
       model_projection_payload_version AS "projectionPayloadVersion",
       model_projection_payload AS "projectionPayload",
+      frozen_model_input_payload_version AS "frozenModelInputPayloadVersion",
+      frozen_model_input_payload AS "frozenModelInputPayload",
+      frozen_model_input_sha256 AS "frozenModelInputSha256",
       model_choice_payload_version AS "choicePayloadVersion",
       model_choice_payload AS "choicePayload",
       validator_result_payload_version AS "validatorPayloadVersion",
@@ -471,6 +493,35 @@ function decodeDecisionRow(
           payload: row.projectionPayload,
           reader: playerModelProjectionCodec.read,
         })
+  const frozenModelInput =
+    row.frozenModelInputPayloadVersion === null &&
+    row.frozenModelInputPayload === null &&
+    row.frozenModelInputSha256 === null
+      ? null
+      : (() => {
+          if (
+            row.frozenModelInputPayloadVersion !== 1 ||
+            row.frozenModelInputPayload === null ||
+            row.frozenModelInputSha256 === null
+          ) {
+            throw new PersistenceDataCorruptionError('invalidPlayerDecision')
+          }
+          try {
+            const decoded = decodeFrozenPlayerModelInputV1(
+              row.frozenModelInputPayload,
+            )
+            if (
+              hashFrozenPlayerModelInputV1(decoded) !==
+              row.frozenModelInputSha256
+            ) {
+              throw new PlayerDecisionIntegrityError()
+            }
+            return decoded
+          } catch (error) {
+            if (error instanceof PlayerDecisionIntegrityError) throw error
+            throw new PersistenceDataCorruptionError('invalidPlayerDecision')
+          }
+        })()
   const choice =
     row.choicePayloadVersion === null && row.choicePayload === null
       ? null
@@ -506,6 +557,7 @@ function decodeDecisionRow(
       Date.parse(row.terminatedAt) < Date.parse(row.createdAt)) ||
     (row.status === 'auditPrepared' &&
       (projection !== null ||
+        frozenModelInput !== null ||
         choice !== null ||
         validatorResult !== null ||
         row.acceptedAttemptId !== null ||
@@ -515,6 +567,7 @@ function decodeDecisionRow(
         row.committedAt !== null)) ||
     (row.status === 'modelPrepared' &&
       (projection === null ||
+        frozenModelInput === null ||
         choice !== null ||
         validatorResult !== null ||
         row.acceptedAttemptId !== null ||
@@ -524,6 +577,7 @@ function decodeDecisionRow(
         row.committedAt !== null)) ||
     (row.status === 'selected' &&
       (projection === null ||
+        frozenModelInput === null ||
         choice === null ||
         validatorResult === null ||
         row.acceptedAttemptId === null ||
@@ -533,6 +587,7 @@ function decodeDecisionRow(
         row.committedAt !== null)) ||
     (row.status === 'committed' &&
       (projection === null ||
+        frozenModelInput === null ||
         choice === null ||
         validatorResult === null ||
         row.acceptedAttemptId === null ||
@@ -550,6 +605,9 @@ function decodeDecisionRow(
       sha256(candidateSetWithoutHash as unknown as JsonValue) ||
     auditSnapshot.candidates.candidateSetSha256 !==
       candidateSet.candidateSetSha256 ||
+    auditSnapshot.sessionMemory.memoryRevision !== row.memoryRevision ||
+    auditSnapshot.sessionMemory.payloadVersion !== row.memoryPayloadVersion ||
+    auditSnapshot.sessionMemory.memorySha256 !== row.memorySha256 ||
     canonicalJson(auditSnapshot.candidates as unknown as JsonValue) !==
       canonicalJson(candidateSet as unknown as JsonValue) ||
     (choice !== null &&
@@ -572,10 +630,13 @@ function decodeDecisionRow(
     participantId: row.participantId,
     sourceStateVersion: row.sourceStateVersion,
     decisionRequestId: row.decisionRequestId,
+    memoryRevision: row.memoryRevision,
+    memorySha256: row.memorySha256,
     status: row.status,
     auditSnapshot,
     candidateSet,
     projection,
+    frozenModelInput,
     choice,
     validatorResult,
     acceptedAttemptId: row.acceptedAttemptId,
@@ -655,7 +716,12 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
         run.handId !== binding.handId ||
         run.participantId !== binding.actorParticipantId ||
         run.sourceStateVersion !== binding.stateVersion ||
-        run.decisionRequestId !== binding.decisionRequestId
+        run.decisionRequestId !== binding.decisionRequestId ||
+        input.snapshot.sessionMemory.sourceAgentRunId !== run.agentRunId ||
+        input.snapshot.sessionMemory.sourceHandId !== run.handId ||
+        input.snapshot.sessionMemory.sourceStateVersion !==
+          run.sourceStateVersion ||
+        input.snapshot.sessionMemory.decisionRequestId !== run.decisionRequestId
       ) {
         throw new AgentRunTransitionError('agent_run_fencing_rejected')
       }
@@ -676,7 +742,8 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
           source_state_version, decision_request_id, runtime, record_version,
           status, decision_audit_snapshot_payload_version,
           decision_audit_snapshot_payload, candidate_set_payload_version,
-          candidate_set_payload
+          candidate_set_payload, memory_revision, memory_payload_version,
+          memory_sha256
         ) VALUES (
           ${decisionRecordId}::uuid, ${run.agentRunId}::uuid,
           ${owner.databaseOwnerId}::uuid, ${run.sessionId}::uuid,
@@ -686,6 +753,9 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
           ${transaction.json(audit.payload as unknown as JsonValue)},
           ${candidates.payloadVersion},
           ${transaction.json(candidates.payload as unknown as JsonValue)}
+          , ${input.snapshot.sessionMemory.memoryRevision}::bigint,
+          ${input.snapshot.sessionMemory.payloadVersion},
+          ${input.snapshot.sessionMemory.memorySha256}
         )
         RETURNING id::text AS "decisionRecordId"
       `)
@@ -703,6 +773,16 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
     },
 
     async markModelPrepared(transaction, owner, authority, input) {
+      let frozenModelInput: FrozenPlayerModelInputV1
+      let frozenModelInputSha256: string
+      try {
+        frozenModelInput = decodeFrozenPlayerModelInputV1(
+          input.frozenModelInput,
+        )
+        frozenModelInputSha256 = hashFrozenPlayerModelInputV1(frozenModelInput)
+      } catch {
+        throw new RepositoryInputValidationError()
+      }
       const parsed = z
         .strictObject({
           decisionRecordId: UuidSchema,
@@ -746,6 +826,11 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
             model_projection_payload = ${transaction.json(
               projection.payload as unknown as JsonValue,
             )},
+            frozen_model_input_payload_version = 1,
+            frozen_model_input_payload = ${transaction.json(
+              frozenModelInput as unknown as JsonValue,
+            )},
+            frozen_model_input_sha256 = ${frozenModelInputSha256},
             model_prepared_at = clock_timestamp(),
             updated_at = clock_timestamp()
         WHERE id = ${parsed.data.decisionRecordId}::uuid
@@ -859,8 +944,14 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
           decision_audit_snapshot_payload AS "auditPayload",
           candidate_set_payload_version AS "candidatePayloadVersion",
           candidate_set_payload AS "candidatePayload",
+          memory_revision::float8 AS "memoryRevision",
+          memory_payload_version AS "memoryPayloadVersion",
+          memory_sha256 AS "memorySha256",
           model_projection_payload_version AS "projectionPayloadVersion",
           model_projection_payload AS "projectionPayload",
+          frozen_model_input_payload_version AS "frozenModelInputPayloadVersion",
+          frozen_model_input_payload AS "frozenModelInputPayload",
+          frozen_model_input_sha256 AS "frozenModelInputSha256",
           model_choice_payload_version AS "choicePayloadVersion",
           model_choice_payload AS "choicePayload",
           validator_result_payload_version AS "validatorPayloadVersion",
@@ -964,8 +1055,14 @@ export function createPlayerDecisionRepository(): PlayerDecisionRepository {
           decision_audit_snapshot_payload AS "auditPayload",
           candidate_set_payload_version AS "candidatePayloadVersion",
           candidate_set_payload AS "candidatePayload",
+          memory_revision::float8 AS "memoryRevision",
+          memory_payload_version AS "memoryPayloadVersion",
+          memory_sha256 AS "memorySha256",
           model_projection_payload_version AS "projectionPayloadVersion",
           model_projection_payload AS "projectionPayload",
+          frozen_model_input_payload_version AS "frozenModelInputPayloadVersion",
+          frozen_model_input_payload AS "frozenModelInputPayload",
+          frozen_model_input_sha256 AS "frozenModelInputSha256",
           model_choice_payload_version AS "choicePayloadVersion",
           model_choice_payload AS "choicePayload",
           validator_result_payload_version AS "validatorPayloadVersion",

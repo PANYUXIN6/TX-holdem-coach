@@ -80,7 +80,7 @@ export type FactSourceRef =
       readonly evidenceId: string
       readonly asOfEventSeq: number
       readonly status: 'insufficientEvidence'
-      readonly reasonCode: 'crossHandEvidenceUnavailable'
+      readonly reasonCode: 'noApprovedExploitBaseline'
     }
 
 const SafePositiveIntegerSchema = z
@@ -174,7 +174,7 @@ export const FactSourceRefSchema = z.discriminatedUnion('kind', [
     evidenceId: Sha256DigestSchema,
     asOfEventSeq: SafeNonnegativeIntegerSchema,
     status: z.literal('insufficientEvidence'),
-    reasonCode: z.literal('crossHandEvidenceUnavailable'),
+    reasonCode: z.literal('noApprovedExploitBaseline'),
   }),
 ])
 

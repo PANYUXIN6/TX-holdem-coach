@@ -153,8 +153,8 @@ erDiagram
 | `current_memory_revision` | `bigint`，非空，默认 `0` | 当前生效的记忆修订号，指向 `agent_memory_revisions` 中同 Agent 的对应修订。 |
 | `config_payload_version` | `integer`，非空，正整数 | `config_payload` 的结构契约版本。 |
 | `config_payload` | `jsonb` 对象，非空 | 本场冻结的完整 Agent 配置快照，不得包含秘密。 |
-| `memory_payload_version` | `integer`，非空，正整数 | 当前 `memory_payload` 的结构契约版本。 |
-| `memory_payload` | `jsonb` 对象，非空 | 当前生效的 Agent 记忆内容，是方便读取的当前值镜像。 |
+| `memory_payload_version` | `integer`，非空，固定 `1` | current-only `AgentMemoryPayloadV1` 的结构契约版本。 |
+| `memory_payload` | `jsonb` 对象，非空 | 当前生效的结构化场次记忆镜像；revision 0 为规范空 Memory v1。 |
 | `created_at` | `timestamptz`，非空，默认当前时间 | Session Agent 创建时间。 |
 | `updated_at` | `timestamptz`，非空，默认当前时间 | 配置或当前记忆最后更新时间，由写入方维护。 |
 
@@ -162,6 +162,7 @@ erDiagram
 
 - 只有 `participant_type = agent` 的 Participant 才能有此子表行；每个 Agent Participant 必须恰好有一行。
 - `current_memory_revision` 通过可延迟外键指向历史修订，便于在同一事务中同时写新修订和切换当前版本。
+- Player live Run 固化非零 revision 时，revision 插入与此镜像更新必须在同一事务内完成。
 - 表内不保存当前筹码、按钮或手牌状态，这些属于权威桌面快照。
 
 ### 3.5 `agent_memory_revisions`
@@ -176,13 +177,16 @@ erDiagram
 | `session_id` | `uuid`，非空，复合 FK | 所属场次。 |
 | `owner_id` | `uuid`，非空，复合 FK | 所属 Owner。 |
 | `revision` | `bigint`，复合 PK，非空 | 从 `0` 开始、在单个 Agent 内递增的稳定修订号。 |
-| `memory_payload_version` | `integer`，非空，正整数 | 该历史记忆载荷的结构契约版本。 |
-| `memory_payload` | `jsonb` 对象，非空 | 该修订冻结的记忆内容。 |
+| `memory_payload_version` | `integer`，非空，固定 `1` | current-only Memory v1。 |
+| `memory_payload` | `jsonb` 对象，非空 | 该修订冻结的严格、有界 Memory 内容。 |
+| `source_agent_run_id`、`source_hand_id`、`source_state_version`、`decision_request_id`、`as_of_event_seq` | revision 0 全为空；非零 revision 全非空 | 固化该 Memory 的 live Run、决策身份和认证截止点。 |
+| `memory_sha256` | `text`，非空，64 位小写十六进制 | `memory_payload` 规范 JSON 的 SHA-256。 |
 | `created_at` | `timestamptz`，非空，默认当前时间 | 修订创建时间。 |
 
 **关键规则**：
 
 - 主键为 `(participant_id, revision)`，同一 Agent 的同一修订号只能出现一次。
+- `source_agent_run_id` 非空时唯一；同一 live Run 只能物化一条非零 revision。
 - 删除 Session Agent 时历史修订级联删除。
 
 ## 4. 手牌、命令、事件和快照
@@ -306,6 +310,7 @@ erDiagram
 | `owner_id` | `uuid`，非空，复合 FK | Run 所属 Owner。 |
 | `session_id` | `uuid`，非空，FK → `sessions.id` | Run 所属场次。 |
 | `runtime` | `text`，非空 | Runtime 类型：`player` 或 `coach`。 |
+| `execution_mode` | `text`，非空，默认 `live` | `live` 可参与场次协调；`historicalReexecution` 仅限 Player，必须引用来源 live Run。 |
 | `trigger_type` | `text`，非空 | 启动原因/入口类型，例如自动决策、人工请求或恢复；具体值由 Runtime 契约定义。 |
 | `lifecycle` | `text`，非空 | 生命周期：`queued`、`leased`、`running`、`completed`、`failed`、`cancelled`、`stale`。 |
 | `idempotency_key` | `text`，非空，非空白 | Runtime 范围内的幂等键；`(session_id, runtime, idempotency_key)` 唯一。 |
@@ -315,6 +320,7 @@ erDiagram
 | `decision_request_id` | `uuid`，可空 | Player 决策请求 ID，在场次历史内永久唯一；Coach Run 必须为空。 |
 | `parent_run_id` | `uuid`，可空 | 逻辑前任 Run ID，用于记录人工重试、stale 或进程重启后的接替；当前未设置外键。非空值通过部分唯一索引保证一个 Run 最多有一个直接前任。 |
 | `replacement_run_id` | `uuid`，可空 | 替代当前 Run 的新 Run ID，用于审计接替链；当前未设置外键。非空值通过部分唯一索引保证一个 Run 最多有一个直接后继。 |
+| `reexecution_source_run_id` | `uuid`，可空，自引用 FK | historical Re-execution 的来源 live Run；live Run 必须为空。 |
 | `lease_owner` | `text`，可空，非空白 | 当前持有执行租约的 Worker 标识。 |
 | `lease_expires_at` | `timestamptz`，可空 | 租约到期时间；必须与 `lease_owner` 同时为空或同时存在。 |
 | `fencing_token` | `bigint`，非空，默认 `0` | 单调并发围栏令牌，阻止过期 Worker 提交结果。 |
@@ -408,18 +414,22 @@ erDiagram
 | --- | --- | --- |
 | `id`、`agent_run_id` | `uuid`；PK、Run 唯一 | 一条 Run 至多一份 Decision。 |
 | `owner_id`、`session_id`、`hand_id`、`participant_id`、`source_state_version`、`decision_request_id`、`runtime` | 复合 FK → `agent_runs` | 完整镜像 Player Run 身份；`runtime` 固定为 `player`。 |
+| `execution_mode`、`reexecution_source_decision_id` | `live` 或 `historicalReexecution`；后者自引用同 Owner/Session source Decision | live 不带来源；historical 只引用冻结来源，不能伪装为可提交的现场决策。 |
+| `source_*_sha256` | historical 时四个非空 SHA-256 | 分别锚定来源 Snapshot、Candidate Set、Projection 与 Frozen Model Input；不复制来源大载荷。 |
 | `record_version`、`status` | 正整数、封闭文本 | 当前 record version 为 1；status 只允许四个 durable stage。 |
-| `decision_audit_snapshot_*`、`candidate_set_*` | 必填版本/JSONB 对 | 完整安全审计事实与候选快照，创建首阶段时一次写入。 |
-| `model_projection_*` | 可空版本/JSONB 对 | `modelPrepared` 起必填的最小模型投影。 |
+| `decision_audit_snapshot_*`、`candidate_set_*` | live 必填版本/JSONB 对；historical 为空 | live 在创建首阶段写入完整安全审计事实与候选快照；historical 仅通过来源 Decision 引用。 |
+| `memory_revision`、`memory_payload_version`、`memory_sha256` | 非空，复合 FK → `agent_memory_revisions`，版本固定 `1` | 决策实际使用的 Memory revision 与摘要；审计快照内嵌的 Memory 必须与此完全一致。 |
+| `model_projection_*` | live `modelPrepared` 起必填版本/JSONB 对 | historical 不复制来源投影，只通过 `source_projection_sha256` 认证来源。 |
+| `frozen_model_input_*` | live `modelPrepared` 起必填版本/JSONB/SHA-256 对 | 首次 Provider 调用所见的 canonical messages、路由/模型/输出配置及上下文摘要；不保存密钥、响应或 reasoning。 |
 | `model_choice_*`、`validator_result_*` | 可空版本/JSONB 对 | `selected` 才存在的严格输出和语义验收结果。 |
 | `accepted_attempt_id` | 可空复合 FK → `agent_attempts` | `selected` 精确绑定同 Run/Owner/Session 的 accepted Attempt。 |
 | `command_ledger_id` | 可空复合 FK → `command_ledger`，唯一 | 仅 `committed` 关联同 Owner/Session 的 completed 私有 `aiAction` 账本；一条账本不能被两份 Decision 复用。 |
-| `terminal_outcome`、`terminal_reason`、`terminated_at` | 可空且成组出现 | M4.8 协调终态：仅 `failed|stale`，保留原有 durable stage 与已持久化审计内容；`committed` 不得设置。 |
+| `terminal_outcome`、`terminal_reason`、`terminated_at` | 可空且成组出现 | `failed|stale|cancelled` 终态保留已持久化审计内容；`committed` 不得设置。 |
 | `created_at`、`model_prepared_at`、`selected_at`、`committed_at`、`updated_at` | `timestamptz` | 阶段时间矩阵与单调顺序由 CHECK 固定；`committed_at ≥ selected_at`。 |
 
 **关键规则**：
 
-- 数据库 CHECK 固定 payload pair、四阶段字段矩阵、Decision terminal 三元组和时间顺序；每个可空 pair 的非空分支显式要求 version/payload 双方 `IS NOT NULL`，避免 PostgreSQL 三值逻辑接受单边 NULL。`committed` 必须保留完整 selected 载荷、accepted Attempt、ledger 关联和提交时间，不能写协调终态。
+- 数据库 CHECK 固定 live/historical mode、payload pair、阶段字段矩阵、Decision terminal 三元组和时间顺序；每个可空 pair 的非空分支显式要求 version/payload 双方 `IS NOT NULL`，避免 PostgreSQL 三值逻辑接受单边 NULL。`committed` 必须保留完整 selected 载荷、accepted Attempt、ledger 关联和提交时间，不能写协调终态。
 - accepted Attempt 的 `completed + accepted + valid` 语义由 Player 专属 control 在同一事务锁定 Run/Attempt/Decision 后复验，不能由跨表 CHECK 伪装。
 - 删除 Session 时 Decision 级联删除；Owner 级 `app_settings` 不受影响。
 

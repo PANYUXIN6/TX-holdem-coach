@@ -31,6 +31,10 @@ import {
   FactSourceRefSchema,
   type FactSourceRef,
 } from './player-fact-sources.js'
+import {
+  AgentMemoryPayloadV1Schema,
+  hashPlayerSessionMemoryV1,
+} from './player-session-memory.js'
 import { samePlayerDecisionBinding } from './player-decision-analysis-input.js'
 
 const SafeNonnegativeIntegerSchema = z
@@ -46,9 +50,9 @@ const RuntimeComponentReferenceSchema = z.strictObject({
 export const MODEL_FACT_REASON_CODES_V1 = [
   'noVersionedOpponentRange',
   'noJointResponseModel',
-  'crossHandEvidenceUnavailable',
   'unsupportedStrategySpot',
   'insufficientEvidence',
+  'noApprovedExploitBaseline',
   'noCallRequired',
   'preflopCurrentSprUndefined',
   'forcedRunout',
@@ -282,6 +286,32 @@ export type PlayerCandidateSetSnapshotV1 = Readonly<
   z.infer<typeof PlayerCandidateSetSnapshotV1Schema>
 >
 
+export const PlayerSessionMemorySnapshotV1Schema = z
+  .strictObject({
+    memoryRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    payloadVersion: z.literal(1),
+    payload: AgentMemoryPayloadV1Schema,
+    memorySha256: Sha256DigestSchema,
+    sourceAgentRunId: z.string().uuid(),
+    sourceHandId: z.string().uuid(),
+    sourceStateVersion: SafeNonnegativeIntegerSchema,
+    decisionRequestId: z.string().uuid(),
+    asOfEventSeq: SafeNonnegativeIntegerSchema,
+  })
+  .superRefine((memory, context) => {
+    if (hashPlayerSessionMemoryV1(memory.payload) !== memory.memorySha256) {
+      context.addIssue({
+        code: 'custom',
+        path: ['memorySha256'],
+        message: 'Memory 审计快照摘要与 payload 不一致。',
+      })
+    }
+  })
+
+export type PlayerSessionMemorySnapshotV1 = Readonly<
+  z.infer<typeof PlayerSessionMemorySnapshotV1Schema>
+>
+
 export const DecisionAuditSnapshotV1Schema = z.strictObject({
   decisionAuditSnapshotSchemaVersion: z.literal(1),
   binding: PlayerDecisionAnalysisBindingSchema,
@@ -301,6 +331,7 @@ export const DecisionAuditSnapshotV1Schema = z.strictObject({
     evidenceId: Sha256DigestSchema,
     asOfEventSeq: SafeNonnegativeIntegerSchema,
   }),
+  sessionMemory: PlayerSessionMemorySnapshotV1Schema,
   candidates: PlayerCandidateSetSnapshotV1Schema,
   fullFactManifest: z
     .array(AuditFactManifestEntryV1Schema)
@@ -457,13 +488,29 @@ function factStatesForConcept(
             },
           ]
     case 'opponentEvidence':
+      return preprocessing.opponentEvidence.data.status === 'available'
+        ? [
+            {
+              status: 'available',
+              epistemicKind: 'statisticalEvidence',
+              assumptionCodes: [],
+            },
+          ]
+        : [
+            {
+              status: 'unavailable',
+              reasonCode: 'insufficientEvidence',
+              epistemicKind: 'statisticalEvidence',
+              assumptionCodes: [],
+            },
+          ]
     case 'exploitPolicy':
       return [
         {
           status: 'unavailable',
-          reasonCode: preprocessing.opponentEvidence.data.reasonCode,
+          reasonCode: 'noApprovedExploitBaseline',
           epistemicKind: 'statisticalEvidence',
-          assumptionCodes: ['currentHandEvidenceOnly'],
+          assumptionCodes: [],
         },
       ]
     case 'candidateProjectedSpr':
@@ -603,6 +650,7 @@ export function buildDecisionAuditSnapshotV1(input: {
   readonly observation: PlayerVisibleState
   readonly preprocessing: PlayerDecisionPreprocessingResult
   readonly strategyPackRef: StrategyPackReference
+  readonly sessionMemory: PlayerSessionMemorySnapshotV1
 }): DecisionAuditSnapshotV1 {
   if (
     !isPlayerVisibleState(input.observation) ||
@@ -616,7 +664,14 @@ export function buildDecisionAuditSnapshotV1(input: {
     input.strategyPackRef.datasetId !==
       input.preprocessing.strategyPackRef.datasetId ||
     input.strategyPackRef.datasetVersion !==
-      input.preprocessing.strategyPackRef.datasetVersion
+      input.preprocessing.strategyPackRef.datasetVersion ||
+    input.sessionMemory.sourceHandId !== input.preprocessing.binding.handId ||
+    input.sessionMemory.sourceStateVersion !==
+      input.preprocessing.binding.stateVersion ||
+    input.sessionMemory.decisionRequestId !==
+      input.preprocessing.binding.decisionRequestId ||
+    input.sessionMemory.asOfEventSeq !==
+      input.preprocessing.binding.asOfEventSeq
   ) {
     throw new RangeError('Player 决策审计输入绑定不一致。')
   }
@@ -658,6 +713,9 @@ export function buildDecisionAuditSnapshotV1(input: {
       evidenceId: preprocessing.opponentEvidence.data.evidenceId,
       asOfEventSeq: preprocessing.opponentEvidence.data.asOfEventSeq,
     },
+    sessionMemory: PlayerSessionMemorySnapshotV1Schema.parse(
+      input.sessionMemory,
+    ),
     candidates,
     fullFactManifest: createFullFactManifest(preprocessing),
   }
@@ -709,6 +767,12 @@ export function certifyPersistedDecisionAuditSnapshotV1(input: {
     decoded.binding.actorParticipantId !== input.expected.participantId ||
     decoded.binding.stateVersion !== input.expected.sourceStateVersion ||
     decoded.binding.decisionRequestId !== input.expected.decisionRequestId ||
+    decoded.sessionMemory.sourceHandId !== input.expected.handId ||
+    decoded.sessionMemory.sourceStateVersion !==
+      input.expected.sourceStateVersion ||
+    decoded.sessionMemory.decisionRequestId !==
+      input.expected.decisionRequestId ||
+    decoded.sessionMemory.asOfEventSeq !== decoded.binding.asOfEventSeq ||
     candidateSetSha256 !==
       sha256(candidateWithoutHash as unknown as JsonValue) ||
     snapshotSha256 !== sha256(snapshotWithoutHash as unknown as JsonValue)

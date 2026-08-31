@@ -272,7 +272,7 @@ export const sessionAgents = appPrivateSchema.table(
     ),
     check(
       'session_agents_memory_payload_check',
-      sql`${table.memoryPayloadVersion} > 0
+      sql`${table.memoryPayloadVersion} = 1
         AND jsonb_typeof(${table.memoryPayload}) = 'object'`,
     ),
   ],
@@ -287,6 +287,12 @@ export const agentMemoryRevisions = appPrivateSchema.table(
     revision: safeBigint('revision').notNull(),
     memoryPayloadVersion: integer('memory_payload_version').notNull(),
     memoryPayload: objectPayload('memory_payload').notNull(),
+    sourceAgentRunId: uuid('source_agent_run_id'),
+    sourceHandId: uuid('source_hand_id'),
+    sourceStateVersion: safeBigint('source_state_version'),
+    decisionRequestId: uuid('decision_request_id'),
+    asOfEventSeq: safeBigint('as_of_event_seq'),
+    memorySha256: text('memory_sha256').notNull(),
     createdAt: zonedTimestamp('created_at').notNull().defaultNow(),
   },
   (table) => [
@@ -309,6 +315,9 @@ export const agentMemoryRevisions = appPrivateSchema.table(
       table.ownerId,
       table.revision,
     ),
+    uniqueIndex('agent_memory_revisions_source_run_unique')
+      .on(table.sourceAgentRunId)
+      .where(sql`${table.sourceAgentRunId} IS NOT NULL`),
     index('agent_memory_revisions_session_idx').on(table.sessionId),
     check(
       'agent_memory_revisions_revision_safe',
@@ -316,8 +325,27 @@ export const agentMemoryRevisions = appPrivateSchema.table(
     ),
     check(
       'agent_memory_revisions_payload_check',
-      sql`${table.memoryPayloadVersion} > 0
-        AND jsonb_typeof(${table.memoryPayload}) = 'object'`,
+      sql`${table.memoryPayloadVersion} = 1
+        AND jsonb_typeof(${table.memoryPayload}) = 'object'
+        AND ${table.memorySha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'agent_memory_revisions_source_lifecycle_check',
+      sql`(
+        ${table.revision} = 0
+        AND ${table.sourceAgentRunId} IS NULL
+        AND ${table.sourceHandId} IS NULL
+        AND ${table.sourceStateVersion} IS NULL
+        AND ${table.decisionRequestId} IS NULL
+        AND ${table.asOfEventSeq} IS NULL
+      ) OR (
+        ${table.revision} >= 1
+        AND ${table.sourceAgentRunId} IS NOT NULL
+        AND ${table.sourceHandId} IS NOT NULL
+        AND ${table.sourceStateVersion} IS NOT NULL
+        AND ${table.decisionRequestId} IS NOT NULL
+        AND ${table.asOfEventSeq} IS NOT NULL
+      )`,
     ),
   ],
 )
@@ -627,6 +655,7 @@ export const agentRuns = appPrivateSchema.table(
       .notNull()
       .references(() => sessions.id, { onDelete: 'cascade' }),
     runtime: text('runtime').notNull(),
+    executionMode: text('execution_mode').notNull().default('live'),
     triggerType: text('trigger_type').notNull(),
     lifecycle: text('lifecycle').notNull(),
     idempotencyKey: text('idempotency_key').notNull(),
@@ -636,6 +665,7 @@ export const agentRuns = appPrivateSchema.table(
     decisionRequestId: uuid('decision_request_id'),
     parentRunId: uuid('parent_run_id'),
     replacementRunId: uuid('replacement_run_id'),
+    reexecutionSourceRunId: uuid('reexecution_source_run_id'),
     leaseOwner: text('lease_owner'),
     leaseExpiresAt: zonedTimestamp('lease_expires_at'),
     fencingToken: safeBigint('fencing_token').notNull().default(0),
@@ -656,6 +686,11 @@ export const agentRuns = appPrivateSchema.table(
       name: 'agent_runs_session_owner_fk',
       columns: [table.sessionId, table.ownerId],
       foreignColumns: [sessions.id, sessions.ownerId],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'agent_runs_reexecution_source_scope_fk',
+      columns: [table.reexecutionSourceRunId, table.ownerId, table.sessionId],
+      foreignColumns: [table.id, table.ownerId, table.sessionId],
     }).onDelete('cascade'),
     foreignKey({
       name: 'agent_runs_hand_scope_fk',
@@ -705,6 +740,7 @@ export const agentRuns = appPrivateSchema.table(
       .on(table.sessionId, table.sourceStateVersion, table.participantId)
       .where(
         sql`${table.runtime} = 'player'
+          AND ${table.executionMode} = 'live'
           AND ${table.lifecycle} IN ('queued', 'leased', 'running')`,
       ),
     index('agent_runs_worker_claim_idx').on(
@@ -730,6 +766,18 @@ export const agentRuns = appPrivateSchema.table(
     check(
       'agent_runs_runtime_check',
       sql`${table.runtime} IN ('player', 'coach')`,
+    ),
+    check(
+      'agent_runs_execution_mode_check',
+      sql`${table.executionMode} IN ('live', 'historicalReexecution')
+        AND (
+          (${table.executionMode} = 'live' AND ${table.reexecutionSourceRunId} IS NULL)
+          OR (
+            ${table.executionMode} = 'historicalReexecution'
+            AND ${table.runtime} = 'player'
+            AND ${table.reexecutionSourceRunId} IS NOT NULL
+          )
+        )`,
     ),
     check(
       'agent_runs_lifecycle_check',
@@ -945,20 +993,34 @@ export const playerDecisions = appPrivateSchema.table(
     sourceStateVersion: safeBigint('source_state_version').notNull(),
     decisionRequestId: uuid('decision_request_id').notNull(),
     runtime: text('runtime').notNull(),
+    executionMode: text('execution_mode').notNull().default('live'),
+    reexecutionSourceDecisionId: uuid('reexecution_source_decision_id'),
+    sourceSnapshotSha256: text('source_snapshot_sha256'),
+    sourceCandidateSetSha256: text('source_candidate_set_sha256'),
+    sourceProjectionSha256: text('source_projection_sha256'),
+    sourceModelInputSha256: text('source_model_input_sha256'),
     recordVersion: integer('record_version').notNull(),
     status: text('status').notNull(),
     decisionAuditSnapshotPayloadVersion: integer(
       'decision_audit_snapshot_payload_version',
-    ).notNull(),
+    ),
     decisionAuditSnapshotPayload: objectPayload(
       'decision_audit_snapshot_payload',
-    ).notNull(),
-    candidateSetPayloadVersion: integer(
-      'candidate_set_payload_version',
-    ).notNull(),
-    candidateSetPayload: objectPayload('candidate_set_payload').notNull(),
+    ),
+    candidateSetPayloadVersion: integer('candidate_set_payload_version'),
+    candidateSetPayload: objectPayload('candidate_set_payload'),
+    memoryRevision: safeBigint('memory_revision').notNull(),
+    memoryPayloadVersion: integer('memory_payload_version')
+      .notNull()
+      .default(1),
+    memorySha256: text('memory_sha256').notNull(),
     modelProjectionPayloadVersion: integer('model_projection_payload_version'),
     modelProjectionPayload: objectPayload('model_projection_payload'),
+    frozenModelInputPayloadVersion: integer(
+      'frozen_model_input_payload_version',
+    ),
+    frozenModelInputPayload: objectPayload('frozen_model_input_payload'),
+    frozenModelInputSha256: text('frozen_model_input_sha256'),
     modelChoicePayloadVersion: integer('model_choice_payload_version'),
     modelChoicePayload: objectPayload('model_choice_payload'),
     validatorResultPayloadVersion: integer('validator_result_payload_version'),
@@ -999,6 +1061,15 @@ export const playerDecisions = appPrivateSchema.table(
       ],
     }).onDelete('cascade'),
     foreignKey({
+      name: 'player_decisions_reexecution_source_scope_fk',
+      columns: [
+        table.reexecutionSourceDecisionId,
+        table.ownerId,
+        table.sessionId,
+      ],
+      foreignColumns: [table.id, table.ownerId, table.sessionId],
+    }).onDelete('cascade'),
+    foreignKey({
       name: 'player_decisions_participant_scope_fk',
       columns: [table.participantId, table.sessionId, table.ownerId],
       foreignColumns: [
@@ -1007,6 +1078,21 @@ export const playerDecisions = appPrivateSchema.table(
         sessionAgents.ownerId,
       ],
     }).onDelete('cascade'),
+    foreignKey({
+      name: 'player_decisions_memory_revision_scope_fk',
+      columns: [
+        table.participantId,
+        table.sessionId,
+        table.ownerId,
+        table.memoryRevision,
+      ],
+      foreignColumns: [
+        agentMemoryRevisions.participantId,
+        agentMemoryRevisions.sessionId,
+        agentMemoryRevisions.ownerId,
+        agentMemoryRevisions.revision,
+      ],
+    }),
     foreignKey({
       name: 'player_decisions_accepted_attempt_scope_fk',
       columns: [
@@ -1032,6 +1118,11 @@ export const playerDecisions = appPrivateSchema.table(
       ],
     }),
     unique('player_decisions_agent_run_unique').on(table.agentRunId),
+    unique('player_decisions_id_owner_session_unique').on(
+      table.id,
+      table.ownerId,
+      table.sessionId,
+    ),
     unique('player_decisions_command_ledger_unique').on(table.commandLedgerId),
     index('player_decisions_session_status_idx').on(
       table.sessionId,
@@ -1045,15 +1136,35 @@ export const playerDecisions = appPrivateSchema.table(
         AND ${table.sourceStateVersion} BETWEEN 0 AND 9007199254740991`,
     ),
     check(
+      'player_decisions_execution_mode_check',
+      sql`${table.executionMode} IN ('live', 'historicalReexecution')
+        AND (
+          (
+            ${table.executionMode} = 'live'
+            AND ${table.reexecutionSourceDecisionId} IS NULL
+            AND ${table.sourceSnapshotSha256} IS NULL
+            AND ${table.sourceCandidateSetSha256} IS NULL
+            AND ${table.sourceProjectionSha256} IS NULL
+            AND ${table.sourceModelInputSha256} IS NULL
+          ) OR (
+            ${table.executionMode} = 'historicalReexecution'
+            AND ${table.reexecutionSourceDecisionId} IS NOT NULL
+            AND ${table.sourceSnapshotSha256} ~ '^[0-9a-f]{64}$'
+            AND ${table.sourceCandidateSetSha256} ~ '^[0-9a-f]{64}$'
+            AND ${table.sourceProjectionSha256} ~ '^[0-9a-f]{64}$'
+            AND ${table.sourceModelInputSha256} ~ '^[0-9a-f]{64}$'
+          )
+        )`,
+    ),
+    check(
       'player_decisions_status_check',
       sql`${table.status} IN ('auditPrepared', 'modelPrepared', 'selected', 'committed')`,
     ),
     check(
       'player_decisions_required_payloads_check',
-      sql`${table.decisionAuditSnapshotPayloadVersion} > 0
-        AND jsonb_typeof(${table.decisionAuditSnapshotPayload}) = 'object'
-        AND ${table.candidateSetPayloadVersion} > 0
-        AND jsonb_typeof(${table.candidateSetPayload}) = 'object'`,
+      sql`${table.memoryRevision} BETWEEN 0 AND 9007199254740991
+        AND ${table.memoryPayloadVersion} = 1
+        AND ${table.memorySha256} ~ '^[0-9a-f]{64}$'`,
     ),
     check(
       'player_decisions_optional_payload_pairs_check',
@@ -1066,6 +1177,18 @@ export const playerDecisions = appPrivateSchema.table(
         AND ${table.modelProjectionPayload} IS NOT NULL
         AND jsonb_typeof(${table.modelProjectionPayload}) = 'object'
       ))
+        AND (
+          (
+          ${table.frozenModelInputPayloadVersion} IS NULL
+          AND ${table.frozenModelInputPayload} IS NULL
+          AND ${table.frozenModelInputSha256} IS NULL
+          ) OR (
+          ${table.frozenModelInputPayloadVersion} = 1
+          AND ${table.frozenModelInputPayload} IS NOT NULL
+          AND jsonb_typeof(${table.frozenModelInputPayload}) = 'object'
+          AND ${table.frozenModelInputSha256} ~ '^[0-9a-f]{64}$'
+          )
+        )
         AND (
           (
           ${table.modelChoicePayloadVersion} IS NULL
@@ -1092,45 +1215,109 @@ export const playerDecisions = appPrivateSchema.table(
     check(
       'player_decisions_stage_matrix_check',
       sql`(
-        ${table.status} = 'auditPrepared'
+        ${table.executionMode} = 'live'
+        AND ${table.decisionAuditSnapshotPayloadVersion} = 1
+        AND ${table.decisionAuditSnapshotPayload} IS NOT NULL
+        AND jsonb_typeof(${table.decisionAuditSnapshotPayload}) = 'object'
+        AND ${table.candidateSetPayloadVersion} = 1
+        AND ${table.candidateSetPayload} IS NOT NULL
+        AND jsonb_typeof(${table.candidateSetPayload}) = 'object'
+        AND (
+          (
+            ${table.status} = 'auditPrepared'
+            AND ${table.modelProjectionPayloadVersion} IS NULL
+            AND ${table.frozenModelInputPayloadVersion} IS NULL
+            AND ${table.modelChoicePayloadVersion} IS NULL
+            AND ${table.validatorResultPayloadVersion} IS NULL
+            AND ${table.acceptedAttemptId} IS NULL
+            AND ${table.modelPreparedAt} IS NULL
+            AND ${table.selectedAt} IS NULL
+            AND ${table.commandLedgerId} IS NULL
+            AND ${table.committedAt} IS NULL
+          ) OR (
+            ${table.status} = 'modelPrepared'
+            AND ${table.modelProjectionPayloadVersion} = 1
+            AND ${table.modelProjectionPayload} IS NOT NULL
+            AND ${table.frozenModelInputPayloadVersion} = 1
+            AND ${table.frozenModelInputPayload} IS NOT NULL
+            AND ${table.frozenModelInputSha256} IS NOT NULL
+            AND ${table.modelChoicePayloadVersion} IS NULL
+            AND ${table.validatorResultPayloadVersion} IS NULL
+            AND ${table.acceptedAttemptId} IS NULL
+            AND ${table.modelPreparedAt} IS NOT NULL
+            AND ${table.selectedAt} IS NULL
+            AND ${table.commandLedgerId} IS NULL
+            AND ${table.committedAt} IS NULL
+          ) OR (
+            ${table.status} = 'selected'
+            AND ${table.modelProjectionPayloadVersion} = 1
+            AND ${table.modelProjectionPayload} IS NOT NULL
+            AND ${table.frozenModelInputPayloadVersion} = 1
+            AND ${table.frozenModelInputPayload} IS NOT NULL
+            AND ${table.frozenModelInputSha256} IS NOT NULL
+            AND ${table.modelChoicePayloadVersion} = 1
+            AND ${table.modelChoicePayload} IS NOT NULL
+            AND ${table.validatorResultPayloadVersion} = 1
+            AND ${table.validatorResultPayload} IS NOT NULL
+            AND ${table.acceptedAttemptId} IS NOT NULL
+            AND ${table.modelPreparedAt} IS NOT NULL
+            AND ${table.selectedAt} IS NOT NULL
+            AND ${table.commandLedgerId} IS NULL
+            AND ${table.committedAt} IS NULL
+          ) OR (
+            ${table.status} = 'committed'
+            AND ${table.modelProjectionPayloadVersion} = 1
+            AND ${table.modelProjectionPayload} IS NOT NULL
+            AND ${table.frozenModelInputPayloadVersion} = 1
+            AND ${table.frozenModelInputPayload} IS NOT NULL
+            AND ${table.frozenModelInputSha256} IS NOT NULL
+            AND ${table.modelChoicePayloadVersion} = 1
+            AND ${table.modelChoicePayload} IS NOT NULL
+            AND ${table.validatorResultPayloadVersion} = 1
+            AND ${table.validatorResultPayload} IS NOT NULL
+            AND ${table.acceptedAttemptId} IS NOT NULL
+            AND ${table.modelPreparedAt} IS NOT NULL
+            AND ${table.selectedAt} IS NOT NULL
+            AND ${table.commandLedgerId} IS NOT NULL
+            AND ${table.committedAt} IS NOT NULL
+          )
+        )
+      ) OR (
+        ${table.executionMode} = 'historicalReexecution'
+        AND ${table.decisionAuditSnapshotPayloadVersion} IS NULL
+        AND ${table.decisionAuditSnapshotPayload} IS NULL
+        AND ${table.candidateSetPayloadVersion} IS NULL
+        AND ${table.candidateSetPayload} IS NULL
         AND ${table.modelProjectionPayloadVersion} IS NULL
-        AND ${table.modelChoicePayloadVersion} IS NULL
-        AND ${table.validatorResultPayloadVersion} IS NULL
-        AND ${table.acceptedAttemptId} IS NULL
-        AND ${table.modelPreparedAt} IS NULL
-        AND ${table.selectedAt} IS NULL
-        AND ${table.commandLedgerId} IS NULL
-        AND ${table.committedAt} IS NULL
-      ) OR (
-        ${table.status} = 'modelPrepared'
-        AND ${table.modelProjectionPayloadVersion} IS NOT NULL
-        AND ${table.modelChoicePayloadVersion} IS NULL
-        AND ${table.validatorResultPayloadVersion} IS NULL
-        AND ${table.acceptedAttemptId} IS NULL
-        AND ${table.modelPreparedAt} IS NOT NULL
-        AND ${table.selectedAt} IS NULL
-        AND ${table.commandLedgerId} IS NULL
-        AND ${table.committedAt} IS NULL
-      ) OR (
-        ${table.status} = 'selected'
-        AND ${table.modelProjectionPayloadVersion} IS NOT NULL
-        AND ${table.modelChoicePayloadVersion} IS NOT NULL
-        AND ${table.validatorResultPayloadVersion} IS NOT NULL
-        AND ${table.acceptedAttemptId} IS NOT NULL
-        AND ${table.modelPreparedAt} IS NOT NULL
-        AND ${table.selectedAt} IS NOT NULL
-        AND ${table.commandLedgerId} IS NULL
-        AND ${table.committedAt} IS NULL
-      ) OR (
-        ${table.status} = 'committed'
-        AND ${table.modelProjectionPayloadVersion} IS NOT NULL
-        AND ${table.modelChoicePayloadVersion} IS NOT NULL
-        AND ${table.validatorResultPayloadVersion} IS NOT NULL
-        AND ${table.acceptedAttemptId} IS NOT NULL
-        AND ${table.modelPreparedAt} IS NOT NULL
-        AND ${table.selectedAt} IS NOT NULL
-        AND ${table.commandLedgerId} IS NOT NULL
-        AND ${table.committedAt} IS NOT NULL
+        AND ${table.modelProjectionPayload} IS NULL
+        AND ${table.frozenModelInputPayloadVersion} IS NULL
+        AND ${table.frozenModelInputPayload} IS NULL
+        AND ${table.frozenModelInputSha256} IS NULL
+        AND (
+          (
+            ${table.status} = 'modelPrepared'
+            AND ${table.modelChoicePayloadVersion} IS NULL
+            AND ${table.modelChoicePayload} IS NULL
+            AND ${table.validatorResultPayloadVersion} IS NULL
+            AND ${table.validatorResultPayload} IS NULL
+            AND ${table.acceptedAttemptId} IS NULL
+            AND ${table.modelPreparedAt} IS NOT NULL
+            AND ${table.selectedAt} IS NULL
+            AND ${table.commandLedgerId} IS NULL
+            AND ${table.committedAt} IS NULL
+          ) OR (
+            ${table.status} = 'selected'
+            AND ${table.modelChoicePayloadVersion} = 1
+            AND ${table.modelChoicePayload} IS NOT NULL
+            AND ${table.validatorResultPayloadVersion} = 1
+            AND ${table.validatorResultPayload} IS NOT NULL
+            AND ${table.acceptedAttemptId} IS NOT NULL
+            AND ${table.modelPreparedAt} IS NOT NULL
+            AND ${table.selectedAt} IS NOT NULL
+            AND ${table.commandLedgerId} IS NULL
+            AND ${table.committedAt} IS NULL
+          )
+        )
       )`,
     ),
     check(
@@ -1155,7 +1342,7 @@ export const playerDecisions = appPrivateSchema.table(
         AND ${table.terminalReason} IS NULL
         AND ${table.terminatedAt} IS NULL
       ) OR (
-        ${table.terminalOutcome} IN ('failed', 'stale')
+        ${table.terminalOutcome} IN ('failed', 'stale', 'cancelled')
         AND ${table.terminalReason} IS NOT NULL
         AND length(btrim(${table.terminalReason})) > 0
         AND ${table.terminatedAt} IS NOT NULL

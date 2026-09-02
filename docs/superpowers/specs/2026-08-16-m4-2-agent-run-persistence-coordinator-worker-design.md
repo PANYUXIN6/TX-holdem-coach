@@ -1,6 +1,6 @@
 # M4.2 AgentRun 持久化、Coordinator 与 Worker 设计
 
-状态：实现修复与验收中，尚未满足完成定义；生产启动门禁仍保持关闭
+状态：已实现并完成验收；M4.10 已在 configured runtime 安装 live Player Worker，Coach lane 仍未安装
 
 任务来源：[项目开发任务 M4.2](../plans/2026-07-23-poker-practice-development-tasks.md#m42-实现-agentrun-持久化coordinator-与-worker)
 
@@ -38,7 +38,7 @@ Runtime Registry current 定义 + 严格创建输入 + Player 当时设置
 6. Worker 在同一进程内提供一个 Player 保留槽位和一个 Coach 保留槽位，二者不借用容量；领取仍以数据库中的 Runtime、生命周期、租约和固化预算为准。
 7. 每次成功领取单调增加 `fencingToken`。检查点、Attempt、Capability 审计、Runtime 结果和后续 Commit Gate 都必须在数据库事务中复验同一 `runId + leaseOwner + fencingToken`，且租约尚未过期。
 8. M4.2 只拥有通用取消、租约接管和恢复机制。Player 的 `paused`、stale 后是否创建替代 Run、`process_restart` 取消并新建 Run、Session 事件与指针变化仍由 M4.8 拥有；M4.2 不把通用 Worker 错误直接翻译成扑克状态。
-9. M4.2 交付可构造但不接入 `bootstrap.ts` 的 Worker。生产启动必须继续等待 M4.3、M4.7、M4.8 与 M3.8；测试替身不能作为门禁通过证据。
+9. M4.2 只拥有可构造 Worker，不拥有生产接线；该接线随后由 M4.10 在满足 M4.3、M4.7、M4.8 与 M3.8 契约后完成，测试替身不能作为生产接线证据。
 
 ## 1. 目标、成功标准与非目标
 
@@ -68,7 +68,7 @@ M4.2 完成时必须能证明：
 - Worker 停止或唤醒丢失不删除 queued Run，新的进程连接仍能发现持久任务；
 - 主动 `stop()` 不产生 fatal，不可恢复循环退出只 resolve 一次稳定 fatal；
 - M4.2 没有调用模型、构建扑克观察、提交扑克动作、保存 Coach 报告或修改 Session SSE；
-- M3.8 门禁仍保持关闭。
+- M3.8 启动集成门禁随后由 M4.10 完成。
 
 ### 1.3 非目标
 
@@ -127,7 +127,7 @@ M4.2 可以消费 M4.1 的协议，但不得修改 Registry 为动态形态，�
 | Coach 检查点恢复决策 | M8 | M4.2 按 Recovery Policy 身份提供可恢复领取 seam |
 | Worker 启停、ready 和服务恢复编排 | M3.8 | 提供 lifecycle port，不接 bootstrap |
 
-### 2.3 M3.8 门禁
+### 2.3 M3.8 门禁（设计时边界）
 
 M4.2 完成只满足 M3.8 的一个前置项。以下仍不能发生：
 
@@ -136,9 +136,9 @@ M4.2 完成只满足 M3.8 的一个前置项。以下仍不能发生：
 - 仅凭 queued/leased/running 转换宣称 Player 重启恢复已经完成；
 - 仅凭通用 terminal writer 宣称 Session 已能进入 `paused` 或安全替代旧 Run。
 
-## 3. 当前仓库事实与放置决策
+## 3. 设计时仓库事实与放置决策
 
-### 3.1 当前事实
+### 3.1 设计时基线
 
 - `apps/server/src/db/schema.ts` 已定义三张通用 Agent 表、生命周期列、租约列、fencing token、deadline、版本化 JSONB、Player 有效运行部分唯一索引和领取索引。
 - `agent_runs` 当前允许 `queued|leased|running|completed|failed|cancelled|stale`，但约束尚未完整绑定生命周期、租约、时间和终态字段。
@@ -149,7 +149,7 @@ M4.2 完成只满足 M3.8 的一个前置项。以下仍不能发生：
 - `player-agent-settings-service` 与 `player-settings-repository` 已实现严格 5–30 秒 Attempt、15–120 秒 deadline 和默认 15/45 秒设置。
 - M4.1 已实现唯一生产 Registry、Player/Coach 当前 Budget Policy、RuntimeCommitAuthority 判别和相互隔离的状态图，但尚未提供 authority 签发路径。
 - 既有数据库延迟约束要求 Session `thinking` 恰有一个有效 Player Run，`idle|paused` 没有有效 Player Run。
-- 当前 `bootstrap.ts` 只组合 M3.1–M3.7；仓库地图对 M4.1 已实现、Worker 尚未实现的描述与源码一致。
+- 设计时 `bootstrap.ts` 只组合 M3.1–M3.7；后续 M4.10 已将 live Player Worker 和 Dispatcher 接入 configured runtime。
 
 ### 3.2 新增与调整文件
 
@@ -217,7 +217,7 @@ AgentRunWorkerControl（Coordinator 内部实现）
 - Budget 当前完整载荷与单一 current reader；
 - AgentRun 生命周期 Repository、Coordinator 和双槽 Worker 的真实责任；
 - Attempt/Capability 已受 fencing 保护；
-- Worker 仍未进入 bootstrap，M3.8 门禁仍关闭。
+- Worker 的生产接线不属于 M4.2；该上线门禁随后由 M3.8/M4.10 完成。
 
 ## 4. 术语与状态模型
 
@@ -1008,4 +1008,4 @@ M4.2 只有在以下条件全部满足时才完成：
 - M4.2 没有接 Provider、扑克业务 Gate、Session 事件或 bootstrap；
 - 目标测试、verify、migration assets、m42、一次 full 与 diff check 均按仓库策略报告；
 - `REPO_MAP.md` 与 `ARCHITECTURE.md` 只同步真实已实现入口、依赖和剩余门禁；
-- M3.8 仍明确等待 M4.3、M4.7 和 M4.8。
+- M4.2 保持只提供 lifecycle port；M3.8/M4.10 已在满足 M4.3、M4.7 和 M4.8 后完成生产启动集成。

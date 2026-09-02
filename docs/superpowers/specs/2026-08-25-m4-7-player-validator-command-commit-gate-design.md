@@ -3,7 +3,7 @@
 - 日期：2026-08-25
 - 确认日期：2026-08-25
 - 实施切片细化日期：2026-08-25（不改变已确认的十项设计决策）
-- 状态：已确认，主体实现与验收根因修复中；远程验收尚未闭环
+- 状态：已确认、已实现并完成验收；M4.10 已将唯一 Commit Gate 接入 configured Player Runtime
 - 任务来源：[项目开发任务 M4.7](../plans/2026-07-23-poker-practice-development-tasks.md#m47-实现-player-validator-与-command-commit-gate)
 - 上位架构：[Agent Foundation Runtime 架构](./2026-07-26-agent-foundation-runtime-architecture.md)
 - 标准命令事务：[M3.1 Session Command Executor 设计](./2026-08-05-m3-1-session-command-executor-design.md)
@@ -68,7 +68,7 @@ M4.7 完成时必须证明：
 - Run 只有在扑克命令成功后才进入 `completed`，且 `termination_reason = null`；
 - COMMIT 前不发布 SSE 或 Run 事件，COMMIT 后发布失败不回滚、不重提命令，也不触发 replacement；
 - M4.6 三阶段恢复、三道信息防火墙和 accepted Attempt/selected 原子交接继续通过回归；
-- M4.7 完成后，M4.8/M4.10 仍是 Player Runtime 上线硬门禁。
+- M4.7 本身不等于 Player Runtime 上线；M4.8/M4.10 的失败收敛与生产接线门禁已随后完成。
 
 ## 3. 范围
 
@@ -138,7 +138,7 @@ M4.7 完成时必须证明：
 - `poker/` 保持纯领域，不导入 Agent、Session 或数据库；
 - `packages/contracts` 保持外部协议，不接收私有 `aiAction`。
 
-设计阶段不把未来 M4.7 描述写成当前已实现事实；实现完成后再同步地图。
+以上是设计阶段的放置依据；M4.7、M4.8 与 M4.10 完成后，地图已同步为当前实现事实。
 
 ### 4.4 契约权威
 
@@ -193,7 +193,7 @@ agents/player/player-runtime-executor
 - **I7 拒绝语义**：Gate 拒绝整体回滚，不写 failed ledger、不自动 fold/check、不重调模型、不创建 replacement；
 - **I8 重放语义**：completed replay 只核对同一 ledger 与 committed Decision 后返回；不复验历史 lease/deadline、不重做行动、不再次 finalize、不再次发布；
 - **I9 版本策略**：实现既有 `player.commit-poker-decision@1`，不升级 `playerRuntimeDefinition@1` 或改变其引用语义；
-- **I10 上线边界**：M4.7 不接 `bootstrap.ts`、不组合生产 Worker、不调度下一位 AI；M4.8 与 M4.10 继续是上线门禁；
+- **I10 上线边界**：M4.7 自身不接 `bootstrap.ts`、不组合生产 Worker、不调度下一位 AI；该上线门禁已由 M4.8 与 M4.10 完成；
 - **I11 提交权威**：action/target 只能从 strict persisted candidate snapshot 按认证 candidate ID 唯一解析；模型 summary、调用方 action、current analyzer 重算结果和 projection tuple 均不是提交权威；
 - **I12 上游与公开行为保持**：M4.6 三阶段恢复、accepted Attempt/selected 原子交接、品牌认证和信息防火墙不得弱化；既有用户命令的公开响应、稳定错误和事件语义不得改变；
 - **I13 依赖与副作用边界**：事务内不得调用模型、网络、SSE publisher 或 Run publisher；持久化层不拥有候选选择政策，poker 层不导入 Agent、Session 或数据库。
@@ -913,7 +913,7 @@ E 在定向测试后依次执行 `pnpm run build:server`、`verify:migration-ass
 | ledger replay 掩盖损坏 | replay 必须核对 committed Decision 关联 |
 | engine 拒绝被误报公开失败 | 内部 action 拒绝整体回滚，交 M4.8 稳定分类 |
 | publish 失败导致再提交 | COMMIT 后 best-effort，数据库结果优先 |
-| 过早上线 | M4.8/M4.10 继续门禁，M4.7 不接 bootstrap |
+| 过早上线 | M4.7 不接 bootstrap；M4.8/M4.10 已完成失败收敛与生产接线 |
 
 ### 18.2 设计失效与重新确认条件
 
@@ -935,10 +935,10 @@ E 在定向测试后依次执行 `pnpm run build:server`、`verify:migration-ass
 
 ## 19. 文档与地图同步
 
-设计确认时只在开发任务总表链接本文并标记“设计已确认、待实现”。实现完成后再同步：
+实施状态：下列文档已完成同步；M4.7 的私有 `aiAction` 仍不进入公开 Contracts/HTTP，M4.10 只将其作为生产 Player Runtime 的唯一提交路径：
 
 - `docs/REPO_MAP.md`：增加 private `aiAction`、Player Validator/Gate、Decision committed 和标准命令事务流；
-- `docs/ARCHITECTURE.md`：Player 主链更新至 Commit Gate/Run completed，并继续注明 M4.8/M4.10 未完成；
+- `docs/ARCHITECTURE.md`：Player 主链已更新至 Commit Gate/Run completed，并注明 M4.8 失败收敛和 M4.10 生产接线；
 - `docs/m2-2-schema-data-dictionary.md`：`player_decisions` 新列、状态矩阵、FK/unique；
 - 开发任务总表：M4.7 产出、测试证据与后续门禁；
 - M4.6 设计：仅在实现确实需要时补充“ResultPort 已由 M4.7 实例化”的交接说明，不改写其历史职责。
@@ -964,8 +964,8 @@ M4.7 只有同时满足以下条件才能标记完成：
 15. targeted、`pnpm run verify`、migration assets、database m47、PostgreSQL E2E m47 通过；
 16. 两套 full 按规则串行通过并分别报告；
 17. `REPO_MAP.md`、`ARCHITECTURE.md`、数据字典和任务总表同步；
-18. M4.8/M4.10 仍明确为上线门禁；
-19. 未修改 `bootstrap.ts` 或启动生产 Worker；
+18. M4.7 完成不等于上线；失败收敛与生产接线随后由 M4.8/M4.10 完成；
+19. M4.7 切片本身不修改 `bootstrap.ts` 或启动生产 Worker；实际安装由 M4.10 负责；
 20. 最终报告明确列出 remote database 与 PostgreSQL E2E 各自执行范围。
 
 ## 21. 已人工确认的设计决策
@@ -981,6 +981,6 @@ M4.7 只有同时满足以下条件才能标记完成：
 7. **拒绝语义**：Gate 失败整体回滚，不写 failed ledger、不自动动作、不创建 replacement；
 8. **重放语义**：completed replay 核对 committed Decision 后成功返回，不复验旧 lease、不重复发布；
 9. **版本策略**：实现已冻结的 `player.commit-poker-decision@1`，不升级 `playerRuntimeDefinition@1`；
-10. **上线门禁**：M4.7 完成仍不接 Worker，等待 M4.8 与 M4.10。
+10. **上线门禁**：M4.7 本身不接 Worker；该门禁已由 M4.8 与 M4.10 完成。
 
-本文状态更新为“已确认，开发与验收修复中”。M4.7 主体代码已进入实现，但第 20 节的所有门禁（特别是 database/E2E 验收矩阵与两套 remote full）尚未全部取得通过证据，因此不得标记完成；M4.8/M4.10 上线门禁继续有效。若任一项需要调整，应先修订本文共享契约，再进入实现。
+本文状态已同步为完成。M4.7 的私有 Commit Gate 保持唯一提交路径，M4.8/M4.10 的失败收敛与生产接线边界已另行交付；两套 remote full 是否执行仍按对应任务和仓库测试策略分别报告。若任一项需要调整，应先修订本文共享契约，再进入实现。

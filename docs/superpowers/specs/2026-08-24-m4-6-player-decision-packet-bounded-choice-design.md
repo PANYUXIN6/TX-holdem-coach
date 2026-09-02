@@ -2,7 +2,7 @@
 
 - 日期：2026-08-24
 - 确认日期：2026-08-25
-- 状态：已确认并实现；M4.7/M4.8/M4.9/M4.10 仍为后续门禁
+- 状态：已确认并实现；M4.7–M4.10 后续门禁均已完成，生产接线由 M4.10 交付
 - 任务来源：[项目开发任务 M4.6](../plans/2026-07-23-poker-practice-development-tasks.md#m46-实现-playerdecisionpacket第二三道信息防火墙与-llm-bounded-choice)
 - 上位架构：[Agent Foundation Runtime 架构](./2026-07-26-agent-foundation-runtime-architecture.md)
 - Foundation 基础：[M4.3 Context、Capability 与 Model Gateway 设计](./2026-08-20-m4-3-context-capability-model-gateway-design.md)
@@ -1106,16 +1106,16 @@ apps/server/test/
 | 旧 fencing 迟到覆盖 Decision | 每次阶段写锁 Run 并复验 authority/deadline |
 | 进程重启误续旧 Run | M4.8 process restart cancel 保持 |
 | 专属表再次成为空壳 | 同里程碑交付真实 Codec/writer/reader/E2E |
-| M4.6 被误报为已上线 | M4.7/M4.8/M4.10 继续为硬门禁 |
+| M4.6 被误报为已上线 | M4.7/M4.8/M4.10 曾为硬门禁，现已分别完成提交、失败收敛与生产接线 |
 
 ## 20. 地图与文档同步
 
-当前 `REPO_MAP.md` 与 `ARCHITECTURE.md` 对 M4.4/M4.5 边界和未接 Worker 的声明总体可用；本设计阶段不把未来文件写成已实现。
+M4.10 已完成后，`REPO_MAP.md` 与 `ARCHITECTURE.md` 已同步 M4.4/M4.5 边界、唯一 Player executor、Commit Gate 和 configured Worker/Dispatcher 接线；本设计不改变 M4.6 自身的 Packet 与模型业务职责。
 
-实施完成后同步：
+已完成同步：
 
 - `REPO_MAP.md`：Snapshot/Projection/Guard/Prompt/Repository/executor 与 m46 测试归属；
-- `ARCHITECTURE.md`：Player 链更新到 selected Decision/ResultPort，继续注明 M4.7/M4.8/M4.10 未完成；
+- `ARCHITECTURE.md`：Player 链已更新至 Commit Gate/Run completed，并注明 M4.8 失败收敛与 M4.10 生产接线；
 - 开发任务：M4.6 状态、三道总验收、Memory 延后版本升级、StrategyPack 数据门禁；
 - 数据字典与 Schema 设计：实际 `player_decisions` 当前结构；
 - database test plan/README：m46 和 full 影响；
@@ -1142,7 +1142,7 @@ M4.6 只有同时满足以下条件才可标记完成：
 15. M4.6 不移动筹码、不终结 Run、不发布 Session 事件、不接 bootstrap；
 16. 定向测试、`pnpm run verify`、m44/m45/m46 两套 milestone 和两套 full 按规则串行通过；
 17. 地图、架构、任务、数据字典和测试说明只同步已实现事实；
-18. 最终报告明确 M4.7、M4.8、M4.9、M4.10 仍为后续门禁，M4.6 完成不等于 Player Runtime 上线。
+18. M4.6 本身不等于 Player Runtime 上线；该后续提交、失败收敛、Memory 与生产接线门禁已分别由 M4.7–M4.10 完成。
 
 ## 22. 已人工确认的设计决策
 
@@ -1156,4 +1156,4 @@ M4.6 只有同时满足以下条件才可标记完成：
 
 本文确认后，研发先完成 M4.5 交接收口，再按第 17 节推进 M4.6。任何需要改变上述决策、事实来源、模型最小字段或持久化状态机的发现，都必须先修订并重新确认本文，不能在代码中静默偏离。
 
-用户于 2026-08-25 按上述五项推荐方案确认本文，随后明确授权进入开发。M4.6 已按本文落地源码、Schema/migration、离线测试、database `m46`、PostgreSQL E2E `m46` 与文档同步；生产启动接线仍按 M4.10 后置。
+用户于 2026-08-25 按上述五项推荐方案确认本文，随后明确授权进入开发。M4.6 已按本文落地源码、Schema/migration、离线测试、database `m46`、PostgreSQL E2E `m46` 与文档同步；生产启动接线已由 M4.10 完成。

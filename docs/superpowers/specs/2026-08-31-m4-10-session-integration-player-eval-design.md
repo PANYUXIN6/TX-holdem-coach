@@ -1,7 +1,7 @@
 # M4.10 会话接入、生产 Player Worker 与 Player Eval 设计
 
 - 日期：2026-08-31
-- 状态：已确认；2026-08-31 用户确认 DeepSeek 固定使用官方地址直连
+- 状态：已确认、已实现并完成验收；2026-09-02 已通过离线验证、m410 database milestone 与 PostgreSQL E2E milestone；DeepSeek 固定使用官方地址直连
 - 任务来源：[项目开发任务 M4.10](../plans/2026-07-23-poker-practice-development-tasks.md#m410-接入会话并完成-player-eval)
 - 启动治理事实源：[M3.8 服务启动恢复协调设计](./2026-08-13-m3-8-service-startup-recovery-coordination-design.md)
 - 上游运行事实源：[M4.2 设计](./2026-08-16-m4-2-agent-run-persistence-coordinator-worker-design.md)、[M4.3 设计](./2026-08-20-m4-3-context-capability-model-gateway-design.md)、[M4.7 设计](./2026-08-25-m4-7-player-validator-command-commit-gate-design.md)、[M4.8 设计](./2026-08-28-m4-8-player-failure-pause-stale-replacement-design.md)、[M4.9 设计](./2026-08-30-m4-9-player-audit-replay-bounded-memory-design.md)
@@ -949,14 +949,20 @@ live executor会读取当前观察、Memory、Commit ResultPort，与 M4.9 冻�
 
 ## 22. 文档与地图同步
 
-设计确认时只在任务总表链接本文并标记待实现。实现完成后同步：
+### 22.1 已完成同步与验收（2026-09-02）
+
+以下文档已同步为当前实现状态：
 
 - `docs/REPO_MAP.md`：PlayerTurnDispatcher、startup recovery、installed Worker、observability、Eval 与 production bootstrap；
-- `docs/ARCHITECTURE.md`：主链更新为 Session commit → Dispatcher → Worker → Commit Gate → Session commit，并移除“Worker 未接生产”的旧事实；
+- `docs/ARCHITECTURE.md`：主链已更新为 Session commit → Dispatcher → Worker → Commit Gate → Session commit，并移除“Worker 未接生产”的旧事实；
 - `apps/server/test/integration/README.md`：m410 两套远程测试范围与串行规则；
 - 开发任务总表：M3.8/M4.10 状态、M4.9 完成和 Player 首次生产上线边界；
 - 如无 Schema 变化，不修改数据字典或 migration；
-- 继续明确 Coach Runtime、M5–M11、真实策略覆盖和公网部署未完成。
+- 验收：`pnpm run verify`、m410 database milestone 与 PostgreSQL E2E milestone 均已通过；两套 remote full 未在本轮执行。
+
+### 22.2 仍未完成的范围
+
+- Coach Runtime、M5–M11、真实策略覆盖和公网部署仍未完成。
 
 ## 23. 批准门禁
 

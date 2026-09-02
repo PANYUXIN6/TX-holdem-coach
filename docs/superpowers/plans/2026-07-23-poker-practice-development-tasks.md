@@ -1,8 +1,8 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.9 已完成，M3.8 按依赖后置并纳入 M4.10 集成，M4.10 设计已确认、待实现，M5–M9 待开发，M10/M11 为分阶段后置能力
+- 状态：进行中；M0、M1、M2、M3.1–M3.8、M4.1–M4.10 已完成；M4.10 已通过离线验证、m410 database milestone 与 PostgreSQL E2E milestone，M5–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
-- 最后更新：2026-08-31
+- 最后更新：2026-09-02
 - 本文不包含工期、人数或里程碑时间估算。
 - 2026-08-16 首发前 Schema 收敛：实际开发数据库重建后，以 14 表单一 baseline 为准；删除全局 `protocolVersion`、Settings 版本、重复 JSON 信封版本、无历史责任的 Registry/legacy 兼容、`legacyDiagnosticState` 及尚无消费者的 Coach/Statistics 预埋表。下文已完成任务中的旧字段/旧表文字仅保留实施历史，不得作为后续任务当前契约；M4 仍保留运行审计、重放/精确恢复身份，Execution Budget 直接扩充首发 current 载荷而不发布 V2，M5/M8 在真实 writer 设计确认时再创建最终统计/Coach Schema。
 - 2026-08-30 M4.8 破坏性重基线：首发前开发数据不承担兼容责任，私有事件的 Poker、Session/Accounting 与 Player 协调事件合并为唯一 current `v1`；旧 V1/V2/V3 分派和中间 migration 由唯一 `0000_baseline.sql` 覆盖，远程测试 schema 通过受控重建后只接受该 baseline journal。
@@ -26,11 +26,11 @@
 | M1 确定性牌局引擎 | 已完成并验证 |
 | M2 Supabase Postgres 持久化与恢复 | 已完成并验证 |
 | M3.1–M3.7 会话服务、HTTP API 与 SSE | 已完成并验证 |
-| M3.8 服务启动恢复协调 | 前置已齐备；作为 M4.10 启动集成切片实施 |
+| M3.8 服务启动恢复协调 | 已完成；作为 M4.10 启动集成切片，configured runtime 在恢复后启动 Worker/Dispatcher，再监听 HTTP |
 | M4.7 | 已完成并验证 |
 | M4.8 | 已实现；M4.8 database milestone 与 PostgreSQL E2E milestone 已通过 |
 | M4.9 | 已完成；Memory v1、live 物化、审计 Replay/debug projection 与 historical nonCommit 已落地 |
-| M4.10 | [设计已确认，待实现](../specs/2026-08-31-m4-10-session-integration-player-eval-design.md) |
+| M4.10 | [已完成并验证](../specs/2026-08-31-m4-10-session-integration-player-eval-design.md)：configured Player 生产接线、确定性 Eval、m410 database milestone 与 PostgreSQL E2E milestone 已通过 |
 | M5–M9 | 待开发 |
 | M10 Coach 长期漏洞记忆 | 首版后置，等待 M8 数据质量评估后确认 |
 | M11 针对性练习与复测 | 独立后置，等待 M10 质量评估后确认 |
@@ -829,6 +829,8 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 依赖说明：M3.8 是 M4.2、M4.3、M4.7、M4.8 完成后的后置集成里程碑，编号只用于需求追踪，不表示实施顺序。详细契约见 [M3.8 服务启动恢复协调设计](../specs/2026-08-13-m3-8-service-startup-recovery-coordination-design.md)。
 
+实施状态：已由 M4.10 作为启动集成切片完成；configured runtime 在启动恢复和当前 AI 行动协调完成后启动 Player Worker 与 Dispatcher，最后才开始 HTTP 监听。
+
 产出：
 
 - Worker 保持停止时，Owner-scoped 扫描活动场次，并按稳定顺序为每场启动独立短事务。
@@ -854,7 +856,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 详细契约见 [M4.1 Agent Foundation 核心协议与静态 Registry 设计](../specs/2026-08-14-m4-1-agent-foundation-core-protocol-static-registry-design.md)。该里程碑只交付共享协议、静态定义与窄端口，不解除 M3.8 对 M4.2、M4.3、M4.7、M4.8 的实施门禁。
 
-实施状态：已于 2026-08-14 完成；M3.8 的后续实施门禁保持关闭。
+实施状态：已于 2026-08-14 完成；M3.8 的后续启动集成门禁已由 M4.10 完成。
 
 产出：
 
@@ -1044,18 +1046,18 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M4.10 接入会话并完成 Player Eval
 
-详细契约见 [M4.10 会话接入、生产 Player Worker 与 Player Eval 设计](../specs/2026-08-31-m4-10-session-integration-player-eval-design.md)。当前状态：设计已确认、待实现；DeepSeek 固定使用官方地址直连，尚未接入 `bootstrap.ts` 或启动生产 Worker。
+详细契约见 [M4.10 会话接入、生产 Player Worker 与 Player Eval 设计](../specs/2026-08-31-m4-10-session-integration-player-eval-design.md)。当前状态：已完成并验证；configured runtime 已在 `bootstrap.ts` 接入启动恢复、live Player Worker 与 Dispatcher，DeepSeek 固定使用官方地址直连。离线 Eval、m410 database milestone 与 PostgreSQL E2E milestone 均已通过。
 
 产出：
 
-- 会话服务在 AI 行动位创建 AgentRun，Worker 完成后通过 Commit Gate 回到标准命令主链。
-- 结构化日志、运行指标、泄露回归和固定 6–9 人扑克场景 Eval。
+- Session 创建、用户命令与已提交 `aiAction` 只发送 `sessionId` hint；PlayerTurnDispatcher 独立重读权威状态，并按唯一 active StrategyPack 创建或复用 live Run，Worker 通过唯一 Commit Gate 回到标准命令主链。
+- 结构化日志、运行指标、泄露回归和固定 6–9 人扑克场景的确定性 Eval。
 - 浏览器刷新和 SSE 重连不取消仍有效运行。
 
 后端测试闭环：
 
-- 覆盖正常、基础设施失败、纠错、暂停、恢复、stale 接替和服务重启。
-- Runtime、Prompt、模型、策略或 Context 版本变更通过相应 Eval 门禁。
+- m410 database milestone 覆盖唯一 live Run、精确 pack 引用与协调事件；PostgreSQL E2E milestone 通过生产组合 seam 覆盖连续 AI、丢失 hint/wake、historical claim 隔离和启动恢复。
+- Runtime、Prompt、模型、策略或 Context 版本变更通过相应 Eval 门禁；两套 full 未在本轮执行。
 
 ## 9. M5：历史、统计与数据管理
 

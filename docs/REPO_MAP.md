@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-09-01（M0–M2、M3.1–M3.8、M4.1–M4.9 已完成；M4.10 已完成本地生产接线、离线验证与 m410 远程验收注册，远程执行证据待补）
+更新时间：2026-09-02（M0–M2、M3.1–M3.8、M4.1–M4.10 已完成；M4.10 已通过离线验证、m410 database milestone 与 PostgreSQL E2E milestone）
 
 ## 当前目录与职责
 
@@ -28,7 +28,7 @@
 - `docs/superpowers/specs/2026-08-24-m4-6-player-decision-packet-bounded-choice-design.md`：M4.6 正式事实源；专属三阶段 `player_decisions`、Memory 延后、durable stage 恢复、M4.3 accepted-output 原子交接、最小模型投影、第二/第三 Guard 与唯一 Player executor 已实现。M4.7–M4.9 已闭环；M4.10 只组合其生产调度与启动生命周期，不改变 Packet/模型业务语义。
 - `docs/superpowers/specs/2026-08-25-m4-7-player-validator-command-commit-gate-design.md`：M4.7 正式事实源；认证 selected 结果经纯 Validator 重建唯一私有 `aiAction`，并在单个 Session 命令事务中完成扑克行动、ledger、Decision committed 与 Run completed。M4.10 将该唯一提交路径接入 configured Player Runtime；它仍不对 HTTP/公开命令暴露新的入口。
 - `docs/superpowers/specs/2026-08-30-m4-9-player-audit-replay-bounded-memory-design.md`：M4.9 正式设计源；strict Memory v1、live Run 单次物化、四步 Capability 编排、Memory 审计快照/≤2 KiB 模型投影、只读 Replay 和 live-only 提交门禁已实现。M4.10 的 live Worker claim 明确排除 historical reexecution。
-- `docs/superpowers/specs/2026-08-31-m4-10-session-integration-player-eval-design.md`：M4.10 正式事实源；以提交后 hint、持久轮询与启动修复连接 Session、Dispatcher、唯一 active StrategyPack、live Player Worker 和 M4.7 Commit Gate；还冻结 configured/diagnostic-only 启动分支、Eval 边界与 remote m410 验收。当前实现的远程执行证据待补。
+- `docs/superpowers/specs/2026-08-31-m4-10-session-integration-player-eval-design.md`：M4.10 正式事实源；以提交后 hint、持久轮询与启动修复连接 Session、Dispatcher、唯一 active StrategyPack、live Player Worker 和 M4.7 Commit Gate；还冻结 configured/diagnostic-only 启动分支、Eval 边界与 remote m410 验收。离线 Eval、m410 database milestone 与 PostgreSQL E2E milestone 均已通过；两套 full 未在本轮执行。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
 - `docs/superpowers/specs/2026-07-26-poker-coach-agent-design.md`：已确认的 Coach Agent 唯一详细设计源，约束手动复盘、两阶段信息隔离、确定性工具、策略抽象、决策分级、教学降噪、长期趋势/画像边界、后置训练闭环和验收。
 - `docs/superpowers/plans/`：开发任务的依赖顺序与验收清单。

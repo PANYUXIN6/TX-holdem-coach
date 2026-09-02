@@ -1,6 +1,6 @@
 # M3.8 服务启动恢复协调设计
 
-状态：设计已确认；实施纳入 M4.10，2026-08-31 已与 configured runtime / diagnostic-only 启动分支对齐
+状态：已作为 M4.10 启动集成切片完成并验证；configured runtime / diagnostic-only 启动分支已落地
 
 任务来源：[项目开发任务 M3.8](../plans/2026-07-23-poker-practice-development-tasks.md#m38-实现服务启动恢复协调)
 

@@ -1,7 +1,7 @@
 # M4.9 Player 审计 Replay、历史 Re-execution 与有界场次记忆设计
 
 - 日期：2026-08-30
-- 状态：待确认；current-only 首发策略已采纳
+- 状态：已确认并完成实现与验收；current-only 首发策略已落地，M4.10 仅消费其 live Memory 作为生产接线的一部分
 - 任务来源：[项目开发任务 M4.9](../plans/2026-07-23-poker-practice-development-tasks.md#m49-实现-player-审计replay-与有界记忆)
 - 上游事实源：[M4.6 设计](./2026-08-24-m4-6-player-decision-packet-bounded-choice-design.md)、[M4.7 设计](./2026-08-25-m4-7-player-validator-command-commit-gate-design.md)、[M4.8 设计](./2026-08-28-m4-8-player-failure-pause-stale-replacement-design.md)
 
@@ -87,7 +87,7 @@ M4.9 在现有 Player 主链上补齐三个能力：
 - historical Run 不改变 Session 指针、扑克状态、筹码、`stateVersion`、`eventSeq`、ledger 或 replacement lineage；
 - M4.9 前旧载荷不会触发兼容逻辑，测试从 fresh schema/current fixtures 启动；
 - database 与 PostgreSQL E2E milestone 分别证明 Schema/事务约束和 live/nonCommitting 隔离；
-- M3.8/M4.10 仍是 Player 生产上线门禁。
+- M3.8/M4.10 的 Player 生产上线门禁已完成。
 
 ## 3. 范围
 
@@ -103,7 +103,7 @@ M4.9 在现有 Player 主链上补齐三个能力：
 - Owner-scoped Audit Replay、Run debug trace 与 Historical Re-execution 内部端口；
 - `agent_runs.execution_mode`、historical source relation、live-only Commit/Coordinator/唯一性约束；
 - fresh-schema migration、定向单元、database m49、PostgreSQL E2E m49；
-- 实现完成后的数据字典、任务总表、仓库地图与架构同步。
+- 已完成数据字典、任务总表、仓库地图与架构同步。
 
 ### 3.2 明确不负责
 
@@ -825,7 +825,7 @@ replacement 带 live 协调与失败暂停语义。历史执行使用独立 sour
 
 ## 22. 文档与地图同步
 
-实现完成后更新任务总表、Agent 模块任务、数据字典、`docs/REPO_MAP.md`、`docs/ARCHITECTURE.md` 和测试计划；明确 current-only v1、三条主链和两套 remote milestone 结果。
+已更新任务总表、Agent 模块任务、数据字典、`docs/REPO_MAP.md`、`docs/ARCHITECTURE.md` 和测试计划；明确 current-only v1、三条主链和两套 remote milestone 结果。
 
 ## 23. 批准门禁
 
@@ -834,7 +834,7 @@ replacement 带 live 协调与失败暂停语义。历史执行使用独立 sour
 1. M4.9 是 current-only 首发，Memory、Decision 审计载荷、Projection、Packet、Context、Prompt 与 Player Runtime 统一为单一 v1；
 2. 删除双版本 reader、映射、版本矩阵与历史 Runtime 兼容；Re-execution 只接受 current-v1 source。
 
-### 23.2 实现前仍需确认
+### 23.2 已确认的实施约束
 
 1. M4.9 前开发数据通过重建退出支持范围，不提供旧 `{}` Memory、旧 Decision 或旧 Run 的数据迁移；
 2. Memory 连续扫描全部 prior Hand 生命周期；`completed` 进入 fold，`aborted` 只推进 `scannedThrough`，当前 Hand 继续由 Observation 提供；
@@ -843,7 +843,7 @@ replacement 带 live 协调与失败暂停语义。历史执行使用独立 sour
 5. confidence 阈值为 10/5、25/10、50/20；
 6. M4.9 exploit 最大权重转移为 0；
 7. Historical Re-execution 采用新 execution binding + source 不可变引用；Provider 初始 messages 与来源逐 byte 相同，不重新执行 preprocessing；成功原子提交 accepted Attempt/selected Decision/completed Run，失败或取消原子终结 Decision/Run，unknown in-flight 不重调，且永不提交扑克行动；
-8. M4.9 不接 `bootstrap.ts`，生产接线继续由 M3.8/M4.10 负责。
+8. M4.9 不接 `bootstrap.ts`；生产接线已由 M3.8/M4.10 完成。
 
 若改变 Memory payload、Commit 边界、数据库关系或测试拓扑，必须先修订本文。编码阶段不得增加两套 shape。
 

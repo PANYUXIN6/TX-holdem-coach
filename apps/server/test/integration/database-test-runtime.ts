@@ -239,10 +239,17 @@ export function createDatabaseTestSql(
   url: string,
   runId: string,
   role: string,
+  maximumConnections = 1,
 ): Sql {
+  if (!Number.isSafeInteger(maximumConnections) || maximumConnections < 1) {
+    throw new Error('数据库测试连接池大小无效。')
+  }
   const scope = databaseTestAbortScopeStorage.getStore()
   scope?.signal.throwIfAborted()
-  const sql = postgres(url, createDatabaseTestConnectionOptions(runId, role))
+  const sql = postgres(url, {
+    ...createDatabaseTestConnectionOptions(runId, role),
+    max: maximumConnections,
+  })
   if (scope !== undefined) {
     bindDatabaseTestClientToAbortSignal(sql, scope.signal)
   }
@@ -253,12 +260,13 @@ export function createDatabaseTestSqlForRole(
   url: string,
   role: string,
   environment: NodeJS.ProcessEnv = process.env,
+  maximumConnections = 1,
 ): Sql {
   const runId = environment.DATABASE_TEST_RUN_ID
   if (runId === undefined) {
     throw new Error('数据库测试缺少 Run ID。')
   }
-  return createDatabaseTestSql(url, runId, role)
+  return createDatabaseTestSql(url, runId, role, maximumConnections)
 }
 
 export async function assertNoConflictingDatabaseTestConnections(

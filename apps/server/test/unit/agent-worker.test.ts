@@ -23,6 +23,44 @@ afterEach(() => {
 })
 
 describe('agent worker', () => {
+  test('only starts installed Player lane and rejects an empty executor map', async () => {
+    vi.useFakeTimers()
+    const claimedRuntimeTypes: string[] = []
+    const worker = createAgentWorker({
+      control: {
+        async claimNext({ runtimeType }) {
+          claimedRuntimeTypes.push(runtimeType)
+          return { kind: 'none', diagnostics: [] }
+        },
+        async markRunning() {
+          throw new Error('should not mark a run as running')
+        },
+        async renewLease() {
+          throw new Error('should not renew a lease')
+        },
+        async inspectSettlement() {
+          return 'terminal'
+        },
+        classifyExecutionSettlement() {
+          return 'terminal'
+        },
+      },
+      executors: { player: { runtimeType: 'player', async execute() {} } },
+    })
+
+    await worker.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(claimedRuntimeTypes).toEqual(['player'])
+    await worker.stop()
+
+    expect(() =>
+      createAgentWorker({
+        control: {} as AgentRunWorkerControl,
+        executors: {},
+      }),
+    ).toThrow()
+  })
+
   test('stop 的宽限期是真实上界，即使 executor 忽略 abort 也会返回', async () => {
     vi.useFakeTimers()
     const run = leasedCoachRun()
@@ -60,12 +98,14 @@ describe('agent worker', () => {
     }
     const worker = createAgentWorker({
       control,
-      playerExecutor: { runtimeType: 'player', async execute() {} },
-      coachExecutor: {
-        runtimeType: 'coach',
-        execute(_run, signal) {
-          executorSignal = signal
-          return new Promise(() => undefined)
+      executors: {
+        player: { runtimeType: 'player', async execute() {} },
+        coach: {
+          runtimeType: 'coach',
+          execute(_run, signal) {
+            executorSignal = signal
+            return new Promise(() => undefined)
+          },
         },
       },
     })
@@ -132,11 +172,13 @@ describe('agent worker', () => {
       }
       const worker = createAgentWorker({
         control,
-        playerExecutor: { runtimeType: 'player', async execute() {} },
-        coachExecutor: {
-          runtimeType: 'coach',
-          async execute() {
-            await execution
+        executors: {
+          player: { runtimeType: 'player', async execute() {} },
+          coach: {
+            runtimeType: 'coach',
+            async execute() {
+              await execution
+            },
           },
         },
         onDisposition,
@@ -199,14 +241,16 @@ describe('agent worker', () => {
     }
     const worker = createAgentWorker({
       control,
-      playerExecutor: { runtimeType: 'player', async execute() {} },
-      coachExecutor: {
-        runtimeType: 'coach',
-        async execute(_run, signal) {
-          executionStarted()
-          await new Promise<void>((resolve) =>
-            signal.addEventListener('abort', () => resolve(), { once: true }),
-          )
+      executors: {
+        player: { runtimeType: 'player', async execute() {} },
+        coach: {
+          runtimeType: 'coach',
+          async execute(_run, signal) {
+            executionStarted()
+            await new Promise<void>((resolve) =>
+              signal.addEventListener('abort', () => resolve(), { once: true }),
+            )
+          },
         },
       },
     })
@@ -255,13 +299,15 @@ describe('agent worker', () => {
       })
       const worker = createAgentWorker({
         control,
-        playerExecutor: { runtimeType: 'player', async execute() {} },
-        coachExecutor: {
-          runtimeType: 'coach',
-          async execute() {
-            if (executorOutcome === 'rejected') {
-              throw new Error('executor failed')
-            }
+        executors: {
+          player: { runtimeType: 'player', async execute() {} },
+          coach: {
+            runtimeType: 'coach',
+            async execute() {
+              if (executorOutcome === 'rejected') {
+                throw new Error('executor failed')
+              }
+            },
           },
         },
         onDisposition: ({ disposition }) => reportDisposition(disposition),

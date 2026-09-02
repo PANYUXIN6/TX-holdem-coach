@@ -123,7 +123,7 @@ function parseSingleRow<Output>(
 function decodeObservationEvents(
   rows: readonly unknown[],
 ): readonly PlayerObservationEvent[] {
-  return rows.map((row) => {
+  return rows.flatMap((row) => {
     const parsed = EventObservationRowSchema.safeParse(row)
     if (!parsed.success || parsed.data.handId === null) {
       throw new PersistenceDataCorruptionError('invalidPlayerObservation')
@@ -134,6 +134,18 @@ function decodeObservationEvents(
     )
     if (decoded.kind !== 'decoded') {
       throw new PersistenceDataCorruptionError('invalidPlayerObservation')
+    }
+    // Agent lifecycle events share the hand stream but do not advance the
+    // authoritative poker state. The observation chain is intentionally the
+    // contiguous state-transition history that the replay certifies.
+    if (
+      decoded.value.type !== 'handStarted' &&
+      decoded.value.type !== 'actionCommitted'
+    ) {
+      if (parsed.data.stateVersionBefore !== parsed.data.stateVersionAfter) {
+        throw new PersistenceDataCorruptionError('invalidPlayerObservation')
+      }
+      return []
     }
     return Object.freeze({
       handId: parsed.data.handId,
@@ -278,7 +290,7 @@ export async function loadPlayerObservationInTransaction(
     throw new PersistenceDataCorruptionError('invalidPlayerObservation')
   }
 
-  const asOfEventSeq = session.nextEventSeq - 1
+  const latestSessionEventSeq = session.nextEventSeq - 1
   const eventRows = await queryRows(transaction`
     SELECT
       hand_id::text AS "handId",
@@ -291,10 +303,14 @@ export async function loadPlayerObservationInTransaction(
     WHERE session_id = ${identity.sessionId}::uuid
       AND owner_id = ${owner.databaseOwnerId}::uuid
       AND hand_id = ${identity.handId}::uuid
-      AND event_seq <= ${asOfEventSeq}::bigint
+      AND event_seq <= ${latestSessionEventSeq}::bigint
     ORDER BY event_seq ASC
   `)
   const events = decodeObservationEvents(eventRows)
+  const asOfEventSeq = events.at(-1)?.eventSeq
+  if (asOfEventSeq === undefined) {
+    throw new PersistenceDataCorruptionError('invalidPlayerObservation')
+  }
   try {
     const draft = buildPlayerObservationDraft({
       state,

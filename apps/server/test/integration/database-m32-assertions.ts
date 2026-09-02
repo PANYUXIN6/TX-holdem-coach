@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto'
 import type { PublicSessionSnapshot } from '@tx-holdem-coach/contracts'
 import type { Sql, TransactionSql } from 'postgres'
 import { expect } from 'vitest'
+import {
+  hashPlayerSessionMemoryV1,
+  PLAYER_EMPTY_SESSION_MEMORY_V1,
+} from '../../src/agents/player/player-session-memory.js'
 import { getLegalActions } from '../../src/poker/betting.js'
 import type { RandomSource } from '../../src/poker/random-source.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
@@ -537,17 +541,17 @@ async function assertCommittedCreation(
 
   const memoryRows = await sql<
     {
-      readonly currentRevisionIsZero: boolean
-      readonly currentMemoryIsEmpty: boolean
-      readonly revisionIsZero: boolean
-      readonly revisionMemoryIsEmpty: boolean
+      readonly currentRevision: number
+      readonly currentMemory: unknown
+      readonly revision: number
+      readonly revisionMemory: unknown
     }[]
   >`
     SELECT
-      agent.current_memory_revision = 0 AS "currentRevisionIsZero",
-      agent.memory_payload = '{}'::jsonb AS "currentMemoryIsEmpty",
-      revision.revision = 0 AS "revisionIsZero",
-      revision.memory_payload = '{}'::jsonb AS "revisionMemoryIsEmpty"
+      agent.current_memory_revision::int AS "currentRevision",
+      agent.memory_payload AS "currentMemory",
+      revision.revision::int AS revision,
+      revision.memory_payload AS "revisionMemory"
     FROM app_private.session_agents AS agent
     JOIN app_private.agent_memory_revisions AS revision
       ON revision.participant_id = agent.participant_id
@@ -557,13 +561,16 @@ async function assertCommittedCreation(
     ORDER BY agent.participant_id
   `
   expect(memoryRows).toHaveLength(totalSeatCount - 1)
+  const emptyMemorySha256 = hashPlayerSessionMemoryV1(
+    PLAYER_EMPTY_SESSION_MEMORY_V1,
+  )
   expect(
     memoryRows.every(
       (row) =>
-        row.currentRevisionIsZero &&
-        row.currentMemoryIsEmpty &&
-        row.revisionIsZero &&
-        row.revisionMemoryIsEmpty,
+        row.currentRevision === 0 &&
+        hashPlayerSessionMemoryV1(row.currentMemory) === emptyMemorySha256 &&
+        row.revision === 0 &&
+        hashPlayerSessionMemoryV1(row.revisionMemory) === emptyMemorySha256,
     ),
   ).toBe(true)
 

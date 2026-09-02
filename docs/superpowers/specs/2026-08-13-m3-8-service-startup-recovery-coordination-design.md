@@ -1,6 +1,6 @@
 # M3.8 服务启动恢复协调设计
 
-状态：设计待确认；存在已确认的里程碑依赖倒置，实施必须后置于 M4.2、M4.3、M4.7、M4.8
+状态：设计已确认；实施纳入 M4.10，2026-08-31 已与 configured runtime / diagnostic-only 启动分支对齐
 
 任务来源：[项目开发任务 M3.8](../plans/2026-07-23-poker-practice-development-tasks.md#m38-实现服务启动恢复协调)
 
@@ -31,7 +31,7 @@ M3.8 是后置集成里程碑，编号不再表示实施顺序。它不实现 Ag
 3. M4.7 拥有检查点、结果和扑克命令提交前的迟到结果屏障。M3.8 不以进程内取消、AbortSignal 或“旧 Worker 已经退出”冒充 fencing 正确性。
 4. M4.8 拥有 Player `process_restart` 策略：通常取消旧运行、失效旧请求/attempt/租约/fencing、重新判断当前决策点、可选创建替代运行，以及协调状态和 Player current v1 私有事件的原子写入；若 predecessor 的 exact 配置或依赖不可用，则旧运行以稳定配置失败进入 `failed`、Session paused。M3.8 不复制这些判断。
 5. M3.8 拥有且仅拥有活动场次扫描、M2.6 恢复组合、调用 M4.8 端口、提交后 Worker 唤醒、启动就绪和进程资源关闭治理。M3.8 不进入 HTTP 请求链，也不成为普通场次读取或 Agent 恢复的转发层。
-6. Worker 在全部启动恢复候选处理完成前保持停止，Hono 在恢复完成、Worker 成功启动前不监听；只有监听端口确认绑定后才能进入 ready。外部请求不能观察或竞争半完成的本进程启动恢复。
+6. 在 M4.10 判定为 configured runtime 时，Worker 在全部启动恢复候选处理完成前保持停止，Hono 在恢复完成、Worker 成功启动前不监听；只有监听端口确认绑定后才能进入 ready。`DEEPSEEK_API_KEY` 缺失且没有 active Session 时，M4.10 进入不构造 Worker 的 diagnostic-only 分支；存在 active Session 时阻止 ready。
 7. 每个 Session 使用独立短事务并按稳定 Session ID 顺序串行处理。某场进入 `readonlyDiagnostic` 是已闭合的恢复结果，不阻止服务就绪；数据库、契约或未知基础设施错误阻止监听。
 8. 每个恢复事务提交后才允许发布其已持久化 Player 协调事件或唤醒对应运行。发布失败不撤销数据库事实；Worker 唤醒只是持久队列的低延迟提示，不是任务事实源。
 9. M3.8 不新增 Contracts、数据库表、迁移、事件类型或公开错误。M4.8 必须先把三种 Player 协调事件纳入唯一 current v1 联合并发布对应 mutation/投影 writer，M3.8 才能实施。
@@ -121,7 +121,7 @@ M3.8 开始实现前必须同时满足：
 | --- | --- | --- |
 | 权威扑克快照/事件恢复与诊断 | M2.6 | 调用并按返回联合分流 |
 | AgentRun 生命周期、租约、fencing、Worker | M4.2 | 组合 Worker 控制端口 |
-| Provider/ModelGateway/Attempt | M4.3 | 不直接依赖；只验证 Worker 可最终消费 queued Run |
+| Provider/ModelGateway/Attempt | M4.3/M4.10 | M3.8 不调用 Provider；bootstrap 只消费 M4.10 已验证的 configured/diagnostic-only 模式 |
 | Player Commit Gate | M4.7 | 不调用；作为迟到结果安全前置 |
 | Player 重启取消、替代运行、current v1 协调事件 | M4.8 | 在 M2.6 锁定事务内调用窄端口 |
 | 当前公开投影、提交后 Hub | M3.6 | 发布 M4.8 返回的已提交事件批次 |
@@ -225,13 +225,15 @@ index 安装 SIGINT/SIGTERM 并创建 AbortSignal
 → ready
 ```
 
+该固定顺序是 configured runtime 路径。M4.10 在数据库可读且取得 Owner scope 后，使用同源 active Session candidate reader 完成启动模式门禁：`DEEPSEEK_API_KEY` 缺失且存在 active Session 时立即失败；不存在 active Session 时进入 diagnostic-only，跳过 M3.8 恢复、Worker 与 Dispatcher，只创建受限 HTTP app 并等待端口绑定。diagnostic-only 不是一个空 Worker，也不满足 Player Runtime ready。
+
 约束：
 
 - Worker 构造不得自动领取任务；只有显式 `start()` 后才可轮询或领取。
 - `createApp()` 可以在恢复前后构造，但 `listen()` 必须在恢复、Worker start/wake 完成后发生。首版为降低半初始化对象的清理复杂度，在恢复和 Worker 启动成功后才创建 app。
 - `listen()` 返回第 5.4 节的 server handle；调用返回只表示已创建监听对象，不表示端口绑定成功。
-- `ready` 的唯一判据是启动恢复完成、必需 Worker 已启动、唤醒提示已处理、`server.bound` 已成功 resolve，且 signal/HTTP/Worker fatal 均未先行 settle；数据库连接成功或 `listen()` 同步返回都不等于服务 ready。
-- 启动恢复不调用外部模型，因此不会把 Provider 延迟放入服务监听门禁。
+- configured runtime 的 `ready` 判据是启动恢复完成、必需 Worker 已启动、唤醒提示已处理、`server.bound` 已成功 resolve，且 signal/HTTP/Worker fatal 均未先行 settle；diagnostic-only 的必需资源只有受限 HTTP。数据库连接成功或 `listen()` 同步返回都不等于任一模式 ready。
+- 启动恢复不调用外部模型。M4.10 启动时只检查 Key presence；configured runtime 的 DNS、Provider `/models`、模型服务暂时不可用或远端鉴权失败属于运行时健康/调用失败，不进入服务监听门禁。
 
 ### 4.3 启动失败与正常关闭
 
@@ -515,14 +517,14 @@ interface StartupCommittedEffects {
 
 ### 7.3 Worker 启动与唤醒
 
-全部候选事务处理完毕后，恢复应用服务返回包含已提交 `replacementRunIds` 的不可变 `StartupCommittedEffects`，自身不调用 `start()`、`wake()` 或 `stop()`。`bootstrap.ts` 接管该结果，并按唯一顺序执行：
+本节只适用于 configured runtime。全部候选事务处理完毕后，恢复应用服务返回包含已提交 `replacementRunIds` 的不可变 `StartupCommittedEffects`，自身不调用 `start()`、`wake()` 或 `stop()`。`bootstrap.ts` 接管该结果，并按唯一顺序执行：
 
 1. 仅调用一次 `playerWorker.start()`；失败则阻止 listen，并按第 4.3 节清理。
 2. 对返回的 `replacementRunIds` 去重并按 UUID 升序；集合非空时调用一次 `wake()`，为空时不调用。
 3. `wake()` 抛出时记录固定 category `startup_worker_wake_failed`，但只要 Worker 的持久轮询已经成功启动，服务仍可 ready；周期扫描负责最终发现 queued Run。
 4. 完成上述步骤后由 `bootstrap.ts` 创建 app、取得 HTTP server handle 并 await `server.bound`；只有端口绑定成功才进入 ready，不等待 Run 被领取、Attempt 开始或模型返回。
 
-因此空候选与非空候选都只有一个 Worker 启动调用点，不受 M4.2 选择“重复 `start()` 稳定拒绝”语义影响；同时避免恢复扫描过程中 Worker 抢先领取尚待协调的旧运行，也不把外部模型可用性变成服务启动条件。
+因此 configured runtime 的空候选与非空候选都只有一个 Worker 启动调用点，不受 M4.2 选择“重复 `start()` 稳定拒绝”语义影响；同时避免恢复扫描过程中 Worker 抢先领取尚待协调的旧运行。diagnostic-only 不调用本节端口；configured runtime 也不以 Provider 网络或健康检查成功作为 ready 条件。
 
 ## 8. Player 恢复语义的集成约束
 
@@ -700,7 +702,7 @@ Session/Run UUID 默认不需要进入启动摘要。定向诊断若确需关联
 
 ### 12.2 Bootstrap 测试
 
-扩展现有启动顺序测试，精确断言：
+configured runtime 扩展现有启动顺序测试，精确断言：
 
 ```text
 config
@@ -718,6 +720,9 @@ config
 
 关键 Oracle 固定为：
 
+- `DEEPSEEK_API_KEY` 缺失且 active candidate 非空：零 startup recovery、Worker、app/listen，以 `playerRuntimeConfigurationUnavailable` 失败；
+- `DEEPSEEK_API_KEY` 缺失且 active candidate 为空：进入 diagnostic-only，零 startup recovery/Worker/Dispatcher，只构造受限 app，`httpBound` 后 ready；
+- configured runtime 即使 Provider `/models`、模型网络不可达或远端鉴权失败也不在 bootstrap 发请求，继续进入恢复与 Worker-before-listen；
 - 空候选：`start()` 恰好一次、`wake()` 零次，`httpBound` 后才返回运行句柄；
 - 非空候选：`start()` 恰好一次，之后使用去重并按 UUID 升序的 ID 调用 `wake()` 恰好一次，再创建 app 和监听；
 - `wake()` 抛出：只记录 `startup_worker_wake_failed` 且不重跑恢复，仍创建 app、等待绑定并进入 ready；
@@ -804,7 +809,9 @@ M3.8 本身不新增 Schema、migration 或共享事务基础设施，因此默�
 
 - `replacementQueued` 不等于 Attempt 已创建；
 - Worker 领取后从运行固化的 Player Route Policy 起点创建 DeepSeek Attempt；
-- M3.8 无 Provider 依赖，Provider 不可用不阻止 Hono 启动。
+- M3.8 不调用 Provider；M4.10 必须先检查 `DEEPSEEK_API_KEY` presence 并选择 configured runtime 或 diagnostic-only；
+- configured runtime 下 Provider 的 DNS、健康检查、模型服务暂时不可用或远端鉴权失败不阻止 Hono ready，后续 Attempt 按 M4.3/M4.8 分类；
+- Key 缺失且存在 active Session 时阻止 ready；没有 active Session 时由 M4.10 diagnostic-only 启动受限 Hono，不构造 Worker。
 
 ### 14.3 对 M4.7
 
@@ -832,7 +839,7 @@ M3.8 只有在以下条件全部满足时才完成：
 - M3.8 没有实现或复制任何 M4 生命周期、Attempt、Commit Gate 或 Player 重启业务规则；
 - 启动时 Owner-scoped 扫描活动场次，每场在独立事务中先 M2.6、后 M4.8；
 - M4.8 完整返回联合在 COMMIT 前严格解码；非法 Run ID、事件、kind/字段组合，以及 Session 不匹配、eventId 重复、eventSeq 非连续全部回滚；
-- Worker 在全部恢复完成前不领取，Hono 在恢复和 Worker start 成功前不监听，只有 HTTP 端口确认绑定后才 ready；
+- configured runtime 的 Worker 在全部恢复完成前不领取，Hono 在恢复和 Worker start 成功前不监听，只有 HTTP 端口确认绑定后才 ready；diagnostic-only 不构造 Worker/Dispatcher，只有受限 HTTP 绑定后才 ready；
 - 只有提交后的事件被发布、提交后的替代 Run 被唤醒；
 - `thinking` replacement、既有 `paused` 零写、配置/依赖不可用时新暂停并返回 `reconciledWithoutReplacement`、不再需要 AI、ended/missing 和 readonlyDiagnostic 都有通过证据；
 - 并发恢复和旧 fencing 迟到结果不能造成双 Run 或双行动；

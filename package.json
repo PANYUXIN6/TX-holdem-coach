@@ -31,7 +31,7 @@
     "simplify:deep": "pnpm run lint && pnpm run report:knip && pnpm run report:duplication && pnpm run verify && pnpm run build && pnpm --filter @tx-holdem-coach/server run verify:migration-assets",
     "verify:repository-map": "node scripts/verify-repository-map-paths.mjs",
     "verify:poker-assets": "node scripts/verify-poker-assets.mjs",
-    "verify": "pnpm run verify:repository-map && pnpm run verify:poker-assets && pnpm run format:check && pnpm run typecheck && pnpm run test:backend"
+    "verify": "pnpm run verify:repository-map && pnpm run verify:poker-assets && pnpm --filter @tx-holdem-coach/server run eval:player:deterministic && pnpm run format:check && pnpm run typecheck && pnpm run test:backend"
   },
   "devDependencies": {
     "jscpd": "^5.0.15",

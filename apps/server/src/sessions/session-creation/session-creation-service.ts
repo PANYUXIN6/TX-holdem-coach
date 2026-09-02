@@ -39,6 +39,7 @@ import type {
   SessionCreationSnapshotProjectorBinding,
 } from './session-creation-projector.js'
 import type { CommittedSessionEventPublisher } from '../public-projection/committed-session-event-hub.js'
+import type { PlayerTurnHintPort } from '../../agents/player/player-turn-dispatcher.js'
 
 export interface ProviderCreationPolicy {
   readonly deepSeekConfigured: boolean
@@ -136,6 +137,7 @@ export function createSessionCreationService(input: {
     readonly firstEventSeq: number
     readonly lastEventSeq: number
   }) => void
+  readonly playerTurnHintPort?: PlayerTurnHintPort
 }): SessionCreationService {
   const {
     sql,
@@ -152,6 +154,7 @@ export function createSessionCreationService(input: {
     activeSessionSnapshotReaderBinding,
     committedEventPublisher,
     logPublishFailure,
+    playerTurnHintPort,
   } = input
 
   const assertRosterMirrorsPlan = (
@@ -488,6 +491,11 @@ export function createSessionCreationService(input: {
           } catch {
             // 提交后诊断日志不改变创建结果。
           }
+        }
+        try {
+          playerTurnHintPort?.notify(result.response.snapshot.sessionId)
+        } catch {
+          // The committed Session state is the scheduling source of truth.
         }
       }
       return result

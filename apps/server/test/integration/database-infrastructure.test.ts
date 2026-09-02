@@ -6,6 +6,7 @@ import { assertM46PlayerDecisionPersistence } from './database-m46-assertions.js
 import { assertM47PlayerCommitSchema } from './database-m47-assertions.js'
 import { assertM48PlayerCoordinationSchema } from './database-m48-assertions.js'
 import { assertM49PlayerAuditReplayMemorySchema } from './database-m49-assertions.js'
+import { assertM410PlayerSessionIntegrationPersistence } from './database-m410-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -154,6 +155,12 @@ registerDatabaseMilestoneTest(
   'm49',
   'M4.9 Player Memory 与 Replay schema',
   (sql) => assertM49PlayerAuditReplayMemorySchema(sql),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm410',
+  'M4.10 Player Session integration persistence',
+  (sql) => assertM410PlayerSessionIntegrationPersistence(sql),
   300_000,
 )
 

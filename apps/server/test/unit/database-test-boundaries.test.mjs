@@ -114,6 +114,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm47',
       'm48',
       'm49',
+      'm410',
     ])
     expect(persistenceEntry).not.toContain('postgres-application-e2e')
     expect(persistenceEntry).toContain('database-repository-assertions')
@@ -171,6 +172,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm47',
       'm48',
       'm49',
+      'm410',
     ])
     expect(applicationEntry).not.toContain('database-schema-assertions')
     expect(applicationEntry).toContain('postgres-e2e-m35-assertions')

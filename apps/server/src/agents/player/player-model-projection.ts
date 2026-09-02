@@ -337,7 +337,7 @@ const ModelMemoryMetricTupleV1Schema = z.tuple([
   SafeNonnegativeIntegerSchema,
 ])
 const ModelMemoryOpponentTupleV1Schema = z.tuple([
-  z.number().int().min(1).max(8),
+  z.number().int().min(0).max(8),
   SafeNonnegativeIntegerSchema,
   SafeNonnegativeIntegerSchema,
   z.array(ModelMemoryMetricTupleV1Schema).length(6),

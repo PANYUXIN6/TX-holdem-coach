@@ -39,7 +39,10 @@ import {
 } from './errors.js'
 import { isResolvedOwnerScope, type ResolvedOwnerScope } from './owner-scope.js'
 
-export const AGENT_RUN_LEASE_MS = 15_000
+// Capability 审计和 Commit Gate 都会在同一 Run 上获取短事务锁；为避免
+// 心跳在锁等待期间把仍在执行的合法 Run 误判为失去 authority，租约必须
+// 覆盖一次受控数据库往返链路。总执行 deadline 仍由 Run budget 约束。
+export const AGENT_RUN_LEASE_MS = 60_000
 export const AGENT_WORKER_CLAIM_BATCH_SIZE = 16
 const RUNTIME_ADVISORY_KEYS: Readonly<Record<RuntimeType, number>> =
   Object.freeze({ player: 1_296_312_912, coach: 1_296_312_899 })
@@ -757,6 +760,7 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
                   budget_payload AS "budgetPayload"
            FROM app_private.agent_runs
            WHERE runtime = $1 AND lifecycle IN ('leased', 'running')
+             AND ($1 <> 'player' OR execution_mode = 'live')
              AND lease_expires_at > $2::timestamptz`,
           [parsed.data.runtimeType, databaseNow],
         )
@@ -793,6 +797,7 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
             id::text AS "runId"
           FROM app_private.agent_runs
           WHERE runtime = ${parsed.data.runtimeType}
+            AND (${parsed.data.runtimeType} <> 'player' OR execution_mode = 'live')
             AND (
               lifecycle = 'queued'
               OR (
@@ -842,6 +847,7 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
           candidateRows = await transaction.unsafe(
             `SELECT ${RUN_COLUMNS} FROM app_private.agent_runs AS run
              WHERE run.runtime = $1
+               AND ($1 <> 'player' OR run.execution_mode = 'live')
                AND (run.lifecycle = 'queued' OR (
                  run.lifecycle IN ('leased', 'running')
                  AND run.lease_expires_at <= $2::timestamptz
@@ -915,8 +921,10 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
           try {
             lockedRows = await transaction.unsafe(
               `SELECT ${RUN_COLUMNS} FROM app_private.agent_runs AS run
-               WHERE run.id = $1::uuid AND run.owner_id = $2::uuid FOR UPDATE`,
-              [candidate.runId, owner.databaseOwnerId],
+               WHERE run.id = $1::uuid AND run.owner_id = $2::uuid
+                 AND ($3 <> 'player' OR run.execution_mode = 'live')
+               FOR UPDATE`,
+              [candidate.runId, owner.databaseOwnerId, parsed.data.runtimeType],
             )
           } catch {
             throw new DatabaseOperationError()
@@ -961,6 +969,7 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
                    run.lifecycle IN ('leased', 'running')
                    AND run.lease_expires_at <= $2::timestamptz
                  ))
+                 AND ($6 <> 'player' OR run.execution_mode = 'live')
                RETURNING ${RUN_COLUMNS}`,
               [
                 parsed.data.leaseOwner,
@@ -968,6 +977,7 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
                 AGENT_RUN_LEASE_MS,
                 locked.runId,
                 owner.databaseOwnerId,
+                parsed.data.runtimeType,
               ],
             )
           } catch {

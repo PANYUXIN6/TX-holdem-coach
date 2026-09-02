@@ -1,8 +1,8 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.6 与 M4.8 已完成，M3.8 按依赖后置，M4.7 主体实现与验收根因修复中，M4.9 开发中，M5–M9 待开发，M10/M11 为分阶段后置能力
+- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.9 已完成，M3.8 按依赖后置并纳入 M4.10 集成，M4.10 设计已确认、待实现，M5–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
-- 最后更新：2026-08-30
+- 最后更新：2026-08-31
 - 本文不包含工期、人数或里程碑时间估算。
 - 2026-08-16 首发前 Schema 收敛：实际开发数据库重建后，以 14 表单一 baseline 为准；删除全局 `protocolVersion`、Settings 版本、重复 JSON 信封版本、无历史责任的 Registry/legacy 兼容、`legacyDiagnosticState` 及尚无消费者的 Coach/Statistics 预埋表。下文已完成任务中的旧字段/旧表文字仅保留实施历史，不得作为后续任务当前契约；M4 仍保留运行审计、重放/精确恢复身份，Execution Budget 直接扩充首发 current 载荷而不发布 V2，M5/M8 在真实 writer 设计确认时再创建最终统计/Coach Schema。
 - 2026-08-30 M4.8 破坏性重基线：首发前开发数据不承担兼容责任，私有事件的 Poker、Session/Accounting 与 Player 协调事件合并为唯一 current `v1`；旧 V1/V2/V3 分派和中间 migration 由唯一 `0000_baseline.sql` 覆盖，远程测试 schema 通过受控重建后只接受该 baseline journal。
@@ -26,10 +26,11 @@
 | M1 确定性牌局引擎 | 已完成并验证 |
 | M2 Supabase Postgres 持久化与恢复 | 已完成并验证 |
 | M3.1–M3.7 会话服务、HTTP API 与 SSE | 已完成并验证 |
-| M3.8 服务启动恢复协调 | 按依赖后置，等待 M4.7 |
-| M4.7 | 主体实现与验收根因修复中；远程数据库/E2E 证据未闭环 |
+| M3.8 服务启动恢复协调 | 前置已齐备；作为 M4.10 启动集成切片实施 |
+| M4.7 | 已完成并验证 |
 | M4.8 | 已实现；M4.8 database milestone 与 PostgreSQL E2E milestone 已通过 |
-| M4.9 | 开发中：Memory v1、live 物化、审计投影与 Replay 基础已实现；远程 PostgreSQL 验收待执行 |
+| M4.9 | 已完成；Memory v1、live 物化、审计 Replay/debug projection 与 historical nonCommit 已落地 |
+| M4.10 | [设计已确认，待实现](../specs/2026-08-31-m4-10-session-integration-player-eval-design.md) |
 | M5–M9 | 待开发 |
 | M10 Coach 长期漏洞记忆 | 首版后置，等待 M8 数据质量评估后确认 |
 | M11 针对性练习与复测 | 独立后置，等待 M10 质量评估后确认 |
@@ -991,7 +992,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M4.7 实现 Player Validator 与 Command Commit Gate
 
-详细契约见 [M4.7 Player Validator 与 Command Commit Gate 设计](../specs/2026-08-25-m4-7-player-validator-command-commit-gate-design.md)。用户已于 2026-08-25 确认十项推荐方案；本轮已进入开发与根因修复。主体代码已存在，但验收矩阵与远程 PostgreSQL 证据尚未闭环，因此不得标记为“已完成”。设计已按 governing design 收拢契约权威和共享不变量，并为 A–H 每个切片明确目标/非目标、前置依赖、责任边界、继承契约、局部实现自由与独立完成证据。
+详细契约见 [M4.7 Player Validator 与 Command Commit Gate 设计](../specs/2026-08-25-m4-7-player-validator-command-commit-gate-design.md)。用户已于 2026-08-25 确认十项推荐方案；实现、验收矩阵与远程 PostgreSQL 证据均已闭环，当前状态为已完成。设计按 governing design 收拢契约权威和共享不变量，并为 A–H 每个切片明确目标/非目标、前置依赖、责任边界、继承契约、局部实现自由与独立完成证据。
 
 产出：
 
@@ -1026,6 +1027,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M4.9 实现 Player 审计、Replay 与有界记忆
 
+状态：已完成。Memory v1、live 物化、跨手 evidence、审计 Replay/debug projection 与 historical nonCommit 已落地；M4.10 继续拥有生产接线与 Eval。
+
 产出：
 
 - M4.6 已建立的 `player_decisions` 在 M4.9 直接扩展 Replay/Memory 审计；当前仍处于首发前开发阶段，Memory、Decision 审计载荷、Projection、Packet、Context、Prompt 与 Player Runtime 统一覆盖为单一 `v1` 契约，不保留 M4.9 前开发数据的兼容 reader。M4.7/M4.8 分别负责命令提交结果和失败/stale 终态，不把这些字段预建进 M4.6 三阶段写面。
@@ -1040,6 +1043,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 历史回放和重新执行都无法二次提交扑克命令。
 
 ### M4.10 接入会话并完成 Player Eval
+
+详细契约见 [M4.10 会话接入、生产 Player Worker 与 Player Eval 设计](../specs/2026-08-31-m4-10-session-integration-player-eval-design.md)。当前状态：设计已确认、待实现；DeepSeek 固定使用官方地址直连，尚未接入 `bootstrap.ts` 或启动生产 Worker。
 
 产出：
 

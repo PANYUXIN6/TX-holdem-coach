@@ -710,8 +710,7 @@ export async function assertM46PlayerDecisionApplicationFlow(
     })
     const worker = createAgentWorker({
       control: workerControl,
-      playerExecutor: executor,
-      coachExecutor: { runtimeType: 'coach', async execute() {} },
+      executors: { player: executor },
       onDisposition: ({ runtimeType, runId: settledRunId, disposition }) => {
         if (runtimeType === 'player' && settledRunId === runId) {
           reportSettlement(disposition)

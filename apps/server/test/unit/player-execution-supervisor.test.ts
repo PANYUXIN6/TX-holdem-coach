@@ -55,6 +55,7 @@ describe('Player execution supervisor', () => {
     const supervisor = createPlayerExecutionSupervisor({
       executor,
       coordinator: {
+        reconcileCurrentTurn: vi.fn(),
         pauseAfterFailure,
         reconcileStale,
         startIfNeeded: vi.fn(),
@@ -101,6 +102,7 @@ describe('Player execution supervisor', () => {
     const supervisor = createPlayerExecutionSupervisor({
       executor,
       coordinator: {
+        reconcileCurrentTurn: vi.fn(),
         pauseAfterFailure,
         reconcileStale,
         startIfNeeded: vi.fn(),

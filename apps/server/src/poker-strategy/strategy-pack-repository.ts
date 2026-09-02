@@ -3,6 +3,7 @@ import {
   type StrategyPack,
   type StrategyPackReference,
 } from './strategy-pack.js'
+import { POKER_RULE_SET_VERSION } from '../poker/poker-rule-set.js'
 
 export class StrategyPackUnavailableError extends Error {
   public constructor(
@@ -13,7 +14,21 @@ export class StrategyPackUnavailableError extends Error {
   }
 }
 
+export class ActiveStrategyPackResolutionError extends Error {
+  public constructor(public readonly reason: 'missing' | 'ambiguous') {
+    super(
+      reason === 'missing'
+        ? '当前规则集没有可用于新运行的激活策略包。'
+        : '当前规则集存在多个可用于新运行的激活策略包。',
+    )
+    this.name = 'ActiveStrategyPackResolutionError'
+  }
+}
+
 export interface StrategyPackRepository {
+  resolveActiveForNewRun(input: {
+    readonly pokerRuleSetVersion: typeof POKER_RULE_SET_VERSION
+  }): StrategyPack
   read(input: {
     readonly reference: StrategyPackReference
     readonly usage: 'newRun' | 'pinnedRun'
@@ -38,13 +53,28 @@ export function createStaticStrategyPackRepository(
   packs: readonly StrategyPack[] = [EMPTY_AUTHORIZED_STRATEGY_PACK],
 ): StrategyPackRepository {
   const byKey = new Map<string, StrategyPack>()
+  const activeByRuleSet = new Map<string, StrategyPack>()
   for (const rawPack of packs) {
     const pack = parseStrategyPack(rawPack)
     const key = `${pack.datasetId}@${pack.datasetVersion}`
     if (byKey.has(key)) throw new RangeError('静态策略包版本不得重复。')
     byKey.set(key, pack)
+    if (pack.status === 'active') {
+      if (activeByRuleSet.has(pack.pokerRuleSetVersion)) {
+        throw new ActiveStrategyPackResolutionError('ambiguous')
+      }
+      activeByRuleSet.set(pack.pokerRuleSetVersion, pack)
+    }
   }
   return Object.freeze({
+    resolveActiveForNewRun(input: {
+      readonly pokerRuleSetVersion: typeof POKER_RULE_SET_VERSION
+    }) {
+      const pack = activeByRuleSet.get(input.pokerRuleSetVersion)
+      if (pack === undefined)
+        throw new ActiveStrategyPackResolutionError('missing')
+      return pack
+    },
     read(input: {
       readonly reference: StrategyPackReference
       readonly usage: 'newRun' | 'pinnedRun'

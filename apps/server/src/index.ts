@@ -1,4 +1,4 @@
 import 'dotenv/config'
-import { bootstrap } from './bootstrap.js'
+import { startServiceProcess } from './server-process-lifecycle.js'
 
-void bootstrap()
+startServiceProcess()

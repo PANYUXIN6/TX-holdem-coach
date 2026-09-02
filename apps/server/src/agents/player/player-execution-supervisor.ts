@@ -21,6 +21,38 @@ function assertCanonicalTimestamp(value: string): void {
   }
 }
 
+function reportExecutionFailure(
+  run: LeasedAgentRun<'player'>,
+  error: unknown,
+): void {
+  const failure =
+    typeof error === 'object' &&
+    error !== null &&
+    'failure' in error &&
+    typeof error.failure === 'string'
+      ? error.failure
+      : undefined
+  const code =
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string'
+      ? error.code
+      : undefined
+  const details =
+    error instanceof Error
+      ? { errorName: error.name, errorMessage: error.message, failure, code }
+      : { errorName: typeof error, errorMessage: 'non_error_throwable' }
+  console.error(
+    JSON.stringify({
+      category: 'player_execution_failed',
+      runId: run.runId,
+      sessionId: run.sessionId,
+      ...details,
+    }),
+  )
+}
+
 export interface PlayerExecutionSupervisorDependencies {
   readonly executor: RuntimeExecutionPort<'player'>
   readonly coordinator: SessionAgentCoordinator
@@ -60,6 +92,9 @@ export function createPlayerExecutionSupervisor(
         await dependencies.executor.execute(run, signal)
       } catch (error) {
         const settlement = classifyPlayerExecutionFailure(error, signal)
+        if (settlement.kind !== 'deferred') {
+          reportExecutionFailure(run, error)
+        }
         if (settlement.kind === 'deferred') return
 
         const settledAt = now()

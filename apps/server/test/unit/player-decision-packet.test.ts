@@ -135,6 +135,48 @@ function prepared() {
 }
 
 describe('M4.6 Player decision packet', () => {
+  test('将 0 号座位的跨手对手统计投影给模型', () => {
+    const { snapshot } = createPlayerDecisionAuditFixture()
+    const payload = {
+      ...snapshot.sessionMemory.payload,
+      scannedThrough: { handNumber: 1, eventSeq: 1 },
+      lastCompletedHandNumber: 1,
+      sessionSummary: {
+        completedHandsObserved: 1,
+        showdownHandsObserved: 0,
+      },
+      opponents: [
+        {
+          participantId: '10000000-0000-4000-8000-000000000000',
+          seatNumber: 0,
+          completedHandsObserved: 1,
+          showdownHandsObserved: 0,
+          metrics: [
+            'preflopVoluntaryParticipation',
+            'preflopFullRaise',
+            'facingAggressionFold',
+            'facingAggressionCall',
+            'facingAggressionRaise',
+            'currentStreetAggression',
+          ].map((metric) => ({
+            metric,
+            numerator: 0,
+            denominator: 1,
+            distinctHandCount: 0,
+          })),
+        },
+      ],
+      recentHands: [],
+    }
+    const memory = PlayerSessionMemorySnapshotV1Schema.parse({
+      ...snapshot.sessionMemory,
+      payload,
+      memorySha256: hashPlayerSessionMemoryV1(payload),
+    })
+
+    expect(projectSessionMemoryForModelV1(memory)[4][0]?.[0]).toBe(0)
+  })
+
   test('将最坏存储 Memory 截断为不超过 2 KiB 的模型投影', () => {
     const { snapshot } = createPlayerDecisionAuditFixture()
     const maximum = Number.MAX_SAFE_INTEGER

@@ -1,6 +1,10 @@
 import { describe, expect, test, vi } from 'vitest'
 import { loadServerConfig, ServerConfigurationError } from '../../src/config.js'
-import { bootstrap } from '../../src/bootstrap.js'
+import {
+  bootstrap,
+  type HttpServerHandle,
+  ServiceStartupError,
+} from '../../src/bootstrap.js'
 import {
   loadAndValidatePersonaCatalog,
   PersonaCatalogValidationError,
@@ -13,15 +17,24 @@ const config = loadServerConfig({
     'postgresql://postgres.abcdefghijklmnopqrst:runtime-secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
 })
 
+function serverHandle(): HttpServerHandle {
+  return {
+    bound: Promise.resolve(),
+    fatal: new Promise(() => undefined),
+    beginClose: vi.fn(),
+    waitForClose: vi.fn().mockResolvedValue(undefined),
+    forceClose: vi.fn(),
+  }
+}
+
 describe('server bootstrap', () => {
-  test('loads the persona catalog after config and before database/listen', async () => {
+  test('waits for HTTP binding after config, personas, database, and runtime composition', async () => {
     const calls: string[] = []
     const catalog = loadAndValidatePersonaCatalog()
-    const database = {
-      close: vi.fn(),
-    } as unknown as DatabaseClient
+    const database = { close: vi.fn() } as unknown as DatabaseClient
+    const handle = serverHandle()
 
-    await bootstrap({
+    const running = await bootstrap({
       loadConfig: () => {
         calls.push('config')
         return config
@@ -34,14 +47,13 @@ describe('server bootstrap', () => {
         calls.push('database')
         return database
       },
-      createRuntime: async (_config, receivedCatalog, receivedDatabase) => {
+      createRuntime: async () => {
         calls.push('runtime')
-        expect(receivedCatalog).toBe(catalog)
-        expect(receivedDatabase).toBe(database)
         return {} as never
       },
       listen: () => {
         calls.push('listen')
+        return handle
       },
     })
 
@@ -53,67 +65,105 @@ describe('server bootstrap', () => {
       'listen',
     ])
     expect(database.close).not.toHaveBeenCalled()
+    await running.shutdown()
+    expect(handle.beginClose).toHaveBeenCalledOnce()
+    expect(handle.waitForClose).toHaveBeenCalledOnce()
+    expect(database.close).toHaveBeenCalledOnce()
   })
 
-  test('sanitizes catalog validation failures before database initialization', async () => {
-    const initializeDatabase = vi.fn()
-    const listen = vi.fn()
-    const logError = vi.fn()
-    const setExitCode = vi.fn()
+  test('drains HTTP after stopping Player runtime and force-closes a stuck SSE connection before database close', async () => {
+    vi.useFakeTimers()
+    try {
+      const calls: string[] = []
+      let resolveDrain!: () => void
+      const drain = new Promise<void>((resolve) => {
+        resolveDrain = resolve
+      })
+      const handle: HttpServerHandle = {
+        bound: Promise.resolve(),
+        fatal: new Promise(() => undefined),
+        beginClose: vi.fn(() => calls.push('http.beginClose')),
+        waitForClose: vi.fn(() => drain),
+        forceClose: vi.fn(() => {
+          calls.push('http.forceClose')
+          resolveDrain()
+        }),
+      }
+      const database = {
+        close: vi.fn(async () => calls.push('database.close')),
+      } as unknown as DatabaseClient
+      const playerRuntime = {
+        worker: {
+          fatal: new Promise(() => undefined),
+          start: vi.fn(async () => undefined),
+          wake: vi.fn(),
+          stop: vi.fn(async () => calls.push('worker.stop')),
+        },
+        dispatcher: {
+          fatal: new Promise(() => undefined),
+          start: vi.fn(async () => undefined),
+          stop: vi.fn(async () => calls.push('dispatcher.stop')),
+          notify: vi.fn(),
+          reconcileStartup: vi.fn(async () => []),
+        },
+        startupRecovery: {
+          recoverAtStartup: vi.fn(async () => ({ replacementRunIds: [] })),
+        },
+        reconcileInitialTurns: vi.fn(async () => []),
+      }
+      const running = await bootstrap({
+        loadConfig: () => config,
+        initializeDatabase: async () => database,
+        createRuntime: async () => ({ playerRuntime }) as never,
+        listen: () => handle,
+      })
 
-    await bootstrap({
-      loadConfig: () => config,
-      loadPersonaCatalog: () => {
-        throw new PersonaCatalogValidationError()
-      },
-      initializeDatabase,
-      listen,
-      logError,
-      setExitCode,
-    })
+      const shutdown = running.shutdown()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await shutdown
 
-    expect(initializeDatabase).not.toHaveBeenCalled()
-    expect(listen).not.toHaveBeenCalled()
-    expect(logError).toHaveBeenCalledWith('人物目录配置无效，服务未启动。')
-    expect(setExitCode).toHaveBeenCalledWith(1)
+      expect(calls).toEqual([
+        'http.beginClose',
+        'dispatcher.stop',
+        'worker.stop',
+        'http.forceClose',
+        'database.close',
+      ])
+      expect(handle.waitForClose).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  test('does not listen when the database gate fails', async () => {
-    const listen = vi.fn()
-    const logError = vi.fn()
-    const setExitCode = vi.fn()
-
-    await bootstrap({
-      loadConfig: () => config,
-      initializeDatabase: async () => {
-        throw new StartupError('migrationRecordsMissing')
-      },
-      listen,
-      logError,
-      setExitCode,
-    })
-
-    expect(listen).not.toHaveBeenCalled()
-    expect(logError).toHaveBeenCalledWith('数据库迁移记录缺失，服务未启动。')
-    expect(setExitCode).toHaveBeenCalledWith(1)
+  test('maps a configuration failure to a stable startup result', async () => {
+    await expect(
+      bootstrap({
+        loadConfig: () => {
+          throw new ServerConfigurationError()
+        },
+      }),
+    ).rejects.toMatchObject({
+      failure: 'configurationFailed',
+    } satisfies Partial<ServiceStartupError>)
   })
 
-  test('keeps server configuration failures separate from database startup failures', async () => {
-    const logError = vi.fn()
-    const setExitCode = vi.fn()
-
-    await bootstrap({
-      loadConfig: () => {
-        throw new ServerConfigurationError()
-      },
-      logError,
-      setExitCode,
-    })
-
-    expect(logError).toHaveBeenCalledWith(
-      '服务配置无效，请检查后端 .env 文件。',
-    )
-    expect(setExitCode).toHaveBeenCalledWith(1)
+  test('maps catalog and database gates to stable startup results', async () => {
+    await expect(
+      bootstrap({
+        loadConfig: () => config,
+        loadPersonaCatalog: () => {
+          throw new PersonaCatalogValidationError()
+        },
+      }),
+    ).rejects.toMatchObject({ failure: 'configurationFailed' })
+    await expect(
+      bootstrap({
+        loadConfig: () => config,
+        initializeDatabase: async () => {
+          throw new StartupError('migrationRecordsMissing')
+        },
+      }),
+    ).rejects.toMatchObject({ failure: 'databaseFailed' })
   })
 
   test('closes the initialized database when runtime composition fails', async () => {

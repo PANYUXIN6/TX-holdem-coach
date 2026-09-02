@@ -9,6 +9,7 @@ import {
 } from '../../src/persistence/errors.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
 import { encodeCurrentPrivateEvent } from '../../src/sessions/authoritative-state/private-event-codec.js'
+import { createPrivateEvent } from '../../src/sessions/authoritative-state/private-event.js'
 import { isPlayerVisibleState } from '../../src/sessions/authoritative-state/player-information-boundary-guard.js'
 import { encodeSnapshot } from '../../src/sessions/authoritative-state/snapshot-codec.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
@@ -165,6 +166,58 @@ describe('PostgreSQL Player observation authority', () => {
     const queryText = mock.calls.map((call) => call.text).join('\n')
     expect(queryText).not.toMatch(
       /config_payload|memory_payload|completed_result_payload|agent_attempts|agent_capability_invocations/,
+    )
+  })
+
+  test('excludes state-neutral agent lifecycle events from the replay chain', async () => {
+    const prepared = readyResponses()
+    const responses = structuredClone(prepared.responses)
+    const sessionRows = responses[0] as Array<{ nextEventSeq: number }>
+    const eventRows = responses[4] as Array<{
+      handId: string
+      eventSeq: number
+      stateVersionBefore: number
+      stateVersionAfter: number
+      payloadVersion: number
+      payload: unknown
+    }>
+    const lifecycleEvent = encodeCurrentPrivateEvent(
+      createPrivateEvent({
+        type: 'agentStarted',
+        handId: prepared.fixture.input.identity.handId,
+        agentRunId: runId,
+        decisionRequestId: prepared.fixture.input.identity.decisionRequestId,
+        actorSeatNumber: prepared.fixture.input.identity.actorSeat,
+        trigger: 'initial',
+        supersedesRunId: null,
+      }),
+    )
+    const lastStateEvent = eventRows.at(-1)
+    if (lastStateEvent === undefined) throw new Error('缺少状态事件。')
+    lastStateEvent.eventSeq += 1
+    sessionRows[0]!.nextEventSeq += 1
+    eventRows.push({
+      handId: prepared.fixture.input.identity.handId,
+      eventSeq: prepared.fixture.input.asOfEventSeq,
+      stateVersionBefore: prepared.fixture.input.identity.stateVersion,
+      stateVersionAfter: prepared.fixture.input.identity.stateVersion,
+      payloadVersion: lifecycleEvent.payloadVersion,
+      payload: lifecycleEvent.payload,
+    })
+    const port = createPostgresPlayerObservationPort({
+      authority: authority(),
+      database: database(createSqlMock(responses).sql),
+    })
+
+    const result = await port.load({
+      owner: await resolvedOwner(),
+      identity: prepared.fixture.input.identity,
+    })
+
+    expect(result.kind).toBe('ready')
+    if (result.kind !== 'ready') throw new Error('观察未就绪。')
+    expect(result.observation.identity.asOfEventSeq).toBe(
+      prepared.fixture.input.asOfEventSeq + 1,
     )
   })
 

@@ -12,6 +12,7 @@
     "test:unit": "vitest run --dir test/unit",
     "test:service": "vitest run --dir test/service --passWithNoTests",
     "test:coverage": "vitest run --config vitest.coverage.config.ts --coverage --passWithNoTests",
+    "eval:player:deterministic": "tsx eval/player/run-player-deterministic-eval.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "pnpm run build && node scripts/migrate-production.mjs",
     "db:test:integration": "node scripts/run-database-integration-tests.mjs --suite=database",

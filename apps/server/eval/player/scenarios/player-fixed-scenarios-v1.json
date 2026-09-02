@@ -1,0 +1,1353 @@
+[
+  {
+    "scenarioId": "six-handed-unopened",
+    "category": "position",
+    "input": {
+      "playerCount": 6,
+      "targetStreet": "preflop",
+      "targetActorSeat": 3,
+      "actionScript": []
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "call",
+        "raise",
+        "raise",
+        "raise",
+        "raise",
+        "allIn"
+      ],
+      "publicActionTypes": [],
+      "normalizedSpot": {
+        "preflopNodeKind": "unopened",
+        "fullRaiseCount": 0,
+        "limperCount": 0,
+        "callerCount": 0,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "other",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "call",
+          "targetStreetCommitment": 20,
+          "targetKind": "call"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 40,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 45,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 54,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 70,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 2000,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          { "potId": "main", "amount": 20, "eligibleSeatNumbers": [1, 2] },
+          { "potId": "side-1", "amount": 10, "eligibleSeatNumbers": [2] }
+        ],
+        "heroContestablePotBefore": 0,
+        "heroMaximumContestableAmount": 12000
+      },
+      "potOdds": {
+        "status": "available",
+        "numerator": 2,
+        "denominator": 5,
+        "basisPoints": 4000
+      },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "J5s",
+        "isPair": false,
+        "isSuited": true,
+        "rankGap": 5,
+        "isConnector": false,
+        "isBroadway": false
+      }
+    }
+  },
+  {
+    "scenarioId": "seven-handed-limp-isolation",
+    "category": "preflop",
+    "input": {
+      "playerCount": 7,
+      "targetStreet": "preflop",
+      "targetActorSeat": 4,
+      "actionScript": [{ "actorSeat": 3, "action": { "type": "call" } }]
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "call",
+        "raise",
+        "raise",
+        "raise",
+        "raise",
+        "allIn"
+      ],
+      "publicActionTypes": ["call"],
+      "normalizedSpot": {
+        "preflopNodeKind": "limped",
+        "fullRaiseCount": 0,
+        "limperCount": 1,
+        "callerCount": 0,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "limped",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "call",
+          "targetStreetCommitment": 20,
+          "targetKind": "call"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 40,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 55,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 67,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 90,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 2000,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          { "potId": "main", "amount": 30, "eligibleSeatNumbers": [1, 2, 3] },
+          { "potId": "side-1", "amount": 20, "eligibleSeatNumbers": [2, 3] }
+        ],
+        "heroContestablePotBefore": 0,
+        "heroMaximumContestableAmount": 14000
+      },
+      "potOdds": {
+        "status": "available",
+        "numerator": 2,
+        "denominator": 7,
+        "basisPoints": 2857
+      },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "K6s",
+        "isPair": false,
+        "isSuited": true,
+        "rankGap": 6,
+        "isConnector": false,
+        "isBroadway": false
+      }
+    }
+  },
+  {
+    "scenarioId": "eight-handed-squeeze",
+    "category": "preflop",
+    "input": {
+      "playerCount": 8,
+      "targetStreet": "preflop",
+      "targetActorSeat": 5,
+      "actionScript": [
+        {
+          "actorSeat": 3,
+          "action": { "type": "raise", "targetStreetCommitment": 60 }
+        },
+        { "actorSeat": 4, "action": { "type": "call" } }
+      ]
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "call",
+        "raise",
+        "raise",
+        "raise",
+        "raise",
+        "allIn"
+      ],
+      "publicActionTypes": ["raise", "call"],
+      "normalizedSpot": {
+        "preflopNodeKind": "singleRaised",
+        "fullRaiseCount": 1,
+        "limperCount": 0,
+        "callerCount": 1,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "singleRaised",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "call",
+          "targetStreetCommitment": 60,
+          "targetKind": "call"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 100,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 165,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 200,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 270,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 2000,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 40,
+            "eligibleSeatNumbers": [1, 2, 3, 4]
+          },
+          { "potId": "side-1", "amount": 30, "eligibleSeatNumbers": [2, 3, 4] },
+          { "potId": "side-2", "amount": 80, "eligibleSeatNumbers": [3, 4] }
+        ],
+        "heroContestablePotBefore": 0,
+        "heroMaximumContestableAmount": 16000
+      },
+      "potOdds": {
+        "status": "available",
+        "numerator": 2,
+        "denominator": 7,
+        "basisPoints": 2857
+      },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "72o",
+        "isPair": false,
+        "isSuited": false,
+        "rankGap": 4,
+        "isConnector": false,
+        "isBroadway": false
+      }
+    }
+  },
+  {
+    "scenarioId": "nine-handed-four-bet",
+    "category": "preflop",
+    "input": {
+      "playerCount": 9,
+      "targetStreet": "preflop",
+      "targetActorSeat": 6,
+      "actionScript": [
+        {
+          "actorSeat": 3,
+          "action": { "type": "raise", "targetStreetCommitment": 60 }
+        },
+        {
+          "actorSeat": 4,
+          "action": { "type": "raise", "targetStreetCommitment": 140 }
+        },
+        {
+          "actorSeat": 5,
+          "action": { "type": "raise", "targetStreetCommitment": 300 }
+        }
+      ]
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "call",
+        "raise",
+        "raise",
+        "raise",
+        "raise",
+        "allIn"
+      ],
+      "publicActionTypes": ["raise", "raise", "raise"],
+      "normalizedSpot": {
+        "preflopNodeKind": "fourBetOrMore",
+        "fullRaiseCount": 3,
+        "limperCount": 0,
+        "callerCount": 0,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "fourBetOrMore",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "call",
+          "targetStreetCommitment": 300,
+          "targetKind": "call"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 460,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 715,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 854,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 1130,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 2000,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 50,
+            "eligibleSeatNumbers": [1, 2, 3, 4, 5]
+          },
+          {
+            "potId": "side-1",
+            "amount": 40,
+            "eligibleSeatNumbers": [2, 3, 4, 5]
+          },
+          {
+            "potId": "side-2",
+            "amount": 120,
+            "eligibleSeatNumbers": [3, 4, 5]
+          },
+          { "potId": "side-3", "amount": 160, "eligibleSeatNumbers": [4, 5] },
+          { "potId": "side-4", "amount": 160, "eligibleSeatNumbers": [5] }
+        ],
+        "heroContestablePotBefore": 0,
+        "heroMaximumContestableAmount": 18000
+      },
+      "potOdds": {
+        "status": "available",
+        "numerator": 30,
+        "denominator": 83,
+        "basisPoints": 3614
+      },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "84o",
+        "isPair": false,
+        "isSuited": false,
+        "rankGap": 3,
+        "isConnector": false,
+        "isBroadway": false
+      }
+    }
+  },
+  {
+    "scenarioId": "blind-short-stack-option",
+    "category": "blind",
+    "input": {
+      "playerCount": 6,
+      "targetStreet": "preflop",
+      "targetActorSeat": 2,
+      "stackBySeat": { "2": 80 },
+      "actionScript": [
+        { "actorSeat": 3, "action": { "type": "call" } },
+        { "actorSeat": 4, "action": { "type": "call" } },
+        { "actorSeat": 5, "action": { "type": "call" } },
+        { "actorSeat": 0, "action": { "type": "call" } },
+        { "actorSeat": 1, "action": { "type": "call" } }
+      ]
+    },
+    "assertions": {
+      "candidateActionTypes": ["fold", "check", "raise", "raise", "allIn"],
+      "publicActionTypes": ["call", "call", "call", "call", "call"],
+      "normalizedSpot": {
+        "preflopNodeKind": "limped",
+        "fullRaiseCount": 0,
+        "limperCount": 5,
+        "callerCount": 0,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "limped",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "check",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 40,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 79,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 80,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 120,
+            "eligibleSeatNumbers": [0, 1, 2, 3, 4, 5]
+          }
+        ],
+        "heroContestablePotBefore": 120,
+        "heroMaximumContestableAmount": 480
+      },
+      "potOdds": { "status": "notApplicable", "reasonCode": "noCallRequired" },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "T4s",
+        "isPair": false,
+        "isSuited": true,
+        "rankGap": 5,
+        "isConnector": false,
+        "isBroadway": false
+      }
+    }
+  },
+  {
+    "scenarioId": "short-all-in-no-reopen",
+    "category": "raiseTopology",
+    "input": {
+      "playerCount": 6,
+      "targetStreet": "preflop",
+      "targetActorSeat": 3,
+      "stackBySeat": { "5": 80 },
+      "actionScript": [
+        {
+          "actorSeat": 3,
+          "action": { "type": "raise", "targetStreetCommitment": 60 }
+        },
+        { "actorSeat": 4, "action": { "type": "call" } },
+        { "actorSeat": 5, "action": { "type": "allIn" } },
+        { "actorSeat": 0, "action": { "type": "call" } },
+        { "actorSeat": 1, "action": { "type": "call" } },
+        { "actorSeat": 2, "action": { "type": "call" } }
+      ]
+    },
+    "assertions": {
+      "candidateActionTypes": ["fold", "call"],
+      "publicActionTypes": ["raise", "call", "allIn", "call", "call", "call"],
+      "normalizedSpot": {
+        "preflopNodeKind": "shortAllInTree",
+        "fullRaiseCount": 1,
+        "limperCount": 0,
+        "callerCount": 4,
+        "hasShortAllInRaise": true,
+        "potTypeKind": "multiwaySidePot",
+        "hasSidePot": true,
+        "raiseReopened": false,
+        "allInCount": 1
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "call",
+          "targetStreetCommitment": 80,
+          "targetKind": "call"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 360,
+            "eligibleSeatNumbers": [0, 1, 2, 3, 4, 5]
+          },
+          {
+            "potId": "side-1",
+            "amount": 80,
+            "eligibleSeatNumbers": [0, 1, 2, 5]
+          }
+        ],
+        "heroContestablePotBefore": 360,
+        "heroMaximumContestableAmount": 10080
+      },
+      "potOdds": {
+        "status": "available",
+        "numerator": 1,
+        "denominator": 23,
+        "basisPoints": 435
+      },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "J5s",
+        "isPair": false,
+        "isSuited": true,
+        "rankGap": 5,
+        "isConnector": false,
+        "isBroadway": false
+      }
+    }
+  },
+  {
+    "scenarioId": "full-raise-reopen",
+    "category": "raiseTopology",
+    "input": {
+      "playerCount": 7,
+      "targetStreet": "preflop",
+      "targetActorSeat": 3,
+      "actionScript": [
+        {
+          "actorSeat": 3,
+          "action": { "type": "raise", "targetStreetCommitment": 60 }
+        },
+        {
+          "actorSeat": 4,
+          "action": { "type": "raise", "targetStreetCommitment": 140 }
+        },
+        { "actorSeat": 5, "action": { "type": "call" } },
+        { "actorSeat": 6, "action": { "type": "call" } },
+        { "actorSeat": 0, "action": { "type": "call" } },
+        { "actorSeat": 1, "action": { "type": "call" } },
+        { "actorSeat": 2, "action": { "type": "call" } }
+      ]
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "call",
+        "raise",
+        "raise",
+        "raise",
+        "raise",
+        "allIn"
+      ],
+      "publicActionTypes": [
+        "raise",
+        "raise",
+        "call",
+        "call",
+        "call",
+        "call",
+        "call"
+      ],
+      "normalizedSpot": {
+        "preflopNodeKind": "threeBet",
+        "fullRaiseCount": 2,
+        "limperCount": 0,
+        "callerCount": 5,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "threeBet",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "call",
+          "targetStreetCommitment": 140,
+          "targetKind": "call"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 220,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 630,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 794,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 1120,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 2000,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 420,
+            "eligibleSeatNumbers": [0, 1, 2, 3, 4, 5, 6]
+          },
+          {
+            "potId": "side-1",
+            "amount": 480,
+            "eligibleSeatNumbers": [0, 1, 2, 4, 5, 6]
+          }
+        ],
+        "heroContestablePotBefore": 420,
+        "heroMaximumContestableAmount": 14000
+      },
+      "potOdds": {
+        "status": "available",
+        "numerator": 4,
+        "denominator": 49,
+        "basisPoints": 816
+      },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "Q5s",
+        "isPair": false,
+        "isSuited": true,
+        "rankGap": 6,
+        "isConnector": false,
+        "isBroadway": false
+      }
+    }
+  },
+  {
+    "scenarioId": "flop-multiway",
+    "category": "multiway",
+    "input": {
+      "playerCount": 8,
+      "targetStreet": "flop",
+      "targetActorSeat": 1,
+      "actionScript": [
+        { "actorSeat": 3, "action": { "type": "call" } },
+        { "actorSeat": 4, "action": { "type": "call" } },
+        { "actorSeat": 5, "action": { "type": "call" } },
+        { "actorSeat": 6, "action": { "type": "call" } },
+        { "actorSeat": 7, "action": { "type": "call" } },
+        { "actorSeat": 0, "action": { "type": "call" } },
+        { "actorSeat": 1, "action": { "type": "call" } },
+        { "actorSeat": 2, "action": { "type": "check" } }
+      ]
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "check",
+        "bet",
+        "bet",
+        "bet",
+        "bet",
+        "allIn"
+      ],
+      "publicActionTypes": [
+        "call",
+        "call",
+        "call",
+        "call",
+        "call",
+        "call",
+        "call",
+        "check"
+      ],
+      "normalizedSpot": {
+        "preflopNodeKind": "notApplicable",
+        "fullRaiseCount": 0,
+        "limperCount": 7,
+        "callerCount": 0,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "limped",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "check",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 20,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 80,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 107,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 160,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 1980,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 160,
+            "eligibleSeatNumbers": [0, 1, 2, 3, 4, 5, 6, 7]
+          }
+        ],
+        "heroContestablePotBefore": 160,
+        "heroMaximumContestableAmount": 16000
+      },
+      "potOdds": { "status": "notApplicable", "reasonCode": "noCallRequired" },
+      "handFeatures": {
+        "kind": "postflop",
+        "handCategory": "highCard",
+        "holeCardsUsed": 2,
+        "pairRelation": "none",
+        "overcardCount": 1,
+        "madeHandUsesBoardOnly": false,
+        "drawTypes": ["gutshot"],
+        "structuralOutCards": {
+          "status": "available",
+          "valueSha256": "7d2cb128da0e29c02acf73972c2b9f21008e34faf8b0d259a03618d7cd0bddf2"
+        },
+        "redrawFacts": {
+          "status": "available",
+          "valueSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        "counterfeitRiskFacts": {
+          "status": "available",
+          "valueSha256": "cb2f37b1fb79b86a2f02ce1ead3993210570834c61a6a87634021340d52349be"
+        }
+      }
+    }
+  },
+  {
+    "scenarioId": "side-pot-eligibility",
+    "category": "sidePot",
+    "input": {
+      "playerCount": 9,
+      "targetStreet": "preflop",
+      "targetActorSeat": 1,
+      "stackBySeat": { "1": 120, "3": 80, "5": 120 },
+      "actionScript": [
+        { "actorSeat": 3, "action": { "type": "allIn" } },
+        {
+          "actorSeat": 4,
+          "action": { "type": "raise", "targetStreetCommitment": 200 }
+        },
+        { "actorSeat": 5, "action": { "type": "allIn" } },
+        { "actorSeat": 6, "action": { "type": "call" } },
+        { "actorSeat": 7, "action": { "type": "call" } },
+        { "actorSeat": 8, "action": { "type": "call" } },
+        { "actorSeat": 0, "action": { "type": "call" } }
+      ]
+    },
+    "assertions": {
+      "candidateActionTypes": ["fold", "allIn"],
+      "publicActionTypes": [
+        "allIn",
+        "raise",
+        "allIn",
+        "call",
+        "call",
+        "call",
+        "call"
+      ],
+      "normalizedSpot": {
+        "preflopNodeKind": "threeBet",
+        "fullRaiseCount": 2,
+        "limperCount": 0,
+        "callerCount": 4,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "multiwaySidePot",
+        "hasSidePot": true,
+        "raiseReopened": true,
+        "allInCount": 2
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 120,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 90,
+            "eligibleSeatNumbers": [0, 1, 2, 3, 4, 5, 6, 7, 8]
+          },
+          {
+            "potId": "side-1",
+            "amount": 80,
+            "eligibleSeatNumbers": [0, 2, 3, 4, 5, 6, 7, 8]
+          },
+          {
+            "potId": "side-2",
+            "amount": 420,
+            "eligibleSeatNumbers": [0, 3, 4, 5, 6, 7, 8]
+          },
+          {
+            "potId": "side-3",
+            "amount": 240,
+            "eligibleSeatNumbers": [0, 4, 5, 6, 7, 8]
+          },
+          {
+            "potId": "side-4",
+            "amount": 400,
+            "eligibleSeatNumbers": [0, 4, 6, 7, 8]
+          }
+        ],
+        "heroContestablePotBefore": 90,
+        "heroMaximumContestableAmount": 1040
+      },
+      "potOdds": {
+        "status": "available",
+        "numerator": 11,
+        "denominator": 94,
+        "basisPoints": 1170
+      },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "Q3s",
+        "isPair": false,
+        "isSuited": true,
+        "rankGap": 8,
+        "isConnector": false,
+        "isBroadway": false
+      }
+    }
+  },
+  {
+    "scenarioId": "turn-draw-redraw",
+    "category": "draw",
+    "input": {
+      "playerCount": 7,
+      "targetStreet": "turn",
+      "targetActorSeat": 1,
+      "actionScript": [
+        { "actorSeat": 3, "action": { "type": "call" } },
+        { "actorSeat": 4, "action": { "type": "call" } },
+        { "actorSeat": 5, "action": { "type": "call" } },
+        { "actorSeat": 6, "action": { "type": "call" } },
+        { "actorSeat": 0, "action": { "type": "call" } },
+        { "actorSeat": 1, "action": { "type": "call" } },
+        { "actorSeat": 2, "action": { "type": "check" } },
+        { "actorSeat": 1, "action": { "type": "check" } },
+        { "actorSeat": 2, "action": { "type": "check" } },
+        { "actorSeat": 3, "action": { "type": "check" } },
+        { "actorSeat": 4, "action": { "type": "check" } },
+        { "actorSeat": 5, "action": { "type": "check" } },
+        { "actorSeat": 6, "action": { "type": "check" } },
+        { "actorSeat": 0, "action": { "type": "check" } }
+      ]
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "check",
+        "bet",
+        "bet",
+        "bet",
+        "bet",
+        "allIn"
+      ],
+      "publicActionTypes": [
+        "call",
+        "call",
+        "call",
+        "call",
+        "call",
+        "call",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check"
+      ],
+      "normalizedSpot": {
+        "preflopNodeKind": "notApplicable",
+        "fullRaiseCount": 0,
+        "limperCount": 6,
+        "callerCount": 0,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "limped",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "check",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 20,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 70,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 94,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 140,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 1980,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 140,
+            "eligibleSeatNumbers": [0, 1, 2, 3, 4, 5, 6]
+          }
+        ],
+        "heroContestablePotBefore": 140,
+        "heroMaximumContestableAmount": 14000
+      },
+      "potOdds": { "status": "notApplicable", "reasonCode": "noCallRequired" },
+      "handFeatures": {
+        "kind": "postflop",
+        "handCategory": "highCard",
+        "holeCardsUsed": 1,
+        "pairRelation": "none",
+        "overcardCount": 1,
+        "madeHandUsesBoardOnly": false,
+        "drawTypes": ["flushDraw", "doubleGutshot", "comboDraw"],
+        "structuralOutCards": {
+          "status": "available",
+          "valueSha256": "17cc20f16e857ea0e7f4d554d5f4b7c67190cefbbe7e89301703270db965b1ab"
+        },
+        "redrawFacts": {
+          "status": "available",
+          "valueSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        "counterfeitRiskFacts": {
+          "status": "available",
+          "valueSha256": "48702932db94595f05d296d9c739427ac64146b4f5cbca43004b3ab900d154bd"
+        }
+      }
+    }
+  },
+  {
+    "scenarioId": "river-forced-runout",
+    "category": "notApplicable",
+    "input": {
+      "playerCount": 6,
+      "targetStreet": "river",
+      "targetActorSeat": 1,
+      "actionScript": [
+        { "actorSeat": 3, "action": { "type": "call" } },
+        { "actorSeat": 4, "action": { "type": "call" } },
+        { "actorSeat": 5, "action": { "type": "call" } },
+        { "actorSeat": 0, "action": { "type": "call" } },
+        { "actorSeat": 1, "action": { "type": "call" } },
+        { "actorSeat": 2, "action": { "type": "check" } },
+        { "actorSeat": 1, "action": { "type": "check" } },
+        { "actorSeat": 2, "action": { "type": "check" } },
+        { "actorSeat": 3, "action": { "type": "check" } },
+        { "actorSeat": 4, "action": { "type": "check" } },
+        { "actorSeat": 5, "action": { "type": "check" } },
+        { "actorSeat": 0, "action": { "type": "check" } },
+        { "actorSeat": 1, "action": { "type": "check" } },
+        { "actorSeat": 2, "action": { "type": "check" } },
+        { "actorSeat": 3, "action": { "type": "check" } },
+        { "actorSeat": 4, "action": { "type": "check" } },
+        { "actorSeat": 5, "action": { "type": "check" } },
+        { "actorSeat": 0, "action": { "type": "check" } }
+      ],
+      "forcedRunoutProbe": {
+        "stackBySeat": { "3": 100, "4": 100 },
+        "actionScript": [
+          { "actorSeat": 3, "action": { "type": "allIn" } },
+          { "actorSeat": 4, "action": { "type": "allIn" } },
+          { "actorSeat": 5, "action": { "type": "fold" } },
+          { "actorSeat": 0, "action": { "type": "fold" } },
+          { "actorSeat": 1, "action": { "type": "fold" } },
+          { "actorSeat": 2, "action": { "type": "fold" } }
+        ]
+      }
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "check",
+        "bet",
+        "bet",
+        "bet",
+        "bet",
+        "allIn"
+      ],
+      "publicActionTypes": [
+        "call",
+        "call",
+        "call",
+        "call",
+        "call",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check",
+        "check"
+      ],
+      "normalizedSpot": {
+        "preflopNodeKind": "notApplicable",
+        "fullRaiseCount": 0,
+        "limperCount": 5,
+        "callerCount": 0,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "limped",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "check",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 20,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 60,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 80,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "bet",
+          "targetStreetCommitment": 120,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 1980,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          {
+            "potId": "main",
+            "amount": 120,
+            "eligibleSeatNumbers": [0, 1, 2, 3, 4, 5]
+          }
+        ],
+        "heroContestablePotBefore": 120,
+        "heroMaximumContestableAmount": 12000
+      },
+      "potOdds": { "status": "notApplicable", "reasonCode": "noCallRequired" },
+      "handFeatures": {
+        "kind": "postflop",
+        "handCategory": "flush",
+        "holeCardsUsed": 0,
+        "pairRelation": "other",
+        "overcardCount": 0,
+        "madeHandUsesBoardOnly": true,
+        "drawTypes": [],
+        "structuralOutCards": {
+          "status": "notApplicable",
+          "reasonCode": "noFutureDecisionStreet"
+        },
+        "redrawFacts": {
+          "status": "notApplicable",
+          "reasonCode": "noFutureDecisionStreet"
+        },
+        "counterfeitRiskFacts": {
+          "status": "notApplicable",
+          "reasonCode": "noFutureDecisionStreet"
+        }
+      },
+      "forcedRunout": {
+        "terminationReason": "showdown",
+        "boardCardCount": 5
+      }
+    }
+  },
+  {
+    "scenarioId": "memory-cutoff-zero-exploit",
+    "category": "memory",
+    "input": {
+      "playerCount": 6,
+      "targetStreet": "preflop",
+      "targetActorSeat": 5,
+      "completedHandCountBeforeStart": 3,
+      "actionScript": [{ "actorSeat": 4, "action": { "type": "call" } }],
+      "memoryHistory": {
+        "cutoff": { "handNumber": 4, "eventSeq": 30 },
+        "hands": [
+          {
+            "handNumber": 1,
+            "terminalEventSeq": 10,
+            "status": "completed",
+            "buttonSeatNumber": 0,
+            "actions": [
+              {
+                "eventSeq": 5,
+                "actorSeatNumber": 4,
+                "actionType": "call",
+                "contributionDelta": 20,
+                "isVoluntaryPreflopContribution": true,
+                "isFullRaise": false
+              }
+            ]
+          },
+          { "handNumber": 2, "terminalEventSeq": 20, "status": "aborted" },
+          {
+            "handNumber": 3,
+            "terminalEventSeq": 30,
+            "status": "completed",
+            "buttonSeatNumber": 2,
+            "actions": [
+              {
+                "eventSeq": 25,
+                "actorSeatNumber": 4,
+                "actionType": "raise",
+                "contributionDelta": 60,
+                "isVoluntaryPreflopContribution": true,
+                "isFullRaise": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "assertions": {
+      "candidateActionTypes": [
+        "fold",
+        "call",
+        "raise",
+        "raise",
+        "raise",
+        "raise",
+        "allIn"
+      ],
+      "publicActionTypes": ["call"],
+      "normalizedSpot": {
+        "preflopNodeKind": "limped",
+        "fullRaiseCount": 0,
+        "limperCount": 1,
+        "callerCount": 0,
+        "hasShortAllInRaise": false,
+        "potTypeKind": "limped",
+        "hasSidePot": false,
+        "raiseReopened": true,
+        "allInCount": 0
+      },
+      "candidateSizing": [
+        {
+          "actionType": "fold",
+          "targetStreetCommitment": null,
+          "targetKind": "notApplicable"
+        },
+        {
+          "actionType": "call",
+          "targetStreetCommitment": 20,
+          "targetKind": "call"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 40,
+          "targetKind": "minimum"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 55,
+          "targetKind": "halfPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 67,
+          "targetKind": "twoThirdsPot"
+        },
+        {
+          "actionType": "raise",
+          "targetStreetCommitment": 90,
+          "targetKind": "pot"
+        },
+        {
+          "actionType": "allIn",
+          "targetStreetCommitment": 2000,
+          "targetKind": "allIn"
+        }
+      ],
+      "contestablePot": {
+        "potBreakdown": [
+          { "potId": "main", "amount": 30, "eligibleSeatNumbers": [2, 3, 4] },
+          { "potId": "side-1", "amount": 20, "eligibleSeatNumbers": [3, 4] }
+        ],
+        "heroContestablePotBefore": 0,
+        "heroMaximumContestableAmount": 12000
+      },
+      "potOdds": {
+        "status": "available",
+        "numerator": 2,
+        "denominator": 7,
+        "basisPoints": 2857
+      },
+      "handFeatures": {
+        "kind": "preflop",
+        "startingHandClass": "Q6s",
+        "isPair": false,
+        "isSuited": true,
+        "rankGap": 5,
+        "isConnector": false,
+        "isBroadway": false
+      },
+      "memory": {
+        "scannedThrough": { "handNumber": 3, "eventSeq": 30 },
+        "lastCompletedHandNumber": 3,
+        "completedHandsObserved": 2,
+        "showdownHandsObserved": 0,
+        "evidence": {
+          "opponentSeatNumber": 4,
+          "metric": "preflopVoluntaryParticipation",
+          "numerator": 3,
+          "denominator": 3,
+          "distinctHandCount": 3
+        }
+      }
+    }
+  }
+]

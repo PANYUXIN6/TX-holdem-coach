@@ -56,6 +56,7 @@ import {
   type SessionCommandHandlerMap,
 } from './command-handler-map.js'
 import { createPerSessionScheduler } from './per-session-scheduler.js'
+import type { PlayerTurnHintPort } from '../../agents/player/player-turn-dispatcher.js'
 import {
   mapCommandRejectionToErrorResponse,
   parseStableCommandRejection,
@@ -797,6 +798,7 @@ export interface SessionCommandExecutorDependencies {
     readonly firstEventSeq: number
     readonly lastEventSeq: number
   }) => void
+  readonly playerTurnHintPort?: PlayerTurnHintPort
 }
 
 function createSessionCommandExecutorWithInternalAiAction(
@@ -815,6 +817,7 @@ function createSessionCommandExecutorWithInternalAiAction(
     logPointerRepair,
     committedEventPublisher,
     logPublishFailure,
+    playerTurnHintPort,
   } = input
   if (recoveryRepository.sessionMutationRepository !== mutationRepository) {
     throw new SessionCommandCompositionError()
@@ -1302,6 +1305,13 @@ function createSessionCommandExecutorWithInternalAiAction(
           } catch {
             // 提交后诊断日志不改变命令结果。
           }
+        }
+        try {
+          playerTurnHintPort?.notify(
+            executionResult.newlyPersistedEvents[0].sessionId,
+          )
+        } catch {
+          // The committed Session state is the scheduling source of truth.
         }
       }
       return deepFreeze(executionResult)

@@ -20,7 +20,10 @@ const strategyDependencies = [
     datasetVersion: 1,
   }),
 ]
-const strategyPackRepository = { read: vi.fn().mockReturnValue({}) }
+const strategyPackRepository = {
+  resolveActiveForNewRun: vi.fn(),
+  read: vi.fn().mockReturnValue({}),
+}
 
 const predecessor = Object.freeze({
   runId: predecessorRunId,
@@ -226,6 +229,7 @@ describe('retryAgent handler', () => {
         resolveExact: vi.fn().mockReturnValue(playerRuntimeDefinition),
       } as never,
       strategyPackRepository: {
+        resolveActiveForNewRun: vi.fn(),
         read: () => {
           throw new StrategyPackUnavailableError('revoked')
         },

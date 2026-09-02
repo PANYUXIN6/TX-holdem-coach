@@ -48,7 +48,11 @@ import {
 import { projectPublicSessionSnapshot } from '../../sessions/public-projection/public-session-projector.js'
 import type { CommittedSessionEventPublisher } from '../../sessions/public-projection/committed-session-event-hub.js'
 import type { StrategyPackRepository } from '../../poker-strategy/strategy-pack-repository.js'
-import { readPinnedStrategyPackReference } from './player-strategy-pack-audit-reference.js'
+import { POKER_RULE_SET_VERSION } from '../../poker/poker-rule-set.js'
+import {
+  encodeStrategyPackAuditReference,
+  readPinnedStrategyPackReference,
+} from './player-strategy-pack-audit-reference.js'
 import type { PlayerStaleReason } from './player-execution-settlement.js'
 
 const CanonicalTimestampSchema = z.iso.datetime({ precision: 3 })
@@ -93,6 +97,17 @@ export interface StartPlayerDecisionInput {
   readonly supersedesRunId: string | null
   readonly commandLedgerId: string | null
 }
+
+export interface ReconcileCurrentPlayerTurnInput {
+  readonly sessionId: string
+  readonly trigger: 'sessionCommitted' | 'startupRepair' | 'periodicRepair'
+  readonly observedAt: string
+}
+
+export type ReconcileCurrentPlayerTurnResult =
+  | { readonly kind: 'started'; readonly runId: string }
+  | { readonly kind: 'alreadyActive'; readonly runId: string }
+  | { readonly kind: 'userTurn' | 'paused' | 'noTarget' }
 
 export interface PlayerFailureSettlementInput {
   readonly sessionId: string
@@ -168,6 +183,9 @@ export interface PlayerProcessRestartRecoveryCompositionPort {
 }
 
 export interface SessionAgentCoordinator {
+  reconcileCurrentTurn(
+    input: ReconcileCurrentPlayerTurnInput,
+  ): Promise<ReconcileCurrentPlayerTurnResult>
   startIfNeeded(input: StartPlayerDecisionInput): Promise<CoordinationResult>
   pauseAfterFailure(
     input: PlayerFailureSettlementInput,
@@ -235,11 +253,12 @@ function sameUuid(left: string | null, right: string | null): boolean {
   )
 }
 
-function getCurrentAiTurn(recovery: ReadySessionRecovery): {
+function getCurrentParticipantTurn(recovery: ReadySessionRecovery): {
   readonly actorSeatNumber: number
   readonly actorParticipantId: string
   readonly handId: string
   readonly sourceStateVersion: number
+  readonly isUser: boolean
 } | null {
   const hand = recovery.state.poker.hand
   const actorSeatNumber = hand?.currentActorSeatNumber
@@ -252,7 +271,7 @@ function getCurrentAiTurn(recovery: ReadySessionRecovery): {
     actorSeatNumber <= 8
   ) {
     const actor = recovery.state.poker.seats.find(
-      (seat) => seat.seatNumber === actorSeatNumber && !seat.isUser,
+      (seat) => seat.seatNumber === actorSeatNumber,
     )
     if (actor !== undefined) {
       return Object.freeze({
@@ -260,10 +279,23 @@ function getCurrentAiTurn(recovery: ReadySessionRecovery): {
         actorParticipantId: actor.playerId,
         handId: hand.handId,
         sourceStateVersion: recovery.state.stateVersion,
+        isUser: actor.isUser,
       })
     }
   }
   return null
+}
+
+function getCurrentAiTurn(recovery: ReadySessionRecovery): {
+  readonly actorSeatNumber: number
+  readonly actorParticipantId: string
+  readonly handId: string
+  readonly sourceStateVersion: number
+} | null {
+  const current = getCurrentParticipantTurn(recovery)
+  if (current === null || current.isUser) return null
+  const { isUser: _isUser, ...aiTurn } = current
+  return Object.freeze(aiTurn)
 }
 
 function assertExactReplacementConfiguration(
@@ -782,6 +814,159 @@ export function createSessionAgentCoordinator(
 
   const coordinator: SessionAgentCoordinator &
     PlayerProcessRestartRecoveryCompositionPort = {
+    async reconcileCurrentTurn(input) {
+      assertTimestamp(input.observedAt)
+      const transactionResult = await runDatabaseTransaction(
+        dependencies.sql,
+        async (transaction) => {
+          const recovered = await recoveryRepository.recoverSessionForMutation(
+            transaction,
+            dependencies.owner,
+            input.sessionId,
+            input.observedAt,
+          )
+          if (recovered.kind !== 'ready') {
+            return {
+              result: { kind: 'noTarget' as const },
+              effects: noEffects(),
+            }
+          }
+          const currentTurn = getCurrentParticipantTurn(recovered)
+          if (currentTurn === null) {
+            return {
+              result: { kind: 'noTarget' as const },
+              effects: noEffects(),
+            }
+          }
+          if (currentTurn.isUser) {
+            return {
+              result: { kind: 'userTurn' as const },
+              effects: noEffects(),
+            }
+          }
+          if (recovered.session.agentRunState === 'paused') {
+            return {
+              result: { kind: 'paused' as const },
+              effects: noEffects(),
+            }
+          }
+          if (recovered.session.agentRunState === 'thinking') {
+            if (
+              recovered.session.activePlayerRunId === null ||
+              recovered.session.activeDecisionRequestId === null
+            ) {
+              throw new TypeError('Player thinking 指针不完整。')
+            }
+            const activeRun = await runRepository.lockPlayerRunForCoordination(
+              transaction,
+              dependencies.owner,
+              recovered.session.activePlayerRunId,
+            )
+            if (
+              activeRun.lifecycle !== 'queued' &&
+              activeRun.lifecycle !== 'leased' &&
+              activeRun.lifecycle !== 'running'
+            ) {
+              throw new TypeError('Player thinking Run 已终结。')
+            }
+            if (
+              activeRun.decisionRequestId !==
+                recovered.session.activeDecisionRequestId ||
+              activeRun.sessionId !== recovered.session.sessionId ||
+              activeRun.handId !== currentTurn.handId ||
+              activeRun.participantId !== currentTurn.actorParticipantId ||
+              activeRun.sourceStateVersion !== currentTurn.sourceStateVersion
+            ) {
+              throw new TypeError('Player thinking 指针与 Run 不一致。')
+            }
+            return {
+              result: {
+                kind: 'alreadyActive' as const,
+                runId: activeRun.runId,
+              },
+              effects: noEffects(),
+            }
+          }
+          if (recovered.session.agentRunState !== 'idle') {
+            return {
+              result: { kind: 'noTarget' as const },
+              effects: noEffects(),
+            }
+          }
+
+          const activePack =
+            dependencies.strategyPackRepository.resolveActiveForNewRun({
+              pokerRuleSetVersion: POKER_RULE_SET_VERSION,
+            })
+          const dataDependencies = [
+            encodeStrategyPackAuditReference({
+              datasetId: activePack.datasetId,
+              datasetVersion: activePack.datasetVersion,
+            }),
+          ]
+          const created = await dependencies.runCoordinator.createOrReuse(
+            transaction,
+            {
+              agentRunId: nextRunId(),
+              runtimeType: 'player',
+              sessionId: recovered.session.sessionId,
+              handId: currentTurn.handId,
+              actorParticipantId: currentTurn.actorParticipantId,
+              sourceStateVersion: currentTurn.sourceStateVersion,
+              decisionRequestId: nextDecisionRequestId(),
+              triggerType: 'action_required',
+              idempotencyKey: `player-initial:${recovered.session.sessionId}:${currentTurn.sourceStateVersion}:${currentTurn.actorParticipantId}`,
+              supersedesRunId: null,
+              dataDependencies,
+              createdAt: input.observedAt,
+            },
+          )
+          if (
+            created.kind !== 'created' ||
+            created.run.runtimeType !== 'player' ||
+            created.run.participantId !== currentTurn.actorParticipantId ||
+            created.run.sourceStateVersion !== currentTurn.sourceStateVersion
+          ) {
+            throw new TypeError('Player 初始 Run 与当前决策点不一致。')
+          }
+          const event = createPrivateEvent({
+            type: 'agentStarted',
+            handId: created.run.handId,
+            agentRunId: created.run.runId,
+            decisionRequestId: created.run.decisionRequestId,
+            actorSeatNumber: currentTurn.actorSeatNumber,
+            trigger: 'initial',
+            supersedesRunId: null,
+          })
+          const sessionEvents = await persistCoordinationEvents({
+            transaction,
+            owner: dependencies.owner,
+            recovery: recovered,
+            mutationRepository,
+            agentRunState: 'thinking',
+            activePlayerRunId: created.run.runId,
+            activeDecisionRequestId: created.run.decisionRequestId,
+            eventDrafts: [event],
+            commandLedgerId: null,
+            mutationAt: input.observedAt,
+          })
+          return {
+            result: {
+              kind: 'started' as const,
+              runId: created.run.runId,
+            },
+            effects: freezeEffects({
+              sessionEvents,
+              runEffects: created.committedEffects,
+              queuedRunId: created.run.runId,
+            }),
+          }
+        },
+      )
+      await publishBestEffort(transactionResult.effects)
+      return transactionResult.result
+    },
+
     async startIfNeeded(input) {
       assertTimestamp(input.createdAt)
       const transactionResult = await runDatabaseTransaction(

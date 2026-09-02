@@ -204,39 +204,45 @@ function createCoordinator(
       maximumOutputTokens: 20,
     }),
   }
+  const recoveryRepository = {
+    recoverSessionForMutation: vi.fn().mockResolvedValue(recovered),
+    sessionMutationRepository: {
+      currentPrivateEventProtocol,
+      validateSessionMutation: vi.fn(),
+      persistSessionMutation: vi
+        .fn()
+        .mockImplementation(async (_transaction, _locked, batch) => {
+          persistedBatches.push(batch)
+          return {
+            sessionId,
+            finalStateVersion: batch.finalStateVersion,
+            nextEventSeq: batch.events.at(-1).eventSeq + 1,
+            firstEventSeq: batch.events[0].eventSeq,
+            lastEventSeq: batch.events.at(-1).eventSeq,
+            events: batch.events.map(
+              (event: { readonly publicEvent: unknown }) => event.publicEvent,
+            ),
+          }
+        }),
+    },
+  }
+  const runCoordinator = { createOrReuse: vi.fn() }
   const coordinator = createSessionAgentCoordinator({
     sql,
     owner: {} as never,
     registry: {
       resolveExact: vi.fn().mockReturnValue(playerRuntimeDefinition),
     } as never,
-    runCoordinator: { createOrReuse: vi.fn() } as never,
-    recoveryRepository: {
-      recoverSessionForMutation: vi.fn().mockResolvedValue(recovered),
-      sessionMutationRepository: {
-        currentPrivateEventProtocol,
-        validateSessionMutation: vi.fn(),
-        persistSessionMutation: vi
-          .fn()
-          .mockImplementation(async (_transaction, _locked, batch) => {
-            persistedBatches.push(batch)
-            return {
-              sessionId,
-              finalStateVersion: batch.finalStateVersion,
-              nextEventSeq: batch.events.at(-1).eventSeq + 1,
-              firstEventSeq: batch.events[0].eventSeq,
-              lastEventSeq: batch.events.at(-1).eventSeq,
-              events: batch.events.map(
-                (event: { readonly publicEvent: unknown }) => event.publicEvent,
-              ),
-            }
-          }),
-      },
-    } as never,
+    runCoordinator: runCoordinator as never,
+    recoveryRepository: recoveryRepository as never,
     runRepository: runRepository as never,
     decisionRepository: decisionRepository as never,
     foundationRepository: foundationRepository as never,
     strategyPackRepository: {
+      resolveActiveForNewRun: vi.fn().mockReturnValue({
+        datasetId: 'm45-empty-authorized',
+        datasetVersion: 1,
+      }),
       read: vi.fn(input.strategyPackRead ?? (() => ({}))),
     },
     runEventPort,
@@ -250,10 +256,66 @@ function createCoordinator(
     decisionRepository,
     foundationRepository,
     runEventPort,
+    runCoordinator,
+    recoveryRepository,
   }
 }
 
 describe('SessionAgentCoordinator M4.8 settlement', () => {
+  test('re-reads an idle AI turn and atomically starts its canonical initial Run', async () => {
+    const {
+      coordinator,
+      recovered,
+      runCoordinator,
+      recoveryRepository,
+      persistedBatches,
+    } = createCoordinator()
+    const initialRun = createRun({
+      lifecycle: 'queued',
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      fencingToken: 0,
+      startedAt: null,
+    })
+    recoveryRepository.recoverSessionForMutation.mockResolvedValue(
+      Object.freeze({
+        ...recovered,
+        session: Object.freeze({
+          ...recovered.session,
+          agentRunState: 'idle' as const,
+          activePlayerRunId: null,
+          activeDecisionRequestId: null,
+        }),
+      }),
+    )
+    runCoordinator.createOrReuse.mockResolvedValue({
+      kind: 'created',
+      run: initialRun,
+      committedEffects: [],
+    })
+
+    await expect(
+      coordinator.reconcileCurrentTurn({
+        sessionId,
+        trigger: 'sessionCommitted',
+        observedAt: settledAt,
+      }),
+    ).resolves.toEqual({ kind: 'started', runId })
+
+    expect(runCoordinator.createOrReuse).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        runtimeType: 'player',
+        triggerType: 'action_required',
+        idempotencyKey: `player-initial:${sessionId}:7:${actorParticipantId}`,
+        dataDependencies: [
+          { id: 'strategy-pack/m45-empty-authorized', version: 1 },
+        ],
+      }),
+    )
+    expect(persistedBatches).toHaveLength(1)
+  })
+
   test('pauses an otherwise-current authority when its execution deadline is exhausted', async () => {
     const run = createRun({ deadlineAt: settledAt })
     const { coordinator, runRepository, runEventPort } = createCoordinator({

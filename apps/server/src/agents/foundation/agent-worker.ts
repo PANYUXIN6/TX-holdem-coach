@@ -98,10 +98,14 @@ function isRecoverableLaneError(error: unknown): boolean {
 
 export interface AgentWorker extends AgentWorkerLifecyclePort {}
 
+export interface AgentWorkerExecutors {
+  readonly player?: RuntimeExecutionPort<'player'>
+  readonly coach?: RuntimeExecutionPort<'coach'>
+}
+
 export function createAgentWorker(input: {
   readonly control: AgentRunWorkerControl
-  readonly playerExecutor: RuntimeExecutionPort<'player'>
-  readonly coachExecutor: RuntimeExecutionPort<'coach'>
+  readonly executors: AgentWorkerExecutors
   readonly onDisposition?: (input: {
     readonly runtimeType: RuntimeType
     readonly runId: string
@@ -109,9 +113,15 @@ export function createAgentWorker(input: {
       'terminal' | 'authorityLost' | 'runtimeSettlementRequired'
   }) => void
 }): AgentWorker {
+  const runtimeTypes = (Object.keys(input.executors) as RuntimeType[]).filter(
+    (runtimeType) => input.executors[runtimeType] !== undefined,
+  )
   if (
-    input.playerExecutor.runtimeType !== 'player' ||
-    input.coachExecutor.runtimeType !== 'coach'
+    runtimeTypes.length === 0 ||
+    runtimeTypes.some(
+      (runtimeType) =>
+        input.executors[runtimeType]?.runtimeType !== runtimeType,
+    )
   ) {
     throw new AgentWorkerError('worker_start_failed')
   }
@@ -128,10 +138,11 @@ export function createAgentWorker(input: {
   const fatal = new Promise<AgentWorkerFatal>((resolve) => {
     resolveFatal = resolve
   })
-  const signals: Record<RuntimeType, LaneSignal> = {
-    player: createLaneSignal(),
-    coach: createLaneSignal(),
-  }
+  const signals = Object.freeze(
+    Object.fromEntries(
+      runtimeTypes.map((runtimeType) => [runtimeType, createLaneSignal()]),
+    ) as Record<RuntimeType, LaneSignal>,
+  )
   const activeControllers: Partial<Record<RuntimeType, AbortController>> = {}
   let lanePromises: readonly Promise<void>[] = []
 
@@ -145,10 +156,10 @@ export function createAgentWorker(input: {
           ? 'playerWorkerTerminatedUnexpectedly'
           : 'coachWorkerTerminatedUnexpectedly',
     })
-    activeControllers.player?.abort()
-    activeControllers.coach?.abort()
-    signals.player.notify()
-    signals.coach.notify()
+    for (const runtimeType of runtimeTypes) {
+      activeControllers[runtimeType]?.abort()
+      signals[runtimeType].notify()
+    }
   }
 
   async function heartbeat(
@@ -196,8 +207,10 @@ export function createAgentWorker(input: {
     activeControllers[runtimeType] = controller
     let settled = false
     let executorOutcome: 'resolved' | 'rejected' = 'resolved'
-    const executor =
-      runtimeType === 'player' ? input.playerExecutor : input.coachExecutor
+    const executor = input.executors[runtimeType]
+    if (executor === undefined) {
+      throw new AgentWorkerError('worker_start_failed')
+    }
     const execution = executor
       .execute(running as never, controller.signal)
       .catch(() => {
@@ -308,7 +321,7 @@ export function createAgentWorker(input: {
       forceStop = false
       try {
         state = 'running'
-        lanePromises = [runLane('player'), runLane('coach')]
+        lanePromises = runtimeTypes.map((runtimeType) => runLane(runtimeType))
       } catch {
         state = 'stopped'
         throw new AgentWorkerError('worker_start_failed')
@@ -317,7 +330,7 @@ export function createAgentWorker(input: {
     wake(runtimeType, runIds) {
       if (state !== 'running') return
       if (
-        (runtimeType !== 'player' && runtimeType !== 'coach') ||
+        !runtimeTypes.includes(runtimeType) ||
         !z.array(z.uuid()).safeParse([...new Set(runIds)]).success
       ) {
         return
@@ -329,18 +342,17 @@ export function createAgentWorker(input: {
       if (state === 'stopped') return
       stopPromise = (async () => {
         state = 'stopping'
-        activeControllers.player?.abort()
-        activeControllers.coach?.abort()
-        signals.player.notify()
-        signals.coach.notify()
+        for (const runtimeType of runtimeTypes) {
+          activeControllers[runtimeType]?.abort()
+          signals[runtimeType].notify()
+        }
         await waitForCompletionOrTimeout(
           Promise.allSettled(lanePromises),
           AGENT_WORKER_STOP_GRACE_MS,
         )
         forceStop = true
         forceStopController.abort()
-        signals.player.notify()
-        signals.coach.notify()
+        for (const runtimeType of runtimeTypes) signals[runtimeType].notify()
         state = 'stopped'
       })()
       return stopPromise

@@ -236,7 +236,7 @@ export function buildPlayerObservationDraft(
         row.handId !== identity.handId ||
         row.eventSeq > input.asOfEventSeq ||
         (previous !== undefined &&
-          (row.eventSeq !== previous.eventSeq + 1 ||
+          (row.eventSeq <= previous.eventSeq ||
             row.stateVersionBefore !== previous.stateVersionAfter)) ||
         row.stateVersionAfter !== row.stateVersionBefore + 1
       )

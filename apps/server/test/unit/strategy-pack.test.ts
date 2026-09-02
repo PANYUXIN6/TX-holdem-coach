@@ -42,6 +42,42 @@ describe('StrategyPack', () => {
     })
   })
 
+  test('resolves the only active pack for a new Player Run', () => {
+    const repository = createStaticStrategyPackRepository()
+
+    expect(
+      repository.resolveActiveForNewRun({
+        pokerRuleSetVersion: 'nlhe-cash-6to9-10-20-v1',
+      }),
+    ).toStrictEqual(EMPTY_AUTHORIZED_STRATEGY_PACK)
+  })
+
+  test.each([
+    ['missing', []],
+    [
+      'ambiguous',
+      [
+        EMPTY_AUTHORIZED_STRATEGY_PACK,
+        parseStrategyPack({
+          ...EMPTY_AUTHORIZED_STRATEGY_PACK,
+          datasetId: 'another-active-pack',
+        }),
+      ],
+    ],
+  ] as const)('rejects a $0 active pack set for new Runs', (name, packs) => {
+    if (name === 'ambiguous') {
+      expect(() => createStaticStrategyPackRepository(packs)).toThrow()
+      return
+    }
+
+    const repository = createStaticStrategyPackRepository(packs)
+    expect(() =>
+      repository.resolveActiveForNewRun({
+        pokerRuleSetVersion: 'nlhe-cash-6to9-10-20-v1',
+      }),
+    ).toThrow()
+  })
+
   test('accepts an exact authorized test record and rejects illegal candidate references', () => {
     const pack = parseStrategyPack({
       strategyPackSchemaVersion: 1,

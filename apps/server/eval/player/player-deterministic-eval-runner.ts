@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -58,74 +57,11 @@ const manifestSource = readFileSync(
 )
 const ManifestSchema = z.strictObject({
   manifestVersion: z.literal(1),
-  fingerprintSchemaVersion: z.literal(1),
   datasetVersion: z.literal('player-fixed-scenarios-v1'),
   graderVersion: z.literal('deterministic-v1'),
   pokerRuleSetVersion: z.literal('nlhe-cash-6to9-10-20-v1'),
   scenarioCount: z.literal(12),
 })
-
-const FINGERPRINT_FILES = [
-  'player-eval-manifest-v1.json',
-  'scenarios/player-fixed-scenarios-v1.json',
-  'player-eval-scenarios.ts',
-  'player-deterministic-eval-runner.ts',
-  'graders/deterministic-grader.ts',
-  'graders/safety-grader.ts',
-  '../../src/poker/poker-rule-set.ts',
-  '../../src/poker/decision-spot.ts',
-  '../../src/poker/hand-features.ts',
-  '../../src/poker/decision-metrics.ts',
-  '../../src/poker/candidate-outcomes.ts',
-  '../../src/poker/contestable-pot.ts',
-  '../../src/poker/decision-analysis-core.ts',
-  '../../src/poker/decision-analysis-input.ts',
-  '../../src/poker/decision-candidates.ts',
-  '../../src/poker/betting-projection.ts',
-  '../../src/poker/poker-engine.ts',
-  '../../src/sessions/authoritative-state/player-observation-builder.ts',
-  '../../src/sessions/authoritative-state/player-information-boundary-guard.ts',
-  '../../src/agents/foundation/model-route-policy.ts',
-  '../../src/agents/foundation/model-gateway.ts',
-  '../../src/agents/player/foundation-definition.ts',
-  '../../src/agents/player/player-decision-analysis-core.ts',
-  '../../src/agents/player/player-decision-policies.ts',
-  '../../src/agents/player/player-decision-preprocessor.ts',
-  '../../src/agents/player/player-strategy-projection.ts',
-  '../../src/agents/player/player-opponent-evidence.ts',
-  '../../src/agents/player/player-decision-audit.ts',
-  '../../src/agents/player/player-model-projection.ts',
-  '../../src/agents/player/player-decision-packet-leak-guard.ts',
-  '../../src/agents/player/player-context-policy.ts',
-  '../../src/agents/player/player-prompt-modules.ts',
-  '../../src/agents/player/player-bounded-choice.ts',
-  '../../src/agents/player/player-model-adapter-boundary-guard.ts',
-  '../../src/agents/player/route-policy.ts',
-  '../../src/agents/player/player-frozen-model-input.ts',
-  '../../src/agents/player/player-session-memory.ts',
-  '../../src/agents/player/player-commit-gate.ts',
-  '../../src/agents/player/player-decision-validator.ts',
-  '../../src/agents/model-gateway/model-pricing-policy.ts',
-  '../../src/personas/catalog-definitions.ts',
-  '../../src/personas/catalog.ts',
-  '../../src/personas/config.ts',
-  '../../src/poker-strategy/strategy-pack.ts',
-  '../../src/poker-strategy/strategy-pack-repository.ts',
-  '../../src/poker-strategy/strategy-projection.ts',
-  '../../src/persistence/player-commit-gate-repository.ts',
-  '../../src/sessions/command-execution/session-command-executor.ts',
-] as const
-
-function executionFingerprint(): string {
-  const hash = createHash('sha256')
-  for (const file of [...FINGERPRINT_FILES].sort()) {
-    hash.update(file, 'utf8')
-    hash.update('\0', 'utf8')
-    hash.update(readFileSync(join(directory, file), 'utf8'), 'utf8')
-    hash.update('\0', 'utf8')
-  }
-  return hash.digest('hex')
-}
 
 function referenceFor(
   observation: ReturnType<typeof certifyPlayerVisibleState>,
@@ -153,7 +89,6 @@ function referenceFor(
 
 export interface PlayerDeterministicEvalResult {
   readonly scenarioCount: number
-  readonly fingerprint: string
   readonly scenarios: readonly {
     readonly scenarioId: string
     readonly passed: true
@@ -309,7 +244,6 @@ export function runPlayerDeterministicEval(): PlayerDeterministicEvalResult {
   })
   return Object.freeze({
     scenarioCount: results.length,
-    fingerprint: executionFingerprint(),
     scenarios: Object.freeze(results),
   })
 }

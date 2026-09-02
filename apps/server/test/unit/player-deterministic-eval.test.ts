@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 import { runPlayerDeterministicEval } from '../../eval/player/player-deterministic-eval-runner.js'
 import {
@@ -88,33 +86,6 @@ describe('Player deterministic eval', () => {
         })),
         scenarioId,
       ).toEqual(expectedScript)
-    }
-  })
-
-  test('执行指纹覆盖路由、定价、Adapter Guard、策略包和生产 Commit Gate 契约源', () => {
-    const runnerSource = readFileSync(
-      fileURLToPath(
-        new URL(
-          '../../eval/player/player-deterministic-eval-runner.ts',
-          import.meta.url,
-        ),
-      ),
-      'utf8',
-    )
-    for (const file of [
-      '../../src/agents/foundation/model-route-policy.ts',
-      '../../src/agents/player/route-policy.ts',
-      '../../src/agents/model-gateway/model-pricing-policy.ts',
-      '../../src/agents/player/player-model-adapter-boundary-guard.ts',
-      '../../src/poker-strategy/strategy-pack.ts',
-      '../../src/poker-strategy/strategy-pack-repository.ts',
-      '../../src/poker-strategy/strategy-projection.ts',
-      '../../src/agents/player/player-commit-gate.ts',
-      '../../src/agents/player/player-decision-validator.ts',
-      '../../src/persistence/player-commit-gate-repository.ts',
-      '../../src/sessions/command-execution/session-command-executor.ts',
-    ]) {
-      expect(runnerSource).toContain(`'${file}'`)
     }
   })
 
@@ -215,6 +186,5 @@ describe('Player deterministic eval', () => {
 
     expect(result.scenarioCount).toBe(12)
     expect(result.scenarios.every((scenario) => scenario.passed)).toBe(true)
-    expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/)
   })
 })

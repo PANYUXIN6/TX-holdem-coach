@@ -6,6 +6,5 @@ process.stdout.write(
   `${JSON.stringify({
     category: 'player_deterministic_eval_passed',
     scenarioCount: result.scenarioCount,
-    fingerprint: result.fingerprint,
   })}\n`,
 )

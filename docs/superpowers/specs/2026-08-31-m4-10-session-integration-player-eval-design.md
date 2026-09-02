@@ -2,6 +2,7 @@
 
 - 日期：2026-08-31
 - 状态：已确认、已实现并完成验收；2026-09-02 已通过离线验证、m410 database milestone 与 PostgreSQL E2E milestone；DeepSeek 固定使用官方地址直连
+- 后续决策：2026-09-02 取消未被 baseline 或发布门禁消费的 Eval execution fingerprint；当前版本身份由 Git 提交记录承担，本文相关 fingerprint/baseline 内容仅保留为历史设计记录，不再构成当前实现契约。
 - 任务来源：[项目开发任务 M4.10](../plans/2026-07-23-poker-practice-development-tasks.md#m410-接入会话并完成-player-eval)
 - 启动治理事实源：[M3.8 服务启动恢复协调设计](./2026-08-13-m3-8-service-startup-recovery-coordination-design.md)
 - 上游运行事实源：[M4.2 设计](./2026-08-16-m4-2-agent-run-persistence-coordinator-worker-design.md)、[M4.3 设计](./2026-08-20-m4-3-context-capability-model-gateway-design.md)、[M4.7 设计](./2026-08-25-m4-7-player-validator-command-commit-gate-design.md)、[M4.8 设计](./2026-08-28-m4-8-player-failure-pause-stale-replacement-design.md)、[M4.9 设计](./2026-08-30-m4-9-player-audit-replay-bounded-memory-design.md)

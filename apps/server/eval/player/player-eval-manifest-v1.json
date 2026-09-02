@@ -1,6 +1,5 @@
 {
   "manifestVersion": 1,
-  "fingerprintSchemaVersion": 1,
   "datasetVersion": "player-fixed-scenarios-v1",
   "graderVersion": "deterministic-v1",
   "pokerRuleSetVersion": "nlhe-cash-6to9-10-20-v1",

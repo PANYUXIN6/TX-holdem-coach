@@ -33,7 +33,7 @@ Oxlint 使用 TypeScript 7 类型信息覆盖普通未使用项、静态错误�
 
 ## 当前运行链路
 
-`pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 先校验仓库地图声明的明确关键路径和 Web 扑克牌资源清单，再执行离线确定性 Player Eval、格式检查、类型检查与后端测试，不启动服务、不联网，也不读取模型 Key 或数据库凭据。离线 Eval 用严格固定场景实际运行 Player 纯链，并以独立 grader 与覆盖生产源的 fingerprint 判定。Server 入口按“加载 dotenv → 配置/人物/数据库/Owner → active Session preflight → 配置 Player Runtime 或 diagnostic-only → configured 情况下 M3.8 restart recovery → idle-AI reconcile → Player Worker start/wake → Dispatcher start → `createApp()` → 仅监听 `127.0.0.1`”运行；HTTP 确认绑定后才 ready，组合失败按反向资源顺序关闭。运行期 fatal 会先锁存非零退出码；关闭先停止接受 HTTP 连接、并行停止 Dispatcher/Worker，随后有界 drain、强制中断残余连接，最后关闭数据库。
+`pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 先校验仓库地图声明的明确关键路径和 Web 扑克牌资源清单，再执行离线确定性 Player Eval、格式检查、类型检查与后端测试，不启动服务、不联网，也不读取模型 Key 或数据库凭据。离线 Eval 用严格固定场景实际运行 Player 纯链，并以独立 grader 判定。Server 入口按“加载 dotenv → 配置/人物/数据库/Owner → active Session preflight → 配置 Player Runtime 或 diagnostic-only → configured 情况下 M3.8 restart recovery → idle-AI reconcile → Player Worker start/wake → Dispatcher start → `createApp()` → 仅监听 `127.0.0.1`”运行；HTTP 确认绑定后才 ready，组合失败按反向资源顺序关闭。运行期 fatal 会先锁存非零退出码；关闭先停止接受 HTTP 连接、并行停止 Dispatcher/Worker，随后有界 drain、强制中断残余连接，最后关闭数据库。
 
 M2.4 调用链固定为“事务外严格 prepare 命令与解析 Owner → 上层事务锁定 Session → `registerCommand` → 业务事实/事件/快照 → `completeCommand` 或可安全提交的 `failCommand`”。登记只以冲突安全插入实际返回一行为 acquired 判据，未插入后才读取同键既有状态；重放再次校验载荷版本、Contracts Schema、Session/版本镜像和终态矩阵，其中 completed 必须携带事件范围，failed 必须携带最新快照。Repository 自身不开启事务、不锁 Session、不推进扑克状态、不分配事件序号，也不发布 SSE；基础设施与未知异常由上层整笔回滚。
 

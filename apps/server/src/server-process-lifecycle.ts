@@ -2,8 +2,13 @@ import {
   bootstrap,
   ServiceShutdownError,
   ServiceStartupAborted,
+  ServiceStartupError,
   type RunningServiceHandle,
 } from './bootstrap.js'
+import {
+  consoleServiceLifecycleDiagnostic,
+  type ServiceLifecycleDiagnostic,
+} from './service-lifecycle-diagnostics.js'
 
 export interface ServerProcessPort {
   exitCode?: number
@@ -15,6 +20,29 @@ export interface ServerProcessLifecycleDependencies {
     readonly signal: AbortSignal
   }) => Promise<RunningServiceHandle>
   readonly process?: ServerProcessPort
+  readonly onDiagnostic?: (event: ServiceLifecycleDiagnostic) => void
+}
+
+function runtimeFatalResource(
+  fatal: unknown,
+): 'httpServer' | 'playerTurnDispatcher' | 'playerWorker' {
+  if (
+    typeof fatal === 'object' &&
+    fatal !== null &&
+    'category' in fatal &&
+    fatal.category === 'httpServerTerminatedUnexpectedly'
+  ) {
+    return 'httpServer'
+  }
+  if (
+    typeof fatal === 'object' &&
+    fatal !== null &&
+    'category' in fatal &&
+    fatal.category === 'playerTurnDispatcherTerminatedUnexpectedly'
+  ) {
+    return 'playerTurnDispatcher'
+  }
+  return 'playerWorker'
 }
 
 /**
@@ -26,6 +54,17 @@ export function startServiceProcess(
 ): void {
   const processPort = dependencies.process ?? process
   const bootstrapService = dependencies.bootstrap ?? bootstrap
+  const diagnose = (event: ServiceLifecycleDiagnostic): void => {
+    try {
+      if (dependencies.onDiagnostic === undefined) {
+        consoleServiceLifecycleDiagnostic.record(event)
+      } else {
+        dependencies.onDiagnostic(event)
+      }
+    } catch {
+      // Diagnostics cannot change process lifecycle behavior.
+    }
+  }
   const shutdownController = new AbortController()
   let running: RunningServiceHandle | undefined
   let shutdownRequested = false
@@ -35,7 +74,15 @@ export function startServiceProcess(
 
   const shutdownRunningService = (): void => {
     if (running === undefined) return
-    void running.shutdown().catch(latchFailureExitCode)
+    void running.shutdown().catch((error: unknown) => {
+      if (error instanceof ServiceShutdownError) {
+        diagnose({
+          category: 'service_shutdown_resource_failed',
+          resources: error.resources,
+        })
+      }
+      latchFailureExitCode()
+    })
   }
 
   const requestShutdown = (): void => {
@@ -56,14 +103,37 @@ export function startServiceProcess(
         return
       }
       void handle.fatal
-        .then(() => {
+        .then((fatal) => {
+          diagnose({
+            category: 'service_runtime_resource_failed',
+            resource: runtimeFatalResource(fatal),
+          })
           latchFailureExitCode()
           return handle.shutdown()
         })
-        .catch(latchFailureExitCode)
+        .catch((error: unknown) => {
+          if (error instanceof ServiceShutdownError) {
+            diagnose({
+              category: 'service_shutdown_resource_failed',
+              resources: error.resources,
+            })
+          }
+          latchFailureExitCode()
+        })
     })
     .catch((error: unknown) => {
       if (error instanceof ServiceStartupAborted) return
+      if (error instanceof ServiceStartupError) {
+        diagnose({
+          category: 'service_startup_failed',
+          failure: error.failure,
+        })
+      } else if (!(error instanceof ServiceShutdownError)) {
+        diagnose({
+          category: 'service_startup_failed',
+          failure: 'unexpectedStartupFailure',
+        })
+      }
       if (error instanceof ServiceShutdownError) {
         latchFailureExitCode()
         return

@@ -1,6 +1,18 @@
-export class PlayerRestartRecoveryContractError extends Error {
+export type StartupRecoveryFailure =
+  | 'candidateScanFailed'
+  | 'startupRecoveryFailed'
+  | 'playerRestartRecoveryContractInvalid'
+
+export class StartupRecoveryError extends Error {
+  public constructor(public readonly failure: StartupRecoveryFailure) {
+    super('服务启动恢复失败。')
+    this.name = 'StartupRecoveryError'
+  }
+}
+
+export class StartupRecoveryAborted extends Error {
   public constructor() {
-    super('Player 重启恢复端口返回了无效结果。')
-    this.name = 'PlayerRestartRecoveryContractError'
+    super('服务启动恢复已取消。')
+    this.name = 'StartupRecoveryAborted'
   }
 }

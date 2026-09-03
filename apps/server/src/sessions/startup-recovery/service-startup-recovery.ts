@@ -9,8 +9,8 @@ import type {
   PlayerProcessRestartRecoveryCompositionPort,
   PlayerProcessRestartRecoveryResult,
 } from '../../agents/player/session-agent-coordinator.js'
-import type { StartupRecoveryCandidateReader } from '../../agents/player/player-turn-dispatcher.js'
-import { PlayerRestartRecoveryContractError } from './errors.js'
+import type { ActiveSessionCandidateReader } from '../active-session-candidate-reader.js'
+import { StartupRecoveryAborted, StartupRecoveryError } from './errors.js'
 
 const CanonicalTimestampSchema = z.iso.datetime({ precision: 3 })
 const RestartResultSchema = z.discriminatedUnion('kind', [
@@ -26,13 +26,20 @@ const RestartResultSchema = z.discriminatedUnion('kind', [
     newlyPersistedEvents: z.tuple([SseEventSchema]).rest(SseEventSchema),
   }),
 ])
+const RestartTransactionResultSchema = z.strictObject({
+  recovery: RestartResultSchema,
+  // M4 owns the effect payload; M3.8 only proves it is a delivery batch.
+  runEffects: z.array(z.unknown()),
+})
 
 export interface StartupCommittedEffects {
   readonly replacementRunIds: readonly string[]
 }
 
 export interface ServiceStartupRecovery {
-  recoverAtStartup(): Promise<StartupCommittedEffects>
+  recoverAtStartup(input: {
+    readonly signal: AbortSignal
+  }): Promise<StartupCommittedEffects>
 }
 
 function validateRestartResult(input: {
@@ -41,7 +48,9 @@ function validateRestartResult(input: {
   readonly nextEventSeq: number
 }): PlayerProcessRestartRecoveryResult {
   const parsed = RestartResultSchema.safeParse(input.value)
-  if (!parsed.success) throw new PlayerRestartRecoveryContractError()
+  if (!parsed.success) {
+    throw new StartupRecoveryError('playerRestartRecoveryContractInvalid')
+  }
   const result = parsed.data
   if (
     result.kind === 'unchanged' ||
@@ -52,7 +61,7 @@ function validateRestartResult(input: {
       result.kind !== 'reconciledWithoutReplacement' &&
       'newlyPersistedEvents' in result
     ) {
-      throw new PlayerRestartRecoveryContractError()
+      throw new StartupRecoveryError('playerRestartRecoveryContractInvalid')
     }
   }
   const events =
@@ -67,11 +76,37 @@ function validateRestartResult(input: {
       event.eventSeq !== input.nextEventSeq + index ||
       eventIds.has(event.eventId)
     ) {
-      throw new PlayerRestartRecoveryContractError()
+      throw new StartupRecoveryError('playerRestartRecoveryContractInvalid')
     }
     eventIds.add(event.eventId)
   }
   return result as PlayerProcessRestartRecoveryResult
+}
+
+function validateRestartTransactionResult(input: {
+  readonly value: unknown
+  readonly sessionId: string
+  readonly nextEventSeq: number
+}): {
+  readonly recovery: PlayerProcessRestartRecoveryResult
+  readonly runEffects: Parameters<
+    PlayerProcessRestartRecoveryCompositionPort['publishCommittedRestartRunEffects']
+  >[0]
+} {
+  const parsed = RestartTransactionResultSchema.safeParse(input.value)
+  if (!parsed.success) {
+    throw new StartupRecoveryError('playerRestartRecoveryContractInvalid')
+  }
+  return Object.freeze({
+    recovery: validateRestartResult({
+      value: parsed.data.recovery,
+      sessionId: input.sessionId,
+      nextEventSeq: input.nextEventSeq,
+    }),
+    runEffects: parsed.data.runEffects as Parameters<
+      PlayerProcessRestartRecoveryCompositionPort['publishCommittedRestartRunEffects']
+    >[0],
+  })
 }
 
 /**
@@ -79,7 +114,7 @@ function validateRestartResult(input: {
  * 所有发布与唤醒仍只发生在事务提交后。
  */
 export function createServiceStartupRecovery(input: {
-  readonly candidateReader: StartupRecoveryCandidateReader
+  readonly candidateReader: ActiveSessionCandidateReader
   readonly sql: Parameters<typeof runDatabaseTransaction>[0]
   readonly owner: ResolvedOwnerScope
   readonly recoveryRepository: SessionRecoveryRepository
@@ -117,12 +152,29 @@ export function createServiceStartupRecovery(input: {
   }
 
   return Object.freeze({
-    async recoverAtStartup() {
-      const recoveryAt = now()
-      if (!CanonicalTimestampSchema.safeParse(recoveryAt).success) {
-        throw new TypeError('启动恢复时间戳无效。')
+    async recoverAtStartup({ signal }: { readonly signal: AbortSignal }) {
+      const assertNotAborted = (): void => {
+        if (signal.aborted) throw new StartupRecoveryAborted()
       }
-      const sessionIds = await input.candidateReader.listActiveSessionIds()
+
+      assertNotAborted()
+      let recoveryAt: string
+      try {
+        recoveryAt = now()
+      } catch {
+        throw new StartupRecoveryError('startupRecoveryFailed')
+      }
+      if (!CanonicalTimestampSchema.safeParse(recoveryAt).success) {
+        throw new StartupRecoveryError('startupRecoveryFailed')
+      }
+
+      assertNotAborted()
+      let sessionIds: readonly string[]
+      try {
+        sessionIds = await input.candidateReader.listActiveSessionIds()
+      } catch {
+        throw new StartupRecoveryError('candidateScanFailed')
+      }
       const parsedSessionIds = z.array(z.uuid()).safeParse(sessionIds)
       if (
         !parsedSessionIds.success ||
@@ -133,10 +185,13 @@ export function createServiceStartupRecovery(input: {
             parsedSessionIds.data[index - 1]!.localeCompare(sessionId) >= 0,
         )
       ) {
-        throw new PlayerRestartRecoveryContractError()
+        throw new StartupRecoveryError('candidateScanFailed')
       }
+
+      assertNotAborted()
       const replacementRunIds: string[] = []
       for (const sessionId of parsedSessionIds.data) {
+        assertNotAborted()
         let committed:
           | {
               readonly events: readonly SseEvent[]
@@ -150,14 +205,20 @@ export function createServiceStartupRecovery(input: {
           committed = await runDatabaseTransaction(
             input.sql,
             async (transaction) => {
-              const recovered =
-                await input.recoveryRepository.recoverSessionForMutation(
-                  transaction,
-                  input.owner,
-                  sessionId,
-                  recoveryAt,
-                )
-              if (recovered.kind !== 'ready') {
+              const recovered = await (async () => {
+                try {
+                  return await input.recoveryRepository.recoverSessionForMutation(
+                    transaction,
+                    input.owner,
+                    sessionId,
+                    recoveryAt,
+                  )
+                } catch (error) {
+                  if (error instanceof ResourceNotFoundError) return null
+                  throw error
+                }
+              })()
+              if (recovered === null || recovered.kind !== 'ready') {
                 return Object.freeze({
                   events: Object.freeze([]) as readonly SseEvent[],
                   replacementRunId: null,
@@ -173,29 +234,29 @@ export function createServiceStartupRecovery(input: {
                     recoveryAt,
                   },
                 )
-              const result = validateRestartResult({
-                value: transactionResult.recovery,
+              const result = validateRestartTransactionResult({
+                value: transactionResult,
                 sessionId: recovered.locked.sessionId,
                 nextEventSeq: recovered.locked.nextEventSeq,
               })
               const events =
-                result.kind === 'reconciledWithoutReplacement' ||
-                result.kind === 'replacementQueued'
-                  ? result.newlyPersistedEvents
+                result.recovery.kind === 'reconciledWithoutReplacement' ||
+                result.recovery.kind === 'replacementQueued'
+                  ? result.recovery.newlyPersistedEvents
                   : []
               return Object.freeze({
                 events: Object.freeze([...events]),
                 replacementRunId:
-                  result.kind === 'replacementQueued'
-                    ? result.replacementRunId
+                  result.recovery.kind === 'replacementQueued'
+                    ? result.recovery.replacementRunId
                     : null,
-                runEffects: transactionResult.runEffects,
+                runEffects: result.runEffects,
               })
             },
           )
         } catch (error) {
-          if (error instanceof ResourceNotFoundError) continue
-          throw error
+          if (error instanceof StartupRecoveryError) throw error
+          throw new StartupRecoveryError('startupRecoveryFailed')
         }
         if (committed.events.length !== 0) {
           try {

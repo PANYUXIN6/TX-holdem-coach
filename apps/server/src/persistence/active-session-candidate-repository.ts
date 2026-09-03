@@ -1,6 +1,6 @@
 import type { Sql } from 'postgres'
 import { z } from 'zod'
-import type { StartupRecoveryCandidateReader } from '../agents/player/player-turn-dispatcher.js'
+import type { ActiveSessionCandidateReader } from '../sessions/active-session-candidate-reader.js'
 import {
   DatabaseOperationError,
   PersistenceDataCorruptionError,
@@ -13,10 +13,10 @@ const CandidateRowSchema = z.strictObject({ sessionId: z.uuid() })
  * 只提供 Owner 范围内的活动场次候选。当前私有状态和 Player Run 必须由
  * 后续 Session-first 事务重新读取，不能从扫描结果派生。
  */
-export function createStartupRecoveryCandidateRepository(input: {
+export function createActiveSessionCandidateRepository(input: {
   readonly sql: Sql
   readonly owner: ResolvedOwnerScope
-}): StartupRecoveryCandidateReader {
+}): ActiveSessionCandidateReader {
   return Object.freeze({
     async listActiveSessionIds() {
       let rows: readonly unknown[]

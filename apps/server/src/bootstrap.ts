@@ -75,11 +75,22 @@ import { createPostgresPlayerDecisionReferencePort } from './persistence/player-
 import { createPostgresPlayerRunObservationPort } from './persistence/player-run-observation-port.js'
 import { createDatabaseCapabilityExecutionControl } from './persistence/agent-capability-execution-control.js'
 import { createPlayerModelAttemptControlV1 } from './persistence/player-model-attempt-control.js'
-import { createStartupRecoveryCandidateRepository } from './persistence/startup-recovery-candidate-repository.js'
+import { createActiveSessionCandidateRepository } from './persistence/active-session-candidate-repository.js'
 import {
   createServiceStartupRecovery,
   type ServiceStartupRecovery,
 } from './sessions/startup-recovery/service-startup-recovery.js'
+import {
+  StartupRecoveryAborted,
+  StartupRecoveryError,
+} from './sessions/startup-recovery/errors.js'
+import {
+  consoleServiceLifecycleDiagnostic,
+  type ServiceLifecycleDiagnostic,
+  type ServiceLifecycleDiagnosticPort,
+  type ServiceStartupFailure,
+  type ShutdownResource,
+} from './service-lifecycle-diagnostics.js'
 
 function createLocalWebOrigins(port: number): ReadonlySet<string> {
   return new Set([
@@ -104,6 +115,7 @@ export type ApiRuntimeWithPlayerRuntime = ApiRuntime & {
 /** 仅供受控 E2E 注入确定性 Provider；默认生产组合始终创建 DeepSeek adapter。 */
 export interface ApiRuntimeCompositionDependencies {
   readonly playerModelAdapter?: ModelProviderAdapter
+  readonly lifecycleDiagnostic?: ServiceLifecycleDiagnosticPort
 }
 
 export async function createApiRuntime(
@@ -112,6 +124,8 @@ export async function createApiRuntime(
   database: DatabaseClient,
   dependencies: ApiRuntimeCompositionDependencies = {},
 ): Promise<ApiRuntimeWithPlayerRuntime> {
+  const lifecycleDiagnostic =
+    dependencies.lifecycleDiagnostic ?? consoleServiceLifecycleDiagnostic
   let owner: Awaited<ReturnType<typeof resolveOwnerScope>>
   try {
     owner = await resolveOwnerScope(database.sql, { ownerId: 'local-user' })
@@ -187,7 +201,7 @@ export async function createApiRuntime(
   }
   let commands: ReturnType<typeof createSessionCommandExecutor>
   let playerRuntime: ConfiguredPlayerRuntime | undefined
-  const candidateReader = createStartupRecoveryCandidateRepository({
+  const candidateReader = createActiveSessionCandidateRepository({
     sql: database.sql,
     owner,
   })
@@ -305,6 +319,7 @@ export async function createApiRuntime(
         recoveryRepository,
         playerRestartRecovery: playerCoordinator,
         committedEventPublisher: committedSessionEvents,
+        onDiagnostic: (event) => lifecycleDiagnostic.record(event),
       }),
       reconcileInitialTurns: async () =>
         dispatcher!.reconcileStartup(
@@ -347,6 +362,7 @@ export interface BootstrapDependencies {
   readonly loadPersonaCatalog?: typeof loadAndValidatePersonaCatalog
   readonly initializeDatabase?: typeof initializeDatabase
   readonly createRuntime?: typeof createApiRuntime
+  readonly onDiagnostic?: ServiceLifecycleDiagnosticPort['record']
   readonly listen?: (
     config: ServerConfig,
     app: ReturnType<typeof createApp>,
@@ -378,13 +394,7 @@ export interface RunningServiceHandle {
   shutdown(): Promise<void>
 }
 
-export type ServiceStartupFailure =
-  | 'configurationFailed'
-  | 'databaseFailed'
-  | 'playerRuntimeConfigurationUnavailable'
-  | 'startupRecoveryFailed'
-  | 'workerStartFailed'
-  | 'httpListenFailed'
+export type { ServiceStartupFailure, ShutdownResource }
 
 export class ServiceStartupError extends Error {
   public constructor(public readonly failure: ServiceStartupFailure) {
@@ -401,7 +411,7 @@ export class ServiceStartupAborted extends Error {
 }
 
 export class ServiceShutdownError extends Error {
-  public constructor() {
+  public constructor(public readonly resources: readonly ShutdownResource[]) {
     super('服务关闭未能完整完成。')
     this.name = 'ServiceShutdownError'
   }
@@ -431,7 +441,10 @@ async function drainHttpServer(server: HttpServerHandle): Promise<void> {
   ])
   if (timeout !== undefined) clearTimeout(timeout)
   if (result.kind === 'failed') throw result.error
-  if (result.kind === 'timedOut') server.forceClose()
+  if (result.kind === 'timedOut') {
+    server.forceClose()
+    await server.waitForClose()
+  }
 }
 
 function listen(
@@ -511,56 +524,159 @@ export async function bootstrap(
   const initialize = dependencies.initializeDatabase ?? initializeDatabase
   const createRuntime = dependencies.createRuntime ?? createApiRuntime
   const startListening = dependencies.listen ?? listen
+  const lifecycleDiagnostic: ServiceLifecycleDiagnosticPort = Object.freeze({
+    record(event: ServiceLifecycleDiagnostic) {
+      try {
+        if (dependencies.onDiagnostic === undefined) {
+          consoleServiceLifecycleDiagnostic.record(event)
+        } else {
+          dependencies.onDiagnostic(event)
+        }
+      } catch {
+        // Diagnostics must never change a startup or shutdown outcome.
+      }
+    },
+  })
 
   let database: DatabaseClient | undefined
   let runtime: ApiRuntimeWithPlayerRuntime | undefined
   let server: HttpServerHandle | undefined
-  let playerRuntimeStarted = false
+  let workerStartAttempted = false
   let shutdownPromise: Promise<void> | null = null
   const assertNotAborted = (): void => {
     if (signal.aborted) throw new ServiceStartupAborted()
   }
   const closeStartedResources = async (): Promise<void> => {
-    const failures: unknown[] = []
+    const failedResources = new Set<ShutdownResource>()
     let httpDrain: Promise<void> | undefined
     if (server !== undefined) {
       try {
         server.beginClose()
         httpDrain = drainHttpServer(server)
-      } catch (error) {
-        failures.push(error)
+      } catch {
+        failedResources.add('httpServer')
       }
     }
     if (runtime?.playerRuntime !== undefined) {
       try {
         await runtime.playerRuntime.dispatcher.stop()
-      } catch (error) {
-        failures.push(error)
+      } catch {
+        failedResources.add('playerTurnDispatcher')
       }
-      if (playerRuntimeStarted) {
+      if (workerStartAttempted) {
         try {
           await runtime.playerRuntime.worker.stop()
-        } catch (error) {
-          failures.push(error)
+        } catch {
+          failedResources.add('playerWorker')
         }
       }
     }
     if (httpDrain !== undefined) {
       try {
         await httpDrain
-      } catch (error) {
-        failures.push(error)
+      } catch {
+        failedResources.add('httpServer')
       }
     }
     if (database !== undefined) {
       try {
         await database.close()
-      } catch (error) {
-        failures.push(error)
+      } catch {
+        failedResources.add('database')
       }
     }
-    if (failures.length !== 0) throw new ServiceShutdownError()
+    const resources = [
+      'httpServer',
+      'playerTurnDispatcher',
+      'playerWorker',
+      'database',
+    ].filter((resource) =>
+      failedResources.has(resource as ShutdownResource),
+    ) as ShutdownResource[]
+    if (resources.length !== 0) {
+      const error = new ServiceShutdownError(Object.freeze(resources))
+      lifecycleDiagnostic.record({
+        category: 'service_shutdown_resource_failed',
+        resources: error.resources,
+      })
+      throw error
+    }
   }
+
+  const waitForHttpReady = async (): Promise<void> => {
+    if (server === undefined) throw new ServiceStartupError('httpListenFailed')
+    type StartupWaitResult =
+      | 'bound'
+      | 'boundFailed'
+      | 'aborted'
+      | 'timedOut'
+      | 'httpFatal'
+      | 'workerFatal'
+      | 'dispatcherFatal'
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let abortListener: (() => void) | undefined
+    const abortWait = new Promise<StartupWaitResult>((resolve) => {
+      abortListener = () => resolve('aborted')
+      signal.addEventListener('abort', abortListener, { once: true })
+      if (signal.aborted) abortListener()
+    })
+    const fatalWaits: Promise<StartupWaitResult>[] = [
+      server.fatal.then(
+        () => 'httpFatal' as const,
+        () => 'httpFatal' as const,
+      ),
+    ]
+    if (runtime?.playerRuntime !== undefined) {
+      fatalWaits.push(
+        runtime.playerRuntime.worker.fatal.then(
+          () => 'workerFatal' as const,
+          () => 'workerFatal' as const,
+        ),
+        runtime.playerRuntime.dispatcher.fatal.then(
+          () => 'dispatcherFatal' as const,
+          () => 'dispatcherFatal' as const,
+        ),
+      )
+    }
+    const waits: Promise<StartupWaitResult>[] = [
+      ...fatalWaits,
+      abortWait,
+      server.bound.then(
+        () => 'bound' as const,
+        () => 'boundFailed' as const,
+      ),
+      new Promise<StartupWaitResult>((resolve) => {
+        timeout = setTimeout(() => resolve('timedOut'), HTTP_BIND_TIMEOUT_MS)
+      }),
+    ]
+    let result: StartupWaitResult
+    try {
+      result = await Promise.race(waits)
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout)
+      if (abortListener !== undefined) {
+        signal.removeEventListener('abort', abortListener)
+      }
+    }
+    if (signal.aborted || result === 'aborted')
+      throw new ServiceStartupAborted()
+    switch (result) {
+      case 'bound':
+        return
+      case 'boundFailed':
+      case 'timedOut':
+        throw new ServiceStartupError('httpListenFailed')
+      case 'httpFatal':
+        throw new ServiceStartupError('httpServerTerminatedUnexpectedly')
+      case 'workerFatal':
+        throw new ServiceStartupError('playerWorkerTerminatedUnexpectedly')
+      case 'dispatcherFatal':
+        throw new ServiceStartupError(
+          'playerTurnDispatcherTerminatedUnexpectedly',
+        )
+    }
+  }
+
   try {
     assertNotAborted()
     const config = loadConfig(environment)
@@ -569,22 +685,62 @@ export async function bootstrap(
     assertNotAborted()
     database = await initialize(config)
     assertNotAborted()
-    runtime = await createRuntime(config, personaCatalog, database)
+    runtime = await createRuntime(config, personaCatalog, database, {
+      lifecycleDiagnostic,
+    })
     assertNotAborted()
     if (runtime.playerRuntime !== undefined) {
-      const restartEffects =
-        await runtime.playerRuntime.startupRecovery.recoverAtStartup()
+      let restartEffects: Awaited<
+        ReturnType<ServiceStartupRecovery['recoverAtStartup']>
+      >
+      try {
+        restartEffects =
+          await runtime.playerRuntime.startupRecovery.recoverAtStartup({
+            signal,
+          })
+      } catch (error) {
+        if (error instanceof StartupRecoveryAborted || signal.aborted) {
+          throw new ServiceStartupAborted()
+        }
+        if (error instanceof StartupRecoveryError) {
+          throw new ServiceStartupError(error.failure)
+        }
+        throw new ServiceStartupError('startupRecoveryFailed')
+      }
       assertNotAborted()
-      const initialRunIds = await runtime.playerRuntime.reconcileInitialTurns()
+      let initialRunIds: readonly string[]
+      try {
+        initialRunIds = await runtime.playerRuntime.reconcileInitialTurns()
+      } catch {
+        if (signal.aborted) throw new ServiceStartupAborted()
+        throw new ServiceStartupError('initialPlayerTurnReconciliationFailed')
+      }
       assertNotAborted()
-      await runtime.playerRuntime.worker.start()
-      playerRuntimeStarted = true
+      workerStartAttempted = true
+      try {
+        await runtime.playerRuntime.worker.start()
+      } catch {
+        if (signal.aborted) throw new ServiceStartupAborted()
+        throw new ServiceStartupError('workerStartFailed')
+      }
+      assertNotAborted()
       const runIds = [
         ...new Set([...restartEffects.replacementRunIds, ...initialRunIds]),
       ].sort()
-      if (runIds.length !== 0)
-        runtime.playerRuntime.worker.wake('player', runIds)
-      await runtime.playerRuntime.dispatcher.start()
+      if (runIds.length !== 0) {
+        try {
+          runtime.playerRuntime.worker.wake('player', runIds)
+        } catch {
+          lifecycleDiagnostic.record({ category: 'startup_worker_wake_failed' })
+        }
+      }
+      assertNotAborted()
+      try {
+        await runtime.playerRuntime.dispatcher.start()
+      } catch {
+        if (signal.aborted) throw new ServiceStartupAborted()
+        throw new ServiceStartupError('dispatcherStartFailed')
+      }
     }
     assertNotAborted()
     const app = createApp(runtime, {
@@ -592,47 +748,32 @@ export async function bootstrap(
       allowedOrigins: createLocalWebOrigins(config.port),
       logRequest: (entry) => console.info(JSON.stringify(entry)),
     })
-    server = startListening(config, app)
-    let timeout: ReturnType<typeof setTimeout> | undefined
-    let rejectAbort!: (reason: unknown) => void
-    const abortWait = new Promise<never>((_, reject) => {
-      rejectAbort = reject
-    })
-    const onAbort = (): void => rejectAbort(new ServiceStartupAborted())
-    signal.addEventListener('abort', onAbort, { once: true })
-    if (signal.aborted) onAbort()
-    const waits: Promise<unknown>[] = [server.bound, abortWait]
-    if (runtime.playerRuntime !== undefined) {
-      waits.push(
-        runtime.playerRuntime.worker.fatal.then(() => {
-          throw new ServiceStartupError('workerStartFailed')
-        }),
-        runtime.playerRuntime.dispatcher.fatal.then(() => {
-          throw new ServiceStartupError('startupRecoveryFailed')
-        }),
-      )
-    }
-    const timeoutWait = new Promise<never>((_, reject) => {
-      timeout = setTimeout(
-        () => reject(new ServiceStartupError('httpListenFailed')),
-        HTTP_BIND_TIMEOUT_MS,
-      )
-    })
     try {
-      waits.push(timeoutWait)
-      await Promise.race(waits)
-    } finally {
-      if (timeout !== undefined) clearTimeout(timeout)
-      signal.removeEventListener('abort', onAbort)
+      server = startListening(config, app)
+    } catch {
+      throw new ServiceStartupError('httpListenFailed')
     }
-    assertNotAborted()
+    await waitForHttpReady()
     const runningFatal = Promise.race([
-      server.fatal,
+      server.fatal.then(
+        (fatal) => fatal,
+        () => ({ category: 'httpServerTerminatedUnexpectedly' as const }),
+      ),
       ...(runtime.playerRuntime === undefined
         ? []
         : [
-            runtime.playerRuntime.worker.fatal,
-            runtime.playerRuntime.dispatcher.fatal,
+            runtime.playerRuntime.worker.fatal.then(
+              (fatal) => fatal,
+              () => ({
+                category: 'playerWorkerTerminatedUnexpectedly' as const,
+              }),
+            ),
+            runtime.playerRuntime.dispatcher.fatal.then(
+              (fatal) => fatal,
+              () => ({
+                category: 'playerTurnDispatcherTerminatedUnexpectedly' as const,
+              }),
+            ),
           ]),
     ]) as Promise<ServiceRuntimeFatal>
     const shutdown = async (): Promise<void> => {
@@ -644,21 +785,25 @@ export async function bootstrap(
   } catch (error) {
     try {
       await closeStartedResources()
-    } catch {
+    } catch (shutdownError) {
       // The initial startup outcome remains authoritative.
     }
     if (error instanceof ServiceStartupAborted) throw error
-    if (error instanceof PlayerRuntimeConfigurationUnavailableError) {
-      throw new ServiceStartupError('playerRuntimeConfigurationUnavailable')
-    }
-    if (
-      error instanceof ServerConfigurationError ||
-      error instanceof PersonaCatalogValidationError
-    ) {
-      throw new ServiceStartupError('configurationFailed')
-    }
-    if (error instanceof StartupError)
-      throw new ServiceStartupError('databaseFailed')
-    throw error
+    const startupError =
+      error instanceof ServiceStartupError
+        ? error
+        : error instanceof PlayerRuntimeConfigurationUnavailableError
+          ? new ServiceStartupError('playerRuntimeConfigurationUnavailable')
+          : error instanceof ServerConfigurationError ||
+              error instanceof PersonaCatalogValidationError
+            ? new ServiceStartupError('configurationFailed')
+            : error instanceof StartupError
+              ? new ServiceStartupError('databaseFailed')
+              : new ServiceStartupError('unexpectedStartupFailure')
+    lifecycleDiagnostic.record({
+      category: 'service_startup_failed',
+      failure: startupError.failure,
+    })
+    throw startupError
   }
 }

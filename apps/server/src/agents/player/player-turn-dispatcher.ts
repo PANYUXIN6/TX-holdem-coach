@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { AgentWorkerLifecyclePort } from '../foundation/agent-worker-ports.js'
+import type { ActiveSessionCandidateReader } from '../../sessions/active-session-candidate-reader.js'
 
 export const PLAYER_TURN_DISPATCHER_POLL_MS = 1_000
 export const PLAYER_TURN_DISPATCHER_MAX_CONSECUTIVE_ERRORS = 5
@@ -18,10 +19,6 @@ export interface PlayerCurrentTurnCoordinator {
     | { readonly kind: 'alreadyActive'; readonly runId: string }
     | { readonly kind: 'userTurn' | 'paused' | 'noTarget' }
   >
-}
-
-export interface StartupRecoveryCandidateReader {
-  listActiveSessionIds(): Promise<readonly string[]>
 }
 
 export interface PlayerTurnHintPort {
@@ -78,7 +75,7 @@ function asCanonicalSessionIds(input: readonly string[]): readonly string[] {
 
 export function createPlayerTurnDispatcher(input: {
   readonly currentTurnCoordinator: PlayerCurrentTurnCoordinator
-  readonly candidateReader: StartupRecoveryCandidateReader
+  readonly candidateReader: ActiveSessionCandidateReader
   readonly worker: Pick<AgentWorkerLifecyclePort, 'wake'>
   readonly now?: () => string
   readonly pollMs?: number

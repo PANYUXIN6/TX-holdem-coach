@@ -362,7 +362,9 @@ export async function assertM410PlayerSessionIntegrationApplicationFlow(
         )
         const playerRuntime = requirePlayerRuntime(configuredRuntime.runtime)
         try {
-          await playerRuntime.startupRecovery.recoverAtStartup()
+          await playerRuntime.startupRecovery.recoverAtStartup({
+            signal: new AbortController().signal,
+          })
           await reconcileAndStart({
             runtime: configuredRuntime.runtime,
             sessionId: identity.sessionId,
@@ -463,7 +465,9 @@ export async function assertM410PlayerSessionIntegrationApplicationFlow(
           recoveryConfiguredRuntime.runtime,
         )
         try {
-          await recoveryPlayerRuntime.startupRecovery.recoverAtStartup()
+          await recoveryPlayerRuntime.startupRecovery.recoverAtStartup({
+            signal: new AbortController().signal,
+          })
           await recoveryPlayerRuntime.dispatcher.start()
           await waitFor(
             async () =>
@@ -502,7 +506,9 @@ export async function assertM410PlayerSessionIntegrationApplicationFlow(
             await restartPlayerRuntime.reconcileInitialTurns()
           expect(queuedBeforeRestart).toHaveLength(1)
           const restartEffects =
-            await restartPlayerRuntime.startupRecovery.recoverAtStartup()
+            await restartPlayerRuntime.startupRecovery.recoverAtStartup({
+              signal: new AbortController().signal,
+            })
           expect(restartEffects.replacementRunIds).toHaveLength(1)
           const restartProgress = await readSessionProgress(
             sql,

@@ -43,4 +43,39 @@ describe('server process lifecycle', () => {
     await flushMicrotasks()
     expect(processPort.exitCode).toBe(1)
   })
+
+  test('records only the stable failed resource category for a runtime fatal', async () => {
+    let resolveFatal!: (value: {
+      readonly category: 'httpServerTerminatedUnexpectedly'
+    }) => void
+    const fatal = new Promise<{
+      readonly category: 'httpServerTerminatedUnexpectedly'
+    }>((resolve) => {
+      resolveFatal = resolve
+    })
+    const onDiagnostic = vi.fn()
+    const handle: RunningServiceHandle = {
+      fatal,
+      shutdown: vi.fn(async () => undefined),
+    }
+    const processPort: {
+      exitCode?: number
+      once: ReturnType<typeof vi.fn>
+    } = { once: vi.fn() }
+
+    startServiceProcess({
+      bootstrap: async () => handle,
+      process: processPort,
+      onDiagnostic,
+    } as never)
+    await flushMicrotasks()
+    resolveFatal({ category: 'httpServerTerminatedUnexpectedly' })
+    await flushMicrotasks()
+
+    expect(onDiagnostic).toHaveBeenCalledWith({
+      category: 'service_runtime_resource_failed',
+      resource: 'httpServer',
+    })
+    expect(processPort.exitCode).toBe(1)
+  })
 })

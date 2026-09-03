@@ -14,7 +14,7 @@ import {
 import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { hashPlayerSessionMemoryV1 } from '../../src/agents/player/player-session-memory.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
-import { createStartupRecoveryCandidateRepository } from '../../src/persistence/startup-recovery-candidate-repository.js'
+import { createActiveSessionCandidateRepository } from '../../src/persistence/active-session-candidate-repository.js'
 import {
   INITIAL_AGENT_MEMORY,
   insertSessionRosterSnapshot,
@@ -140,7 +140,7 @@ export async function assertM410PlayerSessionIntegrationPersistence(
         await insertOtherOwnerRoster(transaction)
       })
 
-      const candidateReader = createStartupRecoveryCandidateRepository({
+      const candidateReader = createActiveSessionCandidateRepository({
         sql,
         owner,
       })

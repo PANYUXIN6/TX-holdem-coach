@@ -28,6 +28,7 @@ pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m47
 pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m47
 pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m410
 pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m410
+pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m51
 pnpm --filter @tx-holdem-coach/server run db:test:cleanup
 ```
 
@@ -38,6 +39,8 @@ pnpm --filter @tx-holdem-coach/server run db:test:cleanup
 - 发生 timeout、authority/fencing 异常或未观察到预期锁等待时，先检查并发测试进程、连接隔离、数据库锁事实、lease 和 deadline。
 
 `m410` 的 database 阶段验证 owner-scoped active Session 扫描、并发 current-turn reconcile 的单一 live Run、精确 StrategyPack 引用及协调事件原子性；E2E 阶段只在 Provider transport seam 注入确定性假 Provider，但实际经 `createApiRuntime`、Player Runtime executor、ModelGateway 与 M4.7 Commit Gate，验证连续 AI 成功提交、丢失 Dispatcher hint/Worker wake 的轮询补偿、historical Run 的 live-claim 隔离和启动恢复 replacement。两阶段必须串行；它们不运行真实 Provider。
+
+`m51` 只属于 database suite：经 M2.7 完成 Hand writer 与严格编码事件夹具验证 Owner-scoped 单 statement Reader、checkpoint/result/private-event current Codec 与纯私有投影；不安装 HTTP、Contracts 或路由，因此没有 PostgreSQL E2E `m51`。
 
 ## 首发前破坏性重基线
 

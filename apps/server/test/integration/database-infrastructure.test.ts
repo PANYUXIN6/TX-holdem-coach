@@ -7,6 +7,7 @@ import { assertM47PlayerCommitSchema } from './database-m47-assertions.js'
 import { assertM48PlayerCoordinationSchema } from './database-m48-assertions.js'
 import { assertM49PlayerAuditReplayMemorySchema } from './database-m49-assertions.js'
 import { assertM410PlayerSessionIntegrationPersistence } from './database-m410-assertions.js'
+import { assertM51CompletedHandHistory } from './database-m51-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -161,6 +162,12 @@ registerDatabaseMilestoneTest(
   'm410',
   'M4.10 Player Session integration persistence',
   (sql) => assertM410PlayerSessionIntegrationPersistence(sql),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm51',
+  'M5.1 completed hand history persistence',
+  (sql) => assertM51CompletedHandHistory(sql),
   300_000,
 )
 

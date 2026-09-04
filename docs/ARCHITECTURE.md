@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-09-02（M0–M2、M3.1–M3.8、M4.1–M4.10 已实现；M4.10 已通过离线验证、m410 database milestone 与 PostgreSQL E2E milestone）
+更新时间：2026-09-04（M0–M2、M3.1–M3.7、M4.1–M4.10 已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.1 私有完成手历史已实现并通过 m51 database milestone 验收）
 
 ## Workspace 边界
 

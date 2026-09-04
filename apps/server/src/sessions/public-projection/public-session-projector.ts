@@ -11,9 +11,7 @@ import type {
   PublicSessionProjectionFacts,
 } from './public-projection-facts.js'
 import { PublicProjectionInvariantError } from './errors.js'
-
-const USER_DISPLAY_NAME = '玩家'
-const USER_AVATAR_COLOR = '#0F766E'
+import { projectParticipantPresentation } from '../participant-presentation.js'
 
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object') {
@@ -172,11 +170,12 @@ export function projectPublicSessionSnapshot(
     }
     const publicSeats = seats.map((seat, index) => {
       const identity = roster[index]!
+      const presentation = projectParticipantPresentation(identity)
       return {
         seatNumber: seat.seatNumber,
         playerId: seat.playerId,
-        displayName: identity.isUser ? USER_DISPLAY_NAME : identity.displayName,
-        avatarColor: identity.isUser ? USER_AVATAR_COLOR : identity.avatarColor,
+        displayName: presentation.displayName,
+        avatarColor: presentation.avatarColor,
         isUser: seat.isUser,
         stack: seat.stack,
         status: seat.status,

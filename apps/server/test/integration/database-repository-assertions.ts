@@ -2740,12 +2740,51 @@ const M27_RANDOM_SOURCE = Object.freeze({
   nextInt: (maximum: number) => 0 % maximum,
 })
 
-function createM27PokerSeats(rebuySeatNumber?: number) {
+const M27_PLAYER_IDS = Object.freeze(
+  Array.from(
+    { length: 6 },
+    (_, seatNumber) =>
+      `00000000-0000-4000-8000-${(seatNumber + 1)
+        .toString()
+        .padStart(12, '0')}`,
+  ),
+)
+
+function assertM27PlayerIds(playerIds: readonly string[]): void {
+  if (playerIds.length !== 6) {
+    throw new Error('M2.7 Hand fixture 需要六名参与者。')
+  }
+}
+
+async function createM27RosterInput(
+  query: Sql,
+  sessionId: string,
+  playerIds: readonly string[],
+) {
+  assertM27PlayerIds(playerIds)
+  const catalog = loadAndValidatePersonaCatalog()
+  return prepareCurrentCatalogRosterSnapshot(query, ownerScope, catalog, {
+    sessionId,
+    userParticipantId: playerIds[0] ?? '',
+    agents: catalog
+      .list()
+      .slice(0, 5)
+      .map((entry, index) => ({
+        personaId: entry.personaId,
+        seatNumber: index + 1,
+        agentParticipantId: playerIds[index + 1] ?? '',
+      })),
+  })
+}
+
+function createM27PokerSeats(
+  rebuySeatNumber?: number,
+  playerIds: readonly string[] = M27_PLAYER_IDS,
+) {
+  assertM27PlayerIds(playerIds)
   return Array.from({ length: 6 }, (_, seatNumber) => ({
     seatNumber,
-    playerId: `00000000-0000-4000-8000-${(seatNumber + 1)
-      .toString()
-      .padStart(12, '0')}`,
+    playerId: playerIds[seatNumber] ?? '',
     isUser: seatNumber === 0,
     stack: seatNumber === rebuySeatNumber ? 1_250 : 1_000,
     status: 'active' as const,
@@ -2756,14 +2795,18 @@ function createM27PokerSeats(rebuySeatNumber?: number) {
 
 function createM27HandAuditFixture(
   handId: string,
-  options: { readonly rebuySeatNumber?: number } = {},
+  options: {
+    readonly rebuySeatNumber?: number
+    readonly playerIds?: readonly string[]
+  } = {},
 ) {
+  const playerIds = options.playerIds ?? M27_PLAYER_IDS
   const stateBeforeStartPoker = initializePokerTable(
-    createM27PokerSeats(),
+    createM27PokerSeats(undefined, playerIds),
     M27_RANDOM_SOURCE,
   )
   const pokerForStart = initializePokerTable(
-    createM27PokerSeats(options.rebuySeatNumber),
+    createM27PokerSeats(options.rebuySeatNumber, playerIds),
     M27_RANDOM_SOURCE,
   )
   const started = startPokerHand(pokerForStart, {
@@ -2808,9 +2851,20 @@ function createM27HandAuditFixture(
   })
 }
 
-async function insertCommittedM27Session(sql: Sql, sessionId: string) {
+async function insertCommittedM27Session(
+  sql: Sql,
+  sessionId: string,
+  playerIds?: readonly string[],
+) {
   const roster = await sql.begin(async (transaction) => {
-    const input = await createRosterInput(transaction as unknown as Sql)
+    const input =
+      playerIds === undefined
+        ? await createRosterInput(transaction as unknown as Sql)
+        : await createM27RosterInput(
+            transaction as unknown as Sql,
+            sessionId,
+            playerIds,
+          )
     await insertSessionRosterSnapshot(transaction, { ...input, sessionId })
     return input
   })
@@ -3465,9 +3519,14 @@ export async function insertCommittedM27CompletedHand(
   sql: Sql,
   sessionId: string,
   handId: string,
+  options: { readonly playerIds?: readonly string[] } = {},
 ) {
-  const owner = await insertCommittedM27Session(sql, sessionId)
-  const fixture = createM27HandAuditFixture(handId)
+  const owner = await insertCommittedM27Session(
+    sql,
+    sessionId,
+    options.playerIds,
+  )
+  const fixture = createM27HandAuditFixture(handId, options)
   await sql.begin(async (transaction) => {
     await insertInProgressHandAudit(transaction, owner, {
       sessionId,

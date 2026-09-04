@@ -16,6 +16,7 @@ import {
   type StoredHandStartCheckpoint,
 } from '../sessions/hand-audit/hand-start-checkpoint-codec.js'
 import type { HandStartCheckpoint } from '../sessions/hand-audit/hand-start-checkpoint.js'
+import { completedHandResultMirrorsCheckpoint } from '../sessions/hand-audit/completed-hand-mirrors.js'
 import {
   DatabaseOperationError,
   HandAuditTransitionError,
@@ -245,13 +246,8 @@ function parseHandAuditRow(row: unknown, owner: ResolvedOwnerScope): HandAudit {
     if (resultRead.kind === 'invalidPayload') {
       throw new PersistenceDataCorruptionError('invalidHandAudit')
     }
-    try {
-      assertCompletionMirrors(checkpoint, resultRead.value)
-    } catch (error) {
-      if (error instanceof RepositoryInputValidationError) {
-        throw new PersistenceDataCorruptionError('invalidHandAudit')
-      }
-      throw error
+    if (!completedHandResultMirrorsCheckpoint(checkpoint, resultRead.value)) {
+      throw new PersistenceDataCorruptionError('invalidHandAudit')
     }
     return deepFreeze({
       ...base,
@@ -320,48 +316,6 @@ function decodeCompletedResultForWrite(
 
 function toDatabaseTimestamp(value: string): string {
   return value.replace(/(\.\d{3})Z$/, '$1000Z')
-}
-
-function assertCompletionMirrors(
-  checkpoint: HandStartCheckpoint,
-  result: CompletedHandResult,
-): void {
-  const startedHand = checkpoint.startedHand
-  const resultSeatByNumber = new Map(
-    result.seats.map((seat) => [seat.seatNumber, seat]),
-  )
-  const checkpointSeatByNumber = new Map(
-    checkpoint.stateBeforeStartCommand.poker.seats.map((seat) => [
-      seat.seatNumber,
-      seat,
-    ]),
-  )
-  if (
-    result.handId !== startedHand.handId ||
-    result.buttonSeatNumber !== startedHand.buttonSeatNumber ||
-    result.smallBlindSeatNumber !== startedHand.smallBlindSeatNumber ||
-    result.bigBlindSeatNumber !== startedHand.bigBlindSeatNumber ||
-    !equalValues(
-      result.participantSeatNumbers,
-      startedHand.participantSeatNumbers,
-    ) ||
-    !equalValues(result.positions, startedHand.positions) ||
-    startedHand.startingStacks.some(
-      (startingStack) =>
-        resultSeatByNumber.get(startingStack.seatNumber)?.startingStack !==
-        startingStack.stack,
-    ) ||
-    result.seats.some((seat) => {
-      const checkpointSeat = checkpointSeatByNumber.get(seat.seatNumber)
-      return (
-        checkpointSeat === undefined ||
-        checkpointSeat.playerId !== seat.playerId ||
-        checkpointSeat.isUser !== seat.isUser
-      )
-    })
-  ) {
-    throw new RepositoryInputValidationError()
-  }
 }
 
 async function lockInProgressHandAudit(
@@ -502,7 +456,9 @@ export async function completeHandAudit(
     parsed.data.sessionId,
     parsed.data.handId,
   )
-  assertCompletionMirrors(locked.checkpoint, result)
+  if (!completedHandResultMirrorsCheckpoint(locked.checkpoint, result)) {
+    throw new RepositoryInputValidationError()
+  }
   const payload = transaction.json(
     completedResult.payload as unknown as JSONValue,
   )

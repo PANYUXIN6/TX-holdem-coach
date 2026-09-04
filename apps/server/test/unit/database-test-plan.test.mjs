@@ -50,6 +50,15 @@ describe('database test plan', () => {
     })
   })
 
+  test('allows M5.1 only in the database suite', () => {
+    expect(
+      parseDatabaseTestArguments(['--suite=database', '--milestone=m51']),
+    ).toEqual({ kind: 'milestone', milestone: 'm51', suite: 'database' })
+    expect(() =>
+      parseDatabaseTestArguments(['--suite=e2e', '--milestone=m51']),
+    ).toThrow('数据库测试启动参数无效。')
+  })
+
   test.each(['database', 'e2e'])(
     'allows the M4.5 milestone in the %s suite',
     (suite) => {

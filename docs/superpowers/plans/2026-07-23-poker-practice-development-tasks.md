@@ -1,6 +1,6 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2、M3.1–M3.8、M4.1–M4.10 已完成；M4.10 已通过离线验证、m410 database milestone 与 PostgreSQL E2E milestone，M5–M9 待开发，M10/M11 为分阶段后置能力
+- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.10 已完成；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M4.10 已通过离线验证、m410 database milestone 与 PostgreSQL E2E milestone，M5–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
 - 最后更新：2026-09-02
 - 本文不包含工期、人数或里程碑时间估算。
@@ -26,7 +26,7 @@
 | M1 确定性牌局引擎 | 已完成并验证 |
 | M2 Supabase Postgres 持久化与恢复 | 已完成并验证 |
 | M3.1–M3.7 会话服务、HTTP API 与 SSE | 已完成并验证 |
-| M3.8 服务启动恢复协调 | 已完成；作为 M4.10 启动集成切片，configured runtime 在恢复后启动 Worker/Dispatcher，再监听 HTTP |
+| M3.8 服务启动恢复协调 | 主体接线已由 M4.10 落地；专项设计已完成切片，Slice 1–4 待收口实现与验收 |
 | M4.7 | 已完成并验证 |
 | M4.8 | 已实现；M4.8 database milestone 与 PostgreSQL E2E milestone 已通过 |
 | M4.9 | 已完成；Memory v1、live 物化、审计 Replay/debug projection 与 historical nonCommit 已落地 |
@@ -827,9 +827,9 @@ Player 与 Coach 统一采用“先处理所有与当前决策相关、可从允
 
 ### M3.8 实现服务启动恢复协调
 
-依赖说明：M3.8 是 M4.2、M4.3、M4.7、M4.8 完成后的后置集成里程碑，编号只用于需求追踪，不表示实施顺序。详细契约见 [M3.8 服务启动恢复协调设计](../specs/2026-08-13-m3-8-service-startup-recovery-coordination-design.md)。
+依赖说明：M3.8 是 M4.2、M4.3、M4.7、M4.8、M4.10 完成后的后置集成里程碑，编号只用于需求追踪，不表示实施顺序。详细契约见 [M3.8 服务启动恢复协调设计](../specs/2026-08-13-m3-8-service-startup-recovery-coordination-design.md)。
 
-实施状态：已由 M4.10 作为启动集成切片完成；configured runtime 在启动恢复和当前 AI 行动协调完成后启动 Player Worker 与 Dispatcher，最后才开始 HTTP 监听。
+实施状态：主体启动链已由 M4.10 作为集成切片落地；M3.8 专项设计复核发现 Abort、精确 missing、稳定错误/诊断、关闭与测试 Oracle 仍需收口，待按 Slice 1–4 实施，不能标记为完整验收。
 
 产出：
 
@@ -1063,6 +1063,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M5.1 实现分街历史投影
 
+实施状态：已实现服务端私有 facts Reader、纯分街投影和深冻结输出；不安装 HTTP/Contracts。离线 unit/service 与隔离 PostgreSQL `m51` database milestone 均已通过。
+
 产出：
 
 - 从 `session_events` 中的 `actionCommitted`/返还/完成事件和 `hands.completedResult` 生成翻前、翻牌、转牌、河牌和摊牌时间线；前者是行动顺序事实源，后者是牌张、牌型和结算事实源。
@@ -1076,6 +1078,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 使用固定事件夹具验证各街顺序和金额。
 - 覆盖直接获胜、一次性发完剩余公共牌、未跟注返还和多边池。
 - 断言事件投影顺序只依赖 `eventSeq`。
+- database `m51` 通过 M2.7 完成 Hand writer 与严格编码事件夹具验证 Owner-scoped 单语句读取、current Codec 和私有投影；本任务不建立 PostgreSQL E2E `m51`。
 
 ### M5.2 实现历史可见性投影
 

@@ -122,6 +122,23 @@ describe('database integration test mode', () => {
     })
   })
 
+  test('accepts the database-only M5.1 milestone', () => {
+    expect(
+      loadDatabaseTestMode({
+        DATABASE_TEST_ENTRYPOINT: 'run-database-integration-tests',
+        DATABASE_TEST_SCOPE: 'milestone',
+        DATABASE_TEST_MILESTONE: 'm51',
+        DATABASE_TEST_RUN_ID: '0123456789abcdef',
+      }),
+    ).toEqual({
+      enabled: true,
+      full: false,
+      milestone: 'm51',
+      cleanupStale: false,
+      runId: '0123456789abcdef',
+    })
+  })
+
   test.each([
     [{ DATABASE_TEST_SCOPE: 'full' }, '数据库测试 Run ID 无效。'],
     [

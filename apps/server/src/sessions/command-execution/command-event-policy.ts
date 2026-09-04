@@ -1,9 +1,9 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { LedgerCommand } from '../../persistence/command-ledger-repository.js'
-import type { CompletedHandResult } from '../../poker/hand-result.js'
 import type { PrivateEvent } from '../authoritative-state/private-event.js'
 import type { PrivateTableState } from '../authoritative-state/private-table-state.js'
 import { getPrivateEventHandId } from '../authoritative-state/private-event.js'
+import { completedHandResultMirrorsTerminalAction } from '../hand-audit/completed-hand-mirrors.js'
 import { parseEndSessionRelationPlan } from './end-session-handler.js'
 import { parsePlayerActionRelationPlan } from './player-action-handler.js'
 import { parseRebuyRelationPlan } from './rebuy-handler.js'
@@ -460,50 +460,6 @@ function rosterAndTableMirrors(
   )
 }
 
-function terminalActionSnapshotMirrors(
-  event: Extract<PrivateEvent, { type: 'actionCommitted' }>,
-  result: CompletedHandResult,
-): boolean {
-  const beforeBySeat = new Map(
-    event.before.seats.map((seat) => [seat.seatNumber, seat]),
-  )
-  const resultBySeat = new Map(
-    result.seats.map((seat) => [seat.seatNumber, seat]),
-  )
-  const expectedActorStatus =
-    event.command.action.type === 'fold'
-      ? 'folded'
-      : event.command.action.type === 'allIn'
-        ? 'allIn'
-        : 'active'
-  return (
-    event.after.street === result.terminationReason &&
-    event.after.currentActorSeatNumber === null &&
-    equalValue(event.after.board, result.board) &&
-    event.after.pot ===
-      result.seats.reduce((total, seat) => total + seat.totalContribution, 0) &&
-    event.after.seats.length === result.seats.length &&
-    event.after.seats.every((afterSeat) => {
-      const beforeSeat = beforeBySeat.get(afterSeat.seatNumber)
-      const resultSeat = resultBySeat.get(afterSeat.seatNumber)
-      if (beforeSeat === undefined || resultSeat === undefined) return false
-      const contributionDelta =
-        resultSeat.totalContribution - beforeSeat.totalContribution
-      return (
-        contributionDelta >= 0 &&
-        afterSeat.totalContribution === resultSeat.totalContribution &&
-        afterSeat.streetContribution ===
-          beforeSeat.streetContribution + contributionDelta &&
-        afterSeat.stack === beforeSeat.stack - contributionDelta &&
-        afterSeat.status ===
-          (afterSeat.seatNumber === event.actorSeatNumber
-            ? expectedActorStatus
-            : beforeSeat.status)
-      )
-    })
-  )
-}
-
 function pokerActionMirrors(input: CommandMutationConsistencyInput): boolean {
   const beforeHand = input.stateBefore.poker.hand
   const actionEvent = input.events[0]
@@ -599,7 +555,10 @@ function pokerActionMirrors(input: CommandMutationConsistencyInput): boolean {
     input.stateAfter.completedHandCount !==
       input.stateBefore.completedHandCount + 1 ||
     !Number.isSafeInteger(input.stateAfter.completedHandCount) ||
-    !terminalActionSnapshotMirrors(actionEvent, relationPlan.result) ||
+    !completedHandResultMirrorsTerminalAction(
+      actionEvent,
+      relationPlan.result,
+    ) ||
     actionEvent.progression.terminationReason !==
       relationPlan.result.terminationReason ||
     completionEvent.terminationReason !==

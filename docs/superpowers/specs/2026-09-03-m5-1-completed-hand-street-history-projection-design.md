@@ -1,7 +1,7 @@
 # M5.1 完成手分街历史投影设计
 
 - 日期：2026-09-03
-- 状态：待确认；仅完成设计，尚未进入实现
+- 状态：已完成并验证；服务端私有 facts Reader、纯分街投影与深冻结输出已落地，离线 unit/service 与 PostgreSQL `m51` database milestone 均已通过
 - 任务来源：[项目开发任务 M5.1](../plans/2026-07-23-poker-practice-development-tasks.md#m51-实现分街历史投影)
 - 上位设计：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
 - 产品事实源：[PRD 5.4、9.2](./2026-07-23-poker-practice-prd.md)、[前端设计 3.4](./2026-07-23-poker-practice-frontend-design.md)

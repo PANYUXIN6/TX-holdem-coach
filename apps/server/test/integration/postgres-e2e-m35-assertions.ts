@@ -82,6 +82,7 @@ export async function assertM35SettingsHttpPostgresSmoke(
       },
       sessionHttp: unavailableSessionHttp,
       sessionEvents: unavailableSessionEvents,
+      handHistory: { read: async () => null },
     } satisfies ApiRuntime
     const app = createApp(runtime, {
       port: 8787,

@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-09-04（M0–M2、M3.1–M3.7、M4.1–M4.10 已完成；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.1 私有完成手历史已实现并通过 m51 database milestone 验收）
+更新时间：2026-09-04（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.2 已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.1 已通过 m51 database milestone，M5.2 已通过 m52 PostgreSQL E2E）
 
 ## 当前目录与职责
 
@@ -19,6 +19,7 @@
 - `docs/superpowers/specs/2026-08-12-m3-6-public-snapshot-sse-safe-projection-design.md`：M3.6 历史设计；同步有界的唯一生产投影核心、核心外异步事实加载、普通查询单语句读取视图和提交后发布仍有效。无 Handler/客户端的 `retryAgent` 公开预建协议已在首发前删除。
 - `docs/superpowers/specs/2026-08-13-m3-7-sse-reconnection-event-replay-design.md`：M3.7 正式事实源；冻结标准 `Last-Event-ID`、固定 high watermark 下的全量分页预验证与二次读取 proof、容量一页交接、64 项实时队列、单 writer 心跳/数据串行化及初始化取消传播。
 - `docs/superpowers/specs/2026-09-03-m5-1-completed-hand-street-history-projection-design.md`：M5.1 完成手历史私有投影设计；冻结单语句 Owner-scoped 事实读取、current Codec、`eventSeq` 唯一排序、跨来源镜像校验、服务端全量底牌输出与 M5.2 之前不得安装 HTTP/Contracts 的边界。
+- `docs/superpowers/specs/2026-09-04-m5-2-completed-hand-history-visibility-design.md`：M5.2 已实施的浏览器详情设计；冻结 `GET /api/hands/:handId` 的 completed-only Owner-scoped 读取、`public | auditReveal` 视图、字段白名单、严格 query、错误脱敏与只读语义。
 - `docs/superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md`：M1.7 以后非 Agent 运行时唯一重基线，定义纯引擎、会话聚合、版本、事件、持久化、公开投影和前端同步的事实归属。
 - `docs/superpowers/specs/2026-07-26-agent-foundation-runtime-architecture.md`：Agent 大模块总体事实源，定义 Foundation、Runtime、权限、运行生命周期、策略事实源、数据模型与当前/未来边界。
 - `docs/superpowers/specs/2026-08-14-m4-1-agent-foundation-core-protocol-static-registry-design.md`：M4.1 历史设计；Player/Coach 隔离定义、静态 Registry、预算和 Manifest grants 仍有效。未参与真实执行的 ContextEnvelope、Capability executor、Runtime 状态机和未接线 Commit Gate port 已在首发前删除。
@@ -55,7 +56,7 @@
 - `apps/server/scripts/run-database-integration-tests.mjs`：本地只解析 `.env.test.local`，CI 只接受已注入的两条测试 URL；构造子进程 allowlist，剔除线上 URL 和 ref 环境变量，并按纯计划选择数据库持久化或 PostgreSQL E2E 入口、注入 Run ID 及迁移-only、单里程碑、full 或 cleanup scope；Vitest 子进程在首个失败或阶段超时后停止调度同套后续里程碑。
 - `apps/server/scripts/database-test-plan.mjs`：远程 PostgreSQL 测试 CLI 的纯计划边界；`database` suite 只接受迁移、cleanup、full 或已登记里程碑（含 `m410` 与仅 database 的 `m51`），`e2e` suite 只接受已登记的跨层里程碑，并拒绝未归属的名称。计划分别选择 `database-infrastructure.test.ts` 或 `postgres-application-e2e.test.ts`，再生成唯一 Run ID、显式 scope 与失败即停的 Vitest 参数。
 - `apps/server/scripts/managed-child-process.mjs`、`copy-migrations.mjs`、`verify-migration-assets.mjs`、`migrate-production.mjs`：受管子进程模块统一把取消信号转发到完整进程组并等待退出，父进程一旦收到取消信号就不会因子进程退出码为 0 而误报成功；其余脚本依次负责构建迁移/注册表制品、核对源与 `dist` 资产及 digest、在联网前用制品生产 ref 校验合法迁移 URL并启动 `drizzle.release.config.ts`。
-- `apps/server/test/`：离线层覆盖 M4.6 Packet/Schema/三道边界、descriptor 与真实 FactState/full-model 一一映射、compact tuple 语义往返、生产 Snapshot→Projection 预算路径和所有表示字段同时取上限的独立上界 fixture，以及 `none | auditPrepared | modelPrepared | inflightUnknown` 恢复/fencing 矩阵；新增 M4.10 的 active-pack/current-turn/Dispatcher/启动恢复定向测试。M5.1 单元/服务测试覆盖 `eventSeq` 排序的完成手、直接获胜、返还、一次性 runout、深冻结与无 deck/burn 泄露；database `m51` 通过 M2.7 完成 Hand writer 与严格编码事件夹具验证单语句 Reader/Codec/投影，不注册 PostgreSQL E2E。远程入口仅由显式启动器运行，默认 `verify` 不连接数据库。
+- `apps/server/test/`：离线层覆盖 M4.6 Packet/Schema/三道边界、descriptor 与真实 FactState/full-model 一一映射、compact tuple 语义往返、生产 Snapshot→Projection 预算路径和所有表示字段同时取上限的独立上界 fixture，以及 `none | auditPrepared | modelPrepared | inflightUnknown` 恢复/fencing 矩阵；新增 M4.10 的 active-pack/current-turn/Dispatcher/启动恢复定向测试。M5.1 单元/服务测试覆盖 `eventSeq` 排序的完成手、直接获胜、返还、一次性 runout、深冻结与无 deck/burn 泄露；M5.2 的 unit/service 覆盖逐字段可见性、两种视图隔离、严格 query、HTTP 错误与输出脱敏，`m52` 则以真实生产组合验证 completed-only HTTP 读取。远程入口仅由显式启动器运行，默认 `verify` 不连接数据库。
 - `apps/server/test/integration/database-test-harness.ts`、`database-test-runtime.ts` 与 `README.md`：分别拥有远程阶段注册/迁移准备、连接与事务护栏、测试分层和操作事实。共享能力包括 Run ID 连接标签、数据库侧超时、冲突事务预检/显式连接清理、事务内 PID、JSONB fixture，以及“清理失败不覆盖主失败且只报告脱敏类型/稳定码”；每个远程阶段把 Vitest `AbortSignal` 传给迁移进程和断言作用域，取消时终止完整迁移进程组、关闭作用域内全部 PostgreSQL 连接，并等待已登记夹具清理收敛。共享 harness 不拥有 suite 选择。M3.1 竞争夹具仍在 E2E 阶段内额外收敛全部命令 Promise，并以目标 DELETE 的 `55P03` 有界重试精确删除自身 Session。
 - `apps/server/test/unit/command-ledger-repository.test.ts` 与 `database-repository-assertions.ts` 的 M2.4 入口：分别验证导出 Repository API，以及真实 PostgreSQL 的 Owner 隔离、整体回滚、可见 processing 损坏分类、候选 ID 碰撞和双连接终态重放；仅 `db:test:full` 运行远程部分。
 - `apps/server/src/poker/hand-result.ts`：仅定义、校验、排序和冻结手牌领域结果与事件草稿；不编排行为。
@@ -71,7 +72,7 @@
 - `apps/server/src/poker/poker-engine.ts`：M1 对会话层唯一可调用的行为入口，编排初始化、开手、行动推进与同步结算，绝不返回内部终止状态。
 - `apps/server/src/poker/poker-rule-set.ts`：定义开手审计、后续 Player 与 Coach 共享的规范扑克规则版本；当前唯一值为 `nlhe-cash-6to9-10-20-v1`。
 - `apps/server/src/personas/`：M2.3 人物私有配置落点；原始定义模块不得在求值期解析，配置模块承载永久 Payload Schema、Active 准入、规范 JSON 与快照哈希，目录模块只由 `bootstrap()` 显式加载并生成深冻结的私有目录和公开摘要。
-- `apps/server/src/http/`：M3.5/M3.7 HTTP 适配边界；`create-app.ts` 组合安全中间件与路由，`session-event-routes.ts` 只把应用连接写成 SSE wire，并以同一个串行 writer 发送数据与心跳；HTTP 不读取数据库或拼装公开快照。
+- `apps/server/src/http/`：M3.5/M3.7/M5.2 HTTP 适配边界；`create-app.ts` 组合安全中间件与路由，只有 `GET|HEAD /api/hands/:handId` 把 query 交给 `hand-history-routes.ts` 作严格多值解析，其余接口仍拒绝 query；`session-event-routes.ts` 只把应用连接写成 SSE wire，并以同一个串行 writer 发送数据与心跳；HTTP 不读取数据库或拼装公开快照。
 - `apps/server/src/sessions/public-projection/`：M3.6/M3.7 生产公开投影与事件流应用边界；同步 projector 只消费完整事实值，进程内 Hub 只分发已提交事件且不保存历史；stream service 固定 high watermark、全量分页预验证和二次读取 proof，connection 维护容量一页交接、64 项实时队列、可取消数据/心跳等待与幂等关闭。
 - `apps/server/src/providers/` 与 `src/settings/`：前者拥有 DeepSeek 固定模型目录检测、10 秒超时、脱敏分类和单飞缓存；后者在同一数据库事务内调用 Player 设置部分更新入口。缓存不保存 Key 或供应商原文，设置服务不维护数据库外镜像。
 - `apps/server/src/persistence/`：PostgreSQL Repository 落点；`agent-run-lifecycle-repository.ts` 提供 M4.2 Run 生命周期、队列、租约/fencing 与 M4.8 replacement lineage/终结原语；`agent-foundation-audit-repository.ts` 原子裁决 M4.3 Attempt/Invocation 预算；`player-observation-authority.ts` 为单个已领取 Player Run 捕获认证 authority，在短事务中按 `Session → AgentRun` 共享锁顺序读取当前快照、actor 与当前手事件，并只返回认证观察或 `stale | authorityLost | resourceMissing`。`completed-hand-history-repository.ts` 以一条 Owner-scoped `completed` Hand SQL 读取 checkpoint/result、全量同手私有事件和固化 roster，只做 current Codec/镜像认证并返回私有 facts。Repository 不决定 Player/Coach 业务终态。
@@ -80,7 +81,7 @@
 - `apps/server/src/sessions/authoritative-state/poker-private-event.ts`、`private-event.ts`、`private-event-codec.ts`、`current-private-event-protocol.ts`：Poker 私有事件子集、当前累积私有事件、严格 Codec 和组合期协议对象；十二种事件统一以唯一 row payload v1 读写，只保留 current reader，JSON 不重复保存信封版本。
 - `apps/server/src/sessions/authoritative-state/player-visible-state.ts`、`player-observation-builder.ts`、`player-information-boundary-guard.ts`：M4.4 纯权威观察边界；Builder 从 `handStarted` 公开种子逐事件调用共享下注内核，复验 action before/after、金额证明与最终 Snapshot 后只复制白名单公开事实和唯一 Hero 底牌；第一 Guard 独立重放金额/街道链，再以 strict Schema、不变量、规范 SHA-256、递归冻结和模块私有认证身份签发 `PlayerVisibleState`。该边界不读取 SQL、人物、记忆、Coach 或 Provider。
 - `apps/server/src/sessions/hand-audit/`：M2.7/M4.5 纯 Hand 审计边界；当前 `HandStartCheckpoint` 绑定 `pokerRuleSetVersion` 并只读取首发行载荷版本 1，旧 reader 已删除；`CompletedHandResult` 同样保留行载荷版本 1。检查点仍允许同命令自动买入造成起始筹码差异。
-- `apps/server/src/sessions/hand-history/`：M5.1 服务端私有完成手投影边界；复用 Hand/Event current Codec 已认证 facts，以纯函数按 `eventSeq` 投影已到达下注街和固定终局分组，并由窄 Reader 组合 Repository。输出含完整底牌但删除 deck、burn、checkpoint、原始载荷与可恢复桌面状态；不导入 HTTP 或共享 Contracts。
+- `apps/server/src/sessions/hand-history/`：M5.1/M5.2 完成手历史边界；M5.1 复用 Hand/Event current Codec 已认证 facts，以纯函数按 `eventSeq` 投影私有分街历史，并由窄 Reader 组合 Repository。M5.2 只在此边界把已认证历史逐字段复制为共享 Contracts DTO：public 仅显示用户及真实摊牌评估座位的底牌，auditReveal 仅对本次响应显示全部底牌；查询服务不吞掉 Reader 故障。
 - `apps/server/src/agents/audit/`：M2.7 Foundation 审计纯模块；定义规范引用，以及 Run Configuration、Execution Budget 与 Attempt 的 current-only codecs；现存载荷不提供 legacy 注册或迁移。
 - `apps/server/src/agents/foundation/`：M4.1–M4.3 服务器私有协议与应用编排边界；除 Registry、预算、Coordinator/Worker 和 authority 外，现包含认证 `ContextEnvelope`/`PreparedModelRequest`、静态 `CapabilityExecutor`、Route Policy 协议和最多三次真实请求的单 Provider `ModelGateway`。Foundation 不导入 Drizzle Schema、Hono、供应商 SDK 或扑克私有状态；M4.10 Worker 按 `executors` 安装 lane，生产只接 live Player。
 - `apps/server/src/agents/model-gateway/`：M4.3 Provider 适配边界；使用锁定的 `ai` 与 `@ai-sdk/deepseek`，显式关闭 SDK 重试、工具、遥测、思考和原始 request/response body 保留；同时拥有 DeepSeek 错误分类、敏感值扫描和版本化 microCny 定价。命中敏感响应时只向 Foundation 返回稳定替代投影、允许的 usage 与 finish reason；最终语义 Validator 产物在接受和哈希前由 Foundation 再次扫描。该目录不读取数据库或业务扑克 Context。
@@ -103,7 +104,7 @@
 
 M3.3 用户行动链固定为“恢复并锁定 Session → 登记命令 → `playerAction.prepare` 调用一次 M1.9 → 专属 verifier → 预验证 mutation → 可选 `completeHandAudit` → Session/快照/事件持久化 → 完成账本 → COMMIT”。M3.4 在同一执行器中增加三条链：补码只写用户资金；下一手在一个事务内写 AI 自动买入、checkpoint、新 Hand、事件和快照；正常结束不写快照或推进状态版本；暂停中止按 `Session → Hand → AgentRun` 锁序恢复 checkpoint、标记 Hand aborted 并结束 Session。Agent 动作协议在真实 Commit Gate 出现时再设计。
 
-M5.1 读取链固定为“严格 Hand UUID → `completed-hand-history-repository` 的一条 Owner-scoped completed Hand statement → checkpoint/result/private-event current Codec 与 roster/镜像认证 → `projectAuthoritativeCompletedHandHistory` → strict Schema、深拷贝和深冻结”。它只消费结果和事件、不调用扑克引擎、不重算牌型/结算，并只向未来 M5.2 提供服务端私有 Reader；没有 HTTP、SSE、Contracts 或浏览器可达绑定。
+M5.1/M5.2 读取链固定为“严格 Hand UUID → `completed-hand-history-repository` 的一条 Owner-scoped completed Hand statement → checkpoint/result/private-event current Codec 与 roster/镜像认证 → `projectAuthoritativeCompletedHandHistory` → `projectCompletedHandHistoryView(public|auditReveal)` → strict Contracts Schema、深拷贝和深冻结 → HTTP JSON”。M5.1 只消费结果和事件、不调用扑克引擎、不重算牌型/结算；M5.2 不把私有历史原对象交给 HTTP，也不改变 Session、事件序号或后续 public 视图。
 
 M2.4 命令链为“事务外 `prepareCommandRegistration` 与 `resolveOwnerScope` → M3.1 恢复并锁定 Session → `registerCommand` → `completeCommand` 或安全的 `failCommand`”。登记先由唯一约束和 `ON CONFLICT DO NOTHING` 决定是否实际插入，未插入时才以新语句读取既有状态；只有实际插入返回 acquired capability。Repository 不推进扑克状态、不分配事件序号、不发布 SSE。
 

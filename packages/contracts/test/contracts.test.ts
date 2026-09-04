@@ -163,6 +163,47 @@ const publicCompletedHandSummary = {
 }
 
 describe('共享外部协议', () => {
+  it('为完成手详情定义严格的视图与请求输入协议', async () => {
+    type SafeParseSchema = {
+      safeParse(value: unknown): { readonly success: boolean }
+    }
+    const contracts =
+      (await import('../src/index.js')) as typeof import('../src/index.js') & {
+        readonly HandHistoryViewSchema?: SafeParseSchema
+        readonly HandHistoryPathParamsSchema?: SafeParseSchema
+        readonly HandHistoryQuerySchema?: SafeParseSchema
+      }
+
+    expect(contracts.HandHistoryViewSchema?.safeParse('public').success).toBe(
+      true,
+    )
+    expect(
+      contracts.HandHistoryViewSchema?.safeParse('auditReveal').success,
+    ).toBe(true)
+    expect(contracts.HandHistoryViewSchema?.safeParse('PUBLIC').success).toBe(
+      false,
+    )
+    expect(
+      contracts.HandHistoryPathParamsSchema?.safeParse({ handId: ids.hand })
+        .success,
+    ).toBe(true)
+    expect(
+      contracts.HandHistoryPathParamsSchema?.safeParse({
+        handId: ids.hand,
+        ownerId: ids.session,
+      }).success,
+    ).toBe(false)
+    expect(contracts.HandHistoryQuerySchema?.safeParse({}).success).toBe(true)
+    expect(
+      contracts.HandHistoryQuerySchema?.safeParse({ view: 'auditReveal' })
+        .success,
+    ).toBe(true)
+    expect(
+      contracts.HandHistoryQuerySchema?.safeParse({ view: 'public', extra: 1 })
+        .success,
+    ).toBe(false)
+  })
+
   it('严格解析场次创建请求与响应', () => {
     const selections = [
       { personaId: 'nit_fish', seatNumber: 5 },

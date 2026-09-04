@@ -81,6 +81,7 @@ function runtime() {
       },
       sessionHttp: unavailableSessionHttp,
       sessionEvents: unavailableSessionEvents,
+      handHistory: { read: async () => null },
     } satisfies ApiRuntime,
     update,
     deleteEndedSession,

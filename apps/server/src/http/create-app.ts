@@ -7,11 +7,13 @@ import type { ProviderHealthService } from '../providers/provider-health-service
 import type { PlayerAgentSettingsService } from '../settings/player-agent-settings-service.js'
 import type { SessionDataDeletionService } from '../sessions/session-data-deletion-service.js'
 import type { SessionEventStreamService } from '../sessions/public-projection/session-event-stream-service.js'
+import type { CompletedHandHistoryQueryService } from '../sessions/hand-history/completed-hand-history-query-service.js'
 import { registerAgentSettingsRoutes } from './agent-settings-routes.js'
 import type { ApiVariables } from './api-context.js'
 import { registerDataRoutes } from './data-routes.js'
 import { handleHttpError } from './error-mapper.js'
 import { registerHealthRoutes } from './health-routes.js'
+import { registerHandHistoryRoutes } from './hand-history-routes.js'
 import type { HealthService } from './health-service.js'
 import { registerPersonaRoutes } from './persona-routes.js'
 import { registerProviderSettingsRoutes } from './provider-settings-routes.js'
@@ -30,6 +32,7 @@ export interface ApiRuntime {
   readonly deletion: SessionDataDeletionService
   readonly sessionHttp: SessionHttpPorts
   readonly sessionEvents: SessionEventStreamService
+  readonly handHistory: CompletedHandHistoryQueryService
 }
 
 export interface ApiAppOptions {
@@ -76,6 +79,7 @@ function isKnownRoute(method: string, path: string): boolean {
     return method === 'POST'
   }
   if (/^\/api\/agent-personas\/[^/]+$/.test(path)) return method === 'GET'
+  if (/^\/api\/hands\/[^/]+$/.test(path)) return method === 'GET'
   if (path === '/api/sessions/active') return method === 'GET'
   if (/^\/api\/sessions\/[^/]+\/events$/.test(path)) {
     return method === 'GET'
@@ -196,7 +200,14 @@ export function createApp(
         )
       }
     }
-    if (new URL(context.req.url).search.length > 0) {
+    const url = new URL(context.req.url)
+    if (
+      url.search.length > 0 &&
+      !(
+        /^\/api\/hands\/[^/]+$/.test(url.pathname) &&
+        routeLookupMethod(method) === 'GET'
+      )
+    ) {
       throw new HttpBoundaryError(
         400,
         'INVALID_REQUEST',
@@ -246,6 +257,7 @@ export function createApp(
   registerAgentSettingsRoutes(app, runtime.playerAgentSettings)
   registerPersonaRoutes(app, runtime.personaCatalog)
   registerDataRoutes(app, runtime.deletion)
+  registerHandHistoryRoutes(app, runtime.handHistory)
   registerSessionRoutes(app, runtime.sessionHttp)
   registerSessionEventRoutes(app, runtime.sessionEvents)
 

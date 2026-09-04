@@ -793,6 +793,322 @@ export const PublicCompletedHandSummarySchema = z
     })
   })
 
+export const HandHistoryViewSchema = z.enum(['public', 'auditReveal'])
+
+export const HandHistoryPathParamsSchema = z.strictObject({
+  handId: HandIdSchema,
+})
+
+export const HandHistoryQuerySchema = z.strictObject({
+  view: HandHistoryViewSchema.default('public'),
+})
+
+export const HandHistoryParticipantSchema = z.strictObject({
+  seatNumber: SeatNumberSchema,
+  playerId: PlayerIdSchema,
+  isUser: z.boolean(),
+  displayName: z.string().min(1),
+  avatarColor: z.string().min(1),
+  position: PublicLogicalPositionSchema,
+  startingStack: ChipAmountSchema,
+  endingStack: ChipAmountSchema,
+  totalContribution: ChipAmountSchema,
+  netChange: z.number().int(),
+})
+
+export const HandHistoryActionSchema = z.strictObject({
+  actionNumber: z.number().int().positive(),
+  eventSeq: EventSequenceSchema,
+  actorSeatNumber: SeatNumberSchema,
+  playerId: PlayerIdSchema,
+  position: PublicLogicalPositionSchema,
+  action: PokerActionSchema,
+  committedAmount: ChipAmountSchema,
+  streetContributionAfterAction: ChipAmountSchema,
+  stackAfterAction: ChipAmountSchema,
+  potBeforeAction: ChipAmountSchema,
+  potAfterAction: ChipAmountSchema,
+})
+
+const HandHistoryBettingPhaseSchema = z.discriminatedUnion('phase', [
+  z.strictObject({
+    phase: z.literal('preflop'),
+    communityCards: z.tuple([]),
+    actions: z.array(HandHistoryActionSchema),
+  }),
+  z.strictObject({
+    phase: z.literal('flop'),
+    communityCards: z.tuple([CardSchema, CardSchema, CardSchema]),
+    actions: z.array(HandHistoryActionSchema),
+  }),
+  z.strictObject({
+    phase: z.literal('turn'),
+    communityCards: z.tuple([CardSchema, CardSchema, CardSchema, CardSchema]),
+    actions: z.array(HandHistoryActionSchema),
+  }),
+  z.strictObject({
+    phase: z.literal('river'),
+    communityCards: z.tuple([
+      CardSchema,
+      CardSchema,
+      CardSchema,
+      CardSchema,
+      CardSchema,
+    ]),
+    actions: z.array(HandHistoryActionSchema),
+  }),
+])
+
+export const HandHistoryUncalledBetReturnSchema = z.strictObject({
+  eventSeq: EventSequenceSchema,
+  seatNumber: SeatNumberSchema,
+  amount: PositiveChipAmountSchema,
+})
+
+export const HandHistoryResultPhaseSchema = z.strictObject({
+  phase: z.literal('showdown'),
+  terminationReason: z.enum(['showdown', 'complete']),
+  handCompletedEventSeq: EventSequenceSchema,
+  communityCards: z.array(CardSchema).max(5),
+  uncalledBetReturns: z.array(HandHistoryUncalledBetReturnSchema),
+  revealedHands: z.array(PublicRevealedHandSchema),
+  pots: z.array(PublicSettledPotSchema).min(1),
+})
+
+const HandHistoryPhaseSchema = z.discriminatedUnion('phase', [
+  HandHistoryBettingPhaseSchema,
+  HandHistoryResultPhaseSchema,
+])
+
+function isStrictlyAscending(values: readonly number[]): boolean {
+  return values.every(
+    (value, index) => index === 0 || value > values[index - 1]!,
+  )
+}
+
+export const HandHistoryResponseSchema = z
+  .strictObject({
+    protocolVersion: z.literal(1),
+    view: HandHistoryViewSchema,
+    history: z.strictObject({
+      sessionId: SessionIdSchema,
+      handId: HandIdSchema,
+      handNumber: z.number().int().positive(),
+      startedAt: z.iso.datetime(),
+      completedAt: z.iso.datetime(),
+      participantSeatNumbers: z.array(SeatNumberSchema).min(6).max(9),
+      buttonSeatNumber: SeatNumberSchema,
+      smallBlindSeatNumber: SeatNumberSchema,
+      bigBlindSeatNumber: SeatNumberSchema,
+      participants: z.array(HandHistoryParticipantSchema).min(6).max(9),
+      phases: z.array(HandHistoryPhaseSchema).min(2),
+    }),
+  })
+  .superRefine((response, context) => {
+    const { history } = response
+    const participantSeats = history.participantSeatNumbers
+    const participantSet = new Set(participantSeats)
+    const participantEntries = history.participants
+    const terminal = history.phases.at(-1)
+    const addIssue = (path: readonly (string | number)[], message: string) =>
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...path],
+        message,
+      })
+
+    if (
+      participantSet.size !== participantSeats.length ||
+      !isStrictlyAscending(participantSeats)
+    ) {
+      addIssue(
+        ['history', 'participantSeatNumbers'],
+        '参与座位必须唯一且升序。',
+      )
+    }
+    if (
+      participantEntries.length !== participantSeats.length ||
+      participantEntries.some(
+        (participant, index) =>
+          participant.seatNumber !== participantSeats[index],
+      )
+    ) {
+      addIssue(
+        ['history', 'participants'],
+        '参与者必须与座位集合一一对应且升序。',
+      )
+    }
+    const users = participantEntries.filter((participant) => participant.isUser)
+    if (users.length !== 1 || users[0]?.seatNumber !== 0) {
+      addIssue(
+        ['history', 'participants'],
+        '完成手历史必须恰好包含座位 0 的用户。',
+      )
+    }
+    if (
+      new Set([
+        history.buttonSeatNumber,
+        history.smallBlindSeatNumber,
+        history.bigBlindSeatNumber,
+      ]).size !== 3 ||
+      ![
+        history.buttonSeatNumber,
+        history.smallBlindSeatNumber,
+        history.bigBlindSeatNumber,
+      ].every((seat) => participantSet.has(seat))
+    ) {
+      addIssue(
+        ['history', 'buttonSeatNumber'],
+        '按钮和庄盲必须是不同参与座位。',
+      )
+    }
+    if (
+      history.phases[0]?.phase !== 'preflop' ||
+      terminal?.phase !== 'showdown'
+    ) {
+      addIssue(
+        ['history', 'phases'],
+        '完成手历史必须以翻前开始并以终局分组结束。',
+      )
+      return
+    }
+
+    const phaseOrder = ['preflop', 'flop', 'turn', 'river'] as const
+    let previousPhaseIndex = -1
+    let previousEventSeq = -1
+    for (const [phaseIndex, phase] of history.phases.entries()) {
+      if (phase.phase === 'showdown') {
+        if (phaseIndex !== history.phases.length - 1) {
+          addIssue(
+            ['history', 'phases', phaseIndex],
+            '终局分组必须是最后一项。',
+          )
+        }
+        continue
+      }
+      const order = phaseOrder.indexOf(phase.phase)
+      if (order !== previousPhaseIndex + 1) {
+        addIssue(
+          ['history', 'phases', phaseIndex, 'phase'],
+          '下注街必须单调且连续。',
+        )
+      }
+      previousPhaseIndex = order
+      for (const action of phase.actions) {
+        if (
+          !participantSet.has(action.actorSeatNumber) ||
+          !participantEntries.some(
+            (participant) =>
+              participant.seatNumber === action.actorSeatNumber &&
+              participant.playerId === action.playerId &&
+              participant.position === action.position,
+          )
+        ) {
+          addIssue(
+            ['history', 'phases', phaseIndex, 'actions'],
+            '行动必须引用参与者。',
+          )
+        }
+        if (action.eventSeq <= previousEventSeq) {
+          addIssue(
+            ['history', 'phases', phaseIndex, 'actions'],
+            '行动事件序号必须严格递增。',
+          )
+        }
+        previousEventSeq = action.eventSeq
+      }
+    }
+
+    const revealedSeats = terminal.revealedHands.map((hand) => hand.seatNumber)
+    if (
+      revealedSeats.length !== participantSeats.length ||
+      revealedSeats.some((seat, index) => seat !== participantSeats[index])
+    ) {
+      addIssue(
+        ['history', 'phases', history.phases.length - 1, 'revealedHands'],
+        '亮牌必须与参与座位一一对应且升序。',
+      )
+    }
+    if (
+      terminal.uncalledBetReturns.some(
+        (returned) => !participantSet.has(returned.seatNumber),
+      )
+    ) {
+      addIssue(
+        ['history', 'phases', history.phases.length - 1, 'uncalledBetReturns'],
+        '返还必须引用参与座位。',
+      )
+    }
+    if (
+      terminal.pots.some(
+        (pot, potIndex) =>
+          pot.potIndex !== potIndex ||
+          pot.kind !== (potIndex === 0 ? 'main' : 'side') ||
+          pot.winningSeatNumbers.some((seat) => !participantSet.has(seat)) ||
+          pot.awards.some((award) => !participantSet.has(award.seatNumber)),
+      )
+    ) {
+      addIssue(
+        ['history', 'phases', history.phases.length - 1, 'pots'],
+        '逐池结果必须引用参与座位并保持规范顺序。',
+      )
+    }
+    if (
+      terminal.terminationReason === 'complete' &&
+      terminal.revealedHands.some((hand) => hand.handEvaluation !== null)
+    ) {
+      addIssue(
+        ['history', 'phases', history.phases.length - 1, 'revealedHands'],
+        '直接获胜终局不得携带牌型。',
+      )
+    }
+    if (
+      response.view === 'auditReveal' &&
+      terminal.revealedHands.some((hand) => hand.holeCards === null)
+    ) {
+      addIssue(
+        ['history', 'phases', history.phases.length - 1, 'revealedHands'],
+        '审计视图必须显示全部底牌。',
+      )
+    }
+    if (response.view === 'public') {
+      const userHand = terminal.revealedHands.find(
+        (hand) => hand.seatNumber === 0,
+      )
+      if (userHand?.holeCards === null || userHand === undefined) {
+        addIssue(
+          ['history', 'phases', history.phases.length - 1, 'revealedHands'],
+          '公开视图必须显示用户底牌。',
+        )
+      }
+      if (
+        terminal.terminationReason === 'complete' &&
+        terminal.revealedHands.some(
+          (hand) => hand.seatNumber !== 0 && hand.holeCards !== null,
+        )
+      ) {
+        addIssue(
+          ['history', 'phases', history.phases.length - 1, 'revealedHands'],
+          '直接获胜时不得显示其他座位底牌。',
+        )
+      }
+      if (
+        terminal.terminationReason === 'showdown' &&
+        terminal.revealedHands.some(
+          (hand) =>
+            hand.seatNumber !== 0 &&
+            hand.holeCards !== null &&
+            hand.handEvaluation === null,
+        )
+      ) {
+        addIssue(
+          ['history', 'phases', history.phases.length - 1, 'revealedHands'],
+          '公开 AI 底牌必须伴随真实牌型。',
+        )
+      }
+    }
+  })
+
 export const PublicHandSnapshotSchema = z.strictObject({
   handId: HandIdSchema,
   street: HandStreetSchema,
@@ -1114,6 +1430,20 @@ export type PublicCompletedHandSummary = z.infer<
 export type PublicHandEvaluation = z.infer<typeof PublicHandEvaluationSchema>
 export type PublicRevealedHand = z.infer<typeof PublicRevealedHandSchema>
 export type PublicSettledPot = z.infer<typeof PublicSettledPotSchema>
+export type HandHistoryView = z.infer<typeof HandHistoryViewSchema>
+export type HandHistoryPathParams = z.infer<typeof HandHistoryPathParamsSchema>
+export type HandHistoryQuery = z.infer<typeof HandHistoryQuerySchema>
+export type HandHistoryParticipant = z.infer<
+  typeof HandHistoryParticipantSchema
+>
+export type HandHistoryAction = z.infer<typeof HandHistoryActionSchema>
+export type HandHistoryUncalledBetReturn = z.infer<
+  typeof HandHistoryUncalledBetReturnSchema
+>
+export type HandHistoryResultPhase = z.infer<
+  typeof HandHistoryResultPhaseSchema
+>
+export type HandHistoryResponse = z.infer<typeof HandHistoryResponseSchema>
 export type PublicHandSnapshot = z.infer<typeof PublicHandSnapshotSchema>
 export type PublicSessionSnapshot = z.infer<typeof PublicSessionSnapshotSchema>
 export type SseEvent = z.infer<typeof SseEventSchema>

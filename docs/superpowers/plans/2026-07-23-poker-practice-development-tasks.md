@@ -1082,6 +1082,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M5.2 实现历史可见性投影
 
+实施状态：已按[完成手历史可见性与详情接口设计稿](../specs/2026-09-04-m5-2-completed-hand-history-visibility-design.md)实现 `public | auditReveal` 投影、共享协议、`GET /api/hands/:handId`、生产装配与 `m52` PostgreSQL E2E；本轮 `postgres:e2e:milestone -- --milestone=m52` 已通过。
+
 产出：
 
 - `public` 默认显示用户底牌和摊牌未弃牌玩家底牌。

@@ -26,7 +26,9 @@ import { productionSessionMutationRepository } from './persistence/session-mutat
 import { productionSessionRecoveryRepository } from './persistence/session-recovery-repository.js'
 import { insertInProgressHandAudit } from './persistence/hand-audit-repository.js'
 import { createPublicProjectionFactsRepository } from './persistence/public-projection-repository.js'
+import { createCompletedHandHistoryFactsRepository } from './persistence/completed-hand-history-repository.js'
 import { SECURE_RANDOM_SOURCE } from './poker/random-source.js'
+import type { RandomSource } from './poker/random-source.js'
 import { createSessionCreationIdentityGraph } from './sessions/session-creation/session-creation-consistency.js'
 import { createSessionCreationService } from './sessions/session-creation/session-creation-service.js'
 import { createSessionCommandHandlerMap } from './sessions/command-execution/command-handler-map.js'
@@ -43,6 +45,8 @@ import { createPublicSessionBindings } from './sessions/public-projection/public
 import { createPublicSessionQueryService } from './sessions/public-projection/public-session-query-service.js'
 import { createPublicEventReplayRepository } from './persistence/public-event-replay-repository.js'
 import { createSessionEventStreamService } from './sessions/public-projection/session-event-stream-service.js'
+import { createAuthoritativeCompletedHandHistoryReader } from './sessions/hand-history/completed-hand-history-service.js'
+import { createCompletedHandHistoryQueryService } from './sessions/hand-history/completed-hand-history-query-service.js'
 import { createAgentRunCoordinator } from './agents/foundation/agent-run-coordinator.js'
 import {
   createAgentWorker,
@@ -116,6 +120,7 @@ export type ApiRuntimeWithPlayerRuntime = ApiRuntime & {
 export interface ApiRuntimeCompositionDependencies {
   readonly playerModelAdapter?: ModelProviderAdapter
   readonly lifecycleDiagnostic?: ServiceLifecycleDiagnosticPort
+  readonly randomSource?: RandomSource
 }
 
 export async function createApiRuntime(
@@ -126,6 +131,7 @@ export async function createApiRuntime(
 ): Promise<ApiRuntimeWithPlayerRuntime> {
   const lifecycleDiagnostic =
     dependencies.lifecycleDiagnostic ?? consoleServiceLifecycleDiagnostic
+  const randomSource = dependencies.randomSource ?? SECURE_RANDOM_SOURCE
   let owner: Awaited<ReturnType<typeof resolveOwnerScope>>
   try {
     owner = await resolveOwnerScope(database.sql, { ownerId: 'local-user' })
@@ -161,7 +167,7 @@ export async function createApiRuntime(
     readProviderPolicy: () => getProviderCreationPolicy(config),
     createIdentityGraph: (seatNumbers) =>
       createSessionCreationIdentityGraph(seatNumbers),
-    randomSource: SECURE_RANDOM_SOURCE,
+    randomSource,
     now: () => new Date().toISOString(),
     creationRepository,
     mutationRepository,
@@ -182,7 +188,7 @@ export async function createApiRuntime(
       createStartNextHandHandlerBinding({
         owner,
         nextHandId: randomUUID,
-        randomSource: SECURE_RANDOM_SOURCE,
+        randomSource,
       }),
       createEndSessionHandlerBinding({ owner }),
     ],
@@ -330,6 +336,14 @@ export async function createApiRuntime(
   const query = createPublicSessionQueryService(
     createPublicProjectionFactsRepository({ sql: database.sql, owner }),
   )
+  const handHistory = createCompletedHandHistoryQueryService({
+    reader: createAuthoritativeCompletedHandHistoryReader({
+      factsReader: createCompletedHandHistoryFactsRepository({
+        sql: database.sql,
+        owner,
+      }),
+    }),
+  })
   const sessionEvents = createSessionEventStreamService({
     repository: createPublicEventReplayRepository({ sql: database.sql, owner }),
     hub: committedSessionEvents,
@@ -351,6 +365,7 @@ export async function createApiRuntime(
     deletion: createSessionDataDeletionService({ sql: database.sql, owner }),
     sessionHttp: { creation, query, commands },
     sessionEvents,
+    handHistory,
     ...(playerRuntime === undefined ? {} : { playerRuntime }),
   })
 }

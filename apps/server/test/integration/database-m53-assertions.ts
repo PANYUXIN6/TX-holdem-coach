@@ -73,6 +73,54 @@ function withUserResultField(
   return copied
 }
 
+function withSeatPlayerId(
+  payload: JsonValue,
+  seatPaths: readonly (readonly string[])[],
+  seatNumber: number,
+  playerId: string,
+): JsonValue {
+  const copied = structuredClone(payload)
+  for (const seatPath of seatPaths) {
+    let nested: unknown = copied
+    for (const key of seatPath) {
+      nested = requireRecord(
+        nested,
+        `M5.3 fixture 的 ${seatPath.join('.')} 无效。`,
+      )[key]
+    }
+    if (!Array.isArray(nested)) {
+      throw new Error(`M5.3 fixture 的 ${seatPath.join('.')} 不是数组。`)
+    }
+    const seat = nested
+      .map((entry) =>
+        requireRecord(entry, `M5.3 fixture 的 ${seatPath.join('.')} 项无效。`),
+      )
+      .find((entry) => entry.seatNumber === seatNumber)
+    if (seat === undefined) {
+      throw new Error(
+        `M5.3 fixture 的 ${seatPath.join('.')} 缺少座位 ${seatNumber}。`,
+      )
+    }
+    seat.playerId = playerId
+  }
+  return copied
+}
+
+async function readCheckpointPayload(
+  sql: Sql,
+  handId: string,
+): Promise<JsonValue> {
+  const rows = await sql<{ readonly payload: JsonValue }[]>`
+    SELECT hand_start_checkpoint_payload AS payload
+    FROM app_private.hands
+    WHERE id = ${handId}::uuid
+  `
+  const payload = rows[0]?.payload
+  if (payload === undefined)
+    throw new Error('M5.3 fixture 缺少 checkpoint 载荷。')
+  return payload
+}
+
 async function readCompletedResultPayload(
   sql: Sql,
   handId: string,
@@ -95,6 +143,18 @@ async function writeCompletedResultPayload(
   await sql`
     UPDATE app_private.hands
     SET completed_result_payload = ${sql.json(payload)}
+    WHERE id = ${handId}::uuid
+  `
+}
+
+async function writeCheckpointPayload(
+  sql: Sql,
+  handId: string,
+  payload: JsonValue,
+): Promise<void> {
+  await sql`
+    UPDATE app_private.hands
+    SET hand_start_checkpoint_payload = ${sql.json(payload)}
     WHERE id = ${handId}::uuid
   `
 }
@@ -173,6 +233,8 @@ export async function assertM53CompletedHandHistoryList(
     ) {
       throw new Error('M5.3 fixture 缺少用户或历史人物事实。')
     }
+    expect(first).not.toHaveProperty('checkpoint')
+    expect(persona).not.toHaveProperty('playerId')
     const result =
       userSeat.netChange > 0
         ? 'profit'
@@ -208,6 +270,64 @@ export async function assertM53CompletedHandHistoryList(
         'AKs' ~ '^([2-9TJQKA])\\1$' AS aks
     `
     expect(pairPattern).toEqual([{ aa: true, kk: true, aks: false }])
+
+    const aiSeat = first.result.seats.find((seat) => !seat.isUser)
+    if (aiSeat === undefined) {
+      throw new Error('M5.3 fixture 缺少 AI 座位。')
+    }
+    const firstCheckpointPayload = await readCheckpointPayload(
+      sql,
+      first.handId,
+    )
+    const firstResultPayload = await readCompletedResultPayload(
+      sql,
+      first.handId,
+    )
+    const mismatchedCheckpoint = withSeatPlayerId(
+      firstCheckpointPayload,
+      [['checkpoint', 'stateBeforeStartCommand', 'poker', 'seats']],
+      aiSeat.seatNumber,
+      randomUUID(),
+    )
+    await writeCheckpointPayload(sql, first.handId, mismatchedCheckpoint)
+    await expect(
+      reader.listCompletedHandHistoryFacts(
+        baseQuery({ sessionId: first.sessionId }),
+      ),
+    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
+    await writeCheckpointPayload(sql, first.handId, firstCheckpointPayload)
+
+    const mismatchedRosterPlayerId = randomUUID()
+    await writeCheckpointPayload(
+      sql,
+      first.handId,
+      withSeatPlayerId(
+        firstCheckpointPayload,
+        [['checkpoint', 'stateBeforeStartCommand', 'poker', 'seats']],
+        aiSeat.seatNumber,
+        mismatchedRosterPlayerId,
+      ),
+    )
+    await writeCompletedResultPayload(
+      sql,
+      first.handId,
+      withSeatPlayerId(
+        firstResultPayload,
+        [
+          ['result', 'seats'],
+          ['result', 'summary', 'seats'],
+        ],
+        aiSeat.seatNumber,
+        mismatchedRosterPlayerId,
+      ),
+    )
+    await expect(
+      reader.listCompletedHandHistoryFacts(
+        baseQuery({ sessionId: first.sessionId }),
+      ),
+    ).rejects.toBeInstanceOf(PersistenceDataCorruptionError)
+    await writeCheckpointPayload(sql, first.handId, firstCheckpointPayload)
+    await writeCompletedResultPayload(sql, first.handId, firstResultPayload)
 
     const protectedHandId = hands[0]
     const protectedSessionId = sessions[0]

@@ -1,8 +1,12 @@
 import { describe, expect, test, vi } from 'vitest'
+import type { CompletedHandHistoryListFact } from '../../src/sessions/hand-history/completed-hand-history-list.js'
 import { createCompletedHandHistoryListQueryService } from '../../src/sessions/hand-history/completed-hand-history-list-query-service.js'
 import { createDirectWinCompletedHandHistoryFacts } from '../fixtures/completed-hand-history-fixture.js'
 
-function createListFact(handId: string, startedAt: string) {
+function createListFact(
+  handId: string,
+  startedAt: string,
+): CompletedHandHistoryListFact {
   const facts = createDirectWinCompletedHandHistoryFacts()
   return {
     sessionId: facts.sessionId,
@@ -10,16 +14,11 @@ function createListFact(handId: string, startedAt: string) {
     handNumber: facts.handNumber,
     startedAt,
     completedAt: '2026-09-03T12:01:00.000000Z',
-    checkpoint: {
-      ...facts.checkpoint,
-      startedHand: { ...facts.checkpoint.startedHand, handId },
-    },
     result: { ...facts.result, handId },
     aiParticipants: facts.roster
       .filter((participant) => !participant.isUser)
       .map((participant, index) => ({
         seatNumber: participant.seatNumber,
-        playerId: participant.playerId,
         personaId: `retired-persona-${index + 1}`,
         personaVersion: 2,
         displayName: participant.displayName,

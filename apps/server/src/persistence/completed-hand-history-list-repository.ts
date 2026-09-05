@@ -143,13 +143,12 @@ function mapRoster(
     return [
       {
         seatNumber: entry.seatNumber,
-        playerId: entry.playerId,
         personaId: entry.personaId,
         personaVersion: entry.personaVersion,
         displayName: entry.displayName,
         avatarColor: entry.avatarColor,
         configSnapshotKey: entry.configSnapshotKey,
-      },
+      } satisfies HistoricalPersonaSnapshot,
     ]
   })
   if (
@@ -198,10 +197,9 @@ function mapFact(rawRow: unknown): CompletedHandHistoryListFact {
     handNumber: row.handNumber,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
-    checkpoint: checkpointRead.value,
     result: resultRead.value,
     aiParticipants: mapRoster(row.roster, resultRead.value),
-  })
+  } satisfies CompletedHandHistoryListFact)
 }
 
 async function readRows(

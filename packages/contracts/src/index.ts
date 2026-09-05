@@ -803,6 +803,162 @@ export const HandHistoryQuerySchema = z.strictObject({
   view: HandHistoryViewSchema.default('public'),
 })
 
+export const HandHistoryListSortSchema = z.enum(['newest', 'oldest'])
+export const HandHistoryListResultSchema = z.enum(['profit', 'loss', 'even'])
+
+function isStartingHandCategory(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const match = /^([2-9TJQKA])([2-9TJQKA])([so])?$/.exec(value)
+  if (match === null) return false
+  const firstRank = match[1]
+  const secondRank = match[2]
+  const suffix = match[3]
+  if (firstRank === undefined || secondRank === undefined) return false
+  const firstStrength = CARD_RANKS.indexOf(firstRank as CardRank)
+  const secondStrength = CARD_RANKS.indexOf(secondRank as CardRank)
+  return firstRank === secondRank
+    ? suffix === undefined
+    : suffix !== undefined && firstStrength > secondStrength
+}
+
+/** 标准 169 种起手牌类别，不接受具体花色牌或反序表示。 */
+export const StartingHandCategorySchema = z.custom<string>(
+  isStartingHandCategory,
+)
+
+function isCanonicalHistoricalTimestamp(value: unknown): value is string {
+  if (
+    typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value)
+  ) {
+    return false
+  }
+  const date = new Date(`${value.slice(0, 19)}.${value.slice(20, 23)}Z`)
+  return (
+    !Number.isNaN(date.valueOf()) &&
+    date.toISOString().slice(0, 19) === value.slice(0, 19)
+  )
+}
+
+const CanonicalHistoricalTimestampSchema = z.custom<string>(
+  isCanonicalHistoricalTimestamp,
+)
+const HistoricalPersonaIdSchema = z.string().min(1)
+const HistoricalPersonaQueryIdSchema = HistoricalPersonaIdSchema.max(128)
+const HistoricalPersonaVersionSchema = z
+  .number()
+  .int()
+  .positive()
+  .max(2_147_483_647)
+const HistoricalConfigSnapshotKeySchema = z.string().regex(/^[a-f0-9]{64}$/)
+
+export const HandHistoryListQuerySchema = z
+  .strictObject({
+    from: CanonicalHistoricalTimestampSchema.nullable(),
+    to: CanonicalHistoricalTimestampSchema.nullable(),
+    sessionId: SessionIdSchema.nullable(),
+    position: PublicLogicalPositionSchema.nullable(),
+    result: HandHistoryListResultSchema.nullable(),
+    startingHand: StartingHandCategorySchema.nullable(),
+    personaId: HistoricalPersonaQueryIdSchema.nullable(),
+    personaVersion: HistoricalPersonaVersionSchema.nullable(),
+    personaName: z.string().min(1).max(256).nullable(),
+    configSnapshotKey: HistoricalConfigSnapshotKeySchema.nullable(),
+    sort: HandHistoryListSortSchema,
+    limit: z.number().int().min(1).max(100),
+  })
+  .superRefine((query, context) => {
+    if (query.from !== null && query.to !== null && query.from >= query.to) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['to'],
+        message: '结束时间必须晚于开始时间。',
+      })
+    }
+    if (query.personaVersion !== null && query.personaId === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['personaVersion'],
+        message: '人物版本必须与人物 ID 一同提供。',
+      })
+    }
+  })
+
+export const HistoricalPersonaSnapshotSummarySchema = z.strictObject({
+  seatNumber: AiSeatNumberSchema,
+  personaId: HistoricalPersonaIdSchema,
+  personaVersion: HistoricalPersonaVersionSchema,
+  displayName: z.string().min(1),
+  avatarColor: z.string().min(1),
+  configSnapshotKey: HistoricalConfigSnapshotKeySchema,
+})
+
+export const HandHistoryListItemSchema = z
+  .strictObject({
+    handId: HandIdSchema,
+    sessionId: SessionIdSchema,
+    handNumber: z.number().int().positive(),
+    startedAt: CanonicalHistoricalTimestampSchema,
+    completedAt: CanonicalHistoricalTimestampSchema,
+    user: z.strictObject({
+      position: PublicLogicalPositionSchema,
+      holeCards: z.tuple([CardSchema, CardSchema]),
+      startingHandCategory: StartingHandCategorySchema,
+      netChange: z.number().int(),
+    }),
+    board: z.array(CardSchema).max(5),
+    result: z.strictObject({
+      terminationReason: z.enum(['complete', 'showdown']),
+      winnerSeatNumbers: z.array(SeatNumberSchema).min(1),
+      userAwardAmount: ChipAmountSchema,
+    }),
+    aiParticipants: z
+      .array(HistoricalPersonaSnapshotSummarySchema)
+      .min(5)
+      .max(8),
+  })
+  .superRefine((item, context) => {
+    const cardKeys = [...item.user.holeCards, ...item.board].map(
+      (card) => `${card.rank}:${card.suit}`,
+    )
+    if (new Set(cardKeys).size !== cardKeys.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['board'],
+        message: '用户底牌与公共牌不得重复。',
+      })
+    }
+    const aiSeats = item.aiParticipants.map(({ seatNumber }) => seatNumber)
+    if (
+      aiSeats.some((seatNumber, index) =>
+        index === 0 ? false : seatNumber <= aiSeats[index - 1]!,
+      )
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['aiParticipants'],
+        message: '历史 AI 必须按座位号严格升序。',
+      })
+    }
+    const winners = item.result.winnerSeatNumbers
+    if (
+      winners.some((seatNumber, index) =>
+        index === 0 ? false : seatNumber <= winners[index - 1]!,
+      )
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['result', 'winnerSeatNumbers'],
+        message: '获奖座位必须唯一且升序。',
+      })
+    }
+  })
+
+export const HandHistoryListResponseSchema = z.strictObject({
+  items: z.array(HandHistoryListItemSchema),
+  nextCursor: z.string().min(1).nullable(),
+})
+
 export const HandHistoryParticipantSchema = z.strictObject({
   seatNumber: SeatNumberSchema,
   playerId: PlayerIdSchema,
@@ -1433,6 +1589,16 @@ export type PublicSettledPot = z.infer<typeof PublicSettledPotSchema>
 export type HandHistoryView = z.infer<typeof HandHistoryViewSchema>
 export type HandHistoryPathParams = z.infer<typeof HandHistoryPathParamsSchema>
 export type HandHistoryQuery = z.infer<typeof HandHistoryQuerySchema>
+export type HandHistoryListSort = z.infer<typeof HandHistoryListSortSchema>
+export type HandHistoryListResult = z.infer<typeof HandHistoryListResultSchema>
+export type HandHistoryListQuery = z.infer<typeof HandHistoryListQuerySchema>
+export type HistoricalPersonaSnapshotSummary = z.infer<
+  typeof HistoricalPersonaSnapshotSummarySchema
+>
+export type HandHistoryListItem = z.infer<typeof HandHistoryListItemSchema>
+export type HandHistoryListResponse = z.infer<
+  typeof HandHistoryListResponseSchema
+>
 export type HandHistoryParticipant = z.infer<
   typeof HandHistoryParticipantSchema
 >

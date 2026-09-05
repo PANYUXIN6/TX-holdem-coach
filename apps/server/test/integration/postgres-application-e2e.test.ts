@@ -14,6 +14,7 @@ import { assertM48PlayerCoordinationApplicationFlow } from './postgres-e2e-m48-a
 import { assertM49PlayerAuditReplayApplicationFlow } from './postgres-e2e-m49-assertions.js'
 import { assertM410PlayerSessionIntegrationApplicationFlow } from './postgres-e2e-m410-assertions.js'
 import { assertM52CompletedHandHistoryApplicationFlow } from './postgres-e2e-m52-assertions.js'
+import { assertM53CompletedHandHistoryListApplicationFlow } from './postgres-e2e-m53-assertions.js'
 import { assertM31SessionCommandExecutor } from './postgres-e2e-m31-assertions.js'
 import {
   registerDatabaseMilestoneTest,
@@ -124,5 +125,12 @@ registerDatabaseMilestoneTest(
   'M5.2 completed hand history application flow',
   (sql, runtimeUrl) =>
     assertM52CompletedHandHistoryApplicationFlow(sql, runtimeUrl),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm53',
+  'M5.3 completed hand history list application flow',
+  (sql, runtimeUrl) =>
+    assertM53CompletedHandHistoryListApplicationFlow(sql, runtimeUrl),
   300_000,
 )

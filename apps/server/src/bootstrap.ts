@@ -27,6 +27,7 @@ import { productionSessionRecoveryRepository } from './persistence/session-recov
 import { insertInProgressHandAudit } from './persistence/hand-audit-repository.js'
 import { createPublicProjectionFactsRepository } from './persistence/public-projection-repository.js'
 import { createCompletedHandHistoryFactsRepository } from './persistence/completed-hand-history-repository.js'
+import { createCompletedHandHistoryListFactsRepository } from './persistence/completed-hand-history-list-repository.js'
 import { SECURE_RANDOM_SOURCE } from './poker/random-source.js'
 import type { RandomSource } from './poker/random-source.js'
 import { createSessionCreationIdentityGraph } from './sessions/session-creation/session-creation-consistency.js'
@@ -47,6 +48,7 @@ import { createPublicEventReplayRepository } from './persistence/public-event-re
 import { createSessionEventStreamService } from './sessions/public-projection/session-event-stream-service.js'
 import { createAuthoritativeCompletedHandHistoryReader } from './sessions/hand-history/completed-hand-history-service.js'
 import { createCompletedHandHistoryQueryService } from './sessions/hand-history/completed-hand-history-query-service.js'
+import { createCompletedHandHistoryListQueryService } from './sessions/hand-history/completed-hand-history-list-query-service.js'
 import { createAgentRunCoordinator } from './agents/foundation/agent-run-coordinator.js'
 import {
   createAgentWorker,
@@ -344,6 +346,12 @@ export async function createApiRuntime(
       }),
     }),
   })
+  const handHistoryList = createCompletedHandHistoryListQueryService({
+    reader: createCompletedHandHistoryListFactsRepository({
+      sql: database.sql,
+      owner,
+    }),
+  })
   const sessionEvents = createSessionEventStreamService({
     repository: createPublicEventReplayRepository({ sql: database.sql, owner }),
     hub: committedSessionEvents,
@@ -366,6 +374,7 @@ export async function createApiRuntime(
     sessionHttp: { creation, query, commands },
     sessionEvents,
     handHistory,
+    handHistoryList,
     ...(playerRuntime === undefined ? {} : { playerRuntime }),
   })
 }

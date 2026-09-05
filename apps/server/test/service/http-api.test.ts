@@ -82,6 +82,7 @@ function runtime() {
       sessionHttp: unavailableSessionHttp,
       sessionEvents: unavailableSessionEvents,
       handHistory: { read: async () => null },
+      handHistoryList: { list: async () => ({ items: [], nextCursor: null }) },
     } satisfies ApiRuntime,
     update,
     deleteEndedSession,

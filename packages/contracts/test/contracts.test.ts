@@ -16,6 +16,8 @@ import {
   CreateSessionPersonaSelectionSchema,
   ErrorResponseSchema,
   HealthResponseSchema,
+  HandHistoryListItemSchema,
+  HandHistoryListQuerySchema,
   LegalActionSchema,
   LegalActionsSchema,
   PokerActionSchema,
@@ -163,6 +165,80 @@ const publicCompletedHandSummary = {
 }
 
 describe('共享外部协议', () => {
+  it('为完成手列表冻结严格筛选和白名单卡片协议', () => {
+    const query = {
+      from: '2026-09-03T00:00:00.000000Z',
+      to: '2026-09-04T00:00:00.000000Z',
+      sessionId: ids.session,
+      position: 'UTG+1',
+      result: 'even',
+      startingHand: 'AKs',
+      personaId: 'retired-persona',
+      personaVersion: 2,
+      personaName: '历史人物',
+      configSnapshotKey: 'a'.repeat(64),
+      sort: 'newest',
+      limit: 20,
+    }
+    expect(HandHistoryListQuerySchema.safeParse(query).success).toBe(true)
+    expect(
+      HandHistoryListQuerySchema.safeParse({
+        ...query,
+        startingHand: 'KAo',
+      }).success,
+    ).toBe(false)
+    expect(
+      HandHistoryListQuerySchema.safeParse({
+        ...query,
+        personaId: null,
+      }).success,
+    ).toBe(false)
+    expect(
+      HandHistoryListQuerySchema.safeParse({
+        ...query,
+        personaVersion: 2_147_483_648,
+      }).success,
+    ).toBe(false)
+    expect(
+      HandHistoryListQuerySchema.safeParse({
+        ...query,
+        from: '2026-02-29T00:00:00.000000Z',
+      }).success,
+    ).toBe(false)
+    expect(
+      HandHistoryListItemSchema.safeParse({
+        handId: ids.hand,
+        sessionId: ids.session,
+        handNumber: 1,
+        startedAt: '2026-09-03T00:00:00.000000Z',
+        completedAt: '2026-09-03T00:01:00.000000Z',
+        user: {
+          position: 'BTN',
+          holeCards: [
+            { rank: 'A', suit: 'spades' },
+            { rank: 'K', suit: 'hearts' },
+          ],
+          startingHandCategory: 'AKo',
+          netChange: 0,
+        },
+        board: [],
+        result: {
+          terminationReason: 'complete',
+          winnerSeatNumbers: [1],
+          userAwardAmount: 0,
+        },
+        aiParticipants: Array.from({ length: 5 }, (_, index) => ({
+          seatNumber: index + 1,
+          personaId: `historical-${index + 1}`,
+          personaVersion: 2,
+          displayName: `历史人物 ${index + 1}`,
+          avatarColor: '#000000',
+          configSnapshotKey: `${index + 1}`.repeat(64),
+        })),
+      }).success,
+    ).toBe(true)
+  })
+
   it('为完成手详情定义严格的视图与请求输入协议', async () => {
     type SafeParseSchema = {
       safeParse(value: unknown): { readonly success: boolean }

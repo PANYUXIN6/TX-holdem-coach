@@ -1100,6 +1100,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M5.3 实现历史筛选、排序和分页
 
+实施状态：已完成（2026-09-05）。已按[完成手历史筛选、排序和分页设计稿](../specs/2026-09-04-m5-3-completed-hand-history-filter-sort-pagination-design.md)实现 Contracts、Owner-scoped completed 列表 Repository、集合路由和生产装配；`pnpm run verify`、`m53` database milestone 与 PostgreSQL E2E milestone 均已通过。两套 full 均不作为本任务通过证据：`db:test:full` 的历史执行没有可确认终态，`postgres:e2e:full` 曾停在无关的 M4.10 时间精度断言。
+
 产出：
 
 - 支持日期、场次、用户逻辑位置、单手盈亏、起手牌类别和 AI 人物配置快照筛选。

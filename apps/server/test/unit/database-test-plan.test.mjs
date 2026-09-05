@@ -68,6 +68,14 @@ describe('database test plan', () => {
     ).toThrow('数据库测试启动参数无效。')
   })
 
+  test('allows M5.3 in both persistence and PostgreSQL E2E suites', () => {
+    for (const suite of ['database', 'e2e']) {
+      expect(
+        parseDatabaseTestArguments([`--suite=${suite}`, '--milestone=m53']),
+      ).toEqual({ kind: 'milestone', milestone: 'm53', suite })
+    }
+  })
+
   test.each(['database', 'e2e'])(
     'allows the M4.5 milestone in the %s suite',
     (suite) => {

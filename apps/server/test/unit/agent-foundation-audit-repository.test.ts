@@ -91,17 +91,6 @@ function createAgentFoundationAuditRepository() {
           ...input,
         },
       ),
-    appendCapabilityInvocationAudit: (
-      transaction: TransactionSql,
-      owner: Parameters<typeof repository.appendCapabilityInvocationAudit>[1],
-      input: Parameters<typeof repository.appendCapabilityInvocationAudit>[3],
-    ) =>
-      repository.appendCapabilityInvocationAudit(
-        transaction,
-        owner,
-        testAuthority(input.agentRunId),
-        input,
-      ),
   }
 }
 
@@ -689,10 +678,25 @@ describe('agent foundation audit repository', () => {
     ])
   })
 
-  test('appends one complete capability invocation on its independent sequence', async () => {
-    const repository = createAgentFoundationAuditRepository()
+  test('reserves one capability invocation on its independent sequence', async () => {
+    const repository = createRawAgentFoundationAuditRepository()
     const transaction = createTransactionMock([
-      [{ agentRunId, sessionId }],
+      [
+        {
+          agentRunId,
+          sessionId,
+          runtime: 'player',
+          fencingToken: 1,
+          deadlineExpired: false,
+        },
+      ],
+      [
+        {
+          budgetPayloadVersion: storedPlayerBudget.payloadVersion,
+          budgetPayload: storedPlayerBudget.payload,
+        },
+      ],
+      [{ totalBudgetCost: 0, capabilityBudgetCost: 0 }],
       [{ maxNumber: null }],
       (values: readonly unknown[]) => [
         {
@@ -702,137 +706,143 @@ describe('agent foundation audit repository', () => {
       ],
     ])
 
-    const result = await repository.appendCapabilityInvocationAudit(
+    const result = await repository.reserveCapabilityInvocationAudit(
       transaction,
       await resolvedOwner(),
+      testAuthority(),
       {
         sessionId,
         agentRunId,
-        capabilityName: 'equity.calculate',
-        capabilityVersion: 2,
-        authorized: true,
-        inputSchemaVersion: 3,
+        capabilityName: 'player.compute-decision-metrics',
+        capabilityVersion: 1,
+        inputSchemaVersion: 1,
         inputHash: 'c'.repeat(64),
-        outputSchemaVersion: 4,
-        outputHash: 'd'.repeat(64),
-        budgetCost: 1,
-        durationMs: 125,
-        errorCode: null,
+        grantMaximum: 1,
         startedAt: '2026-08-04T12:00:01.000Z',
-        completedAt: '2026-08-04T12:00:01.125Z',
       },
     )
 
+    expect(result).toMatchObject({ kind: 'reserved', invocationNumber: 0 })
+    if (result.kind !== 'reserved') throw new Error('Capability 未预留。')
     expect(result.invocationId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     )
-    expect(result.invocationNumber).toBe(0)
   })
 
   test.each([
-    [true, null, null, null],
-    [false, 'capability_not_authorized', null, null],
-    [true, 'capability_failed', null, null],
+    ['success', null, 1, 'd'.repeat(64)],
+    ['failure', 'capability_failed', null, null],
   ] as const)(
-    'accepts a complete Invocation matrix authorized=%s error=%s',
-    async (authorized, errorCode, outputSchemaVersion, outputHash) => {
-      const repository = createAgentFoundationAuditRepository()
+    'finishes a current %s capability invocation',
+    async (_name, errorCode, outputSchemaVersion, outputHash) => {
+      const repository = createRawAgentFoundationAuditRepository()
+      const invocationId = '88888888-8888-4888-8888-888888888888'
       const transaction = createTransactionMock([
-        [{ agentRunId, sessionId }],
-        [{ maxNumber: null }],
-        (values: readonly unknown[]) => [
-          { invocationId: values[0], invocationNumber: 0 },
+        [
+          {
+            agentRunId,
+            sessionId,
+            runtime: 'player',
+            fencingToken: 1,
+            deadlineExpired: false,
+          },
         ],
+        [
+          {
+            invocationId,
+            agentRunId,
+            sessionId,
+            fencingToken: 1,
+            capabilityName: 'player.compute-decision-metrics',
+            capabilityVersion: 1,
+            authorized: true,
+            inputSchemaVersion: 1,
+            inputHash: 'c'.repeat(64),
+            budgetCost: 1,
+          },
+        ],
+        [{ invocationId }],
       ])
 
       await expect(
-        repository.appendCapabilityInvocationAudit(
+        repository.finishCapabilityInvocationAudit(
           transaction,
           await resolvedOwner(),
+          testAuthority(),
           {
             sessionId,
             agentRunId,
-            capabilityName: 'equity.calculate',
-            capabilityVersion: 2,
-            authorized,
-            inputSchemaVersion: 3,
+            invocationId,
+            capabilityName: 'player.compute-decision-metrics',
+            capabilityVersion: 1,
+            authorized: true,
+            inputSchemaVersion: 1,
             inputHash: 'c'.repeat(64),
             outputSchemaVersion,
             outputHash,
             budgetCost: 1,
-            durationMs: 125,
+            durationMs: 10,
             errorCode,
-            startedAt: '2026-08-04T12:00:01.000Z',
-            completedAt: '2026-08-04T12:00:01.125Z',
+            completedAt: '2026-08-04T12:00:02.000Z',
           },
         ),
-      ).resolves.toMatchObject({ invocationNumber: 0 })
+      ).resolves.toBe('recorded')
     },
   )
 
   test.each([
-    [false, null, null, null],
-    [false, 'capability_not_authorized', 4, 'd'.repeat(64)],
-    [true, null, 4, null],
+    [null, 'd'.repeat(64), null],
+    [1, 'd'.repeat(64), 'capability_failed'],
   ] as const)(
-    'rejects an invalid Invocation matrix authorized=%s error=%s before SQL',
-    async (authorized, errorCode, outputSchemaVersion, outputHash) => {
-      const repository = createAgentFoundationAuditRepository()
+    'rejects an invalid current Invocation matrix before SQL',
+    async (outputSchemaVersion, outputHash, errorCode) => {
+      const repository = createRawAgentFoundationAuditRepository()
 
       await expect(
-        repository.appendCapabilityInvocationAudit(
+        repository.finishCapabilityInvocationAudit(
           createTransactionMock([]),
           await resolvedOwner(),
+          testAuthority(),
           {
             sessionId,
             agentRunId,
-            capabilityName: 'equity.calculate',
-            capabilityVersion: 2,
-            authorized,
-            inputSchemaVersion: 3,
+            invocationId: '88888888-8888-4888-8888-888888888888',
+            capabilityName: 'player.compute-decision-metrics',
+            capabilityVersion: 1,
+            authorized: true,
+            inputSchemaVersion: 1,
             inputHash: 'c'.repeat(64),
             outputSchemaVersion,
             outputHash,
             budgetCost: 1,
-            durationMs: 125,
+            durationMs: 10,
             errorCode,
-            startedAt: '2026-08-04T12:00:01.000Z',
-            completedAt: '2026-08-04T12:00:01.125Z',
+            completedAt: '2026-08-04T12:00:02.000Z',
           },
         ),
       ).rejects.toMatchObject({ name: 'RepositoryInputValidationError' })
     },
   )
 
-  test.each([
-    'capabilityVersion',
-    'inputSchemaVersion',
-    'outputSchemaVersion',
-  ] as const)(
-    'rejects Invocation %s beyond the PostgreSQL integer boundary before SQL',
+  test.each(['capabilityVersion', 'inputSchemaVersion'] as const)(
+    'rejects capability reservation %s beyond the PostgreSQL integer boundary before SQL',
     async (field) => {
-      const repository = createAgentFoundationAuditRepository()
-      const transaction = createTransactionMock([])
+      const repository = createRawAgentFoundationAuditRepository()
 
       await expect(
-        repository.appendCapabilityInvocationAudit(
-          transaction,
+        repository.reserveCapabilityInvocationAudit(
+          createTransactionMock([]),
           await resolvedOwner(),
+          testAuthority(),
           {
             sessionId,
             agentRunId,
-            capabilityName: 'equity.calculate',
-            capabilityVersion: 2,
-            authorized: true,
-            inputSchemaVersion: 3,
+            capabilityName: 'player.compute-decision-metrics',
+            capabilityVersion: 1,
+            inputSchemaVersion: 1,
             inputHash: 'c'.repeat(64),
-            outputSchemaVersion: 4,
-            outputHash: 'd'.repeat(64),
-            budgetCost: 1,
-            durationMs: 125,
-            errorCode: null,
+            grantMaximum: 1,
             startedAt: '2026-08-04T12:00:01.000Z',
-            completedAt: '2026-08-04T12:00:01.125Z',
             [field]: 2_147_483_648,
           },
         ),
@@ -840,32 +850,70 @@ describe('agent foundation audit repository', () => {
     },
   )
 
+  test('rejects capability outputSchemaVersion beyond the PostgreSQL integer boundary before SQL', async () => {
+    const repository = createRawAgentFoundationAuditRepository()
+
+    await expect(
+      repository.finishCapabilityInvocationAudit(
+        createTransactionMock([]),
+        await resolvedOwner(),
+        testAuthority(),
+        {
+          sessionId,
+          agentRunId,
+          invocationId: '88888888-8888-4888-8888-888888888888',
+          capabilityName: 'player.compute-decision-metrics',
+          capabilityVersion: 1,
+          authorized: true,
+          inputSchemaVersion: 1,
+          inputHash: 'c'.repeat(64),
+          outputSchemaVersion: 2_147_483_648,
+          outputHash: 'd'.repeat(64),
+          budgetCost: 1,
+          durationMs: 10,
+          errorCode: null,
+          completedAt: '2026-08-04T12:00:02.000Z',
+        },
+      ),
+    ).rejects.toMatchObject({ name: 'RepositoryInputValidationError' })
+  })
+
   test('rejects Invocation numbering beyond the PostgreSQL integer boundary without misclassifying it as Attempt transition', async () => {
-    const repository = createAgentFoundationAuditRepository()
+    const repository = createRawAgentFoundationAuditRepository()
     const transaction = createTransactionMock([
-      [{ agentRunId, sessionId }],
+      [
+        {
+          agentRunId,
+          sessionId,
+          runtime: 'player',
+          fencingToken: 1,
+          deadlineExpired: false,
+        },
+      ],
+      [
+        {
+          budgetPayloadVersion: storedPlayerBudget.payloadVersion,
+          budgetPayload: storedPlayerBudget.payload,
+        },
+      ],
+      [{ totalBudgetCost: 0, capabilityBudgetCost: 0 }],
       [{ maxNumber: 2_147_483_647 }],
     ])
 
     await expect(
-      repository.appendCapabilityInvocationAudit(
+      repository.reserveCapabilityInvocationAudit(
         transaction,
         await resolvedOwner(),
+        testAuthority(),
         {
           sessionId,
           agentRunId,
-          capabilityName: 'equity.calculate',
-          capabilityVersion: 2,
-          authorized: true,
-          inputSchemaVersion: 3,
+          capabilityName: 'player.compute-decision-metrics',
+          capabilityVersion: 1,
+          inputSchemaVersion: 1,
           inputHash: 'c'.repeat(64),
-          outputSchemaVersion: null,
-          outputHash: null,
-          budgetCost: 1,
-          durationMs: 125,
-          errorCode: null,
+          grantMaximum: 1,
           startedAt: '2026-08-04T12:00:01.000Z',
-          completedAt: '2026-08-04T12:00:01.125Z',
         },
       ),
     ).rejects.toMatchObject({ name: 'RepositoryInputValidationError' })

@@ -75,8 +75,6 @@ export class PlayerDecisionValidationError extends Error {
   }
 }
 
-const validatedDecisions = new WeakSet<object>()
-
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
     for (const nestedValue of Object.values(value)) deepFreeze(nestedValue)
@@ -264,14 +262,5 @@ export function validatePlayerDecisionV1(
     acceptedAttemptId: input.result.acceptedAttemptId,
     commandId: input.persisted.decisionRecordId.toLowerCase(),
   }) as PlayerValidatedDecisionV1
-  validatedDecisions.add(validated)
   return validated
-}
-
-export function isPlayerValidatedDecisionV1(
-  value: unknown,
-): value is PlayerValidatedDecisionV1 {
-  return (
-    typeof value === 'object' && value !== null && validatedDecisions.has(value)
-  )
 }

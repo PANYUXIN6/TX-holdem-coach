@@ -148,43 +148,6 @@ const LockedStartedAttemptRowSchema = z.strictObject({
   payloadVersion: z.unknown(),
   payload: z.unknown(),
 })
-const AppendCapabilityInvocationAuditInputSchema = z
-  .strictObject({
-    sessionId: z.uuid(),
-    agentRunId: z.uuid(),
-    capabilityName: CanonicalAuditReferenceIdSchema,
-    capabilityVersion: PositivePostgresIntegerSchema,
-    authorized: z.boolean(),
-    inputSchemaVersion: PositivePostgresIntegerSchema,
-    inputHash: z.string().regex(/^[0-9a-f]{64}$/),
-    outputSchemaVersion: PositivePostgresIntegerSchema.nullable(),
-    outputHash: z
-      .string()
-      .regex(/^[0-9a-f]{64}$/)
-      .nullable(),
-    budgetCost: NonnegativeSafeIntegerSchema,
-    durationMs: NonnegativeSafeIntegerSchema,
-    errorCode: StableAuditCodeSchema.nullable(),
-    startedAt: CanonicalUtcTimestampSchema,
-    completedAt: CanonicalUtcTimestampSchema,
-  })
-  .superRefine((input, context) => {
-    const outputPairMatches =
-      (input.outputSchemaVersion === null) === (input.outputHash === null)
-    const success = input.authorized && input.errorCode === null
-    const failed = input.errorCode !== null
-    if (
-      !outputPairMatches ||
-      (!success && !failed) ||
-      (failed &&
-        (input.outputSchemaVersion !== null || input.outputHash !== null))
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: '能力调用终态字段组合无效。',
-      })
-    }
-  })
 const InsertedInvocationRowSchema = z.strictObject({
   invocationId: z.uuid(),
   invocationNumber: z.number().int().min(0).max(2_147_483_647),
@@ -366,23 +329,6 @@ export interface FinishAgentAttemptAuditInput {
   readonly completedAt: string
 }
 
-export interface AppendCapabilityInvocationAuditInput {
-  readonly sessionId: string
-  readonly agentRunId: string
-  readonly capabilityName: string
-  readonly capabilityVersion: number
-  readonly authorized: boolean
-  readonly inputSchemaVersion: number
-  readonly inputHash: string
-  readonly outputSchemaVersion: number | null
-  readonly outputHash: string | null
-  readonly budgetCost: number
-  readonly durationMs: number
-  readonly errorCode: string | null
-  readonly startedAt: string
-  readonly completedAt: string
-}
-
 export interface ReserveCapabilityInvocationInput {
   readonly sessionId: string
   readonly agentRunId: string
@@ -500,15 +446,6 @@ export interface AgentFoundationAuditRepository {
     authority: RuntimeCommitAuthority,
     input: FinishCapabilityInvocationInput,
   ): Promise<'recorded' | 'stale'>
-  appendCapabilityInvocationAudit(
-    transaction: TransactionSql,
-    owner: ResolvedOwnerScope,
-    authority: RuntimeCommitAuthority,
-    input: AppendCapabilityInvocationAuditInput,
-  ): Promise<{
-    readonly invocationId: string
-    readonly invocationNumber: number
-  }>
 }
 
 export function createAgentFoundationAuditRepository(): AgentFoundationAuditRepository {
@@ -1494,119 +1431,6 @@ export function createAgentFoundationAuditRepository(): AgentFoundationAuditRepo
         throw new CapabilityInvocationAuditTransitionError()
       }
       return runState.deadlineExpired ? 'stale' : 'recorded'
-    },
-
-    async appendCapabilityInvocationAudit(
-      transaction: TransactionSql,
-      owner: ResolvedOwnerScope,
-      authority: RuntimeCommitAuthority,
-      input: AppendCapabilityInvocationAuditInput,
-    ): Promise<{
-      readonly invocationId: string
-      readonly invocationNumber: number
-    }> {
-      const parsed = AppendCapabilityInvocationAuditInputSchema.safeParse(input)
-      if (!isResolvedOwnerScope(owner) || !parsed.success) {
-        throw new RepositoryInputValidationError()
-      }
-
-      await lockFencedRunningAgentRun(
-        transaction,
-        owner,
-        authority,
-        parsed.data,
-      )
-
-      let maximumRows: readonly unknown[]
-      try {
-        maximumRows = await transaction`
-          SELECT max(invocation_number) AS "maxNumber"
-          FROM app_private.agent_capability_invocations
-          WHERE agent_run_id = ${parsed.data.agentRunId}::uuid
-            AND owner_id = ${owner.databaseOwnerId}::uuid
-            AND session_id = ${parsed.data.sessionId}::uuid
-        `
-      } catch {
-        throw new DatabaseOperationError()
-      }
-      const maximum = z.array(MaximumNumberRowSchema).safeParse(maximumRows)
-      if (!maximum.success || maximum.data.length !== 1) {
-        throw new PersistenceDataCorruptionError(
-          'invalidCapabilityInvocationAudit',
-        )
-      }
-      const nextNumber = BigInt(maximum.data[0]?.maxNumber ?? -1) + 1n
-      if (nextNumber > 2_147_483_647n) {
-        throw new RepositoryInputValidationError()
-      }
-      const invocationNumber = Number(nextNumber)
-      const invocationId = randomUUID()
-
-      let insertedRows: readonly unknown[]
-      try {
-        insertedRows = await transaction`
-          INSERT INTO app_private.agent_capability_invocations (
-            id,
-            agent_run_id,
-            owner_id,
-            session_id,
-            invocation_number,
-            fencing_token,
-            capability_name,
-            capability_version,
-            authorized,
-            input_schema_version,
-            input_hash,
-            output_schema_version,
-            output_hash,
-            budget_cost,
-            duration_ms,
-            error_category,
-            started_at,
-            completed_at,
-            created_at
-          ) VALUES (
-            ${invocationId}::uuid,
-            ${parsed.data.agentRunId}::uuid,
-            ${owner.databaseOwnerId}::uuid,
-            ${parsed.data.sessionId}::uuid,
-            ${invocationNumber},
-            ${authority.fencingToken}::bigint,
-            ${parsed.data.capabilityName},
-            ${parsed.data.capabilityVersion},
-            ${parsed.data.authorized},
-            ${parsed.data.inputSchemaVersion},
-            ${parsed.data.inputHash},
-            ${parsed.data.outputSchemaVersion},
-            ${parsed.data.outputHash},
-            ${parsed.data.budgetCost}::bigint,
-            ${parsed.data.durationMs}::bigint,
-            ${parsed.data.errorCode},
-            ${parsed.data.startedAt}::timestamptz,
-            ${parsed.data.completedAt}::timestamptz,
-            ${parsed.data.startedAt}::timestamptz
-          )
-          RETURNING
-            id::text AS "invocationId",
-            invocation_number AS "invocationNumber"
-        `
-      } catch {
-        throw new DatabaseOperationError()
-      }
-      const inserted = z
-        .array(InsertedInvocationRowSchema)
-        .safeParse(insertedRows)
-      if (
-        !inserted.success ||
-        inserted.data.length !== 1 ||
-        inserted.data[0]?.invocationId !== invocationId ||
-        inserted.data[0]?.invocationNumber !== invocationNumber
-      ) {
-        throw new PersistenceDataCorruptionError(
-          'invalidCapabilityInvocationAudit',
-        )
-      }
-      return Object.freeze({ invocationId, invocationNumber })
     },
   }
   return Object.freeze(repository)

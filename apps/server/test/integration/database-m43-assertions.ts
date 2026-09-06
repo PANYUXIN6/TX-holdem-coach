@@ -12,6 +12,84 @@ import { insertCommittedM27CompletedHand } from './database-repository-assertion
 
 const eventPort = { publish: async () => undefined }
 
+async function insertHistoricalCapabilityBudgetFixtures(
+  sql: Sql,
+  input: {
+    readonly ownerId: string
+    readonly sessionId: string
+    readonly runId: string
+    readonly fencingToken: number
+  },
+): Promise<void> {
+  // 旧版本可写出当前协议已禁止的行；直接冻结存量数据的聚合兼容契约。
+  const startedAt = new Date().toISOString()
+  await sql`
+    INSERT INTO app_private.agent_capability_invocations (
+      id,
+      agent_run_id,
+      owner_id,
+      session_id,
+      invocation_number,
+      fencing_token,
+      capability_name,
+      capability_version,
+      authorized,
+      input_schema_version,
+      input_hash,
+      output_schema_version,
+      output_hash,
+      budget_cost,
+      duration_ms,
+      error_category,
+      started_at,
+      completed_at,
+      created_at
+    ) VALUES
+      (
+        ${randomUUID()}::uuid,
+        ${input.runId}::uuid,
+        ${input.ownerId}::uuid,
+        ${input.sessionId}::uuid,
+        0,
+        ${input.fencingToken}::bigint,
+        'coach.compute-decision-metrics',
+        1,
+        false,
+        1,
+        ${'1'.repeat(64)},
+        NULL,
+        NULL,
+        1,
+        0,
+        'capability_not_authorized',
+        ${startedAt}::timestamptz,
+        ${startedAt}::timestamptz,
+        ${startedAt}::timestamptz
+      ),
+      (
+        ${randomUUID()}::uuid,
+        ${input.runId}::uuid,
+        ${input.ownerId}::uuid,
+        ${input.sessionId}::uuid,
+        1,
+        ${input.fencingToken}::bigint,
+        'coach.compute-decision-metrics',
+        1,
+        true,
+        1,
+        ${'2'.repeat(64)},
+        1,
+        ${'3'.repeat(64)},
+        0,
+        0,
+        NULL,
+        ${startedAt}::timestamptz,
+        ${startedAt}::timestamptz,
+        ${startedAt}::timestamptz
+      )
+  `
+}
+
 export async function assertM43ModelAttemptControl(
   sql: Sql,
   runtimeUrl: string,
@@ -71,50 +149,11 @@ export async function assertM43ModelAttemptControl(
       agentRunId: runId,
     })
     await coordinator.workerControl.renewLease(claim.authority)
-    await sql.begin(async (transaction) => {
-      const auditStartedAt = new Date().toISOString()
-      await repository.appendCapabilityInvocationAudit(
-        transaction,
-        resolvedOwner,
-        claim.authority,
-        {
-          sessionId,
-          agentRunId: runId,
-          capabilityName: 'coach.compute-decision-metrics',
-          capabilityVersion: 1,
-          authorized: false,
-          inputSchemaVersion: 1,
-          inputHash: '1'.repeat(64),
-          outputSchemaVersion: null,
-          outputHash: null,
-          budgetCost: 1,
-          durationMs: 0,
-          errorCode: 'capability_not_authorized',
-          startedAt: auditStartedAt,
-          completedAt: auditStartedAt,
-        },
-      )
-      await repository.appendCapabilityInvocationAudit(
-        transaction,
-        resolvedOwner,
-        claim.authority,
-        {
-          sessionId,
-          agentRunId: runId,
-          capabilityName: 'coach.compute-decision-metrics',
-          capabilityVersion: 1,
-          authorized: true,
-          inputSchemaVersion: 1,
-          inputHash: '2'.repeat(64),
-          outputSchemaVersion: 1,
-          outputHash: '3'.repeat(64),
-          budgetCost: 0,
-          durationMs: 0,
-          errorCode: null,
-          startedAt: auditStartedAt,
-          completedAt: auditStartedAt,
-        },
-      )
+    await insertHistoricalCapabilityBudgetFixtures(sql, {
+      ownerId: resolvedOwner.databaseOwnerId,
+      sessionId,
+      runId,
+      fencingToken: claim.authority.fencingToken,
     })
     const capabilities = [
       { id: 'coach.compute-decision-metrics', version: 1 },

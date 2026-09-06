@@ -96,11 +96,13 @@ async function ensureLegacyAuditAuthority(
       readonly leaseOwner: string | null
       readonly fencingToken: number
       readonly leaseActive: boolean
+      readonly deadlineActive: boolean
     }[]
   >`
     SELECT runtime AS "runtimeType", lifecycle, lease_owner AS "leaseOwner",
            fencing_token::float8 AS "fencingToken",
-           lease_expires_at > clock_timestamp() AS "leaseActive"
+           lease_expires_at > clock_timestamp() AS "leaseActive",
+           deadline_at > clock_timestamp() AS "deadlineActive"
     FROM app_private.agent_runs
     WHERE id = ${agentRunId}::uuid
   `
@@ -112,6 +114,7 @@ async function ensureLegacyAuditAuthority(
     existing.lifecycle === 'running' &&
     existing.leaseOwner === leaseOwner &&
     existing.leaseActive &&
+    existing.deadlineActive &&
     Number.isSafeInteger(existing.fencingToken) &&
     existing.fencingToken > 0
   ) {
@@ -132,6 +135,10 @@ async function ensureLegacyAuditAuthority(
     SET lifecycle = 'running',
         lease_owner = ${leaseOwner},
         lease_expires_at = clock_timestamp() + interval '1 hour',
+        deadline_at = GREATEST(
+          deadline_at,
+          clock_timestamp() + interval '1 hour'
+        ),
         fencing_token = GREATEST(fencing_token, 1),
         started_at = COALESCE(started_at, clock_timestamp()),
         updated_at = clock_timestamp()
@@ -188,16 +195,32 @@ function createAgentFoundationAuditRepository() {
         input,
       )
     },
-    async appendCapabilityInvocationAudit(
+    async reserveCapabilityInvocationAudit(
       transaction: TransactionSql,
-      owner: Parameters<typeof repository.appendCapabilityInvocationAudit>[1],
-      input: Parameters<typeof repository.appendCapabilityInvocationAudit>[3],
+      owner: Parameters<typeof repository.reserveCapabilityInvocationAudit>[1],
+      input: Parameters<typeof repository.reserveCapabilityInvocationAudit>[3],
     ) {
       const authority = await ensureLegacyAuditAuthority(
         transaction,
         input.agentRunId,
       )
-      return repository.appendCapabilityInvocationAudit(
+      return repository.reserveCapabilityInvocationAudit(
+        transaction,
+        owner,
+        authority,
+        input,
+      )
+    },
+    async finishCapabilityInvocationAudit(
+      transaction: TransactionSql,
+      owner: Parameters<typeof repository.finishCapabilityInvocationAudit>[1],
+      input: Parameters<typeof repository.finishCapabilityInvocationAudit>[3],
+    ) {
+      const authority = await ensureLegacyAuditAuthority(
+        transaction,
+        input.agentRunId,
+      )
+      return repository.finishCapabilityInvocationAudit(
         transaction,
         owner,
         authority,
@@ -3489,29 +3512,22 @@ function createM27AttemptInput(
   }
 }
 
-function createM27InvocationInput(
+function createM27InvocationReservationInput(
   sessionId: string,
   agentRunId: string,
   sequence: number,
 ) {
   const inputHashCharacter = sequence % 2 === 0 ? 'c' : 'e'
-  const outputHashCharacter = sequence % 2 === 0 ? 'd' : 'f'
   const startedAt = Date.parse('2026-08-04T13:00:10.000Z') + sequence * 1_000
   return {
     sessionId,
     agentRunId,
     capabilityName: 'equity.calculate',
     capabilityVersion: 2,
-    authorized: true,
     inputSchemaVersion: 3,
     inputHash: inputHashCharacter.repeat(64),
-    outputSchemaVersion: 4,
-    outputHash: outputHashCharacter.repeat(64),
-    budgetCost: 1,
-    durationMs: 125,
-    errorCode: null,
+    grantMaximum: 4,
     startedAt: new Date(startedAt).toISOString(),
-    completedAt: new Date(startedAt + 125).toISOString(),
   }
 }
 
@@ -3576,10 +3592,14 @@ async function assertM27AgentSequenceConcurrency(
     | Promise<{ readonly attemptId: string; readonly attemptNumber: number }>
     | undefined
   let secondInvocation:
-    | Promise<{
-        readonly invocationId: string
-        readonly invocationNumber: number
-      }>
+    | Promise<
+        | {
+            readonly kind: 'reserved'
+            readonly invocationId: string
+            readonly invocationNumber: number
+          }
+        | { readonly kind: 'budgetExhausted' }
+      >
     | undefined
 
   try {
@@ -3628,11 +3648,14 @@ async function assertM27AgentSequenceConcurrency(
 
     await inRollbackTransaction(sql, async (firstTransaction) => {
       const firstBackendPid = await readTransactionBackendPid(firstTransaction)
-      const firstInvocation = await repository.appendCapabilityInvocationAudit(
+      const firstInvocation = await repository.reserveCapabilityInvocationAudit(
         firstTransaction,
         owner,
-        createM27InvocationInput(sessionId, agentRunId, 0),
+        createM27InvocationReservationInput(sessionId, agentRunId, 0),
       )
+      if (firstInvocation.kind !== 'reserved') {
+        throw new Error('M2.7 Capability Invocation 未通过预留。')
+      }
       expect(firstInvocation.invocationNumber).toBe(0)
 
       let signalSecondPid: ((pid: number) => void) | undefined
@@ -3643,10 +3666,10 @@ async function assertM27AgentSequenceConcurrency(
         const secondBackendPid =
           await readTransactionBackendPid(secondTransaction)
         signalSecondPid?.(secondBackendPid)
-        return repository.appendCapabilityInvocationAudit(
+        return repository.reserveCapabilityInvocationAudit(
           secondTransaction,
           owner,
-          createM27InvocationInput(sessionId, agentRunId, 1),
+          createM27InvocationReservationInput(sessionId, agentRunId, 1),
         )
       })
       await waitForTransactionBlock(
@@ -3657,6 +3680,7 @@ async function assertM27AgentSequenceConcurrency(
       )
     })
     await expect(secondInvocation).resolves.toMatchObject({
+      kind: 'reserved',
       invocationNumber: 0,
     })
   } finally {
@@ -3941,10 +3965,33 @@ async function insertM28CascadeFixture(
       roster.owner,
       createM27AttemptInput(sessionId, coachRunId, 0),
     )
-    await auditRepository.appendCapabilityInvocationAudit(
+    const reservation = await auditRepository.reserveCapabilityInvocationAudit(
       transaction,
       roster.owner,
-      createM27InvocationInput(sessionId, coachRunId, 0),
+      createM27InvocationReservationInput(sessionId, coachRunId, 0),
+    )
+    if (reservation.kind !== 'reserved') {
+      throw new Error('M2.8 Cascade fixture 无法预留 Capability Invocation。')
+    }
+    await auditRepository.finishCapabilityInvocationAudit(
+      transaction,
+      roster.owner,
+      {
+        sessionId,
+        agentRunId: coachRunId,
+        invocationId: reservation.invocationId,
+        capabilityName: 'equity.calculate',
+        capabilityVersion: 2,
+        authorized: true,
+        inputSchemaVersion: 3,
+        inputHash: 'c'.repeat(64),
+        outputSchemaVersion: 4,
+        outputHash: 'd'.repeat(64),
+        budgetCost: 1,
+        durationMs: 125,
+        errorCode: null,
+        completedAt: '2026-08-04T13:00:10.125Z',
+      },
     )
   })
 

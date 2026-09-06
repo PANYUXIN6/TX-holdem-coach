@@ -809,7 +809,7 @@ export async function bootstrap(
   } catch (error) {
     try {
       await closeStartedResources()
-    } catch (shutdownError) {
+    } catch {
       // The initial startup outcome remains authoritative.
     }
     if (error instanceof ServiceStartupAborted) throw error

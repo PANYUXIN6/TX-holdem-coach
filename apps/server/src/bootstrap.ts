@@ -28,6 +28,7 @@ import { insertInProgressHandAudit } from './persistence/hand-audit-repository.j
 import { createPublicProjectionFactsRepository } from './persistence/public-projection-repository.js'
 import { createCompletedHandHistoryFactsRepository } from './persistence/completed-hand-history-repository.js'
 import { createCompletedHandHistoryListFactsRepository } from './persistence/completed-hand-history-list-repository.js'
+import { createStatisticsFactsRepository } from './persistence/statistics-facts-repository.js'
 import { SECURE_RANDOM_SOURCE } from './poker/random-source.js'
 import type { RandomSource } from './poker/random-source.js'
 import { createSessionCreationIdentityGraph } from './sessions/session-creation/session-creation-consistency.js'
@@ -49,6 +50,7 @@ import { createSessionEventStreamService } from './sessions/public-projection/se
 import { createAuthoritativeCompletedHandHistoryReader } from './sessions/hand-history/completed-hand-history-service.js'
 import { createCompletedHandHistoryQueryService } from './sessions/hand-history/completed-hand-history-query-service.js'
 import { createCompletedHandHistoryListQueryService } from './sessions/hand-history/completed-hand-history-list-query-service.js'
+import { createStatisticsQueryService } from './sessions/statistics/statistics-query-service.js'
 import { createAgentRunCoordinator } from './agents/foundation/agent-run-coordinator.js'
 import {
   createAgentWorker,
@@ -352,6 +354,9 @@ export async function createApiRuntime(
       owner,
     }),
   })
+  const statistics = createStatisticsQueryService({
+    reader: createStatisticsFactsRepository({ sql: database.sql, owner }),
+  })
   const sessionEvents = createSessionEventStreamService({
     repository: createPublicEventReplayRepository({ sql: database.sql, owner }),
     hub: committedSessionEvents,
@@ -375,6 +380,7 @@ export async function createApiRuntime(
     sessionEvents,
     handHistory,
     handHistoryList,
+    statistics,
     ...(playerRuntime === undefined ? {} : { playerRuntime }),
   })
 }

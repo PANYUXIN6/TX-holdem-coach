@@ -58,6 +58,15 @@ function createSuiteProtectedDatabaseTestSignal(
   return AbortSignal.any([signal, suiteLock.lock.signal])
 }
 
+async function clearPersistentLocalOwnerSessions(sql: Sql): Promise<void> {
+  await sql`
+    DELETE FROM app_private.sessions
+    WHERE owner_id = (
+      SELECT id FROM app_private.owners WHERE identity_key = 'local-user'
+    )
+  `
+}
+
 async function preparePersistentTestDatabase(
   signal: AbortSignal,
 ): Promise<void> {
@@ -110,6 +119,8 @@ async function preparePersistentTestDatabase(
 
     const actual = await readActualMigrationSequence(sql)
     expect(() => assertExactMigrationSequence(expected, actual)).not.toThrow()
+    signal.throwIfAborted()
+    await clearPersistentLocalOwnerSessions(sql)
   } finally {
     await sql.end({ timeout: 0 })
   }

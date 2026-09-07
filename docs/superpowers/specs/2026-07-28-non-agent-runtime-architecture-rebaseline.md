@@ -484,7 +484,7 @@ M3 永远看不到或保存未结算 `showdown | complete`。
 
 ### 10.2 统计输入
 
-- 手牌数、净变化、WTSD、W$SD：`CompletedHandResult`。
+- 手牌数、净变化、摊牌资格与 W$SD：`CompletedHandResult`。WTSD 的“看到翻牌”分母：已持久化 `actionCommitted` 首次发出翻牌的座位状态事实。
 - VPIP、PFR、3-bet 机会与行为：`actionCommitted` 私有事件中的行动前合法动作和规范化命令。
 - 场次净盈亏：最终筹码减 `seatAccounting.cumulativeBuyIn`。
 - 位置和起手牌类别：`CompletedHandResult` 固化值。
@@ -503,6 +503,8 @@ M3 永远看不到或保存未结算 `showdown | complete`。
 为避免在纯状态中复制行动历史，`actionCommitted` 只固化动作本地即可确定的 `isVoluntaryPreflopContribution`、`isPreflopRaise`、`isVoluntaryPreflopFullRaise`、`canMakeFullRaiseBeforeAction`。M5 按 `eventSeq` 对每手翻前事件做一次有限状态投影：维护此前自愿完整加注次数，在次数为 `1` 时按上述规则计算 3-bet 机会与分子。它不得从最终快照、金额猜测或重新调用扑克引擎。
 
 统计不得重新调用扑克引擎或按公开 SSE 负载推断。
+
+2026-09-06 用户确认：由于当前完成结果没有保存看到翻牌的座位，仅将 WTSD 分母来源修订为动作事件，保留已有数据格式；不得以整桌最终公共牌推断某座位是否看到翻牌。具体边界见 [M5.4 设计 §2.2、§4.3](./2026-09-06-m5-4-fixed-statistics-aggregation-design.md)。
 
 ## 11. 公开投影与 SSE
 

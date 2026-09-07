@@ -18,6 +18,8 @@ import {
   HealthResponseSchema,
   HandHistoryListItemSchema,
   HandHistoryListQuerySchema,
+  StatisticsQuerySchema,
+  StatisticsResponseSchema,
   LegalActionSchema,
   LegalActionsSchema,
   PokerActionSchema,
@@ -278,6 +280,94 @@ describe('共享外部协议', () => {
       contracts.HandHistoryQuerySchema?.safeParse({ view: 'public', extra: 1 })
         .success,
     ).toBe(false)
+  })
+
+  it('冻结统计查询的 scope 判别、历史人物条件与有界汇总响应', () => {
+    const sharedFilters = {
+      subject: 'ai' as const,
+      from: '2026-09-03T00:00:00.000000Z',
+      to: '2026-09-04T00:00:00.000000Z',
+      sessionId: ids.session,
+      personaId: 'retired-persona',
+      personaVersion: 2,
+      personaName: '历史人物',
+      configSnapshotKey: 'a'.repeat(64),
+    }
+    const handsQuery = {
+      scope: 'hands' as const,
+      ...sharedFilters,
+      position: 'UTG+1' as const,
+      groupBy: 'position' as const,
+    }
+    expect(StatisticsQuerySchema.safeParse(handsQuery).success).toBe(true)
+    expect(
+      StatisticsQuerySchema.safeParse({
+        ...handsQuery,
+        personaName: '   ',
+      }).success,
+    ).toBe(false)
+    expect(
+      StatisticsQuerySchema.safeParse({
+        ...handsQuery,
+        scope: 'sessions',
+      }).success,
+    ).toBe(false)
+    expect(
+      StatisticsQuerySchema.safeParse({
+        ...handsQuery,
+        personaId: null,
+      }).success,
+    ).toBe(false)
+
+    const rate = { numerator: 1, denominator: 3, percentage: 33.33 }
+    const emptyRate = { numerator: 0, denominator: 0, percentage: null }
+    const handMetrics = {
+      handCount: 1,
+      distinctHandCount: 1,
+      handNetChange: -20,
+      vpip: rate,
+      pfr: emptyRate,
+      threeBet: emptyRate,
+      wtsd: emptyRate,
+      wsd: emptyRate,
+    }
+    expect(
+      StatisticsResponseSchema.safeParse({
+        scope: 'hands',
+        query: handsQuery,
+        timeBasis: 'handStartedAt',
+        totals: handMetrics,
+        byPosition: [
+          'UTG',
+          'UTG+1',
+          'MP',
+          'LJ',
+          'HJ',
+          'CO',
+          'BTN',
+          'SB',
+          'BB',
+        ].map((position) => ({ position, metrics: handMetrics })),
+      }).success,
+    ).toBe(true)
+    expect(
+      StatisticsResponseSchema.safeParse({
+        scope: 'sessions',
+        query: {
+          scope: 'sessions',
+          ...sharedFilters,
+          groupBy: 'none',
+        },
+        timeBasis: 'sessionEndedAt',
+        totals: {
+          sessionCount: 1,
+          participantSessionCount: 2,
+          finalChips: 4_000,
+          cumulativeBuyIn: 4_200,
+          sessionNetChange: -200,
+        },
+      }).success,
+    ).toBe(true)
   })
 
   it('严格解析场次创建请求与响应', () => {

@@ -9,6 +9,7 @@ import { assertM49PlayerAuditReplayMemorySchema } from './database-m49-assertion
 import { assertM410PlayerSessionIntegrationPersistence } from './database-m410-assertions.js'
 import { assertM51CompletedHandHistory } from './database-m51-assertions.js'
 import { assertM53CompletedHandHistoryList } from './database-m53-assertions.js'
+import { assertM54FixedStatistics } from './database-m54-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -175,6 +176,12 @@ registerDatabaseMilestoneTest(
   'm53',
   'M5.3 completed hand history list persistence',
   (sql) => assertM53CompletedHandHistoryList(sql),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm54',
+  'M5.4 fixed statistics persistence',
+  (sql, runtimeUrl) => assertM54FixedStatistics(sql, runtimeUrl),
   300_000,
 )
 

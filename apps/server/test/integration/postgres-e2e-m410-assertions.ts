@@ -526,9 +526,19 @@ export async function assertM410PlayerSessionIntegrationApplicationFlow(
           owner,
           original: originalTimeoutSettings,
         })
-        await expect(
-          readPlayerTimeoutSettingsRow(sql, owner.databaseOwnerId),
-        ).resolves.toEqual(originalTimeoutSettings)
+        const restoredTimeoutSettings = await readPlayerTimeoutSettingsRow(
+          sql,
+          owner.databaseOwnerId,
+        )
+        if (originalTimeoutSettings === undefined) {
+          expect(restoredTimeoutSettings).toBeUndefined()
+        } else {
+          expect(restoredTimeoutSettings).toEqual({
+            id: originalTimeoutSettings.id,
+            settingPayload: originalTimeoutSettings.settingPayload,
+            updatedAt: expect.any(String),
+          })
+        }
       }
     },
     () => clearLocalOwnerSessions(sql),

@@ -125,6 +125,42 @@ export function trackDatabaseTestAbortCleanupCompletion(
   return unregister
 }
 
+export function startDatabaseTestOperation<Started, Result>(
+  label: string,
+  operation: (reportStarted: (value: Started) => void) => Promise<Result>,
+): {
+  readonly started: Promise<Started>
+  readonly completion: Promise<Result>
+} {
+  let startedReported = false
+  let resolveStarted!: (value: Started) => void
+  let rejectStarted!: (error: unknown) => void
+  const started = new Promise<Started>((resolve, reject) => {
+    resolveStarted = resolve
+    rejectStarted = reject
+  })
+  const completion = Promise.resolve().then(() =>
+    operation((value) => {
+      if (startedReported) {
+        throw new Error(`${label} 重复报告已启动。`)
+      }
+      startedReported = true
+      resolveStarted(value)
+    }),
+  )
+  void completion.then(
+    () => {
+      if (!startedReported) {
+        rejectStarted(new Error(`${label} 在报告已启动前结束。`))
+      }
+    },
+    (error: unknown) => {
+      if (!startedReported) rejectStarted(error)
+    },
+  )
+  return Object.freeze({ started, completion })
+}
+
 export function bindDatabaseTestClientToAbortSignal(
   client: AbortableDatabaseTestClient,
   signal: AbortSignal,

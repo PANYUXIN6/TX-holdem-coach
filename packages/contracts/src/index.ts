@@ -959,6 +959,183 @@ export const HandHistoryListResponseSchema = z.strictObject({
   nextCursor: z.string().min(1).nullable(),
 })
 
+export const StatisticsScopeSchema = z.enum(['hands', 'sessions'])
+export const StatisticsSubjectSchema = z.enum(['user', 'ai'])
+export const StatisticsGroupBySchema = z.enum(['none', 'position'])
+
+const StatisticsSafeNonnegativeIntegerSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(Number.MAX_SAFE_INTEGER)
+const StatisticsSafeIntegerSchema = z
+  .number()
+  .int()
+  .min(Number.MIN_SAFE_INTEGER)
+  .max(Number.MAX_SAFE_INTEGER)
+
+const StatisticsQueryFields = {
+  subject: StatisticsSubjectSchema,
+  from: CanonicalHistoricalTimestampSchema.nullable(),
+  to: CanonicalHistoricalTimestampSchema.nullable(),
+  sessionId: SessionIdSchema.nullable(),
+  personaId: HistoricalPersonaQueryIdSchema.nullable(),
+  personaVersion: HistoricalPersonaVersionSchema.nullable(),
+  personaName: z
+    .string()
+    .min(1)
+    .max(256)
+    .refine((value) => value.trim().length > 0)
+    .nullable(),
+  configSnapshotKey: HistoricalConfigSnapshotKeySchema.nullable(),
+} as const
+
+export const HandStatisticsQuerySchema = z.strictObject({
+  scope: z.literal('hands'),
+  ...StatisticsQueryFields,
+  position: PublicLogicalPositionSchema.nullable(),
+  groupBy: z.enum(['none', 'position']),
+})
+
+export const SessionStatisticsQuerySchema = z.strictObject({
+  scope: z.literal('sessions'),
+  ...StatisticsQueryFields,
+  groupBy: z.literal('none'),
+})
+
+export const StatisticsQuerySchema = z
+  .discriminatedUnion('scope', [
+    HandStatisticsQuerySchema,
+    SessionStatisticsQuerySchema,
+  ])
+  .superRefine((query, context) => {
+    if (query.from !== null && query.to !== null && query.from >= query.to) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['to'],
+        message: '结束时间必须晚于开始时间。',
+      })
+    }
+    if (query.personaVersion !== null && query.personaId === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['personaVersion'],
+        message: '人物版本必须与人物 ID 一同提供。',
+      })
+    }
+  })
+
+function expectedStatisticsPercentage(
+  numerator: number,
+  denominator: number,
+): number | null {
+  if (denominator === 0) return null
+  const hundredths =
+    (BigInt(numerator) * 10_000n + BigInt(denominator) / 2n) /
+    BigInt(denominator)
+  return Number(hundredths) / 100
+}
+
+export const StatisticsRateSchema = z
+  .strictObject({
+    numerator: StatisticsSafeNonnegativeIntegerSchema,
+    denominator: StatisticsSafeNonnegativeIntegerSchema,
+    percentage: z.number().min(0).max(100).nullable(),
+  })
+  .superRefine((rate, context) => {
+    if (
+      rate.numerator > rate.denominator ||
+      rate.percentage !==
+        expectedStatisticsPercentage(rate.numerator, rate.denominator)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '统计比率的分子、分母和百分比必须一致。',
+      })
+    }
+  })
+
+export const HandStatisticsMetricsSchema = z.strictObject({
+  handCount: StatisticsSafeNonnegativeIntegerSchema,
+  distinctHandCount: StatisticsSafeNonnegativeIntegerSchema,
+  handNetChange: StatisticsSafeIntegerSchema,
+  vpip: StatisticsRateSchema,
+  pfr: StatisticsRateSchema,
+  threeBet: StatisticsRateSchema,
+  wtsd: StatisticsRateSchema,
+  wsd: StatisticsRateSchema,
+})
+
+const StatisticsPositionMetricsSchema = z.strictObject({
+  position: PublicLogicalPositionSchema,
+  metrics: HandStatisticsMetricsSchema,
+})
+
+const STATISTICS_POSITION_ORDER = [
+  'UTG',
+  'UTG+1',
+  'MP',
+  'LJ',
+  'HJ',
+  'CO',
+  'BTN',
+  'SB',
+  'BB',
+] as const
+
+export const HandStatisticsResponseSchema = z
+  .strictObject({
+    scope: z.literal('hands'),
+    query: HandStatisticsQuerySchema,
+    timeBasis: z.literal('handStartedAt'),
+    totals: HandStatisticsMetricsSchema,
+    byPosition: z.array(StatisticsPositionMetricsSchema).max(9),
+  })
+  .superRefine((response, context) => {
+    const positions = response.byPosition.map((bucket) => bucket.position)
+    const expectedPositions =
+      response.query.groupBy === 'position' ? STATISTICS_POSITION_ORDER : []
+    if (
+      positions.length !== expectedPositions.length ||
+      positions.some((position, index) => position !== expectedPositions[index])
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['byPosition'],
+        message: '位置分组必须与查询条件一致且使用固定顺序。',
+      })
+    }
+  })
+
+export const SessionStatisticsTotalsSchema = z.strictObject({
+  sessionCount: StatisticsSafeNonnegativeIntegerSchema,
+  participantSessionCount: StatisticsSafeNonnegativeIntegerSchema,
+  finalChips: StatisticsSafeNonnegativeIntegerSchema,
+  cumulativeBuyIn: StatisticsSafeNonnegativeIntegerSchema,
+  sessionNetChange: StatisticsSafeIntegerSchema,
+})
+
+export const SessionStatisticsResponseSchema = z.strictObject({
+  scope: z.literal('sessions'),
+  query: SessionStatisticsQuerySchema,
+  timeBasis: z.literal('sessionEndedAt'),
+  totals: SessionStatisticsTotalsSchema,
+})
+
+export const StatisticsResponseSchema = z.discriminatedUnion('scope', [
+  HandStatisticsResponseSchema,
+  SessionStatisticsResponseSchema,
+])
+
+/** M5.4 固定统计的中文定义由共享协议持有，前端不得另行推导公式。 */
+export const StatisticsMetricDefinitions = Object.freeze({
+  vpip: '翻前自愿投入筹码的参与者手数占比。',
+  pfr: '翻前主动加注的参与者手数占比。',
+  threeBet: '在合法 3-bet 机会中完成翻前完整再加注的次数占比。',
+  wtsd: '看到翻牌的参与者中进入摊牌的手数占比。',
+  wsd: '进入摊牌的参与者中获得正派奖的手数占比。',
+} as const)
+
 export const HandHistoryParticipantSchema = z.strictObject({
   seatNumber: SeatNumberSchema,
   playerId: PlayerIdSchema,
@@ -1599,6 +1776,26 @@ export type HandHistoryListItem = z.infer<typeof HandHistoryListItemSchema>
 export type HandHistoryListResponse = z.infer<
   typeof HandHistoryListResponseSchema
 >
+export type StatisticsScope = z.infer<typeof StatisticsScopeSchema>
+export type StatisticsSubject = z.infer<typeof StatisticsSubjectSchema>
+export type StatisticsGroupBy = z.infer<typeof StatisticsGroupBySchema>
+export type HandStatisticsQuery = z.infer<typeof HandStatisticsQuerySchema>
+export type SessionStatisticsQuery = z.infer<
+  typeof SessionStatisticsQuerySchema
+>
+export type StatisticsQuery = z.infer<typeof StatisticsQuerySchema>
+export type StatisticsRate = z.infer<typeof StatisticsRateSchema>
+export type HandStatisticsMetrics = z.infer<typeof HandStatisticsMetricsSchema>
+export type HandStatisticsResponse = z.infer<
+  typeof HandStatisticsResponseSchema
+>
+export type SessionStatisticsTotals = z.infer<
+  typeof SessionStatisticsTotalsSchema
+>
+export type SessionStatisticsResponse = z.infer<
+  typeof SessionStatisticsResponseSchema
+>
+export type StatisticsResponse = z.infer<typeof StatisticsResponseSchema>
 export type HandHistoryParticipant = z.infer<
   typeof HandHistoryParticipantSchema
 >

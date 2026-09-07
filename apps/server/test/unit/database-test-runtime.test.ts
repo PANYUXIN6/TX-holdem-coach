@@ -9,6 +9,7 @@ import {
   readTransactionBackendPid,
   runAbortableDatabasePhase,
   runDatabaseTestWithCleanup,
+  startDatabaseTestOperation,
   runTimedDatabasePhase,
   shouldRunDatabaseMilestone,
   serializeJsonbFixture,
@@ -151,6 +152,40 @@ describe('database test runtime', () => {
       '[database-test] START M2.6\n',
       '[database-test] FAIL M2.6 (250 ms)\n',
     ])
+  })
+
+  test('reports a database operation start while its completion remains independently awaitable', async () => {
+    let releaseOperation!: () => void
+    const operationGate = new Promise<void>((resolve) => {
+      releaseOperation = resolve
+    })
+    const operation = startDatabaseTestOperation(
+      'second transaction',
+      async (reportStarted) => {
+        reportStarted(4242)
+        await operationGate
+        return 'completed'
+      },
+    )
+
+    await expect(operation.started).resolves.toBe(4242)
+    releaseOperation()
+    await expect(operation.completion).resolves.toBe('completed')
+  })
+
+  test('propagates a connection failure that happens before the operation can report its start', async () => {
+    const connectFailure = Object.assign(new Error('connection unavailable'), {
+      code: 'CONNECT_TIMEOUT',
+    })
+    const operation = startDatabaseTestOperation(
+      'second transaction',
+      async () => {
+        throw connectFailure
+      },
+    )
+
+    await expect(operation.started).rejects.toBe(connectFailure)
+    await expect(operation.completion).rejects.toBe(connectFailure)
   })
 
   test('aborts a phase, closes its database clients, and waits for fixture cleanup', async () => {

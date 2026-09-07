@@ -30,6 +30,8 @@ pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m410
 pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m410
 pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m51
 pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m52
+pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m54
+pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m54
 pnpm --filter @tx-holdem-coach/server run db:test:cleanup
 ```
 
@@ -44,6 +46,8 @@ pnpm --filter @tx-holdem-coach/server run db:test:cleanup
 `m51` 只属于 database suite：经 M2.7 完成 Hand writer 与严格编码事件夹具验证 Owner-scoped 单 statement Reader、checkpoint/result/private-event current Codec 与纯私有投影；不安装 HTTP、Contracts 或路由，因此没有 PostgreSQL E2E `m51`。
 
 `m52` 只属于 PostgreSQL E2E suite：通过真实 `createApiRuntime`、Hono 详情路由、M5.1 Reader 与 M5.2 可见性查询服务读取经正式 Session 命令完成的 Hand，验证 completed-only 准入、`public | auditReveal` 的底牌边界、重复 public 无污染以及 GET 零写入；它不新增 database persistence milestone。
+
+`m54` 同时属于 database 与 PostgreSQL E2E suite。database 阶段验证 Owner-scoped completed Hand 与 ended Session 的只读一致扫描、认证 payload/roster 镜像、固定统计贡献及跨批次、删除和损坏事实边界；E2E 阶段通过真实 `createApiRuntime`、正式 Session 命令与 `GET /api/statistics` 验证 hands/sessions 汇总、查询零写入和删除后的空统计。两阶段必须串行；它们不运行真实 Provider。
 
 ## 首发前破坏性重基线
 

@@ -61,7 +61,7 @@ function createTerminalEvents(handId: string, playerIds: readonly string[]) {
   return completed.eventDrafts
 }
 
-async function insertTerminalEvents(
+export async function insertTerminalEvents(
   sql: Sql,
   input: {
     readonly sessionId: string

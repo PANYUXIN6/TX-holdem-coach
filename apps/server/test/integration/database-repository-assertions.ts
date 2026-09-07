@@ -76,6 +76,7 @@ import {
   createDatabaseTestSqlForRole,
   readTransactionBackendPid,
   serializeJsonbFixture,
+  startDatabaseTestOperation,
 } from './database-test-runtime.js'
 
 const { recoverSessionForMutation, retryReadonlySessionRecovery } =
@@ -2349,25 +2350,26 @@ async function assertConcurrentRecoveryAfterMutation(
         throw new Error('Expected first active recovery.')
       }
 
-      let signalSecondPid: ((pid: number) => void) | undefined
-      const secondPid = new Promise<number>((resolve) => {
-        signalSecondPid = resolve
-      })
-      secondRecovery = secondSql.begin(async (secondTransaction) => {
-        const secondBackendPid =
-          await readTransactionBackendPid(secondTransaction)
-        signalSecondPid?.(secondBackendPid)
-        return recoverSessionForMutation(
-          secondTransaction,
-          owner,
-          sessionId,
-          '2026-08-04T10:09:00.000Z',
-        )
-      })
+      const trackedSecondRecovery = startDatabaseTestOperation(
+        'M2.6 第二恢复事务',
+        (reportStarted: (pid: number) => void) =>
+          secondSql.begin(async (secondTransaction) => {
+            const secondBackendPid =
+              await readTransactionBackendPid(secondTransaction)
+            reportStarted(secondBackendPid)
+            return recoverSessionForMutation(
+              secondTransaction,
+              owner,
+              sessionId,
+              '2026-08-04T10:09:00.000Z',
+            )
+          }),
+      )
+      secondRecovery = trackedSecondRecovery.completion
       await waitForTransactionBlock(
         transaction,
         firstBackendPid,
-        await secondPid,
+        await trackedSecondRecovery.started,
       )
       await persistSessionMutation(
         transaction,

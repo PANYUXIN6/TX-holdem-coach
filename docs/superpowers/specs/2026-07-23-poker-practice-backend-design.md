@@ -723,7 +723,7 @@ WHERE lifecycle_status = 'active';
 统计口径固定为：
 
 - 所有统计只纳入 `hands.status = completed`；`aborted` 手的既有行动事件不贡献任何分子或分母。
-- 手牌数、单手净盈亏、WTSD 与 W$SD 从 `CompletedHandResult` 聚合；单手净盈亏为结束筹码减开始筹码。
+- 手牌数、单手净盈亏、摊牌资格与 W$SD 从 `CompletedHandResult` 聚合；单手净盈亏为结束筹码减开始筹码。WTSD 的“看到翻牌”分母由已持久化 `actionCommitted` 首次发出翻牌时仍未弃牌的参与座位确定，不以整桌最终牌面代替个人资格。
 - 场次净盈亏为最终筹码减 `PrivateTableState`/账务事实中的全部累计买入，不从底池投入反推。
 - VPIP、PFR、3-bet 及合法机会分母从 `actionCommitted` 事件聚合；强制盲注不计 VPIP。
 - VPIP 和 PFR 分母为总手数，3-bet 分母为合法 3-bet 机会数。
@@ -737,6 +737,8 @@ WHERE lifecycle_status = 'active';
 - WTSD 要求已看到翻牌且在 `showdown` 终止时未弃牌；W$SD 在这些样本中获得任意正派奖即计入，平分池也算。
 
 3-bet 的跨动作上下文不进入 `PokerTableState`。M5 只按 `eventSeq` 顺序维护“此前自愿完整加注次数”，结合事件固化的 `isVoluntaryPreflopFullRaise` 和 `canMakeFullRaiseBeforeAction` 计算机会与分子；不得按最终下注额猜测或重新调用引擎。
+
+2026-09-06 用户确认的事实来源修订：当前完成结果未保存看到翻牌的座位，WTSD 分母改由现有动作事件补足，摊牌和获奖仍读取完成结果；不改变完成结果格式。精确定义见 [M5.4 设计 §2.2、§4.3](./2026-09-06-m5-4-fixed-statistics-aggregation-design.md)。
 
 百分比查询同时返回分子、分母和结果；分母为 0 时结果为 `null`，前端显示“—”，不能返回具有误导性的 0%。
 

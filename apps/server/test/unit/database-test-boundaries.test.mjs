@@ -42,6 +42,10 @@ const suiteLockSource = await readFile(
   new URL('../../src/db/database-test-suite-lock.ts', import.meta.url),
   'utf8',
 )
+const databaseTestHarnessSource = await readFile(
+  new URL('../integration/database-test-harness.ts', import.meta.url),
+  'utf8',
+)
 const serverPackage = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
 )
@@ -117,6 +121,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm410',
       'm51',
       'm53',
+      'm54',
     ])
     expect(persistenceEntry).not.toContain('postgres-application-e2e')
     expect(persistenceEntry).toContain('database-repository-assertions')
@@ -177,6 +182,7 @@ describe('remote PostgreSQL test boundaries', () => {
       'm410',
       'm52',
       'm53',
+      'm54',
     ])
     expect(applicationEntry).not.toContain('database-schema-assertions')
     expect(applicationEntry).toContain('postgres-e2e-m35-assertions')
@@ -221,6 +227,18 @@ describe('remote PostgreSQL test boundaries', () => {
     expect(coverageConfig).toContain("'test/unit/**/*.{test,spec}.{ts,mjs}'")
     expect(coverageConfig).toContain("'test/service/**/*.{test,spec}.{ts,mjs}'")
     expect(coverageConfig).not.toContain('test/integration')
+  })
+
+  test('resets local owner session data after migrations before running a suite', () => {
+    const migrationAssertionPosition = databaseTestHarnessSource.indexOf(
+      'expect(() => assertExactMigrationSequence(expected, actual)).not.toThrow()',
+    )
+    const sessionCleanupPosition = databaseTestHarnessSource.indexOf(
+      'clearPersistentLocalOwnerSessions(sql)',
+    )
+
+    expect(migrationAssertionPosition).toBeGreaterThanOrEqual(0)
+    expect(sessionCleanupPosition).toBeGreaterThan(migrationAssertionPosition)
   })
 
   test('gates destructive rebaseline locally and aborts migration when the suite lock is lost', () => {

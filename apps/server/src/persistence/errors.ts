@@ -49,6 +49,8 @@ export type DataCorruptionKind =
   | 'invalidHandAudit'
   | 'invalidCompletedHandHistory'
   | 'invalidStatisticsFacts'
+  | 'invalidSessionManagementQuery'
+  | 'invalidAgentCallQuery'
   | 'invalidAgentRunAudit'
   | 'invalidAgentAttemptAudit'
   | 'invalidCapabilityInvocationAudit'

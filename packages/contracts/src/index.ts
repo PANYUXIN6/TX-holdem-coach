@@ -959,6 +959,390 @@ export const HandHistoryListResponseSchema = z.strictObject({
   nextCursor: z.string().min(1).nullable(),
 })
 
+const ManagementSafeNonnegativeIntegerSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(Number.MAX_SAFE_INTEGER)
+const ManagementSafeIntegerSchema = z
+  .number()
+  .int()
+  .min(Number.MIN_SAFE_INTEGER)
+  .max(Number.MAX_SAFE_INTEGER)
+export const PUBLIC_AGENT_AUDIT_CODES = [
+  'capability_authority_lost',
+  'capability_budget_exhausted',
+  'capability_cancelled',
+  'capability_deadline_exhausted',
+  'capability_execution_failed',
+  'capability_schema_rejected',
+  'capability_timeout',
+  'content_correction',
+  'content_correction_exhausted',
+  'execution_budget_exhausted',
+  'execution_deadline_exhausted',
+  'lease_replaced',
+  'local_persistence_error',
+  'player_commit_authority_lost',
+  'player_commit_decision_stale',
+  'player_commit_resource_missing',
+  'player_decision_authority_lost',
+  'player_dependency_unavailable',
+  'player_internal_failure',
+  'player_runtime_contract_rejected',
+  'process_restart',
+  'provider_auth_error',
+  'provider_billing_unavailable',
+  'provider_network_error',
+  'provider_rate_limited',
+  'provider_service_unavailable',
+  'provider_timeout',
+  'provider_unknown_error',
+  'provider_usage_unavailable',
+  'response_parse_error',
+  'response_schema_error',
+  'response_semantic_invalid',
+  'runtime_authority_lost',
+  'runtime_cancelled',
+  'sensitive_projection_rejected',
+  'session_data_deleted',
+  'technical_error',
+  'user_cancelled',
+] as const
+export const AgentAuditPublicCodeSchema = z.enum(PUBLIC_AGENT_AUDIT_CODES)
+const AuditReferenceIdSchema = z.string().trim().min(1).max(128)
+const AuditModelSchema = z.string().trim().min(1).max(256)
+const AuditDigestSchema = z.string().regex(/^[a-f0-9]{64}$/)
+
+export const SessionManagementLifecycleFilterSchema = z.enum([
+  'all',
+  'active',
+  'ended',
+  'readonlyDiagnostic',
+])
+export const SessionManagementListQuerySchema = z
+  .strictObject({
+    lifecycle: SessionManagementLifecycleFilterSchema,
+    from: CanonicalHistoricalTimestampSchema.nullable(),
+    to: CanonicalHistoricalTimestampSchema.nullable(),
+    sort: HandHistoryListSortSchema,
+    limit: z.number().int().min(1).max(100),
+  })
+  .superRefine((query, context) => {
+    if (query.from !== null && query.to !== null && query.from >= query.to) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['to'],
+        message: '结束时间必须晚于开始时间。',
+      })
+    }
+  })
+
+export const SessionManagementRosterEntrySchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('user'),
+    participantId: PlayerIdSchema,
+    seatNumber: z.literal(0),
+  }),
+  z.strictObject({
+    kind: z.literal('ai'),
+    participantId: PlayerIdSchema,
+    seatNumber: AiSeatNumberSchema,
+    personaId: HistoricalPersonaIdSchema,
+    personaVersion: HistoricalPersonaVersionSchema,
+    displayName: z.string().min(1),
+    avatarColor: z.string().min(1),
+    configSnapshotKey: HistoricalConfigSnapshotKeySchema,
+  }),
+])
+
+export const AvailableSessionAccountingSeatSchema = z.strictObject({
+  participantId: PlayerIdSchema,
+  seatNumber: SeatNumberSchema,
+  initialChips: ManagementSafeNonnegativeIntegerSchema,
+  currentChips: ManagementSafeNonnegativeIntegerSchema,
+  cumulativeBuyIn: ManagementSafeNonnegativeIntegerSchema,
+  finalChips: ManagementSafeNonnegativeIntegerSchema.nullable(),
+  sessionNetChange: ManagementSafeIntegerSchema.nullable(),
+})
+
+export const SessionManagementAccountingSchema = z.discriminatedUnion(
+  'status',
+  [
+    z.strictObject({
+      status: z.literal('available'),
+      stateVersion: StateVersionSchema.max(Number.MAX_SAFE_INTEGER),
+      seats: z.array(AvailableSessionAccountingSeatSchema).min(6).max(9),
+    }),
+    z.strictObject({
+      status: z.literal('unavailable'),
+      reason: z.literal('readonlyDiagnostic'),
+    }),
+  ],
+)
+
+export const SessionManagementItemSchema = z
+  .strictObject({
+    sessionId: SessionIdSchema,
+    lifecycle: SessionLifecycleSchema,
+    createdAt: CanonicalHistoricalTimestampSchema,
+    endedAt: CanonicalHistoricalTimestampSchema.nullable(),
+    completedHandCount: ManagementSafeNonnegativeIntegerSchema,
+    currentHandId: HandIdSchema.nullable(),
+    roster: z.array(SessionManagementRosterEntrySchema).min(6).max(9),
+    accounting: SessionManagementAccountingSchema,
+  })
+  .superRefine((item, context) => {
+    const seats = item.roster.map(({ seatNumber }) => seatNumber)
+    if (
+      seats.some((seat, index) => index > 0 && seat <= seats[index - 1]!) ||
+      item.roster.filter(({ kind }) => kind === 'user').length !== 1
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['roster'],
+        message: '场次阵容必须唯一并按座位升序。',
+      })
+    }
+    if (
+      (item.lifecycle === 'active' && item.endedAt !== null) ||
+      (item.lifecycle === 'ended' && item.endedAt === null) ||
+      (item.lifecycle === 'readonlyDiagnostic') !==
+        (item.accounting.status === 'unavailable')
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '场次生命周期与结束时间、账务状态不一致。',
+      })
+    }
+    if (item.accounting.status === 'available') {
+      const accountingSeats = item.accounting.seats.map(
+        ({ seatNumber }) => seatNumber,
+      )
+      if (
+        accountingSeats.length !== seats.length ||
+        accountingSeats.some((seat, index) => seat !== seats[index]) ||
+        item.accounting.seats.some((seat, index) => {
+          const roster = item.roster[index]
+          return (
+            roster?.participantId !== seat.participantId ||
+            (item.lifecycle === 'active'
+              ? seat.finalChips !== null || seat.sessionNetChange !== null
+              : seat.finalChips !== seat.currentChips ||
+                seat.sessionNetChange !==
+                  seat.currentChips - seat.cumulativeBuyIn)
+          )
+        })
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accounting', 'seats'],
+          message: '场次账务必须与阵容及生命周期一致。',
+        })
+      }
+    }
+  })
+
+export const SessionManagementListResponseSchema = z.strictObject({
+  query: SessionManagementListQuerySchema,
+  timeBasis: z.literal('sessionCreatedAt'),
+  items: z.array(SessionManagementItemSchema),
+  nextCursor: z.string().min(1).nullable(),
+})
+
+export const AgentRunRuntimeSchema = z.enum(['player', 'coach'])
+export const AgentRunExecutionModeSchema = z.enum([
+  'live',
+  'historicalReexecution',
+])
+export const AgentRunLifecycleSchema = z.enum([
+  'queued',
+  'leased',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+  'stale',
+])
+export const AgentCallListQuerySchema = z.strictObject({
+  limit: z.number().int().min(1).max(100),
+})
+export const AgentRunPathParamsSchema = z.strictObject({ runId: z.uuid() })
+
+export const AgentRunSummarySchema = z
+  .strictObject({
+    runId: z.uuid(),
+    sessionId: SessionIdSchema,
+    handId: HandIdSchema,
+    runtime: AgentRunRuntimeSchema,
+    executionMode: AgentRunExecutionModeSchema,
+    lifecycle: AgentRunLifecycleSchema,
+    participantId: PlayerIdSchema.nullable(),
+    seatNumber: AiSeatNumberSchema.nullable(),
+    sourceStateVersion: StateVersionSchema.max(
+      Number.MAX_SAFE_INTEGER,
+    ).nullable(),
+    decisionRequestId: DecisionRequestIdSchema.nullable(),
+    createdAt: CanonicalHistoricalTimestampSchema,
+    startedAt: CanonicalHistoricalTimestampSchema.nullable(),
+    completedAt: CanonicalHistoricalTimestampSchema.nullable(),
+    terminationReasonCode: AgentAuditPublicCodeSchema.nullable(),
+  })
+  .superRefine((run, context) => {
+    const playerFields = [
+      run.participantId,
+      run.seatNumber,
+      run.sourceStateVersion,
+      run.decisionRequestId,
+    ]
+    if (
+      (run.runtime === 'player' &&
+        playerFields.some((value) => value === null)) ||
+      (run.runtime === 'coach' && playerFields.some((value) => value !== null))
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Agent Run 身份字段与 Runtime 不一致。',
+      })
+    }
+  })
+
+export const AgentCallHandSummarySchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    handId: HandIdSchema,
+    sessionId: SessionIdSchema,
+    handNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    status: z.enum(['inProgress', 'completed']),
+  }),
+  z.strictObject({
+    handId: HandIdSchema,
+    sessionId: SessionIdSchema,
+    handNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    status: z.literal('aborted'),
+    abortedAt: CanonicalHistoricalTimestampSchema,
+    abortReasonCode: AgentAuditPublicCodeSchema,
+    abortedByAgentRunId: z.uuid(),
+  }),
+])
+
+export const HandAgentCallsResponseSchema = z.strictObject({
+  query: AgentCallListQuerySchema,
+  hand: AgentCallHandSummarySchema,
+  items: z.array(AgentRunSummarySchema),
+  nextCursor: z.string().min(1).nullable(),
+})
+
+export const PublicNormalizedActionSchema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('notSelected') }),
+  z.strictObject({ status: z.literal('withheld') }),
+  z.strictObject({ status: z.literal('visible'), action: PokerActionSchema }),
+])
+export const AgentRunDecisionSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('none') }),
+  z.strictObject({
+    kind: z.literal('summary'),
+    decisionId: z.uuid(),
+    status: z.enum(['auditPrepared', 'modelPrepared', 'selected', 'committed']),
+    terminalOutcome: z.enum(['failed', 'stale', 'cancelled']).nullable(),
+    terminalReasonCode: AgentAuditPublicCodeSchema.nullable(),
+    acceptedAttemptId: z.uuid().nullable(),
+    commandLedgerId: z.uuid().nullable(),
+    sourceDecisionId: z.uuid().nullable(),
+    normalizedAction: PublicNormalizedActionSchema,
+  }),
+])
+export const AgentRunDetailResponseSchema = AgentRunSummarySchema.and(
+  z.strictObject({
+    parentRunId: z.uuid().nullable(),
+    replacementRunId: z.uuid().nullable(),
+    reexecutionSourceRunId: z.uuid().nullable(),
+    decision: AgentRunDecisionSchema,
+    commandEventRange: z
+      .strictObject({
+        firstEventSeq: EventSequenceSchema.max(Number.MAX_SAFE_INTEGER),
+        lastEventSeq: EventSequenceSchema.max(Number.MAX_SAFE_INTEGER),
+      })
+      .refine((range) => range.firstEventSeq <= range.lastEventSeq)
+      .nullable(),
+    contentAvailability: z.strictObject({
+      requestBody: z.literal('notExposed'),
+      rawResponse: z.literal('notRecorded'),
+      validationDetails: z.literal('notRecorded'),
+    }),
+  }),
+)
+
+export const AgentAttemptUsageSchema = z.discriminatedUnion('accounting', [
+  z.strictObject({
+    inputTokens: z.null(),
+    outputTokens: z.null(),
+    accounting: z.literal('pending'),
+  }),
+  z.strictObject({
+    inputTokens: ManagementSafeNonnegativeIntegerSchema,
+    outputTokens: ManagementSafeNonnegativeIntegerSchema,
+    accounting: z.enum(['providerReported', 'reservedUpperBound']),
+  }),
+  z.strictObject({
+    inputTokens: z.literal(0),
+    outputTokens: z.literal(0),
+    accounting: z.literal('notIncurred'),
+  }),
+])
+export const AgentAttemptSummarySchema = z.strictObject({
+  attemptId: z.uuid(),
+  attemptNumber: z.number().int().nonnegative().max(2_147_483_647),
+  stage: AuditReferenceIdSchema,
+  lifecycle: z.enum(['started', 'completed', 'failed', 'cancelled', 'stale']),
+  provider: AuditReferenceIdSchema,
+  model: AuditModelSchema,
+  attemptType: AuditReferenceIdSchema,
+  routingReasonCode: AgentAuditPublicCodeSchema.nullable(),
+  startedAt: CanonicalHistoricalTimestampSchema,
+  completedAt: CanonicalHistoricalTimestampSchema.nullable(),
+  durationMs: ManagementSafeNonnegativeIntegerSchema.nullable(),
+  accepted: z.boolean(),
+  stale: z.boolean(),
+  interrupted: z.boolean(),
+  validationStatus: z.enum(['notRun', 'valid', 'invalid']),
+  errorCode: AgentAuditPublicCodeSchema.nullable(),
+  requestProjectionHash: AuditDigestSchema,
+  responseProjectionHash: AuditDigestSchema.nullable(),
+  usage: AgentAttemptUsageSchema,
+})
+export const AgentCapabilityInvocationSummarySchema = z.strictObject({
+  invocationId: z.uuid(),
+  invocationNumber: z.number().int().nonnegative().max(2_147_483_647),
+  capabilityName: AuditReferenceIdSchema,
+  capabilityVersion: z.number().int().positive().max(2_147_483_647),
+  authorized: z.boolean(),
+  startedAt: CanonicalHistoricalTimestampSchema,
+  completedAt: CanonicalHistoricalTimestampSchema.nullable(),
+  durationMs: ManagementSafeNonnegativeIntegerSchema.nullable(),
+  inputSchemaVersion: z.number().int().positive().max(2_147_483_647),
+  outputSchemaVersion: z
+    .number()
+    .int()
+    .positive()
+    .max(2_147_483_647)
+    .nullable(),
+  inputHash: AuditDigestSchema,
+  outputHash: AuditDigestSchema.nullable(),
+  errorCode: AgentAuditPublicCodeSchema.nullable(),
+})
+export const AgentRunAttemptsResponseSchema = z.strictObject({
+  query: AgentCallListQuerySchema,
+  runId: z.uuid(),
+  items: z.array(AgentAttemptSummarySchema),
+  nextCursor: z.string().min(1).nullable(),
+})
+export const AgentRunCapabilityInvocationsResponseSchema = z.strictObject({
+  query: AgentCallListQuerySchema,
+  runId: z.uuid(),
+  items: z.array(AgentCapabilityInvocationSummarySchema),
+  nextCursor: z.string().min(1).nullable(),
+})
+
 export const StatisticsScopeSchema = z.enum(['hands', 'sessions'])
 export const StatisticsSubjectSchema = z.enum(['user', 'ai'])
 export const StatisticsGroupBySchema = z.enum(['none', 'position'])
@@ -1775,6 +2159,36 @@ export type HistoricalPersonaSnapshotSummary = z.infer<
 export type HandHistoryListItem = z.infer<typeof HandHistoryListItemSchema>
 export type HandHistoryListResponse = z.infer<
   typeof HandHistoryListResponseSchema
+>
+export type SessionManagementListQuery = z.infer<
+  typeof SessionManagementListQuerySchema
+>
+export type SessionManagementRosterEntry = z.infer<
+  typeof SessionManagementRosterEntrySchema
+>
+export type SessionManagementItem = z.infer<typeof SessionManagementItemSchema>
+export type SessionManagementListResponse = z.infer<
+  typeof SessionManagementListResponseSchema
+>
+export type AgentCallListQuery = z.infer<typeof AgentCallListQuerySchema>
+export type AgentRunSummary = z.infer<typeof AgentRunSummarySchema>
+export type AgentCallHandSummary = z.infer<typeof AgentCallHandSummarySchema>
+export type HandAgentCallsResponse = z.infer<
+  typeof HandAgentCallsResponseSchema
+>
+export type AgentRunDecision = z.infer<typeof AgentRunDecisionSchema>
+export type AgentRunDetailResponse = z.infer<
+  typeof AgentRunDetailResponseSchema
+>
+export type AgentAttemptSummary = z.infer<typeof AgentAttemptSummarySchema>
+export type AgentCapabilityInvocationSummary = z.infer<
+  typeof AgentCapabilityInvocationSummarySchema
+>
+export type AgentRunAttemptsResponse = z.infer<
+  typeof AgentRunAttemptsResponseSchema
+>
+export type AgentRunCapabilityInvocationsResponse = z.infer<
+  typeof AgentRunCapabilityInvocationsResponseSchema
 >
 export type StatisticsScope = z.infer<typeof StatisticsScopeSchema>
 export type StatisticsSubject = z.infer<typeof StatisticsSubjectSchema>

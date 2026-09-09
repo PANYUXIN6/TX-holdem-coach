@@ -1,9 +1,10 @@
 # M5.5 数据管理与手牌调用链查询设计
 
 - 日期：2026-09-06
-- 状态：设计稿；用户已确认本期使用现有审计摘要，整体设计待确认；本轮不实施业务代码
+- 最后更新：2026-09-08（实现与验收完成）
+- 状态：已完成并验证；本期使用现有审计摘要
 - 任务来源：[项目开发任务 M5.5](../plans/2026-07-23-poker-practice-development-tasks.md#m55-实现数据管理查询)
-- 需求依据：[PRD §9](./2026-07-23-poker-practice-prd.md)、[后端设计 §13.4、§16](./2026-07-23-poker-practice-backend-design.md)、[前端设计 §3.7–3.8](./2026-07-23-poker-practice-frontend-design.md)
+- 需求依据：[PRD §7.4、§9](./2026-07-23-poker-practice-prd.md)、[后端设计 §1.2、§13.4、§14.9、§16](./2026-07-23-poker-practice-backend-design.md)、[前端设计 §3.7–3.8](./2026-07-23-poker-practice-frontend-design.md)
 - 上游契约：[M3.5 HTTP](./2026-08-11-m3-5-hono-api-error-mapping-design.md)、[M2.8 删除](./2026-08-04-m2-8-session-data-deletion-design.md)、[M4.9 审计](./2026-08-30-m4-9-player-audit-replay-bounded-memory-design.md)、[M5.3 历史列表](./2026-09-04-m5-3-completed-hand-history-filter-sort-pagination-design.md)、[M5.4 统计](./2026-09-06-m5-4-fixed-statistics-aggregation-design.md)
 - 下游：M6 API/Query 缓存约定，M7 历史、设置及 AI 调试页面；M8 只继承通用调用摘要协议
 
@@ -36,17 +37,21 @@
 | [data-routes.ts](../../../apps/server/src/http/data-routes.ts)、[session-data-deletion-service.ts](../../../apps/server/src/sessions/session-data-deletion-service.ts) 已提供确认文字和明确删除响应 | 不重复开发删除 API，不改确认文字与已确认的锁/级联语义 |
 | [create-app.ts](../../../apps/server/src/http/create-app.ts)、[bootstrap.ts](../../../apps/server/src/bootstrap.ts) 使用必需应用端口与严格 query 门禁 | 新接口必须进入正式装配、路由识别、query 白名单和输出 Schema 验证 |
 
-已阅读 [REPO_MAP](../../REPO_MAP.md) 和 [ARCHITECTURE](../../ARCHITECTURE.md)。两者仍将 M5.4 记作后续工作，当前工作区代码已超出该状态；本任务按上表源码定位责任，只编写设计，不将计划中的 M5.5 模块登记为已经存在。M5.4 既有工作区修改保留，其历史测试结果不由本次阅读推定。
+截至 2026-09-08，[REPO_MAP](../../REPO_MAP.md) 和 [ARCHITECTURE](../../ARCHITECTURE.md) 已同步 M5.5 的实际端口、责任边界及验收结果。M5.5 未修改 Schema/migration；database m55 与 PostgreSQL E2E m55 已按顺序通过。
 
 ### 2.2 调试正文的契约冲突
 
-前端设计 §3.8 要求“脱敏请求、最终原始输出、校验错误”；M4.9 明确不返回完整 Prompt/response，当前 Attempt 审计也没有保存原始输出或逐项原始校验错误。live Decision 的 `frozenModelInput` 虽保留首次 canonical messages，但它包含 AI 当时可见的私有牌局信息，也不代表各次纠错请求。
+原 PRD §7.4 要求每次调用保存“脱敏请求、最终原始输出和归一化结果”，原前端设计 §3.8 也要求展示正文；M4.9 明确不返回完整 Prompt/response，当前 Attempt 审计没有保存原始输出或逐项原始校验错误。live Decision 的 `frozenModelInput` 虽保留首次 canonical messages，但它包含 AI 当时可见的私有牌局信息，也不代表各次纠错请求。
 
-用户于 2026-09-06 明确选择：**本期使用现有审计摘要。** M5.5 提供调用链、纠错/错误码、耗时、Token 用量及可见的归一化决策；请求/响应正文以及未持久化的逐项错误标为未提供。该范围决定已冻结，整体设计仍待审阅。
+用户于 2026-09-06 明确选择：**本期使用现有审计摘要。** M5.5 提供调用链、纠错/错误码、耗时、Token 用量及可见的归一化决策；请求/响应正文以及未持久化的逐项错误标为未提供。实现已按该冻结范围完成。
+
+2026-09-07 按已确认的评审修复决定同步修订 [PRD §7.4](./2026-07-23-poker-practice-prd.md#74-调试与审计)：本期审计持久化义务为现有调用摘要、校验状态和已生成的归一化结果，取代原先逐次保存脱敏请求正文及最终原始输出的要求。该修订同时适用于本期新增调用，不是仅在前端隐藏已经保存的正文，也不要求补录历史原文。现有 private frozen input 仍按 M4.9 保留；本期不增加原文记录或揭示开关。
+
+同日第二批评审修复同步[后端设计 §14.9](./2026-07-23-poker-practice-backend-design.md)：`agent_attempts` 原“脱敏输入输出、结构与业务校验错误”清单改为已有请求/响应投影哈希、校验状态和稳定错误码，明确不要求保存正文或逐项错误详情。已生成的 Player 模型选择及 Validator 结果仍由 `player_decisions` 保存，首次 frozen model input 保持 M4.9 的私有用途。PRD、后端持久化清单与本稿采用同一本期范围，哈希不被解释为输出正文。
 
 后续若扩展正文，必须先设计审计写入、逐 Attempt 事实来源、载荷容量、敏感字段、Hand 可见性、历史缺失值及删除验收。不能在查询时重建原文、重调模型、把初始 messages 冒充纠错请求，或把归一化选择标成原始输出。
 
-本轮同步前端设计 §3.8 的首版展示口径。TODO（本设计跟踪）：当摘要不足以定位实际 Provider 内容错误，且用户决定扩展正文审计时，重新评估正文能力。不据此删除现有私有 frozen input。
+前端设计 §3.8 已同步摘要展示口径，PRD §7.4 与后端设计 §14.9 已同步本期保存契约。TODO（本设计跟踪）：当摘要不足以定位实际 Provider 内容错误，且用户决定扩展正文审计时，重新评估正文能力。不据此删除现有私有 frozen input。
 
 ### 2.3 成熟方案参考
 
@@ -95,7 +100,7 @@ type SessionManagementItem = {
 
 - roster 固定按领域 seatNumber 升序，6–9 人、用户唯一且座位 0；用户项只有 `participantId, seatNumber, kind=user`，AI 项另外包含 `personaId, personaVersion, displayName, avatarColor, configSnapshotKey`。历史名称/ID 使用历史协议叶类型，不套当前目录 enum 或前端筛选输入的长度约束。
 - `completedHandCount` 来自当前快照内已提交计数，并在同一读取视图与 `hands.status=completed` 计数核对；诊断分支仅使用关系计数。不计 aborted，不用最大 handNumber 或 Run 数代替手数。
-- `currentHandId` 来自 Session 关系行，不表示最近完成手。历史入口继续使用 `GET /api/hands?sessionId=...`；不为旧后端草案重复安装 `/api/sessions/:id/hands`。
+- `currentHandId` 只公开经有效私有快照认证的当前手：对 active/ended，先从已解码快照确定 `expectedCurrentHandId = state.poker.hand?.handId ?? null`，再要求 `sessions.currentHandId === expectedCurrentHandId`；一致时返回该认证值，任何偏差均按 §5 使整次查询失败，即使两侧 stateVersion 相等也不例外。`readonlyDiagnostic` 不提供可信当前手，固定返回 null；这里的 null 由生命周期区分为“未提供”，不能推断该场实际没有当前手。该字段不表示最近完成手。历史入口继续使用 `GET /api/hands?sessionId=...`；不为旧后端草案重复安装 `/api/sessions/:id/hands`。
 - `createdAt` 是持久化开场事务时间，不取第一条模型调用时间；`endedAt` 仅忠实返回关系事实，不以最后一手时间补齐。
 
 正常 active/ended 的 `accounting` 为 `{ status:'available', stateVersion, seats }`，seats 每项只有：
@@ -138,7 +143,9 @@ Run 列表的根为 `agent_runs`，LEFT JOIN 可选 Decision；queued 或 auditP
 
 **Hand 最小摘要**：`handId, sessionId, handNumber, status`；aborted 时额外返回 `abortedAt, abortReasonCode, abortedByAgentRunId`。错误原因先映射稳定公开码，不直接输出自由文本。inProgress/completed 没有中止字段。此接口不返回 Hand result、底牌或街道历史。
 
-**Run 摘要**：`runId, sessionId, handId, runtime, executionMode, lifecycle, participantId, seatNumber, sourceStateVersion, decisionRequestId, createdAt, startedAt, completedAt, terminationReasonCode`。Coach 的 participant/seat/sourceStateVersion/decisionRequestId 可按真实合法形态为 null；Player 必须符合其身份契约。详情额外返回 `parentRunId, replacementRunId, reexecutionSourceRunId` 和 Decision 摘要。引用只关联已确认同 Owner/Session 的资源，不带 leaseOwner、fencing token、idempotencyKey、budget payload 或配置正文。
+**Run 摘要**：`runId, sessionId, handId, runtime, executionMode, lifecycle, participantId, seatNumber, sourceStateVersion, decisionRequestId, createdAt, startedAt, completedAt, terminationReasonCode`。Coach 的 participant/seat/sourceStateVersion/decisionRequestId 可按真实合法形态为 null；Player 必须符合其身份契约。详情额外返回 `parentRunId, replacementRunId, reexecutionSourceRunId`、Decision 摘要以及必填的 `commandEventRange`。引用只关联已确认同 Owner/Session 的资源，不带 leaseOwner、fencing token、idempotencyKey、budget payload 或配置正文。
+
+**Run 详情的命令事件范围**：`commandEventRange: { firstEventSeq: number, lastEventSeq: number } | null`，字段不得省略，也不允许 undefined。两个序号均为非负安全整数，且 `firstEventSeq <= lastEventSeq`；存在同 Run 的可认证 completed command ledger 时必须返回其完整范围，否则按 §4.3 的合法无命令情形返回 null。范围对象自身使用 strictObject，归属校验或已完成账本损坏不能降级为 null。
 
 **Attempt**：`attemptId, attemptNumber, stage, lifecycle, provider, model, attemptType, routingReasonCode, startedAt, completedAt, durationMs, accepted, stale, interrupted, validationStatus, errorCode`；request/response 仅返回既有 `requestProjectionHash, responseProjectionHash`，不增加摘要计算。`usage` 明确带 `inputTokens, outputTokens, accounting`：
 
@@ -151,11 +158,13 @@ Run 列表的根为 `agent_runs`，LEFT JOIN 可选 Decision；queued 或 auditP
 
 **Decision**：判别联合，`none` 表示尚未产生；`summary` 带 `decisionId, status, terminalOutcome, terminalReasonCode, acceptedAttemptId, commandLedgerId, sourceDecisionId` 和归一化行动的可见性结果。`status`（阶段）与 terminalOutcome 分开，不能把“selected 后 stale”称为已行动。归一化行动仅投影 Validator 已认证的可执行动作种类及其规范金额，不返回 modelChoice、理由、候选频率或策略标签；没有合法选择时明确 `notSelected`。
 
-详情带固定 `contentAvailability`：`requestBody='notExposed'`、`rawResponse='notRecorded'`、`validationDetails='notRecorded'`。客户端显示“本版本未提供”，不能显示为空字符串暗示实际调用返回空内容。首次 frozen input 的存在不改变 requestBody 结论。
+详情带固定 `contentAvailability`：`requestBody='notExposed'`、`rawResponse='notRecorded'`、`validationDetails='notRecorded'`。这是对 §2.2、已修订 PRD §7.4 和后端设计 §14.9 的本期持久化/展示契约的直接表达：原始响应本期没有保存，不能解释为已保存但暂不返回。客户端显示“本版本未提供”，不能显示为空字符串暗示实际调用返回空内容。首次 frozen input 的存在不改变 requestBody 结论。
 
 这些是公开 Schema 的完整内容边界。Contracts 深层 strictObject，只复用现有公开动作与历史身份叶类型；不得将私有 Zod Schema 或 Replay DTO 导出给浏览器。
 
 ### 4.3 Hand 可见性与关联语义
+
+M4.9 审计契约及实现就绪是 M5.5 的显式实施前置条件：开始 §7 的切片 A 前，必须确认 Run/Attempt/Capability/Decision 关系、私有 Replay 与图关系语义、所消费的 current reader 及镜像校验已经可用；未就绪时不能仅凭 M1、M2、M3 完成而启动 M5.5。该依赖已同步到[总计划 §2](../plans/2026-07-23-poker-practice-development-tasks.md#2-总体模块与依赖)，只约束 M5.5，不将整个 M5 改为依赖全部 M4。截至 2026-09-07，总计划的 M4.9 完成记录与 §2.1 的实现证据已满足此条件。
 
 | Hand 状态 | 可查询内容 | 归一化行动 |
 | --- | --- | --- |
@@ -167,7 +176,13 @@ aborted Hand 的调用集合只返回上述关联失败 Run；直接 Run/子集�
 
 技术可见性不因 `view=auditReveal` 参数扩大；这些接口不接受 view。底牌揭示继续由 M5.2 completed-only 详情拥有。ReadonlyDiagnostic 场次仍可按 Owner 查询已持久化技术摘要，不调用 Session recovery；只解码实际消费的审计载荷，不依赖当前扑克快照健康。
 
-扑克 stateVersion 与 eventSeq 不混用。Run 的 sourceStateVersion 表示决策所依据的状态，不是本次查询时 Session 最新版本。详情可附加已认证的命令事件范围 `{ firstEventSeq,lastEventSeq } | null`，仅从同 Run/Decision 关联的 completed command ledger 取得；不得以 Run 创建时间或当前 nextEventSeq 猜测。暂停/重试的协调事件仍通过现有 SSE/事件链定位，本接口不新建事件日志副本。
+扑克 stateVersion 与 eventSeq 不混用。Run 的 sourceStateVersion 表示决策所依据的状态，不是本次查询时 Session 最新版本。详情必须返回 §4.2 定义的 `commandEventRange`，与 Run/Decision 在同一读取快照中认证：
+
+- Decision 通过 `commandLedgerId` 关联到同 Owner/Session 的 completed command ledger 时，必须投影其 `firstEventSeq,lastEventSeq`；不能只因客户端未展开详情或某个可选投影步骤未执行而省略字段。
+- 尚无 Decision、尚未绑定命令或合法关联命令尚未 completed 时返回 null。historicalReexecution 与 Coach 没有自身扑克命令时也返回 null，不能借来源 live Run 的账本填充范围。
+- 已声明 committed 的 Decision 缺少命令账本、非空引用指向缺失或不属于本 Run/Session/Owner 的账本、completed 账本序号缺失/逆序/越界或 current reader 认证失败，均使整次详情查询失败并映射为 500；不能当作合法“暂无事件范围”。
+
+前端将非 null 范围显示为“本次命令事件序号”，只有一个序号时显示单值；null 显示“暂无已提交命令事件”。这不是 Session 最新 eventSeq，也不表示该 Run 没有协调事件。不得以 Run 创建时间、当前 nextEventSeq 或来源 Run 的事件猜测本次范围。暂停/重试的协调事件仍通过现有 SSE/事件链定位，本接口不新建事件日志副本。
 
 M4.9 私有 Replay 与图构造函数继续保留。新查询沿用 HAS_ATTEMPT、INVOKED、PRODUCED、ACCEPTED_FROM、REEXECUTES 等关联语义，但不为所有 Run 强行构造 Memory/Decision 节点；只存在 Run 是合法审计状态。无需让每次 HTTP 查询执行完整 Memory hash replay；对实际返回的 Decision/Attempt 使用 current reader 和所需镜像校验即可。
 
@@ -195,7 +210,11 @@ Hono 严格输入 / Owner 绑定
 
 每个多语句请求复用 [runDatabaseTransaction](../../../apps/server/src/persistence/database-transaction.ts)，在首条业务 SELECT 前设置事务局部 `REPEATABLE READ, READ ONLY`。SQL 参数化；不取得 Session/Owner 写锁、不调用 CommandExecutor/Recovery、不持有事务句柄出 persistence、不请求 Provider。未知 Codec 版本、载荷损坏和领域不变量保留错误类型；数据库连接/驱动故障才包装为 DatabaseOperationError。
 
-场次查询按一页根 ID 批量读取 roster、首手 checkpoint、单行最新 snapshot、completed 计数。缺失必须显式可见，不通过 INNER JOIN 隐藏正常场次。认证 seat/participant/owner/session 身份、版本镜像、首手编号、金额与生命周期。不扫描全部历史 action events 计算资金，不逐场进行网络或 SQL 往返。列表最重载荷是一页首手和最新快照，内存不会随全历史手数线性增长。
+场次查询按一页根 ID 批量读取 roster、首手 checkpoint、单行最新 snapshot、completed 计数。缺失必须显式可见，不通过 INNER JOIN 隐藏正常场次。认证 seat/participant/owner/session 身份、版本镜像、首手编号、金额与生命周期；对 active/ended 还必须逐项校验 §3.2 的快照 Hand ID 与关系指针相等，这是独立于 stateVersion 镜像的条件。不扫描全部历史 action events 计算资金，不逐场进行网络或 SQL 往返。列表最重载荷是一页首手和最新快照，内存不会随全历史手数线性增长。
+
+指针偏差的确定路径是：同一只读快照内解码有效私有状态 → 计算 expectedCurrentHandId → 对比关系指针 → 任一不等即抛出持久化不变量错误、终止整次查询、释放只读事务并返回 `500 / INTERNAL_SERVER_ERROR`，不交付任何部分页面。例如快照为 H2、指针为 H1、stateVersion 相等时也失败，不返回 H1，不把 H2 当作已经完成数据库修复后的成功结果。betweenHands 的期望指针为 null；已有 readonlyDiagnostic 分支不认证该指针，也不公开未经认证的关系值。
+
+这里采用“发现偏差后读取失败”，不依赖启动恢复永远先于查询的假设。指针重建与提交后的修复诊断元数据仍由 [M2.6 恢复边界 §8.3](./2026-08-03-m2-6-multiversion-recovery-design.md#83-可修复指针)及其 [session-recovery-repository.ts](../../../apps/server/src/persistence/session-recovery-repository.ts) 负责，由既有恢复入口在独立写事务中锁定并重新认证最新事实；本 GET 不自动调度或等待修复。外部恢复提交后，下一次列表请求建立新快照并重新验证，通过后才返回当前手。查询失败本身不表示已完成指针修复、已写入诊断状态或应自动重试扑克命令。
 
 调试 Reader 按根页、子页分别读取；列表只读投影所需列，详情按需解码 Decision 的 Validator 结果、阶段和关联账本，不拉取所有 auditSnapshot、候选、Memory 和 frozen messages。有记录但 payload 缺失、未知版本或镜像不合法应失败；合法阶段的未生成载荷才允许空分支。涉及 historical Decision 的 source 引用必须验证同 Owner/Session 及来源约束，不能为了显示来源再复制全部源载荷。
 
@@ -207,7 +226,7 @@ Hono 严格输入 / Owner 绑定
 | 场次集合没有数据 | 200 / items=[]、nextCursor=null |
 | Hand/Run 不存在、跨 Owner、已删除 | 404，新增资源使用明确的 HAND_NOT_FOUND / AGENT_RUN_NOT_FOUND 映射；不误报 SESSION_NOT_FOUND |
 | 根存在但没有调用/子记录 | 200 / 空集合，Decision 尚未生成是合法 none |
-| 未知版本、坏镜像、输出 Schema 错误、金额越界 | 500 / INTERNAL_SERVER_ERROR，脱敏消息，无部分页面 |
+| 未知版本、坏镜像（包括有效快照与 currentHandId 偏差）、命令账本范围认证失败、输出 Schema 错误、金额越界 | 500 / INTERNAL_SERVER_ERROR，脱敏消息，无部分页面 |
 | 数据库不可用 | 503 / SERVICE_UNAVAILABLE |
 
 为新接口注册精确 GET/HEAD query 例外；POST `/api/sessions` 仍拒绝 query。保留 Host/Origin/CORS、安全头、HEAD 无响应体、成功和错误 no-store，以及路由模板级日志；不记录请求 query、私有载荷、底牌、原始错误或 SQL 参数。`ApiRuntime` 增加必需查询端口，configured 与 diagnostic-only 生产装配都提供同一 Reader，不加成功空结果 fallback。
@@ -231,11 +250,11 @@ Repository 负责既有锁、运行失效、指针清理和同事务级联；响
 
 ## 7. 研发切片与顺序
 
-§2.2 的范围已经确认；整体设计确认后，按 A → B → C → D → E 推进。每个切片先实现与风险相称的窄证据；协议或跨切片可见性发生变化时先修订本文。当前不创建研发子任务、不分派代理、不开始编码。
+§2.2 的范围已经确认并按 A → B → C → D → E 实施。每个切片均以风险相称的窄证据推进；未创建研发子任务或分派代理。
 
 | 切片 | 结果/责任边界 | 前置与不可重定义的契约 | 完成证据 |
 | --- | --- | --- | --- |
-| A：公开协议与纯投影 | Contracts、严格查询/cursor、场次账务和审计可见性投影 | 整体批准；M5.4 账务、历史身份、Hand 可见性、正文范围 | 窄失败测试 → 最小实现 → 通过；金额/中止/无 Decision/Token 上界可人工核对 |
+| A：公开协议与纯投影 | Contracts、严格查询/cursor、场次账务和审计可见性投影 | 整体批准且 §4.3 的 M4.9 前置条件满足；M5.4 账务、历史身份、Hand 可见性、正文范围 | 窄失败测试 → 最小实现 → 通过；金额/中止/无 Decision/Token 上界可人工核对 |
 | B：场次 Reader | 页内批量 Session/roster/checkpoint/snapshot 读取 | A；Owner、首手初始资金、结束最终快照、诊断分支 | database m55 的列表、分页、历史配置、补码资金与只读一致视图 |
 | C：调用链 Reader | Run 根、Attempt/Capability 子页、Decision 摘要与事件引用 | A；缺少 Decision 合法，载荷损坏不合法；不暴露私有 Replay | database m55 的无 Decision 失败、纠错链、替代链、Owner/关联隔离与删除 |
 | D：服务/HTTP/装配 | 必需端口、路由门禁、输出 Schema、生产 bootstrap | A–C；只读与 no-store，既有创建/快照/删除行为不变 | 离线真实服务经 app.request 验证，400/404/500/503 与 HEAD 边界 |
@@ -254,16 +273,20 @@ B/C 的职责独立，未来编排可在 A 冻结后分别推进；任何远程�
 3. queued、无 Decision 的失败 Run；三个 Attempt 的首次→纠错→接受；pending/上界/实际 Token 分开；selected 后 stale 不称 committed。
 4. 同一私有 fixture 在 inProgress/completed/aborted 的公开 DTO 不同；活动手未提交选择不可见；递归标记验证 Key、连接串、底牌、Memory、Prompt、候选、reasoning_content 和原始错误不会进入任何成功/失败响应。
 5. 必需端口缺失不能静默成功；非法 query/未知版本/输出损坏分类正确；删除响应和确认文字保持现有契约。只新增必要分支，不复制 M3.5 的完整 HTTP 拒绝矩阵。
+6. 指针专用最小夹具：快照 Hand=H2、关系 currentHandId=H1、stateVersion 相等，其余事实合法；整次列表返回 500 且不调用恢复端口、不输出部分 items。正常一致夹具返回 H2；readonlyDiagnostic 固定输出 currentHandId=null。
+7. Run 详情始终含 commandEventRange：有合法 completed 账本时返回手工声明的序号范围，无命令时为 null；省略字段不通过 Contracts。关联的 completed 账本缺失或范围不合法时返回 500，不返回 null；historical Run 不借用来源 Run 的范围。
 
 测试策略沿用根 AGENTS.md：稳定纯逻辑和 Codec 优先最窄失败测试再实现；HTTP 接线先冻结协议，适当复用已有 unit/service fixture，不为文档本身新增程序测试。
 
 ### 8.2 database m55
 
-实施前必须阅读[数据库测试手册](../../../apps/server/test/integration/README.md)。`m55` 是计划新增里程碑，目前不能宣称命令已可执行。使用正式 writer 构造正常事实，SQL 仅用于损坏/约束验证。
+实施前已阅读[数据库测试手册](../../../apps/server/test/integration/README.md)。`m55` 已登记为独立里程碑；使用正式 writer 构造正常事实，SQL 仅用于损坏/约束验证。
 
 - 多场 completed/active/diagnostic 及另一个 Owner；一场至少两页 Run/子项，以 limit=1 跨边界而不大量造数。验证 Session 根分页不拆 roster、Owner JOIN 不串数据、非 current 目录展示值不被当前目录覆盖。当前 config Codec 支持范围内用真实历史 fixture；不伪造未来版本冒充兼容测试。
 - 在实际读取中核对首手 checkpoint、最终快照和累计买入；正常生命周期缺失必需事实失败，diagnostic 分支不偷偷恢复快照。
+- 用局部 SQL 仅注入 currentHandId 偏差，保持有效快照和版本相等；正式列表 Reader 拒绝且查询零写入。随后显式调用既有 M2.6 恢复事务并提交，断言修复元数据及新列表读取的认证值，证明修复由外部写边界完成。
 - Run 在 Decision 写入前失败仍可查询；Attempt/Capability 次序与 accepted 关联正确；未知审计版本或错 Owner/Session 镜像显式失败。手牌状态和行动可见性在同一快照读取。
+- 使用真实提交关联的 command ledger 验证 Run 详情的 commandEventRange 与持久化范围相等；无提交场景为显式 null，跨 Owner/Session 关联和损坏范围不能成为空范围。
 - 用单个受控套件内独立连接和确定性屏障安排查询中途结束场次、完成 Attempt 或删除，验证请求内不拼接两种状态；提交后的新请求反映变更。屏障复用测试 seam，不以 sleep 推测交接时点。
 - 正式删除/清空后所有新 Reader 无目标；另一 Owner 与设置保留。记录根页及子页的 SQL 次数、计划、行数和用时，确认没有逐项 N+1 和全历史审计树装载。
 
@@ -288,14 +311,24 @@ pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=
 
 连接任何远程数据库之前必须中断询问用户网络是否可用；设计批准不替代这个项目要求。报告分别列出 database milestone/full、PostgreSQL E2E milestone/full 的执行范围和结果。
 
-本轮为文档交付，不连接远程数据库，不声称新接口已有行为证据。实际检查结果（2026-09-06）：
+以下三段为实施前的文档评审历史记录，不代表当前实现状态。实际检查结果（2026-09-06）：
 
 - 三份本轮改动文档共 67 项本地文件链接存在性检查通过；Prettier 与 `git diff --check` 通过。
 - `pnpm run verify` 首次因沙箱禁止 tsx 本地 IPC 管道中断；经批准在沙箱外执行同一离线命令后退出码为 0：12 个确定性 Eval 场景、27 项 Contracts、1004 项 unit、49 项 service 均通过，格式与类型检查通过。
 - database：milestone/full 均未执行；PostgreSQL E2E：milestone/full 均未执行。上述离线验证针对当前工作区，不作为尚未实施的 M5.5 接口验收，也不补写 M5.4 的远程验证成绩。
 
+第一批文档修复检查（2026-09-07）：三份改动文档的 74 项本地文件链接及新增章节引用有效，三项修改的文字核对、Prettier 与 `git diff --check` 通过。`pnpm run verify` 通过：12 个确定性 Eval、27 项 Contracts、1008 项 unit、49 项 service；格式和类型检查通过。本轮 database milestone/full 与 PostgreSQL E2E milestone/full 均未执行，未连接远程数据库；这些检查不代替设计评审方的修复复核。
+
+第二批文档修复检查（2026-09-07）：本稿与后端设计共 46 项本地文件链接及新增章节引用有效；指针偏差拒绝路径、审计清单同步、commandEventRange 必填及分支规则已完成文字核对。Prettier、`git diff --check` 和重新执行的 `pnpm run verify` 均通过，Eval/Contracts/unit/service 数量分别为 12/27/1008/49。database milestone/full 和 PostgreSQL E2E milestone/full 均未执行；新增业务验收场景仍待实施，设计评审仍待复核。
+
+实现检查（2026-09-07）：已完成共享 Contracts、严格 query/cursor、场次账务投影、Agent 行动可见性、两个 Owner-scoped repeatable-read Repository、Hono 路由、错误映射、生产 bootstrap 及 m55 两套远程入口登记。`pnpm run verify` 通过：12 个确定性 Eval 场景、30 项 Contracts、1018 项 unit、51 项 service，格式与类型检查通过。database m55/full 与 PostgreSQL E2E m55/full 均未执行，未连接远程数据库。
+
+远程验收（2026-09-08）：用户确认网络可用后串行执行 database m55 与 PostgreSQL E2E m55。database 阶段在修正完成手状态夹具和合法 Run 协调拓扑后通过；真实读取同时发现并修复 Run 详情对象被 strict 摘要 Schema 误拒绝的问题，并新增离线回归测试。随后 database m55 通过（2 passed、27 skipped），PostgreSQL E2E m55 通过（2 passed、19 skipped）。两套 full 均未执行。
+
+远程修复后的最终离线复验（2026-09-08）：`pnpm run verify` 通过，包含 12 个确定性 Eval 场景、30 项 Contracts、1019 项 unit、51 项 service，格式、类型及仓库地图检查均通过。
+
 ## 9. 交接状态
 
-已识别的调试正文范围冲突已经用户决定解决，并同步本稿及前端设计。正常/诊断场次资金定义、Run 根查询、只读隔离、分页、删除与验收边界均已给出；当前没有尚未回答的产品范围问题。整体设计确认后进入 §7 研发。
+调试正文范围已按用户决定收敛为现有审计摘要，并同步本稿、PRD、后端设计和前端设计。M5.5 服务端实现及离线验证已完成，任务进度、REPO_MAP、ARCHITECTURE、测试手册与共享 Contracts 已同步；未修改 M5.4 的历史测试成绩。
 
-实施收口需更新任务进度、实际端口与职责的 REPO_MAP/ARCHITECTURE、测试手册、共享 Contracts 和 M6/M7 缓存消费说明；本轮不提前登记实现完成，不修改 M5.4 未经核实的历史测试成绩。
+M5.5 实现、离线验证及两套远程 milestone 均已完成；两套 full 未执行，也未触发本任务的 full 条件。

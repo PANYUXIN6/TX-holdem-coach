@@ -247,9 +247,8 @@ describe('session command execution', () => {
     })
 
     const publicExecutor = createSessionCommandExecutor(fixture.executorInput)
-    const { handlers: _handlers, ...session } = fixture.executorInput
     const composition = createPlayerCommitSessionComposition({
-      session,
+      session: fixture.executorInput,
       player: { runEventPort: { publish: async () => undefined } },
     })
 
@@ -262,6 +261,18 @@ describe('session command execution', () => {
     expect(
       'createInternalAiActionHandlerMap' in playerActionHandlerModule,
     ).toBe(false)
+    await expect(
+      composition.commands.execute({
+        sessionId: fixture.sessionId,
+        commandId: fixture.commandId,
+        expectedStateVersion: 7,
+        type: 'endSession',
+        payload: {},
+      }),
+    ).resolves.toMatchObject({
+      kind: 'rejected',
+      response: { code: 'COMMAND_NOT_ALLOWED_IN_PHASE' },
+    })
   })
 
   test('constructs an immutable handler map with an exact enabled command set', () => {

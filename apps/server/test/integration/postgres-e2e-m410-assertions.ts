@@ -10,11 +10,11 @@ import type { ModelProviderAdapter } from '../../src/agents/foundation/model-gat
 import { createPlayerHistoricalReexecutionService } from '../../src/agents/player/player-historical-reexecution.js'
 import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
 import { resolveOwnerScope } from '../../src/persistence/owner-scope.js'
+import { patchPlayerTimeoutSettings } from '../../src/persistence/player-settings-repository.js'
 import {
-  lockPlayerTimeoutSettings,
-  patchPlayerTimeoutSettings,
-  PLAYER_TIMEOUT_SETTING_KEY,
-} from '../../src/persistence/player-settings-repository.js'
+  readPlayerTimeoutSettingsRow,
+  restorePlayerTimeoutSettingsRow,
+} from '../helpers/player-timeout-settings-fixture.js'
 import {
   createSessionFixture,
   readPrivateState,
@@ -23,60 +23,7 @@ import { clearLocalOwnerSessions } from './database-m32-assertions.js'
 import {
   createDatabaseTestSqlForRole,
   runDatabaseTestWithCleanup,
-  serializeJsonbFixture,
 } from './database-test-runtime.js'
-
-interface PlayerTimeoutSettingsRowSnapshot {
-  readonly id: string
-  readonly settingPayload: unknown
-  readonly updatedAt: string
-}
-
-async function readPlayerTimeoutSettingsRow(
-  sql: Sql,
-  databaseOwnerId: string,
-): Promise<PlayerTimeoutSettingsRowSnapshot | undefined> {
-  const rows = await sql<readonly PlayerTimeoutSettingsRowSnapshot[]>`
-    SELECT
-      id::text AS id,
-      setting_payload AS "settingPayload",
-      updated_at::text AS "updatedAt"
-    FROM app_private.app_settings
-    WHERE owner_id = ${databaseOwnerId}::uuid
-      AND setting_key = ${PLAYER_TIMEOUT_SETTING_KEY}
-  `
-  if (rows.length > 1) {
-    throw new Error('M4.10 Player timeout 设置行不唯一。')
-  }
-  return rows[0]
-}
-
-async function restorePlayerTimeoutSettingsRow(input: {
-  readonly sql: Sql
-  readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
-  readonly original: PlayerTimeoutSettingsRowSnapshot | undefined
-}): Promise<void> {
-  await input.sql.begin(async (transaction) => {
-    await lockPlayerTimeoutSettings(transaction, input.owner)
-    await transaction`
-      DELETE FROM app_private.app_settings
-      WHERE owner_id = ${input.owner.databaseOwnerId}::uuid
-        AND setting_key = ${PLAYER_TIMEOUT_SETTING_KEY}
-    `
-    if (input.original === undefined) return
-    await transaction`
-      INSERT INTO app_private.app_settings (
-        id, owner_id, setting_key, setting_payload, updated_at
-      ) VALUES (
-        ${input.original.id}::uuid,
-        ${input.owner.databaseOwnerId}::uuid,
-        ${PLAYER_TIMEOUT_SETTING_KEY},
-        ${serializeJsonbFixture(input.original.settingPayload)}::text::jsonb,
-        ${input.original.updatedAt}::timestamptz
-      )
-    `
-  })
-}
 
 function asDatabaseClient(sql: Sql): DatabaseClient {
   return {

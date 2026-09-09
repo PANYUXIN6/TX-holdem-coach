@@ -10,6 +10,7 @@ import { assertM410PlayerSessionIntegrationPersistence } from './database-m410-a
 import { assertM51CompletedHandHistory } from './database-m51-assertions.js'
 import { assertM53CompletedHandHistoryList } from './database-m53-assertions.js'
 import { assertM54FixedStatistics } from './database-m54-assertions.js'
+import { assertM55SessionAndAgentCallQueries } from './database-m55-assertions.js'
 import {
   assertM24M25AtomicComposition,
   assertM23Repositories,
@@ -182,6 +183,12 @@ registerDatabaseMilestoneTest(
   'm54',
   'M5.4 fixed statistics persistence',
   (sql, runtimeUrl) => assertM54FixedStatistics(sql, runtimeUrl),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm55',
+  'M5.5 session management and agent call queries',
+  (sql, runtimeUrl) => assertM55SessionAndAgentCallQueries(sql, runtimeUrl),
   300_000,
 )
 

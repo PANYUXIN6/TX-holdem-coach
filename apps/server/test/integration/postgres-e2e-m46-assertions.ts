@@ -16,6 +16,7 @@ import { deepSeekPricingPolicy } from '../../src/agents/model-gateway/model-pric
 import { productionRuntimeRegistry } from '../../src/agents/production-runtime-registry.js'
 import { playerDecisionCapabilityDefinitions } from '../../src/agents/player/player-decision-capabilities.js'
 import { playerDecisionPreprocessingPlan } from '../../src/agents/player/player-decision-preprocessing-plan.js'
+import { createPlayerExecutionSupervisor } from '../../src/agents/player/player-execution-supervisor.js'
 import { createPlayerRuntimeExecutor } from '../../src/agents/player/player-runtime-executor.js'
 import { createPlayerCommitResultPort } from '../../src/agents/player/player-commit-gate.js'
 import {
@@ -26,6 +27,7 @@ import {
 import { encodeStrategyPackAuditReference } from '../../src/agents/player/player-strategy-pack-audit-reference.js'
 import { playerRuntimeDefinition } from '../../src/agents/player/foundation-definition.js'
 import { playerModelRoutePolicy } from '../../src/agents/player/route-policy.js'
+import { createSessionAgentCoordinator } from '../../src/agents/player/session-agent-coordinator.js'
 import type { DatabaseClient } from '../../src/db/client.js'
 import { createAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
 import { runDatabaseTransaction } from '../../src/persistence/database-transaction.js'
@@ -48,6 +50,7 @@ import {
   readResolvedPlayerTimeoutSettings,
 } from '../../src/persistence/player-settings-repository.js'
 import { createPlayerCommitSessionComposition } from '../../src/sessions/command-execution/session-command-executor.js'
+import { createSessionCommandHandlerMap } from '../../src/sessions/command-execution/command-handler-map.js'
 import {
   createStaticStrategyPackRepository,
   EMPTY_AUTHORIZED_STRATEGY_PACK,
@@ -194,6 +197,7 @@ export interface M47CommitScenario {
   readonly failSessionPublish?: boolean
   readonly failRunPublish?: boolean
   readonly completeHand?: boolean
+  readonly pauseAfterSelectedResultFailure?: boolean
   readonly failAfterLedger?: boolean
   readonly assertAfterLedger?: (input: {
     readonly transaction: TransactionSql
@@ -205,6 +209,7 @@ export interface M47CommitScenario {
     readonly sql: Sql
     readonly owner: Awaited<ReturnType<typeof resolveOwnerScope>>
     readonly sessionId: string
+    readonly handId: string
     readonly runId: string
     readonly authority: RuntimeCommitAuthority<'player'>
     readonly result: PlayerRuntimeCandidateResultV1
@@ -258,6 +263,12 @@ export async function assertM46PlayerDecisionApplicationFlow(
     readonly commitSelectedDecision?: boolean
   } & M47CommitScenario = {},
 ): Promise<void> {
+  if (
+    input.pauseAfterSelectedResultFailure === true &&
+    input.commitSelectedDecision === true
+  ) {
+    throw new TypeError('selected Result 失败与 Commit 场景不能同时启用。')
+  }
   let publishedEventCount = 0
   const owner = await resolveOwnerScope(sql, { ownerId: 'local-user' })
   const originalTimeoutSettings = await readResolvedPlayerTimeoutSettings(
@@ -372,6 +383,9 @@ export async function assertM46PlayerDecisionApplicationFlow(
       expect(resultAuthority).toEqual(authority)
       expect(isPlayerRuntimeCandidateResultV1(result)).toBe(true)
       publishedResults.push(result)
+      if (input.pauseAfterSelectedResultFailure === true) {
+        throw new Error('M5.5 在 selected ResultPort 注入失败。')
+      }
     }
     const executor = createPlayerRuntimeExecutor({
       database,
@@ -434,19 +448,52 @@ export async function assertM46PlayerDecisionApplicationFlow(
       decisionRepository.readForResume(transaction, owner, authority),
     )
     expect(initialResume).toEqual({ kind: 'none' })
-    await executeWithPlayerRuntimeDiagnostics({
-      sql,
-      runId,
-      execute: () => executor.execute(runningRun, new AbortController().signal),
-      renewLease: () => workerControl.renewLease(authority),
-    })
+    if (input.pauseAfterSelectedResultFailure === true) {
+      const runEventPort = Object.freeze({ publish: async () => undefined })
+      const supervised = createPlayerExecutionSupervisor({
+        executor,
+        coordinator: createSessionAgentCoordinator({
+          sql,
+          owner,
+          registry: productionRuntimeRegistry,
+          runCoordinator: coordinator,
+          strategyPackRepository: strategyRepository,
+          runEventPort,
+        }),
+      })
+      await executeWithLeaseHeartbeat(
+        () => supervised.execute(runningRun, new AbortController().signal),
+        async () => {
+          try {
+            await workerControl.renewLease(authority)
+          } catch (error) {
+            if (
+              (await workerControl.inspectSettlement(authority)) !== 'terminal'
+            ) {
+              throw error
+            }
+          }
+        },
+      )
+    } else {
+      await executeWithPlayerRuntimeDiagnostics({
+        sql,
+        runId,
+        execute: () =>
+          executor.execute(runningRun, new AbortController().signal),
+        renewLease: () => workerControl.renewLease(authority),
+      })
+    }
 
     expect(adapter.calls).toBe(1)
     expect(reservationSequence).toBe(4)
     expect(publishedResults).toHaveLength(1)
     // M4.6 自身验证 selected resume；M4.7 已由成功场景中的真实 Worker
     // 重领并恢复 selected Run，无需在每个 Commit Gate 场景前重复一次完整执行。
-    if (input.commitSelectedDecision !== true) {
+    if (
+      input.commitSelectedDecision !== true &&
+      input.pauseAfterSelectedResultFailure !== true
+    ) {
       await executeWithPlayerRuntimeDiagnostics({
         sql,
         runId,
@@ -491,10 +538,12 @@ export async function assertM46PlayerDecisionApplicationFlow(
       sql,
       owner,
       sessionId: identityGraph.sessionId,
+      handId: identityGraph.handId,
       runId,
       authority,
       result: selectedResult,
     })
+    if (input.pauseAfterSelectedResultFailure === true) return
     if (input.commitSelectedDecision !== true) {
       const afterState = await readPrivateState(sql, identityGraph.sessionId)
       expect(afterState.stateVersion).toBe(beforeState.stateVersion)
@@ -520,6 +569,7 @@ export async function assertM46PlayerDecisionApplicationFlow(
         session: {
           sql: gateSql,
           owner,
+          handlers: createSessionCommandHandlerMap({ bindings: [] }),
           mutationRepository: productionSessionMutationRepository,
           recoveryRepository: productionSessionRecoveryRepository,
           ...(input.failAfterLedger === true

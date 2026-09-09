@@ -13,6 +13,7 @@ import { runManagedChildProcess } from '../../scripts/managed-child-process.mjs'
 import {
   assertNoConflictingDatabaseTestConnections,
   acquireDatabaseTestSuiteLock,
+  createDatabaseTestSuiteLockClient,
   createDatabaseTestSql,
   type DatabaseTestSuiteLock,
   runAbortableDatabasePhase,
@@ -72,57 +73,74 @@ async function preparePersistentTestDatabase(
 ): Promise<void> {
   const { runtimeUrl } = loadTestDatabaseConnections(process.env)
   const runId = requireDatabaseTestRunId()
-  const sql = createDatabaseTestSql(runtimeUrl, runId, 'migration')
+  const sourceDirectory = join(process.cwd(), 'src/db/migrations')
+  const expected = await buildExpectedMigrationSequence(sourceDirectory)
+  const preflightSql = createDatabaseTestSql(
+    runtimeUrl,
+    runId,
+    'migration-preflight',
+  )
 
   try {
-    await assertNoConflictingDatabaseTestConnections(sql, runId)
-    const sourceDirectory = join(process.cwd(), 'src/db/migrations')
-    const expected = await buildExpectedMigrationSequence(sourceDirectory)
-    const existingSchema = await sql<{ readonly schema: string | null }[]>`
+    await assertNoConflictingDatabaseTestConnections(preflightSql, runId)
+    const existingSchema = await preflightSql<
+      { readonly schema: string | null }[]
+    >`
       SELECT to_regnamespace('app_private') AS schema
     `
 
     if (existingSchema[0]?.schema !== null) {
-      const actualBeforeMigration = await readActualMigrationSequence(sql)
+      const actualBeforeMigration =
+        await readActualMigrationSequence(preflightSql)
       assertMigrationSequence(expected, actualBeforeMigration, 'prefix')
     }
+  } finally {
+    await preflightSql.end({ timeout: 0 })
+  }
 
-    signal.throwIfAborted()
-    const { completion } = runManagedChildProcess(
-      process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
-      [
-        'exec',
-        'drizzle-kit',
-        'migrate',
-        '--config',
-        'drizzle.integration.config.ts',
-      ],
-      {
-        cwd: process.cwd(),
-        env: process.env,
-        signal,
-        signalErrorMessage: '数据库测试迁移进程异常终止。',
-        stdio: 'inherit',
-      },
-    )
-    const unregisterMigrationCompletion =
-      trackDatabaseTestAbortCleanupCompletion(completion)
-    let exitCode: number
-    try {
-      exitCode = await completion
-    } finally {
-      unregisterMigrationCompletion()
-    }
-    if (exitCode !== 0) {
-      throw new Error(`数据库测试迁移失败，退出码 ${exitCode}。`)
-    }
+  signal.throwIfAborted()
+  const { completion } = runManagedChildProcess(
+    process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
+    [
+      'exec',
+      'drizzle-kit',
+      'migrate',
+      '--config',
+      'drizzle.integration.config.ts',
+    ],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      signal,
+      signalErrorMessage: '数据库测试迁移进程异常终止。',
+      stdio: 'inherit',
+    },
+  )
+  const unregisterMigrationCompletion =
+    trackDatabaseTestAbortCleanupCompletion(completion)
+  let exitCode: number
+  try {
+    exitCode = await completion
+  } finally {
+    unregisterMigrationCompletion()
+  }
+  if (exitCode !== 0) {
+    throw new Error(`数据库测试迁移失败，退出码 ${exitCode}。`)
+  }
 
-    const actual = await readActualMigrationSequence(sql)
+  signal.throwIfAborted()
+  const verificationSql = createDatabaseTestSql(
+    runtimeUrl,
+    runId,
+    'migration-verify',
+  )
+  try {
+    const actual = await readActualMigrationSequence(verificationSql)
     expect(() => assertExactMigrationSequence(expected, actual)).not.toThrow()
     signal.throwIfAborted()
-    await clearPersistentLocalOwnerSessions(sql)
+    await clearPersistentLocalOwnerSessions(verificationSql)
   } finally {
-    await sql.end({ timeout: 0 })
+    await verificationSql.end({ timeout: 0 })
   }
 }
 
@@ -132,15 +150,15 @@ export function registerPersistentDatabasePreparation(): void {
       context.skip()
       return
     }
-    const { runtimeUrl } = loadTestDatabaseConnections(process.env)
-    const lock = createDatabaseTestSql(
-      runtimeUrl,
+    const { migrationUrl } = loadTestDatabaseConnections(process.env)
+    const lockClient = createDatabaseTestSuiteLockClient(
+      migrationUrl,
       requireDatabaseTestRunId(),
-      'suite-lock',
     )
+    const lock = lockClient.sql
     let retained = false
     try {
-      const suiteLock = await acquireDatabaseTestSuiteLock(lock)
+      const suiteLock = await acquireDatabaseTestSuiteLock(lockClient)
       persistentDatabaseSuiteLock = { client: lock, lock: suiteLock }
       retained = true
       const phaseSignal = createSuiteProtectedDatabaseTestSignal(context.signal)

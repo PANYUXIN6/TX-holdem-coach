@@ -49,7 +49,7 @@
 | 变量 | 端口 | 用途 |
 |---|---:|---|
 | `TEST_DATABASE_URL` | 6543 | 测试真实读写和双连接竞争 |
-| `TEST_DATABASE_MIGRATION_URL` | 5432 | 测试环境 Drizzle 迁移 |
+| `TEST_DATABASE_MIGRATION_URL` | 5432 | 测试环境 Drizzle 迁移与套件级 session lock；direct endpoint 优先 |
 
 该文件只能包含这两个变量。CI 可以直接注入相同变量。测试入口不接受任何 project ref 环境变量或命令参数。
 
@@ -86,8 +86,10 @@
 
 5432 迁移连接接受：
 
-- shared session pooler 和 `postgres.<project-ref>` 用户名；或
-- `db.<project-ref>.supabase.co` direct host 和 `postgres` 用户名。
+- `db.<project-ref>.supabase.co` direct host 和 `postgres` 用户名（本机可访问 IPv6 时优先）；或
+- shared session pooler 和 `postgres.<project-ref>` 用户名（仅作为 IPv4 环境的备选）。
+
+远程测试的套件级 advisory lock 与 Drizzle 迁移复用这条配置。direct endpoint 让长生命周期的 session lock 直接绑定 PostgreSQL backend；若 shared session pooler 或其 TCP 连接在测试中断开，锁会随 backend session 消失，测试必须 fail-closed，而不是重试后继续写入。
 
 测试的两条 URL 必须解析为注册表中的测试 ref。生产迁移 URL 必须解析为迁移制品注册表中的生产 ref。错误只返回脱敏消息。
 

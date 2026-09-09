@@ -10,6 +10,10 @@ import type { SessionEventStreamService } from '../sessions/public-projection/se
 import type { CompletedHandHistoryQueryService } from '../sessions/hand-history/completed-hand-history-query-service.js'
 import type { CompletedHandHistoryListQueryService } from '../sessions/hand-history/completed-hand-history-list-query-service.js'
 import type { StatisticsQueryService } from '../sessions/statistics/statistics-query-service.js'
+import type { SessionManagementQueryService } from '../sessions/data-management/session-management-query-service.js'
+import type { AgentCallQueryService } from '../agents/audit/agent-call-query-service.js'
+import { registerAgentCallRoutes } from './agent-call-routes.js'
+import { registerSessionManagementRoutes } from './session-management-routes.js'
 import { registerAgentSettingsRoutes } from './agent-settings-routes.js'
 import type { ApiVariables } from './api-context.js'
 import { registerDataRoutes } from './data-routes.js'
@@ -39,6 +43,8 @@ export interface ApiRuntime {
   readonly handHistory: CompletedHandHistoryQueryService
   readonly handHistoryList: CompletedHandHistoryListQueryService
   readonly statistics: StatisticsQueryService
+  readonly sessionManagement: SessionManagementQueryService
+  readonly agentCalls: AgentCallQueryService
 }
 
 export interface ApiAppOptions {
@@ -87,6 +93,13 @@ function isKnownRoute(method: string, path: string): boolean {
   if (/^\/api\/agent-personas\/[^/]+$/.test(path)) return method === 'GET'
   if (path === '/api/hands') return method === 'GET'
   if (path === '/api/statistics') return method === 'GET'
+  if (/^\/api\/hands\/[^/]+\/agent-calls$/.test(path)) return method === 'GET'
+  if (/^\/api\/agent-runs\/[^/]+$/.test(path)) return method === 'GET'
+  if (
+    /^\/api\/agent-runs\/[^/]+\/(attempts|capability-invocations)$/.test(path)
+  ) {
+    return method === 'GET'
+  }
   if (/^\/api\/hands\/[^/]+$/.test(path)) return method === 'GET'
   if (path === '/api/sessions/active') return method === 'GET'
   if (/^\/api\/sessions\/[^/]+\/events$/.test(path)) {
@@ -95,7 +108,7 @@ function isKnownRoute(method: string, path: string): boolean {
   if (/^\/api\/sessions\/[^/]+$/.test(path)) {
     return method === 'DELETE' || method === 'GET'
   }
-  if (path === '/api/sessions') return method === 'POST'
+  if (path === '/api/sessions') return method === 'POST' || method === 'GET'
   return method === 'POST' && /^\/api\/sessions\/[^/]+\/commands$/.test(path)
 }
 
@@ -213,8 +226,12 @@ export function createApp(
       url.search.length > 0 &&
       !(
         (url.pathname === '/api/hands' ||
+          url.pathname === '/api/sessions' ||
           url.pathname === '/api/statistics' ||
-          /^\/api\/hands\/[^/]+$/.test(url.pathname)) &&
+          /^\/api\/hands\/[^/]+(?:\/agent-calls)?$/.test(url.pathname) ||
+          /^\/api\/agent-runs\/[^/]+\/(?:attempts|capability-invocations)$/.test(
+            url.pathname,
+          )) &&
         routeLookupMethod(method) === 'GET'
       )
     ) {
@@ -270,6 +287,8 @@ export function createApp(
   registerHandHistoryListRoutes(app, runtime.handHistoryList)
   registerHandHistoryRoutes(app, runtime.handHistory)
   registerStatisticsRoutes(app, runtime.statistics)
+  registerSessionManagementRoutes(app, runtime.sessionManagement)
+  registerAgentCallRoutes(app, runtime.agentCalls)
   registerSessionRoutes(app, runtime.sessionHttp)
   registerSessionEventRoutes(app, runtime.sessionEvents)
 

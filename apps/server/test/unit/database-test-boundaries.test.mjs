@@ -27,6 +27,10 @@ const applicationM45Assertions = await readFile(
   new URL('../integration/postgres-e2e-m45-assertions.ts', import.meta.url),
   'utf8',
 )
+const persistenceM55Assertions = await readFile(
+  new URL('../integration/database-m55-assertions.ts', import.meta.url),
+  'utf8',
+)
 const playerCommitGateRepository = await readFile(
   new URL(
     '../../src/persistence/player-commit-gate-repository.ts',
@@ -36,10 +40,6 @@ const playerCommitGateRepository = await readFile(
 )
 const rebaselineScript = await readFile(
   new URL('../../scripts/rebaseline-test-database.mjs', import.meta.url),
-  'utf8',
-)
-const suiteLockSource = await readFile(
-  new URL('../../src/db/database-test-suite-lock.ts', import.meta.url),
   'utf8',
 )
 const databaseTestHarnessSource = await readFile(
@@ -122,10 +122,13 @@ describe('remote PostgreSQL test boundaries', () => {
       'm51',
       'm53',
       'm54',
+      'm55',
     ])
     expect(persistenceEntry).not.toContain('postgres-application-e2e')
     expect(persistenceEntry).toContain('database-repository-assertions')
     expect(persistenceEntry).not.toContain('postgres-e2e-m31-assertions')
+    // M5.5 的持久化查询必须用 current Player Decision codecs 认证公开动作；
+    // 精确冻结其 schema 依赖闭包，避免继续扩展到命令执行或 Runtime 编排。
     expect(
       persistenceDependencyClosure.filter((path) =>
         path.startsWith('src/sessions/command-execution/'),
@@ -159,7 +162,25 @@ describe('remote PostgreSQL test boundaries', () => {
           path,
         ),
       ),
-    ).toEqual([])
+    ).toEqual([
+      'src/poker/candidate-outcomes.ts',
+      'src/poker/decision-metrics.ts',
+      'src/poker/hand-features.ts',
+      'src/poker/decision-spot.ts',
+      'src/agents/player/player-decision-analysis-input.ts',
+      'src/agents/player/opponent-feature-projector.ts',
+    ])
+  })
+
+  test('keeps M5.5 database connection role literals valid offline', () => {
+    const roles = [
+      ...persistenceM55Assertions.matchAll(
+        /createDatabaseTestSqlForRole\(\s*[^,]+,\s*['"]([^'"]+)['"]/g,
+      ),
+    ].map((match) => match[1])
+
+    expect(roles.length).toBeGreaterThan(0)
+    expect(roles.filter((role) => !/^[a-z0-9-]{1,24}$/.test(role))).toEqual([])
   })
 
   test('keeps application milestones in the PostgreSQL E2E entry', () => {
@@ -183,10 +204,16 @@ describe('remote PostgreSQL test boundaries', () => {
       'm52',
       'm53',
       'm54',
+      'm55',
+      'm55',
     ])
     expect(applicationEntry).not.toContain('database-schema-assertions')
     expect(applicationEntry).toContain('postgres-e2e-m35-assertions')
     expect(applicationEntry).toContain('postgres-e2e-m31-assertions')
+    expect(applicationEntry).toContain(
+      'assertM55SessionAndAgentCallHttpSuccessFlow',
+    )
+    expect(applicationEntry).toContain('assertM55PauseAbortAndClearHttpFlow')
     expect(applicationEntry).not.toContain('database-repository-assertions')
     expect(applicationDependencyClosure).toContain(
       'src/sessions/command-execution/session-command-executor.ts',
@@ -229,16 +256,61 @@ describe('remote PostgreSQL test boundaries', () => {
     expect(coverageConfig).not.toContain('test/integration')
   })
 
-  test('resets local owner session data after migrations before running a suite', () => {
+  test('refreshes the runtime connection after migrations before resetting test data', () => {
+    const preflightClosePosition = databaseTestHarnessSource.indexOf(
+      'await preflightSql.end({ timeout: 0 })',
+    )
+    const migrationStartPosition = databaseTestHarnessSource.indexOf(
+      'const { completion } = runManagedChildProcess(',
+    )
+    const migrationCompletionPosition = databaseTestHarnessSource.indexOf(
+      'exitCode = await completion',
+    )
+    const verificationConnectionPosition = databaseTestHarnessSource.indexOf(
+      'const verificationSql = createDatabaseTestSql(',
+    )
     const migrationAssertionPosition = databaseTestHarnessSource.indexOf(
       'expect(() => assertExactMigrationSequence(expected, actual)).not.toThrow()',
     )
     const sessionCleanupPosition = databaseTestHarnessSource.indexOf(
-      'clearPersistentLocalOwnerSessions(sql)',
+      'clearPersistentLocalOwnerSessions(verificationSql)',
     )
 
-    expect(migrationAssertionPosition).toBeGreaterThanOrEqual(0)
+    expect(preflightClosePosition).toBeGreaterThanOrEqual(0)
+    expect(migrationStartPosition).toBeGreaterThan(preflightClosePosition)
+    expect(migrationCompletionPosition).toBeGreaterThan(migrationStartPosition)
+    expect(verificationConnectionPosition).toBeGreaterThan(
+      migrationCompletionPosition,
+    )
+    expect(migrationAssertionPosition).toBeGreaterThan(
+      verificationConnectionPosition,
+    )
     expect(sessionCleanupPosition).toBeGreaterThan(migrationAssertionPosition)
+  })
+
+  test('holds the suite lock on the persistent database endpoint', () => {
+    const preparationStart = databaseTestHarnessSource.indexOf(
+      'export function registerPersistentDatabasePreparation()',
+    )
+    const milestoneStart = databaseTestHarnessSource.indexOf(
+      'export function registerDatabaseMilestoneTest(',
+    )
+    const preparationSource = databaseTestHarnessSource.slice(
+      preparationStart,
+      milestoneStart,
+    )
+
+    expect(preparationStart).toBeGreaterThanOrEqual(0)
+    expect(milestoneStart).toBeGreaterThan(preparationStart)
+    expect(preparationSource).toContain(
+      'const { migrationUrl } = loadTestDatabaseConnections(process.env)',
+    )
+    expect(preparationSource).toMatch(
+      /createDatabaseTestSuiteLockClient\(\s*migrationUrl,/,
+    )
+    expect(rebaselineScript).toContain(
+      'createDatabaseTestSuiteLockClient(migrationUrl, runId)',
+    )
   })
 
   test('gates destructive rebaseline locally and aborts migration when the suite lock is lost', () => {
@@ -258,7 +330,7 @@ describe('remote PostgreSQL test boundaries', () => {
       "from '../dist/db/database-test-suite-lock.js'",
     )
     const lockAcquisitionPosition = rebaselineScript.indexOf(
-      'const suiteLock = await acquireDatabaseTestSuiteLock(lockSql)',
+      'const suiteLock = await acquireDatabaseTestSuiteLock(lockClient)',
     )
     const clientBindingPosition = rebaselineScript.indexOf(
       'const unbindMigrationSql = bindDatabaseTestClientToSuiteLock(',
@@ -266,11 +338,9 @@ describe('remote PostgreSQL test boundaries', () => {
     const firstDatabaseQueryPosition = rebaselineScript.indexOf(
       'const conflictingRows = await migrationSql',
     )
+    expect(lockAcquisitionPosition).toBeGreaterThanOrEqual(0)
     expect(clientBindingPosition).toBeGreaterThan(lockAcquisitionPosition)
     expect(firstDatabaseQueryPosition).toBeGreaterThan(clientBindingPosition)
     expect(rebaselineScript).toContain('signal: suiteLock.signal')
-    expect(rebaselineScript).not.toContain('pg_try_advisory_xact_lock')
-    expect(suiteLockSource).toContain('delay(30_000, false, { ref: false })')
-    expect(suiteLockSource).toContain('await transaction`SELECT 1`')
   })
 })

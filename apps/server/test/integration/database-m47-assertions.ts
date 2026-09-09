@@ -18,6 +18,7 @@ import {
   registerCommand,
 } from '../../src/persistence/command-ledger-repository.js'
 import { createAgentRunLifecycleRepository } from '../../src/persistence/agent-run-lifecycle-repository.js'
+import { createAgentFoundationAuditRepository } from '../../src/persistence/agent-foundation-audit-repository.js'
 import {
   createPlayerCommitGateRepository,
   type PlayerCommitClaim,
@@ -720,7 +721,7 @@ async function insertSelectedDecisionFixture(
         attempt_payload_version, attempt_payload, started_at, completed_at
       ) VALUES (
         ${attemptId}::uuid, ${runId}::uuid, ${owner.databaseOwnerId}::uuid,
-        ${SESSION_ID}::uuid, 1, 1, 'initial', 'player.bounded-choice',
+        ${SESSION_ID}::uuid, 1, 0, 'initial', 'player.bounded-choice',
         'deepseek', 'deepseek-v4-flash', 'completed', true, false, false,
         100, 10, 120, 10, NULL, 1,
         ${transaction.json({
@@ -991,6 +992,231 @@ async function completeLiveCommitSurface(input: {
   )
   if (!finalized.changed || finalized.run.lifecycle !== 'completed') {
     throw new Error('M4.7 Repository fixture 未完成 Player Run。')
+  }
+}
+
+async function commitM47LiveFixture(
+  sql: Sql,
+  fixture: M47LiveFixture,
+): Promise<void> {
+  await sql.begin(async (transaction) => {
+    const attempt = await prepareLiveCommitAttempt({ transaction, fixture })
+    const capability = attempt.commits.issueCommitCapability({
+      transaction,
+      owner: fixture.owner,
+      liveFacts: attempt.liveFacts,
+    })
+    await completeLiveCommitSurface({
+      transaction,
+      fixture,
+      commits: attempt.commits,
+      capability,
+      registration: attempt.registration,
+      recovery: attempt.recovery,
+    })
+  })
+}
+
+/**
+ * M5.5 查询验收复用的正式 Player Commit Gate 事实。
+ * 返回的 Run 已完成提交，因此 command ledger/event range 均由正式 writer 生成。
+ */
+export async function seedM47CommittedPlayerQueryFixture(sql: Sql) {
+  await clearFixtures(sql)
+  try {
+    let fixture = await insertSelectedDecisionFixture(sql, {
+      completeHand: true,
+    })
+    const audit = createAgentFoundationAuditRepository()
+    await sql.begin(async (transaction) => {
+      await transaction`
+      UPDATE app_private.agent_attempts
+      SET accepted = false,
+          attempt_payload = jsonb_set(
+            attempt_payload,
+            '{validationStatus}',
+            '"invalid"'::jsonb
+          )
+      WHERE id = ${fixture.claim.acceptedAttemptId}::uuid
+    `
+      const correction = await audit.startBudgetedAgentAttemptAudit(
+        transaction,
+        fixture.owner,
+        fixture.authority,
+        {
+          sessionId: SESSION_ID,
+          agentRunId: fixture.runId,
+          stage: 'player.bounded-choice',
+          provider: 'deepseek',
+          model: 'deepseek-v4-flash',
+          attemptType: 'correction',
+          routingReasonCode: 'content_correction',
+          estimatedInputTokens: 10,
+          requestedMaximumOutputTokens: 10,
+          reservedCostMicrounits: 1,
+          requestProjectionHash: 'b'.repeat(64),
+        },
+      )
+      if (correction.kind !== 'started') {
+        throw new Error('M5.5 查询夹具无法启动 correction Attempt。')
+      }
+      await audit.finishAgentAttemptAudit(
+        transaction,
+        fixture.owner,
+        fixture.authority,
+        {
+          sessionId: SESSION_ID,
+          agentRunId: fixture.runId,
+          attemptId: correction.attemptId,
+          lifecycle: 'completed',
+          accepted: false,
+          stale: false,
+          interrupted: false,
+          inputTokens: 10,
+          outputTokens: 1,
+          costMicrounits: 1,
+          durationMs: 1,
+          errorCode: null,
+          responseProjectionHash: 'e'.repeat(64),
+          validationStatus: 'invalid',
+          usageAccounting: 'providerReported',
+          costAccounting: 'providerReportedSplit',
+          completedAt: new Date(Date.now() + 1).toISOString(),
+        },
+      )
+      const acceptedCorrection = await audit.startBudgetedAgentAttemptAudit(
+        transaction,
+        fixture.owner,
+        fixture.authority,
+        {
+          sessionId: SESSION_ID,
+          agentRunId: fixture.runId,
+          stage: 'player.bounded-choice',
+          provider: 'deepseek',
+          model: 'deepseek-v4-flash',
+          attemptType: 'correction',
+          routingReasonCode: 'content_correction',
+          estimatedInputTokens: 10,
+          requestedMaximumOutputTokens: 10,
+          reservedCostMicrounits: 1,
+          requestProjectionHash: 'c'.repeat(64),
+        },
+      )
+      if (acceptedCorrection.kind !== 'started') {
+        throw new Error('M5.5 查询夹具无法启动 accepted correction Attempt。')
+      }
+      await audit.finishAgentAttemptAudit(
+        transaction,
+        fixture.owner,
+        fixture.authority,
+        {
+          sessionId: SESSION_ID,
+          agentRunId: fixture.runId,
+          attemptId: acceptedCorrection.attemptId,
+          lifecycle: 'completed',
+          accepted: true,
+          stale: false,
+          interrupted: false,
+          inputTokens: 10,
+          outputTokens: 1,
+          costMicrounits: 1,
+          durationMs: 1,
+          errorCode: null,
+          responseProjectionHash: 'f'.repeat(64),
+          validationStatus: 'valid',
+          usageAccounting: 'providerReported',
+          costAccounting: 'providerReportedSplit',
+          completedAt: new Date(Date.now() + 3).toISOString(),
+        },
+      )
+      await transaction`
+      UPDATE app_private.player_decisions
+      SET accepted_attempt_id = ${acceptedCorrection.attemptId}::uuid
+      WHERE id = ${fixture.decisionId}::uuid
+    `
+      fixture = Object.freeze({
+        ...fixture,
+        claim: Object.freeze({
+          ...fixture.claim,
+          acceptedAttemptId: acceptedCorrection.attemptId,
+        }),
+      })
+      for (let index = 0; index < 2; index += 1) {
+        const reserved = await audit.reserveCapabilityInvocationAudit(
+          transaction,
+          fixture.owner,
+          fixture.authority,
+          {
+            sessionId: SESSION_ID,
+            agentRunId: fixture.runId,
+            capabilityName: 'player.query-fixture',
+            capabilityVersion: 1,
+            inputSchemaVersion: 1,
+            inputHash: (index === 0 ? 'c' : 'd').repeat(64),
+            grantMaximum: 2,
+            startedAt: new Date(Date.now() + 4 + index * 2).toISOString(),
+          },
+        )
+        if (reserved.kind !== 'reserved') {
+          throw new Error('M5.5 查询夹具无法预留 Capability Invocation。')
+        }
+        await audit.finishCapabilityInvocationAudit(
+          transaction,
+          fixture.owner,
+          fixture.authority,
+          {
+            sessionId: SESSION_ID,
+            agentRunId: fixture.runId,
+            invocationId: reserved.invocationId,
+            capabilityName: 'player.query-fixture',
+            capabilityVersion: 1,
+            authorized: true,
+            inputSchemaVersion: 1,
+            inputHash: (index === 0 ? 'c' : 'd').repeat(64),
+            outputSchemaVersion: 1,
+            outputHash: (index === 0 ? 'e' : 'f').repeat(64),
+            budgetCost: 1,
+            durationMs: 1,
+            errorCode: null,
+            completedAt: new Date(Date.now() + 5 + index * 2).toISOString(),
+          },
+        )
+      }
+    })
+    await commitM47LiveFixture(sql, fixture)
+    return Object.freeze({
+      owner: fixture.owner,
+      sessionId: SESSION_ID,
+      handId: HAND_ID,
+      runId: fixture.runId,
+      decisionId: fixture.decisionId,
+    })
+  } catch (error) {
+    await clearFixtures(sql)
+    throw error
+  }
+}
+
+/**
+ * M5.5 清空验收保留的旧提交者。闭包捕获真实 Run authority 与完整提交 claim，
+ * 调用时重新进入生产 Commit Gate；Owner clear 后必须在资源锁边界失败。
+ */
+export async function createM47LatePlayerCommitWriter(sql: Sql) {
+  await clearFixtures(sql)
+  try {
+    const fixture = await insertSelectedDecisionFixture(sql, {
+      completeHand: true,
+    })
+    return Object.freeze({
+      sessionId: SESSION_ID,
+      handId: HAND_ID,
+      runId: fixture.runId,
+      decisionId: fixture.decisionId,
+      commit: () => commitM47LiveFixture(sql, fixture),
+    })
+  } catch (error) {
+    await clearFixtures(sql)
+    throw error
   }
 }
 

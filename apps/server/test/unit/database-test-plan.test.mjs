@@ -59,6 +59,14 @@ describe('database test plan', () => {
     ).toEqual({ kind: 'milestone', milestone: 'm54', suite: 'e2e' })
   })
 
+  test('allows M5.5 in both PostgreSQL suites', () => {
+    for (const suite of ['database', 'e2e']) {
+      expect(
+        parseDatabaseTestArguments([`--suite=${suite}`, '--milestone=m55']),
+      ).toEqual({ kind: 'milestone', milestone: 'm55', suite })
+    }
+  })
+
   test('allows M5.1 only in the database suite', () => {
     expect(
       parseDatabaseTestArguments(['--suite=database', '--milestone=m51']),

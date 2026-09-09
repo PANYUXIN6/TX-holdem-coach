@@ -13,6 +13,7 @@
 ## 核心约束
 
 - 只能通过仓库受控入口连接隔离测试库，禁止连接或清理生产数据库。
+- 套件级 advisory lock 必须独占 `TEST_DATABASE_MIGRATION_URL` 的 `5432` 连接，并以 session lock、backend PID 心跳和连接关闭信号共同认证锁仍由同一 PostgreSQL backend 持有；本机可访问 IPv6 时优先配置 `db.<project-ref>.supabase.co` direct endpoint，shared session pooler 只作为 IPv4 环境的备选。业务测试事务继续走 `TEST_DATABASE_URL` 的 `6543` transaction pooler。不得用跨整套测试的长事务承载全局锁，也不得用重试掩盖持锁连接中断。
 - 测试必须自包含，不依赖执行顺序或前序残留；共享配置、fixture 和连接必须在 `finally` 中恢复或清理。
 - 禁止多个远程测试进程同时运行；套件级 advisory lock 仅作为误操作保护。Worker heartbeat、业务长事务和锁竞争参与者必须使用独立连接。
 - 时间语义使用数据库时钟。普通流程应显式设置并断言足够的 deadline；短 deadline 只用于过期测试，不得通过提高 Vitest timeout 或重试掩盖 lease、deadline、锁或性能问题。
@@ -32,6 +33,8 @@ pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m51
 pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m52
 pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m54
 pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m54
+pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m55
+pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m55
 pnpm --filter @tx-holdem-coach/server run db:test:cleanup
 ```
 
@@ -48,6 +51,8 @@ pnpm --filter @tx-holdem-coach/server run db:test:cleanup
 `m52` 只属于 PostgreSQL E2E suite：通过真实 `createApiRuntime`、Hono 详情路由、M5.1 Reader 与 M5.2 可见性查询服务读取经正式 Session 命令完成的 Hand，验证 completed-only 准入、`public | auditReveal` 的底牌边界、重复 public 无污染以及 GET 零写入；它不新增 database persistence milestone。
 
 `m54` 同时属于 database 与 PostgreSQL E2E suite。database 阶段验证 Owner-scoped completed Hand 与 ended Session 的只读一致扫描、认证 payload/roster 镜像、固定统计贡献及跨批次、删除和损坏事实边界；E2E 阶段通过真实 `createApiRuntime`、正式 Session 命令与 `GET /api/statistics` 验证 hands/sessions 汇总、查询零写入和删除后的空统计。两阶段必须串行；它们不运行真实 Provider。
+
+`m55` 同时属于 database 与 PostgreSQL E2E suite。database 阶段验证 Owner-scoped 场次管理与 Hand/Run 调用摘要 Reader、根分页、current Codec、损坏拒绝和独立连接并发删除下的 repeatable-read 一致视图；E2E 阶段通过真实 `createApiRuntime`、Hono、Worker/Dispatcher 与确定性 Provider transport 执行创建→AI Hand→查询/统计→补码→结束→单删，以及暂停→中止→清空两条正式主链。两阶段必须串行；它们不调用真实远程 Provider，也不得在未确认网络时启动。
 
 ## 首发前破坏性重基线
 

@@ -29,6 +29,8 @@ import { createPublicProjectionFactsRepository } from './persistence/public-proj
 import { createCompletedHandHistoryFactsRepository } from './persistence/completed-hand-history-repository.js'
 import { createCompletedHandHistoryListFactsRepository } from './persistence/completed-hand-history-list-repository.js'
 import { createStatisticsFactsRepository } from './persistence/statistics-facts-repository.js'
+import { createSessionManagementFactsRepository } from './persistence/session-management-query-repository.js'
+import { createAgentCallQueryRepository } from './persistence/agent-call-query-repository.js'
 import { SECURE_RANDOM_SOURCE } from './poker/random-source.js'
 import type { RandomSource } from './poker/random-source.js'
 import { createSessionCreationIdentityGraph } from './sessions/session-creation/session-creation-consistency.js'
@@ -51,6 +53,8 @@ import { createAuthoritativeCompletedHandHistoryReader } from './sessions/hand-h
 import { createCompletedHandHistoryQueryService } from './sessions/hand-history/completed-hand-history-query-service.js'
 import { createCompletedHandHistoryListQueryService } from './sessions/hand-history/completed-hand-history-list-query-service.js'
 import { createStatisticsQueryService } from './sessions/statistics/statistics-query-service.js'
+import { createSessionManagementQueryService } from './sessions/data-management/session-management-query-service.js'
+import { createAgentCallQueryService } from './agents/audit/agent-call-query-service.js'
 import { createAgentRunCoordinator } from './agents/foundation/agent-run-coordinator.js'
 import {
   createAgentWorker,
@@ -246,7 +250,7 @@ export async function createApiRuntime(
       sessionEventPublisher: committedSessionEvents,
     })
     const sessionComposition = createPlayerCommitSessionComposition({
-      session: sessionDependencies,
+      session: { ...sessionDependencies, handlers },
       player: { runEventPort },
     })
     commands = sessionComposition.commands
@@ -357,6 +361,15 @@ export async function createApiRuntime(
   const statistics = createStatisticsQueryService({
     reader: createStatisticsFactsRepository({ sql: database.sql, owner }),
   })
+  const sessionManagement = createSessionManagementQueryService({
+    reader: createSessionManagementFactsRepository({
+      sql: database.sql,
+      owner,
+    }),
+  })
+  const agentCalls = createAgentCallQueryService({
+    reader: createAgentCallQueryRepository({ sql: database.sql, owner }),
+  })
   const sessionEvents = createSessionEventStreamService({
     repository: createPublicEventReplayRepository({ sql: database.sql, owner }),
     hub: committedSessionEvents,
@@ -381,6 +394,8 @@ export async function createApiRuntime(
     handHistory,
     handHistoryList,
     statistics,
+    sessionManagement,
+    agentCalls,
     ...(playerRuntime === undefined ? {} : { playerRuntime }),
   })
 }

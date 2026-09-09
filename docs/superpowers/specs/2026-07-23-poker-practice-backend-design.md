@@ -2,7 +2,7 @@
 
 - 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构、预设人物与 Supabase Postgres 迁移方案已纳入
 - 日期：2026-07-23
-- 最后更新：2026-07-29
+- 最后更新：2026-09-07
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - 专项设计：
   - [非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
@@ -703,8 +703,10 @@ WHERE lifecycle_status = 'active';
 `agent_attempts` 保存：
 
 - 运行阶段、供应商、模型、尝试类型和路由原因。
-- 脱敏输入输出、结构与业务校验错误。
+- 已有请求/响应投影哈希、结构与业务校验状态及稳定错误码；尚未产生的响应哈希按实际状态为空，不用哈希冒充输出正文。
 - Token、成本、延迟、采用、过期和中断状态。
+
+2026-09-07 按已确认的 M5.5 评审修复决定，本期保存清单与 [PRD §7.4](./2026-07-23-poker-practice-prd.md#74-调试与审计)同步，取代原先 `agent_attempts` 保存“脱敏输入输出、结构与业务校验错误”的正文要求。本期新增 Attempt 不要求保存请求/响应正文或逐项校验错误详情，不补录历史原文；M5.5 查询据此返回 `requestBody='notExposed'`、`rawResponse='notRecorded'`、`validationDetails='notRecorded'`。这限定的是私有持久化范围，不只是前端可见性。
 
 `agent_capability_invocations` 保存固定能力调用的名称、版本、授权、输入输出 Schema 与哈希、耗时和错误。
 
@@ -713,6 +715,8 @@ WHERE lifecycle_status = 'active';
 - `agentRunId`、场次、手牌、座位、`decisionRequestId` 和状态版本。
 - `PlayerDecisionPacket` 版本、候选集合与来源快照。
 - 模型选择、Validator 结果和最终扑克命令关联。
+
+已生成的 Player 归一化结果继续使用 `player_decisions` 的模型选择及 Validator 结果，不复制到 Attempt 作为原始输出。M4.9 首次 frozen model input 保留私有审计/重执行用途，既不删除，也不作为逐次纠错请求正文公开。本期不增加原文审计开关；实际排障需要扩展时另行设计采集、保存、可见性与删除边界，参见 [M5.5 §2.2、§4.2](./2026-09-06-m5-5-session-management-agent-call-query-design.md)。
 
 任何表都不保存供应商隐藏推理或 `reasoning_content`。
 

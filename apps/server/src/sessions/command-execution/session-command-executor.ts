@@ -20,6 +20,7 @@ import {
   type AcquiredCommandRegistration,
   type AiActionLedgerCommand,
   type ExistingCommandResult,
+  type LedgerCommand,
   type PreparedCommandRegistration,
 } from '../../persistence/command-ledger-repository.js'
 import {
@@ -1368,7 +1369,7 @@ export function createSessionCommandExecutor(
  * 能取得组合结果，也无法自行拼装 aiAction、跳过实时复验或省略成功终结。
  */
 export interface PlayerCommitSessionCompositionDependencies {
-  readonly session: Omit<SessionCommandExecutorDependencies, 'handlers'>
+  readonly session: SessionCommandExecutorDependencies
   readonly player: {
     readonly runEventPort: AgentRunEventPort
     readonly logPublishFailure?: (input: {
@@ -1386,11 +1387,23 @@ export interface PlayerCommitSessionComposition {
 export function createPlayerCommitSessionComposition(
   input: PlayerCommitSessionCompositionDependencies,
 ): PlayerCommitSessionComposition {
+  const aiHandlers = createSessionCommandHandlerMap({
+    bindings: [createAiActionHandlerBinding({ owner: input.session.owner })],
+  })
+  if (input.session.handlers.has('aiAction')) {
+    throw new SessionCommandCompositionError()
+  }
+  const handlers: SessionCommandHandlerMap = Object.freeze({
+    has: (commandType: LedgerCommand['type']) =>
+      aiHandlers.has(commandType) || input.session.handlers.has(commandType),
+    get: (commandType: LedgerCommand['type']) =>
+      aiHandlers.has(commandType)
+        ? aiHandlers.get(commandType)
+        : input.session.handlers.get(commandType),
+  })
   const internal = createSessionCommandExecutorWithInternalAiAction({
     ...input.session,
-    handlers: createSessionCommandHandlerMap({
-      bindings: [createAiActionHandlerBinding({ owner: input.session.owner })],
-    }),
+    handlers,
   })
   return Object.freeze({
     commands: internal.commands,

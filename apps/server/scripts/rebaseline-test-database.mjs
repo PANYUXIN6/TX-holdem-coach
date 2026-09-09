@@ -12,6 +12,7 @@ import { verifySingleBaselineMigrationAssets } from '../dist/db/migration-artifa
 import {
   acquireDatabaseTestSuiteLock,
   bindDatabaseTestClientToSuiteLock,
+  createDatabaseTestSuiteLockClient,
 } from '../dist/db/database-test-suite-lock.js'
 import {
   DATABASE_TEST_APPLICATION_PREFIX,
@@ -80,20 +81,17 @@ const expected = await verifySingleBaselineMigrationAssets(
 )
 const testEnvironment = await loadTestEnvironment()
 const environment = { ...process.env, ...testEnvironment }
-const { runtimeUrl, migrationUrl, projectRef } =
-  loadTestDatabaseConnections(environment)
+const { migrationUrl, projectRef } = loadTestDatabaseConnections(environment)
 const runId = randomBytes(8).toString('hex')
-const lockSql = postgres(
-  runtimeUrl,
-  createConnectionOptions(runId, 'suite-lock'),
-)
+const lockClient = createDatabaseTestSuiteLockClient(migrationUrl, runId)
+const lockSql = lockClient.sql
 const migrationSql = postgres(
   migrationUrl,
   createConnectionOptions(runId, 'rebaseline'),
 )
 
 try {
-  const suiteLock = await acquireDatabaseTestSuiteLock(lockSql)
+  const suiteLock = await acquireDatabaseTestSuiteLock(lockClient)
   const unbindMigrationSql = bindDatabaseTestClientToSuiteLock(
     migrationSql,
     suiteLock,

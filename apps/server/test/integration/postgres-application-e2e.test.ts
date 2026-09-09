@@ -16,6 +16,10 @@ import { assertM410PlayerSessionIntegrationApplicationFlow } from './postgres-e2
 import { assertM52CompletedHandHistoryApplicationFlow } from './postgres-e2e-m52-assertions.js'
 import { assertM53CompletedHandHistoryListApplicationFlow } from './postgres-e2e-m53-assertions.js'
 import { assertM54FixedStatisticsApplicationFlow } from './postgres-e2e-m54-assertions.js'
+import {
+  assertM55PauseAbortAndClearHttpFlow,
+  assertM55SessionAndAgentCallHttpSuccessFlow,
+} from './postgres-e2e-m55-assertions.js'
 import { assertM31SessionCommandExecutor } from './postgres-e2e-m31-assertions.js'
 import {
   registerDatabaseMilestoneTest,
@@ -139,5 +143,18 @@ registerDatabaseMilestoneTest(
   'm54',
   'M5.4 fixed statistics application flow',
   (sql, runtimeUrl) => assertM54FixedStatisticsApplicationFlow(sql, runtimeUrl),
+  300_000,
+)
+registerDatabaseMilestoneTest(
+  'm55',
+  'M5.5 session management and agent call HTTP success flow',
+  (sql, runtimeUrl) =>
+    assertM55SessionAndAgentCallHttpSuccessFlow(sql, runtimeUrl),
+  420_000,
+)
+registerDatabaseMilestoneTest(
+  'm55',
+  'M5.5 pause, abort, and clear HTTP flow',
+  (sql, runtimeUrl) => assertM55PauseAbortAndClearHttpFlow(sql, runtimeUrl),
   300_000,
 )

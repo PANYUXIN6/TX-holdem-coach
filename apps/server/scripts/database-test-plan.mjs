@@ -26,6 +26,7 @@ export const DATABASE_TEST_MILESTONES = Object.freeze([
   'm52',
   'm53',
   'm54',
+  'm55',
 ])
 
 export const DATABASE_TEST_SUITES = Object.freeze(['database', 'e2e'])
@@ -50,6 +51,7 @@ const DATABASE_MILESTONES_BY_SUITE = Object.freeze({
     'm51',
     'm53',
     'm54',
+    'm55',
   ]),
   e2e: new Set([
     'm31',
@@ -71,6 +73,7 @@ const DATABASE_MILESTONES_BY_SUITE = Object.freeze({
     'm52',
     'm53',
     'm54',
+    'm55',
   ]),
 })
 

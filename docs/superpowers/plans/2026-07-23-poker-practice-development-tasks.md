@@ -1,8 +1,8 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.4 已完成（M5.4 由用户于 2026-09-06 确认开发完成，验证记录另行收口）；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M4.10 已通过离线验证、m410 database milestone 与 PostgreSQL E2E milestone；M5.5 设计稿待确认，M6–M9 待开发，M10/M11 为分阶段后置能力
+- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 已完成；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones；M6–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
-- 最后更新：2026-09-06
+- 最后更新：2026-09-08
 - 本文不包含工期、人数或里程碑时间估算。
 - 2026-08-16 首发前 Schema 收敛：实际开发数据库重建后，以 14 表单一 baseline 为准；删除全局 `protocolVersion`、Settings 版本、重复 JSON 信封版本、无历史责任的 Registry/legacy 兼容、`legacyDiagnosticState` 及尚无消费者的 Coach/Statistics 预埋表。下文已完成任务中的旧字段/旧表文字仅保留实施历史，不得作为后续任务当前契约；M4 仍保留运行审计、重放/精确恢复身份，Execution Budget 直接扩充首发 current 载荷而不发布 V2，M5/M8 在真实 writer 设计确认时再创建最终统计/Coach Schema。
 - 2026-08-30 M4.8 破坏性重基线：首发前开发数据不承担兼容责任，私有事件的 Poker、Session/Accounting 与 Player 协调事件合并为唯一 current `v1`；旧 V1/V2/V3 分派和中间 migration 由唯一 `0000_baseline.sql` 覆盖，远程测试 schema 通过受控重建后只接受该 baseline journal。
@@ -33,7 +33,7 @@
 | M4.10 | [已完成并验证](../specs/2026-08-31-m4-10-session-integration-player-eval-design.md)：configured Player 生产接线、确定性 Eval、m410 database milestone 与 PostgreSQL E2E milestone 已通过 |
 | M5.1–M5.3 | 已完成；分任务实现与验收范围见 §9，不以 milestone 结果代替 full |
 | M5.4 | 用户确认开发完成；当前工作区已有统计实现，历史验证记录另行收口 |
-| M5.5 | 数据管理与手牌调用链查询设计稿已编写；用户已确认本期使用审计摘要，整体待确认，尚未实施 |
+| M5.5 | 已完成并验证；分页场次管理与 Hand → Run → Attempt/Capability 查询链已通过离线验证及 m55 两套远程 milestones |
 | M6–M9 | 待开发 |
 | M10 Coach 长期漏洞记忆 | 首版后置，等待 M8 数据质量评估后确认 |
 | M11 针对性练习与复测 | 独立后置，等待 M10 质量评估后确认 |
@@ -61,7 +61,7 @@
 | M2 | Supabase Postgres 持久化与恢复 | M0，部分依赖 M1 状态模型 | Drizzle 基础设施、显式迁移、Schema、事务、快照、事件、幂等和恢复 |
 | M3 | 会话服务、HTTP API 与 SSE | M1、M2 | 服务端权威命令链路和实时同步 |
 | M4 | Agent Foundation 与 Player Runtime | M0、M2，接入 M3 | 运行底座、权限、持久任务、决策预处理、有界选择、提交和恢复 |
-| M5 | 历史、统计与数据管理 | M1、M2、M3 | 分街复盘、可见性投影、统计和删除 |
+| M5 | 历史、统计与数据管理 | M1、M2、M3；M5.5 另依赖 M4.9 审计契约及实现就绪 | 分街复盘、可见性投影、统计和删除 |
 | M6 | 前端基础设施与通用界面 | M0，可与 M1–M5 部分并行 | Query、SSE、Zustand、路由和视觉底座 |
 | M7 | 前端产品功能 | M3、M4、M5、M6 | 训练首页、预设人物选择、组桌、移动牌桌、全屏手牌流程、历史、统计、设置和调试 |
 | M8 | Coach Runtime | M2、M4 的 Foundation、M5、M6、M7.7 | 确定性证据与分类、两阶段教学分析、结构化报告和手机端复盘 |
@@ -72,6 +72,8 @@
 推荐实现主线：
 
 `M0 → M1 → M2 → M3 → M4/M5 → M6/M7 → M8 → M9 → M10（后置）→ M11（后置）`
+
+`M4/M5` 表示可按子任务依赖并行，不豁免 `M4.9 → M5.5`：启动 M5.5 前必须确认其消费的审计关系、Replay/图关系语义、current reader 与镜像校验已经可用，具体就绪条件见 [M5.5 设计 §4.3](../specs/2026-09-06-m5-5-session-management-agent-call-query-design.md#43-hand-可见性与关联语义)。M5.1–M5.4 不因此增加对整个 M4 的依赖。
 
 M6 可以在后端开发期间基于共享契约和固定夹具先行，但不得在前端复制一套扑克规则。
 
@@ -1142,7 +1144,9 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M5.5 实现数据管理查询
 
-设计状态：已编写[数据管理与手牌调用链查询设计稿](../specs/2026-09-06-m5-5-session-management-agent-call-query-design.md)（2026-09-06）。用户已确认本期使用现有审计摘要，前端展示范围同步修订；整体设计待确认。研发切片和验收见设计稿 §7–8，本轮尚未实施。
+实施状态：已按[数据管理与手牌调用链查询设计](../specs/2026-09-06-m5-5-session-management-agent-call-query-design.md)完成 Contracts、严格查询/游标、只读 Repository、公开投影、HTTP 与生产装配；本期继续只使用现有审计摘要。离线验证及 m55 database、PostgreSQL E2E milestones 均已通过。
+
+实施前置：除 M1、M2、M3 及本任务已引用的 M5 上游契约外，须满足 M4.9 审计契约及实现就绪条件；当前 M4.9 已完成。2026-09-07 已同步 PRD §7.4，明确本期保存现有审计摘要，暂不保存原始输出。
 
 产出：
 

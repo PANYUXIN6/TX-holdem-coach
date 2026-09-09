@@ -84,6 +84,8 @@ function runtime() {
       handHistory: { read: async () => null },
       handHistoryList: { list: async () => ({ items: [], nextCursor: null }) },
       statistics: {} as never,
+      sessionManagement: {} as never,
+      agentCalls: {} as never,
     } satisfies ApiRuntime,
     update,
     deleteEndedSession,

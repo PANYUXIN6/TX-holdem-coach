@@ -9,7 +9,10 @@ import {
 } from '../../src/poker/poker-engine.js'
 import { POKER_RULE_SET_VERSION } from '../../src/poker/poker-rule-set.js'
 import { createPokerTableState } from '../../src/poker/state.js'
-import { loadAndValidatePersonaCatalog } from '../../src/personas/catalog.js'
+import {
+  loadAndValidatePersonaCatalog,
+  type PersonaCatalog,
+} from '../../src/personas/catalog.js'
 import { PERSONA_CATALOG_DEFINITIONS } from '../../src/personas/catalog-definitions.js'
 import { createActiveModelConfigurationSchema } from '../../src/personas/config.js'
 import {
@@ -2785,9 +2788,9 @@ async function createM27RosterInput(
   query: Sql,
   sessionId: string,
   playerIds: readonly string[],
+  catalog: PersonaCatalog = loadAndValidatePersonaCatalog(),
 ) {
   assertM27PlayerIds(playerIds)
-  const catalog = loadAndValidatePersonaCatalog()
   return prepareCurrentCatalogRosterSnapshot(query, ownerScope, catalog, {
     sessionId,
     userParticipantId: playerIds[0] ?? '',
@@ -2805,13 +2808,14 @@ async function createM27RosterInput(
 function createM27PokerSeats(
   rebuySeatNumber?: number,
   playerIds: readonly string[] = M27_PLAYER_IDS,
+  initialStack = 1_000,
 ) {
   assertM27PlayerIds(playerIds)
   return Array.from({ length: 6 }, (_, seatNumber) => ({
     seatNumber,
     playerId: playerIds[seatNumber] ?? '',
     isUser: seatNumber === 0,
-    stack: seatNumber === rebuySeatNumber ? 1_250 : 1_000,
+    stack: seatNumber === rebuySeatNumber ? initialStack + 250 : initialStack,
     status: 'active' as const,
     streetContribution: 0,
     totalContribution: 0,
@@ -2823,15 +2827,17 @@ function createM27HandAuditFixture(
   options: {
     readonly rebuySeatNumber?: number
     readonly playerIds?: readonly string[]
+    readonly initialStack?: number
   } = {},
 ) {
   const playerIds = options.playerIds ?? M27_PLAYER_IDS
+  const initialStack = options.initialStack ?? 1_000
   const stateBeforeStartPoker = initializePokerTable(
-    createM27PokerSeats(undefined, playerIds),
+    createM27PokerSeats(undefined, playerIds, initialStack),
     M27_RANDOM_SOURCE,
   )
   const pokerForStart = initializePokerTable(
-    createM27PokerSeats(options.rebuySeatNumber, playerIds),
+    createM27PokerSeats(options.rebuySeatNumber, playerIds, initialStack),
     M27_RANDOM_SOURCE,
   )
   const started = startPokerHand(pokerForStart, {
@@ -2866,7 +2872,7 @@ function createM27HandAuditFixture(
         completedHandCount: 0,
         seatAccounting: stateBeforeStartPoker.seats.map((seat) => ({
           seatNumber: seat.seatNumber,
-          cumulativeBuyIn: 1_000,
+          cumulativeBuyIn: initialStack,
         })),
         lastCompletedHandSummary: null,
       }),
@@ -2880,6 +2886,7 @@ async function insertCommittedM27Session(
   sql: Sql,
   sessionId: string,
   playerIds?: readonly string[],
+  catalog?: PersonaCatalog,
 ) {
   const roster = await sql.begin(async (transaction) => {
     const input =
@@ -2889,6 +2896,7 @@ async function insertCommittedM27Session(
             transaction as unknown as Sql,
             sessionId,
             playerIds,
+            catalog,
           )
     await insertSessionRosterSnapshot(transaction, { ...input, sessionId })
     return input
@@ -3365,7 +3373,7 @@ function createM27ExecutionBudget() {
   }
 }
 
-function createM27CoachRunInput(
+export function createM27CoachRunInput(
   sessionId: string,
   handId: string,
   agentRunId: string,
@@ -3537,12 +3545,17 @@ export async function insertCommittedM27CompletedHand(
   sql: Sql,
   sessionId: string,
   handId: string,
-  options: { readonly playerIds?: readonly string[] } = {},
+  options: {
+    readonly playerIds?: readonly string[]
+    readonly initialStack?: number
+    readonly catalog?: PersonaCatalog
+  } = {},
 ) {
   const owner = await insertCommittedM27Session(
     sql,
     sessionId,
     options.playerIds,
+    options.catalog,
   )
   const fixture = createM27HandAuditFixture(handId, options)
   await sql.begin(async (transaction) => {

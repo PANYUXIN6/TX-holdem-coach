@@ -1,11 +1,12 @@
 import { describe, expect, test, vi } from 'vitest'
-import type { Sql, TransactionSql } from 'postgres'
+import type { ReservedSql, Sql, TransactionSql } from 'postgres'
 import {
   acquireDatabaseTestSuiteLock,
   assertNoConflictingDatabaseTestConnections,
   bindDatabaseTestClientToAbortSignal,
   bindDatabaseTestClientToSuiteLock,
   createDatabaseTestConnectionOptions,
+  createDatabaseTestSuiteLockClient,
   readTransactionBackendPid,
   runAbortableDatabasePhase,
   runDatabaseTestWithCleanup,
@@ -17,46 +18,59 @@ import {
   trackDatabaseTestAbortCleanupCompletion,
   waitForDatabaseTestAbortCleanup,
 } from '../integration/database-test-runtime.js'
+import type { DatabaseTestSuiteLockClient } from '../../src/db/database-test-suite-lock.js'
 
 describe('database test runtime', () => {
-  function createSuiteLockSql(acquired: boolean): Sql {
-    const transaction = (() =>
-      Promise.resolve([{ acquired }])) as unknown as TransactionSql
-    return Object.assign(() => Promise.resolve([]), {
-      begin: (operation: (transaction: TransactionSql) => Promise<unknown>) =>
-        operation(transaction),
-    }) as unknown as Sql
-  }
-
-  function createPostAcquisitionFailureSuiteLockSql(failure: Error): {
-    readonly sql: Sql
-    failTransaction(): void
+  function createSuiteLockClient(input?: { readonly acquired?: boolean }): {
+    readonly client: DatabaseTestSuiteLockClient
+    readonly queries: readonly string[]
+    readonly releaseReserved: ReturnType<typeof vi.fn>
+    closeConnection(error: Error): void
+    setBackendPid(pid: number): void
   } {
-    let rejectTransaction!: (error: Error) => void
-    const transactionFailure = new Promise<void>((_resolve, reject) => {
-      rejectTransaction = reject
-    })
-    let reportLockQuery!: () => void
-    const lockQuery = new Promise<void>((resolve) => {
-      reportLockQuery = resolve
-    })
-    const transaction = (() => {
-      reportLockQuery()
-      return Promise.resolve([{ acquired: true }])
-    }) as unknown as TransactionSql
-    const sql = Object.assign(() => Promise.resolve([]), {
-      begin: async (
-        operation: (transaction: TransactionSql) => Promise<unknown>,
-      ) => {
-        void operation(transaction)
-        await lockQuery
-        await transactionFailure
+    const connectionClosedController = new AbortController()
+    const queries: string[] = []
+    const releaseReserved = vi.fn()
+    let backendPid = 4242
+    const applicationName = 'txhc-dbtest:0123456789abcdef:suite-lock'
+    const reserved = Object.assign(
+      (strings: TemplateStringsArray) => {
+        const query = strings.join('?')
+        queries.push(query)
+        if (query.includes('set_config')) {
+          return Promise.resolve([{ applicationName }])
+        }
+        if (query.includes('pg_try_advisory_lock')) {
+          return Promise.resolve([
+            { acquired: input?.acquired ?? true, backendPid },
+          ])
+        }
+        if (query.includes('pg_advisory_unlock')) {
+          return Promise.resolve([{ released: true, backendPid }])
+        }
+        if (query.includes('pg_backend_pid')) {
+          return Promise.resolve([{ backendPid }])
+        }
+        throw new Error(`未预期的 suite-lock SQL：${query}`)
       },
-    }) as unknown as Sql
+      { release: releaseReserved },
+    ) as unknown as ReservedSql
+    const sql = {
+      reserve: vi.fn(async () => reserved),
+    } as unknown as Sql
 
     return {
-      sql,
-      failTransaction: () => rejectTransaction(failure),
+      client: {
+        applicationName,
+        connectionClosedSignal: connectionClosedController.signal,
+        sql,
+      },
+      queries,
+      releaseReserved,
+      closeConnection: (error) => connectionClosedController.abort(error),
+      setBackendPid: (pid) => {
+        backendPid = pid
+      },
     }
   }
 
@@ -231,6 +245,45 @@ describe('database test runtime', () => {
     expect(cleanup).toHaveBeenCalledTimes(1)
   })
 
+  test('preserves the abort reason when client shutdown rejects the in-flight operation', async () => {
+    const controller = new AbortController()
+    const lockLoss = new Error('数据库测试全局锁已丢失，已中止后续数据库写入。')
+    const connectionEnded = Object.assign(new Error('write CONNECTION_ENDED'), {
+      code: 'CONNECTION_ENDED',
+    })
+    let rejectOperation!: (error: Error) => void
+    const operation = new Promise<never>((_resolve, reject) => {
+      rejectOperation = reject
+    })
+    let reportStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      reportStarted = resolve
+    })
+    const closeClient = vi.fn(async () => {
+      rejectOperation(connectionEnded)
+    })
+
+    const phase = runAbortableDatabasePhase(
+      'suite lock shutdown',
+      controller.signal,
+      async (signal) => {
+        bindDatabaseTestClientToAbortSignal(
+          { end: closeClient } as unknown as Pick<Sql, 'end'>,
+          signal,
+        )
+        reportStarted()
+        return operation
+      },
+      { now: () => 0, write: () => undefined },
+    )
+
+    await started
+    controller.abort(lockLoss)
+
+    await expect(phase).rejects.toBe(lockLoss)
+    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 0 })
+  })
+
   test('preserves an aborted phase failure and sanitizes abort cleanup diagnostics', async () => {
     const controller = new AbortController()
     const primaryFailure = new Error('phase timed out')
@@ -392,27 +445,53 @@ describe('database test runtime', () => {
     })
   })
 
+  test('rejects a transaction-pooler endpoint for the persistent suite lock client', () => {
+    expect(() =>
+      createDatabaseTestSuiteLockClient(
+        'postgresql://postgres.wlxjauqsesrmcyghibsr:secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres',
+        '0123456789abcdef',
+      ),
+    ).toThrow('Supabase 数据库连接配置无效。')
+  })
+
   test('acquires one suite-wide advisory lock before remote test mutation', async () => {
-    const lock = await acquireDatabaseTestSuiteLock(createSuiteLockSql(true))
+    const suiteLockClient = createSuiteLockClient()
+    const lock = await acquireDatabaseTestSuiteLock(suiteLockClient.client)
 
     await expect(lock.release()).resolves.toBeUndefined()
+    expect(suiteLockClient.queries).toHaveLength(3)
+    expect(suiteLockClient.queries[0]).toContain('set_config')
+    expect(suiteLockClient.queries[1]).toContain('pg_try_advisory_lock')
+    expect(suiteLockClient.queries[2]).toContain('pg_advisory_unlock')
+    expect(suiteLockClient.releaseReserved).toHaveBeenCalledTimes(1)
   })
 
   test('rejects a concurrent remote suite before it mutates shared fixtures', async () => {
+    const suiteLockClient = createSuiteLockClient({ acquired: false })
     await expect(
-      acquireDatabaseTestSuiteLock(createSuiteLockSql(false)),
+      acquireDatabaseTestSuiteLock(suiteLockClient.client),
     ).rejects.toThrow(
       '检测到另一套远程 PostgreSQL 测试正在运行。请等待其结束后再串行执行。',
     )
+    expect(suiteLockClient.queries).toHaveLength(2)
+    expect(suiteLockClient.queries).not.toContain(
+      expect.stringContaining('pg_advisory_unlock'),
+    )
+    expect(suiteLockClient.releaseReserved).toHaveBeenCalledTimes(1)
   })
 
-  test('aborts an active phase when the acquired suite lock transaction fails', async () => {
-    const transactionFailure = new Error(
-      'connection failed at postgresql://user:password@example.test/postgres',
+  test('aborts an active phase when the reserved suite lock connection closes', async () => {
+    const connectionFailure = Object.assign(
+      new Error(
+        'connection failed at postgresql://user:password@example.test/postgres',
+      ),
+      { name: 'PostgresError', code: '08006' },
     )
-    const suiteLockSql =
-      createPostAcquisitionFailureSuiteLockSql(transactionFailure)
-    const lock = await acquireDatabaseTestSuiteLock(suiteLockSql.sql)
+    const suiteLockClient = createSuiteLockClient()
+    const output: string[] = []
+    const lock = await acquireDatabaseTestSuiteLock(suiteLockClient.client, {
+      reporter: { write: (message) => output.push(message) },
+    })
     const contextController = new AbortController()
     const phaseSignal = AbortSignal.any([contextController.signal, lock.signal])
     let reportPhaseStarted!: () => void
@@ -438,7 +517,7 @@ describe('database test runtime', () => {
     )
 
     await phaseStarted
-    suiteLockSql.failTransaction()
+    suiteLockClient.closeConnection(connectionFailure)
 
     await expect(phase).rejects.toThrow(
       '数据库测试全局锁已丢失，已中止后续数据库写入。',
@@ -453,20 +532,25 @@ describe('database test runtime', () => {
     })
     expect(releaseFailure).not.toHaveProperty('cause')
     expect(String(releaseFailure)).not.toContain('password')
+    expect(output).toEqual([
+      '[database-test] SUITE LOCK lost: PostgresError(code=08006)\n',
+    ])
+    expect(output.join('')).not.toContain('password')
+    expect(suiteLockClient.releaseReserved).not.toHaveBeenCalled()
   })
 
   test('terminates a protected database client when the suite lock is lost', async () => {
-    const suiteLockSql = createPostAcquisitionFailureSuiteLockSql(
-      new Error('suite lock connection failed'),
-    )
-    const lock = await acquireDatabaseTestSuiteLock(suiteLockSql.sql)
+    const suiteLockClient = createSuiteLockClient()
+    const lock = await acquireDatabaseTestSuiteLock(suiteLockClient.client, {
+      reporter: { write: () => undefined },
+    })
     const endClient = vi.fn(async () => undefined)
     const unbind = bindDatabaseTestClientToSuiteLock(
       { end: endClient } as unknown as Pick<Sql, 'end'>,
       lock,
     )
 
-    suiteLockSql.failTransaction()
+    suiteLockClient.closeConnection(new Error('suite lock connection failed'))
 
     await vi.waitFor(() => {
       expect(endClient).toHaveBeenCalledExactlyOnceWith({ timeout: 0 })
@@ -475,6 +559,22 @@ describe('database test runtime', () => {
       '数据库测试全局锁已丢失，已中止后续数据库写入。',
     )
     unbind()
+  })
+
+  test('fails closed when a suite lock heartbeat observes another backend', async () => {
+    const suiteLockClient = createSuiteLockClient()
+    const lock = await acquireDatabaseTestSuiteLock(suiteLockClient.client, {
+      heartbeatIntervalMs: 1,
+      reporter: { write: () => undefined },
+    })
+    suiteLockClient.setBackendPid(4343)
+
+    await vi.waitFor(() => expect(lock.signal.aborted).toBe(true))
+
+    await expect(lock.release()).rejects.toThrow(
+      '数据库测试全局锁已丢失，已中止后续数据库写入。',
+    )
+    expect(suiteLockClient.releaseReserved).not.toHaveBeenCalled()
   })
 
   test('fails fast with safe diagnostics when another tagged test transaction remains', async () => {
@@ -505,6 +605,26 @@ describe('database test runtime', () => {
     await expect(
       terminateConflictingDatabaseTestConnections(sql, '0123456789abcdef'),
     ).resolves.toEqual([4242])
+  })
+
+  test('preflight and cleanup include an idle foreign suite lock by its strict tag', async () => {
+    const queries: {
+      readonly text: string
+      readonly values: readonly unknown[]
+    }[] = []
+    const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+      queries.push({ text: strings.join('?'), values })
+      return Promise.resolve([])
+    }) as unknown as Sql
+
+    await assertNoConflictingDatabaseTestConnections(sql, '0123456789abcdef')
+    await terminateConflictingDatabaseTestConnections(sql, '0123456789abcdef')
+
+    expect(queries).toHaveLength(2)
+    for (const query of queries) {
+      expect(query.text).toContain('application_name ~')
+      expect(query.values).toContain('^txhc-dbtest:[a-f0-9]{16}:suite-lock$')
+    }
   })
 
   test('reads the backend PID through the exact transaction under observation', async () => {

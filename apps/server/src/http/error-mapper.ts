@@ -22,6 +22,10 @@ import type { StableSessionCommandErrorCode } from '../sessions/command-executio
 import { HttpBoundaryError } from './request-boundary.js'
 import { HttpOutputValidationError } from './response.js'
 import { SessionReadonlyDiagnosticError } from '../sessions/public-projection/errors.js'
+import {
+  AgentRunQueryNotFoundError,
+  HandQueryNotFoundError,
+} from '../agents/audit/query-errors.js'
 
 export type StableSessionHttpErrorCode = StableSessionCommandErrorCode
 
@@ -79,6 +83,24 @@ export function mapHttpError(error: unknown): {
       response: errorResponse({
         code: 'SESSION_NOT_FOUND',
         message: '场次不存在。',
+      }),
+    }
+  }
+  if (error instanceof HandQueryNotFoundError) {
+    return {
+      status: 404,
+      response: errorResponse({
+        code: 'HAND_NOT_FOUND',
+        message: '手牌不存在。',
+      }),
+    }
+  }
+  if (error instanceof AgentRunQueryNotFoundError) {
+    return {
+      status: 404,
+      response: errorResponse({
+        code: 'AGENT_RUN_NOT_FOUND',
+        message: 'Agent Run 不存在。',
       }),
     }
   }

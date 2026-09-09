@@ -7,9 +7,12 @@ import type {
 export {
   acquireDatabaseTestSuiteLock,
   bindDatabaseTestClientToSuiteLock,
+  createDatabaseTestSuiteLockClient,
   type DatabaseTestSuiteLock,
 } from '../../src/db/database-test-suite-lock.js'
 import { DATABASE_TEST_APPLICATION_PREFIX } from '../../src/db/test-database-safety.js'
+
+const DATABASE_TEST_SUITE_LOCK_APPLICATION_PATTERN = `^${DATABASE_TEST_APPLICATION_PREFIX}:[a-f0-9]{16}:suite-lock$`
 
 interface ConflictingDatabaseTestConnection {
   readonly pid: number
@@ -319,7 +322,10 @@ export async function assertNoConflictingDatabaseTestConnections(
     WHERE datname = current_database()
       AND application_name LIKE ${`${DATABASE_TEST_APPLICATION_PREFIX}:%`}
       AND application_name NOT LIKE ${`${DATABASE_TEST_APPLICATION_PREFIX}:${runId}:%`}
-      AND xact_start IS NOT NULL
+      AND (
+        xact_start IS NOT NULL
+        OR application_name ~ ${DATABASE_TEST_SUITE_LOCK_APPLICATION_PATTERN}
+      )
     ORDER BY xact_start, pid
   `
   if (rows.length === 0) {
@@ -350,7 +356,10 @@ export async function terminateConflictingDatabaseTestConnections(
     WHERE datname = current_database()
       AND application_name LIKE ${`${DATABASE_TEST_APPLICATION_PREFIX}:%`}
       AND application_name NOT LIKE ${`${DATABASE_TEST_APPLICATION_PREFIX}:${runId}:%`}
-      AND xact_start IS NOT NULL
+      AND (
+        xact_start IS NOT NULL
+        OR application_name ~ ${DATABASE_TEST_SUITE_LOCK_APPLICATION_PATTERN}
+      )
     ORDER BY pid
   `
   return Object.freeze(
@@ -431,6 +440,9 @@ export async function runAbortableDatabasePhase<Result>(
       )
       signal.throwIfAborted()
       return result
+    } catch (error) {
+      if (signal.aborted) signal.throwIfAborted()
+      throw error
     } finally {
       if (signal.aborted) {
         await waitForDatabaseTestAbortCleanup(signal, reporter)

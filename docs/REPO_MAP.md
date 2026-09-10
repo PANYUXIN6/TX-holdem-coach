@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-09-08（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
+更新时间：2026-09-10（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
 
 ## 当前目录与职责
 
@@ -43,7 +43,7 @@
 - `docs/ARCHITECTURE.md`：M0.1 建立的 workspace 边界、入口点和依赖方向。
 - `apps/web/public/poker/`：唯一的扑克牌静态资源目录，含 52 张标准牌、牌背和两张 Joker；Vite 浏览器路径为 `/poker/<filename>`，不得替换或修改资源内容。
 - `apikey.txt`：用户本地密钥文件；不作为运行时配置源，开发中不得读取或记录。
-- 根 `package.json`：pnpm workspace 的开发、构建、类型检查、格式检查与测试编排入口；三处 workspace 使用 TypeScript 7。`lint` 先构建 Contracts 声明，再执行含类型感知的 Oxlint；`verify` 按“地图关键路径 → 扑克牌资源清单 → 格式检查 → 类型检查 → 后端测试”执行；`simplify:light` 聚合格式、Oxlint 与 typecheck，`simplify:deep` 再顺序执行 Knip/jscpd 报告、verify、build 与迁移制品校验，远程数据库测试不被硬编码其中；`pnpm-lock.yaml` 锁定其依赖树。
+- 根 `package.json`：pnpm workspace 的开发、构建、类型检查、格式检查与测试编排入口；三处 workspace 使用 TypeScript 7。`lint` 先构建 Contracts 声明，再执行含类型感知的 Oxlint；`verify` 按“地图关键路径 → 扑克牌资源清单 → 离线确定性 Player Eval → 格式检查 → 类型检查 → 后端测试 → Web 测试”执行；`simplify:light` 聚合格式、Oxlint 与 typecheck，`simplify:deep` 再顺序执行 Knip/jscpd 报告、verify、build 与迁移制品校验，远程数据库测试不被硬编码其中；`pnpm-lock.yaml` 锁定其依赖树。
 - `.oxlintrc.json`、`knip.json`、`.jscpd.json`：仓库级静态分析配置。Oxlint 是普通 lint 门禁，使用 `oxlint-tsgolint` 的 TypeScript 7 类型信息；Knip 和 jscpd 只生成候选，入口与排除理由见 `docs/DEFENSIVE_PATTERNS.md`，不能授权删除代码。
 - `scripts/verify-repository-map-paths.mjs`：读取 `docs/REPO_MAP.md` 与 `docs/ARCHITECTURE.md`，校验其中从仓库根起算的明确关键路径仍然存在，防止已删除模块继续被地图声明为当前结构。
 - `scripts/verify-poker-assets.mjs`：校验 `apps/web/public/poker/` 恰好包含 52 张标准牌、牌背和两张 Joker 的完整文件清单，不把 Web 文件名重新放入服务端牌张领域模型。
@@ -54,6 +54,10 @@
 
 - 根 `package.json`：pnpm workspace 的开发、构建、类型检查和测试编排入口。
 - `apps/web/`：React/Vite 手机竖屏 Web 客户端入口；目标可玩宽度为 360–430px，宽屏只居中承载手机画布。其 `public/poker/` 是唯一牌面资源位置，后续只负责前端展示和调用服务端 API。
+- `apps/web/src/main.tsx` → `App.tsx` → `Shell.tsx` / `Pages.tsx`：StrictMode 与根错误边界装配 BrowserRouter，渲染最大 430px 手机画布及普通、牌桌、全屏三种布局；页面错误边界保留标题和导航。`styles.css` 负责安全区、内容滚动、基础深色样式。
+- `apps/web/src/navigation.ts`：实际渲染和 Node 测试共用的路由定义、资源路径生成、受限列表返回策略；不承载查询或业务实体。`Shell.tsx` 统一处理 pathname 焦点/滚动和 coarse 手机横屏提示。
+- `apps/web/src/ErrorBoundary.tsx`：固定中文根级/页面渲染错误恢复；不显示原始异常，不处理异步请求错误。
+- `apps/web/vitest.config.ts`、`apps/web/test/navigation.test.ts`：独立 Node 导航冒烟，只收集 Web `test/**/*.test.ts`；根 `test:web` 独立执行，`test` / `verify` 在后端测试之后执行。M6.1 页面为待接入骨架，未读取 API、未安装 Query/Store。
 - `apps/server/`：Node/Hono 本地服务入口；`src/db/schema.ts` 是 14 张 `app_private` 业务表及 Drizzle 可表达约束/索引的唯一入口。首发前全部 Schema 演进已压入唯一 `src/db/migrations/0000_baseline.sql`，journal/snapshot 也只保留该基线；baseline 另保留延迟循环外键、约束触发器、默认 Owner 与权限收紧，`verify:migration-assets` 会阻止这些手工不变量被重新生成覆盖。运行时仍只使用参数化 `postgres.js`，不安装 `supabase-js`；迁移兼容、测试数据库安全和发布制品校验继续复用既有边界。
 - `apps/server/.env.example` 与 `.env.test.example`：前者只描述线上运行/迁移 URL 与 DeepSeek Provider Key，后者只描述两条测试 URL；project ref 只存在于非秘密注册表，不接受环境覆盖，真实 `.env.test.local` 被 Git 忽略。
 - `apps/server/scripts/run-database-integration-tests.mjs`：本地只解析 `.env.test.local`，CI 只接受已注入的两条测试 URL；构造子进程 allowlist，剔除线上 URL 和 ref 环境变量，并按纯计划选择数据库持久化或 PostgreSQL E2E 入口、注入 Run ID 及迁移-only、单里程碑、full 或 cleanup scope；Vitest 子进程在首个失败或阶段超时后停止调度同套后续里程碑。
@@ -105,7 +109,7 @@
 
 本节描述已实现的 M4.7/M4.8 代码现状；M4.8 database milestone 与 PostgreSQL E2E milestone 已按测试手册串行通过。会话版本仍属于 `PrivateTableState`，纯扑克规则、审计 Repository 与 Agent Foundation 协议都不自行推进它。
 
-根 pnpm 脚本编排三个 workspace；`verify` 固定执行离线确定性 Player Eval、格式检查、类型检查与后端分类测试，且不读取模型 Key、数据库凭据或联网。configured Server 启动已由 M4.10 接入 M3.8 恢复、Commit Gate、Player Worker 和 Dispatcher；默认启动不主动调用 Provider，实际模型请求只由已领取的 Run 在运行期发起。
+根 pnpm 脚本编排三个 workspace；`verify` 固定执行离线确定性 Player Eval、格式检查、类型检查、后端分类测试与 Web Node 测试，且不读取模型 Key、数据库凭据或联网。configured Server 启动已由 M4.10 接入 M3.8 恢复、Commit Gate、Player Worker 和 Dispatcher；默认启动不主动调用 Provider，实际模型请求只由已领取的 Run 在运行期发起。
 
 M3.3 用户行动链固定为“恢复并锁定 Session → 登记命令 → `playerAction.prepare` 调用一次 M1.9 → 专属 verifier → 预验证 mutation → 可选 `completeHandAudit` → Session/快照/事件持久化 → 完成账本 → COMMIT”。M3.4 在同一执行器中增加三条链：补码只写用户资金；下一手在一个事务内写 AI 自动买入、checkpoint、新 Hand、事件和快照；正常结束不写快照或推进状态版本；暂停中止按 `Session → Hand → AgentRun` 锁序恢复 checkpoint、标记 Hand aborted 并结束 Session。Agent 动作协议在真实 Commit Gate 出现时再设计。
 

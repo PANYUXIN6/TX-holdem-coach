@@ -1,10 +1,10 @@
 # 架构概览
 
-更新时间：2026-09-09（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 已实现；M3.8 主体接线已由 M4.10 落地；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
+更新时间：2026-09-10（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳已实现；M3.8 主体接线已由 M4.10 落地；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
 
 ## Workspace 边界
 
-- 根目录通过 pnpm 编排开发、构建、类型检查、格式检查和后端测试命令；`verify` 先校验仓库地图路径与 Web 扑克牌资源清单，再执行离线确定性 Player Eval、“格式检查 → 类型检查 → 后端测试”，后端测试会先验证并重建 Contracts，再运行 Server 分类测试，不承载运行时业务代码。
+- 根目录通过 pnpm 编排开发、构建、类型检查、格式检查和后端测试命令；`verify` 先校验仓库地图路径与 Web 扑克牌资源清单，再执行离线确定性 Player Eval、“格式检查 → 类型检查 → 后端测试 → Web Node 测试”，后端测试会先验证并重建 Contracts，再运行 Server 分类测试，不承载运行时业务代码。
 - `apps/web` 是 React/Vite 手机竖屏浏览器客户端，入口为 `src/main.tsx`；目标可玩宽度为 360–430px，宽屏不建立第二套布局。唯一的牌面资源位于 `public/poker/`，由 Vite 作为 `/poker/<filename>` 提供。
 - `apps/server` 是 Node/Hono 本地服务，运行入口为 `src/index.ts`，应用组合点为 `src/bootstrap.ts`，信号与运行期 fatal 生命周期归 `src/server-process-lifecycle.ts`。`src/persistence/` 直接使用参数化 `postgres.js` SQL；`src/db/schema.ts` 是当前 14 张 `app_private` 表与 Drizzle 可表达约束的唯一入口，首发前全部 Schema 演进已破坏性压入唯一 `0000_baseline.sql`。该 baseline 还显式保留 Drizzle 无法表达的延迟循环外键、约束触发器、默认 Owner 与权限收紧，并由迁移资产门禁防止重新生成时丢失。Hono 保持唯一入口，不安装 `supabase-js`，也不使用 Supabase Auth、Data API、Realtime、Storage 或 Edge Functions。
 - `src/persistence/command-ledger-repository.ts` 是 M2.4 命令账本边界：依赖 Contracts Schema 验证当前四类公开命令与响应；它在 Schema 验证后规范化命令 UUID，生成稳定摘要与一次性 capability，并把 acquired capability 绑定到登记事务，只消费调用方事务和已解析 Owner，不依赖扑克引擎、HTTP 或 SSE。可见 `processing` 被视为损坏，只有 completed/failed 终态可以重放。
@@ -33,7 +33,7 @@ Oxlint 使用 TypeScript 7 类型信息覆盖普通未使用项、静态错误�
 
 ## 当前运行链路
 
-`pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 先校验仓库地图声明的明确关键路径和 Web 扑克牌资源清单，再执行离线确定性 Player Eval、格式检查、类型检查与后端测试，不启动服务、不联网，也不读取模型 Key 或数据库凭据。离线 Eval 用严格固定场景实际运行 Player 纯链，并以独立 grader 判定。Server 入口按“加载 dotenv → 配置/人物/数据库/Owner → active Session preflight → 配置 Player Runtime 或 diagnostic-only → configured 情况下 M3.8 restart recovery → idle-AI reconcile → Player Worker start/wake → Dispatcher start → `createApp()` → 仅监听 `127.0.0.1`”运行；HTTP 确认绑定后才 ready，组合失败按反向资源顺序关闭。运行期 fatal 会先锁存非零退出码；关闭先停止接受 HTTP 连接、并行停止 Dispatcher/Worker，随后有界 drain、强制中断残余连接，最后关闭数据库。
+`pnpm run dev` 同时编排 Web 与 Server；`pnpm run verify` 先校验仓库地图声明的明确关键路径和 Web 扑克牌资源清单，再执行离线确定性 Player Eval、格式检查、类型检查、后端测试与 Web Node 测试，不启动服务、不联网，也不读取模型 Key 或数据库凭据。离线 Eval 用严格固定场景实际运行 Player 纯链，并以独立 grader 判定。Server 入口按“加载 dotenv → 配置/人物/数据库/Owner → active Session preflight → 配置 Player Runtime 或 diagnostic-only → configured 情况下 M3.8 restart recovery → idle-AI reconcile → Player Worker start/wake → Dispatcher start → `createApp()` → 仅监听 `127.0.0.1`”运行；HTTP 确认绑定后才 ready，组合失败按反向资源顺序关闭。运行期 fatal 会先锁存非零退出码；关闭先停止接受 HTTP 连接、并行停止 Dispatcher/Worker，随后有界 drain、强制中断残余连接，最后关闭数据库。
 
 M2.4 调用链固定为“事务外严格 prepare 命令与解析 Owner → 上层事务锁定 Session → `registerCommand` → 业务事实/事件/快照 → `completeCommand` 或可安全提交的 `failCommand`”。登记只以冲突安全插入实际返回一行为 acquired 判据，未插入后才读取同键既有状态；重放再次校验载荷版本、Contracts Schema、Session/版本镜像和终态矩阵，其中 completed 必须携带事件范围，failed 必须携带最新快照。Repository 自身不开启事务、不锁 Session、不推进扑克状态、不分配事件序号，也不发布 SSE；基础设施与未知异常由上层整笔回滚。
 
@@ -94,3 +94,11 @@ apps/server/src/
     ├── player/
     └── coach/
 ```
+
+## M6.1 浏览器应用壳
+
+`apps/web/src/main.tsx` 在 StrictMode 内使用 Router 外的根错误边界；`apps/web/src/App.tsx` 稳定装配 BrowserRouter，消费 `apps/web/src/navigation.ts` 的同一份路径定义，嵌套 `apps/web/src/Shell.tsx` 和 `apps/web/src/Pages.tsx`。Shell 统一最大 430px 画布、标题、安全区、内容滚动与焦点；普通布局显示三项主导航，牌桌提供独立操作容器，全屏详情只显示当前内容。页面边界按 pathname 重置，公共壳故障由根边界收敛。
+
+横屏提示仅针对 coarse 指针、宽度至少 431px、高度不超过 430px 的 landscape 视口，隐藏并 inert 页面交互树，保留 Router 挂载；旋回后聚焦标题。search 更新保持 URL 与当前焦点/滚动。详情返回只接受已登记的历史/手牌调用列表 `{ pathname, search }`，其余使用确定性上级。
+
+应用壳只拥有导航与展示状态，不保存 Session/Hand/Run 实体；API/Query、SSE、UI Store 由后续 M6.2–M6.4 接入。`pnpm run dev:web` 独立运行，不启动后端。BrowserRouter 根路径部署要求静态宿主对页面 GET 深链接回写 index.html，静态资源正常服务，`/api/*` 交由 Hono；本轮不改变后端或部署拓扑。Web Vitest 3.2.7 固定 Node 环境，与数据库测试隔离。

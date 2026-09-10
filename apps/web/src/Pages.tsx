@@ -1,0 +1,113 @@
+import { Link, useParams } from 'react-router'
+import { paths, resourcePath, sessionHistoryPath } from './navigation.js'
+import type { PageId } from './navigation.js'
+
+const descriptions: Partial<Record<PageId, string>> = {
+  newSession:
+    '阵容选择将在后续接入。这里将用于选择同桌 AI 人物，准备你的练习。',
+  confirm:
+    '开场确认将在阵容与创建场次功能接入后开放。当前尚未选择阵容，也不会创建场次。',
+  table:
+    '牌桌数据与操作尚未接入。此地址仅指定目标场次，不表示场次存在或正在进行。',
+  currentHand: '本手流程将在场次快照与实时事件接入后显示。',
+  agents: 'AI 状态将在调用查询接入后显示。当前没有读取模型或连接状态。',
+  history: '历史列表与筛选将在查询功能接入后开放。当前尚未读取手牌记录。',
+  hand: '手牌详情将在查询功能接入后显示。手牌是否存在及是否已完成，以服务端响应为准。',
+  statistics: '统计将在聚合查询接入后显示。这里将帮助你回看练习表现。',
+  settings: '人物、模型供应商与数据管理设置将在后续接入。',
+  debug: '调用查询接入后，可从手牌或 AI 状态进入对应的调用记录。',
+  handRuns: '手牌关联调用将在查询功能接入后显示。当前尚未读取调用记录。',
+  run: '调用详情将在查询功能接入后显示。当前尚未读取调用结果。',
+}
+
+export function Page({ id }: { id: PageId }) {
+  const params = useParams()
+  if (id === 'home')
+    return (
+      <>
+        <section className="training-intro">
+          <p className="eyebrow">德州扑克 · AI 对练</p>
+          <h2>
+            把每一次决策，
+            <br />
+            变成下一手的底气。
+          </h2>
+          <p className="intro-copy">
+            从组建一桌开始，在练习中思考，在回看中进步。
+          </p>
+          <Link className="primary-link" to={paths.newSession}>
+            开始组桌 <span aria-hidden="true">↗</span>
+          </Link>
+        </section>
+        <section className="notice">
+          <span className="section-label">练习准备</span>
+          <h2>你的练习室，正在就位</h2>
+          <p>
+            现在可以浏览组桌、历史、统计和设置页面。阵容、牌局与数据功能将陆续接入。
+          </p>
+        </section>
+        <div className="home-note">
+          <span aria-hidden="true">♣</span>
+          <p>留一点时间，给每一手思考。</p>
+        </div>
+      </>
+    )
+  if (id === 'notFound')
+    return (
+      <section className="notice">
+        <span className="section-label">404</span>
+        <h2>这条路径没有对应页面</h2>
+        <p>请使用上方入口返回训练首页，继续浏览。</p>
+        <Link className="primary-link" to={paths.home}>
+          返回训练首页 <span aria-hidden="true">↗</span>
+        </Link>
+      </section>
+    )
+  const resourceId = params.sessionId ?? params.handId ?? params.runId
+  return (
+    <>
+      {id === 'newSession' || id === 'confirm' ? (
+        <p className="step-label">
+          组桌准备 / {id === 'newSession' ? '01 选择阵容' : '02 确认开场'}
+        </p>
+      ) : null}
+      <section className="notice">
+        <span className="section-label">功能待接入</span>
+        <h2>
+          {id === 'confirm' ? '开场前，再确认一次' : '这里将承载下一步练习'}
+        </h2>
+        <p>{descriptions[id]}</p>
+        {resourceId ? (
+          <p className="resource-label">
+            目标标识 <span>{resourceId}</span>
+          </p>
+        ) : null}
+      </section>
+      <div className="page-links">
+        {id === 'newSession' ? (
+          <Link className="primary-link" to={paths.confirm}>
+            查看确认页 <span aria-hidden="true">→</span>
+          </Link>
+        ) : null}
+        {id === 'settings' ? (
+          <Link to={paths.debug}>
+            调试入口说明 <span aria-hidden="true">↗</span>
+          </Link>
+        ) : null}
+        {id === 'table' ? (
+          <>
+            <Link to={resourcePath('currentHand', params.sessionId!)}>
+              本手流程 <span aria-hidden="true">↗</span>
+            </Link>
+            <Link to={resourcePath('agents', params.sessionId!)}>
+              AI 状态 <span aria-hidden="true">↗</span>
+            </Link>
+            <Link to={sessionHistoryPath(params.sessionId!)}>
+              本场历史 <span aria-hidden="true">↗</span>
+            </Link>
+          </>
+        ) : null}
+      </div>
+    </>
+  )
+}

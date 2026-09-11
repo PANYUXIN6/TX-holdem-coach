@@ -1,0 +1,407 @@
+{
+  "public": {
+    "protocolVersion": 1,
+    "view": "public",
+    "history": {
+      "sessionId": "22222222-2222-4222-8222-222222222222",
+      "handId": "10000000-0000-4000-8000-000000000001",
+      "handNumber": 1,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "completedAt": "2026-09-03T12:01:00.000Z",
+      "participantSeatNumbers": [0, 1, 2, 3, 4, 5],
+      "buttonSeatNumber": 0,
+      "smallBlindSeatNumber": 1,
+      "bigBlindSeatNumber": 2,
+      "participants": [
+        {
+          "seatNumber": 0,
+          "playerId": "00000000-0000-4000-8000-000000000001",
+          "isUser": true,
+          "displayName": "玩家",
+          "avatarColor": "#0F766E",
+          "position": "BTN",
+          "startingStack": 1000,
+          "endingStack": 1000,
+          "totalContribution": 0,
+          "netChange": 0
+        },
+        {
+          "seatNumber": 1,
+          "playerId": "00000000-0000-4000-8000-000000000002",
+          "isUser": false,
+          "displayName": "AI 1",
+          "avatarColor": "#000000",
+          "position": "SB",
+          "startingStack": 1000,
+          "endingStack": 990,
+          "totalContribution": 10,
+          "netChange": -10
+        },
+        {
+          "seatNumber": 2,
+          "playerId": "00000000-0000-4000-8000-000000000003",
+          "isUser": false,
+          "displayName": "AI 2",
+          "avatarColor": "#000000",
+          "position": "BB",
+          "startingStack": 1000,
+          "endingStack": 1010,
+          "totalContribution": 20,
+          "netChange": 10
+        },
+        {
+          "seatNumber": 3,
+          "playerId": "00000000-0000-4000-8000-000000000004",
+          "isUser": false,
+          "displayName": "AI 3",
+          "avatarColor": "#000000",
+          "position": "UTG",
+          "startingStack": 1000,
+          "endingStack": 1000,
+          "totalContribution": 0,
+          "netChange": 0
+        },
+        {
+          "seatNumber": 4,
+          "playerId": "00000000-0000-4000-8000-000000000005",
+          "isUser": false,
+          "displayName": "AI 4",
+          "avatarColor": "#000000",
+          "position": "HJ",
+          "startingStack": 1000,
+          "endingStack": 1000,
+          "totalContribution": 0,
+          "netChange": 0
+        },
+        {
+          "seatNumber": 5,
+          "playerId": "00000000-0000-4000-8000-000000000006",
+          "isUser": false,
+          "displayName": "AI 5",
+          "avatarColor": "#000000",
+          "position": "CO",
+          "startingStack": 1000,
+          "endingStack": 1000,
+          "totalContribution": 0,
+          "netChange": 0
+        }
+      ],
+      "phases": [
+        {
+          "phase": "preflop",
+          "communityCards": [],
+          "actions": [
+            {
+              "actionNumber": 1,
+              "eventSeq": 10,
+              "actorSeatNumber": 3,
+              "playerId": "00000000-0000-4000-8000-000000000004",
+              "position": "UTG",
+              "action": {
+                "type": "fold"
+              },
+              "committedAmount": 0,
+              "streetContributionAfterAction": 0,
+              "stackAfterAction": 1000,
+              "potBeforeAction": 30,
+              "potAfterAction": 30
+            }
+          ]
+        },
+        {
+          "phase": "showdown",
+          "terminationReason": "complete",
+          "handCompletedEventSeq": 12,
+          "communityCards": [],
+          "uncalledBetReturns": [
+            {
+              "eventSeq": 11,
+              "seatNumber": 2,
+              "amount": 10
+            }
+          ],
+          "revealedHands": [
+            {
+              "seatNumber": 0,
+              "holeCards": [
+                {
+                  "rank": "8",
+                  "suit": "clubs"
+                },
+                {
+                  "rank": "A",
+                  "suit": "clubs"
+                }
+              ],
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 1,
+              "holeCards": null,
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 2,
+              "holeCards": null,
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 3,
+              "holeCards": null,
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 4,
+              "holeCards": null,
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 5,
+              "holeCards": null,
+              "handEvaluation": null
+            }
+          ],
+          "pots": [
+            {
+              "potIndex": 0,
+              "kind": "main",
+              "amount": 20,
+              "winningSeatNumbers": [2],
+              "awards": [
+                {
+                  "seatNumber": 2,
+                  "amount": 20
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "auditReveal": {
+    "protocolVersion": 1,
+    "view": "auditReveal",
+    "history": {
+      "sessionId": "22222222-2222-4222-8222-222222222222",
+      "handId": "10000000-0000-4000-8000-000000000001",
+      "handNumber": 1,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "completedAt": "2026-09-03T12:01:00.000Z",
+      "participantSeatNumbers": [0, 1, 2, 3, 4, 5],
+      "buttonSeatNumber": 0,
+      "smallBlindSeatNumber": 1,
+      "bigBlindSeatNumber": 2,
+      "participants": [
+        {
+          "seatNumber": 0,
+          "playerId": "00000000-0000-4000-8000-000000000001",
+          "isUser": true,
+          "displayName": "玩家",
+          "avatarColor": "#0F766E",
+          "position": "BTN",
+          "startingStack": 1000,
+          "endingStack": 1000,
+          "totalContribution": 0,
+          "netChange": 0
+        },
+        {
+          "seatNumber": 1,
+          "playerId": "00000000-0000-4000-8000-000000000002",
+          "isUser": false,
+          "displayName": "AI 1",
+          "avatarColor": "#000000",
+          "position": "SB",
+          "startingStack": 1000,
+          "endingStack": 990,
+          "totalContribution": 10,
+          "netChange": -10
+        },
+        {
+          "seatNumber": 2,
+          "playerId": "00000000-0000-4000-8000-000000000003",
+          "isUser": false,
+          "displayName": "AI 2",
+          "avatarColor": "#000000",
+          "position": "BB",
+          "startingStack": 1000,
+          "endingStack": 1010,
+          "totalContribution": 20,
+          "netChange": 10
+        },
+        {
+          "seatNumber": 3,
+          "playerId": "00000000-0000-4000-8000-000000000004",
+          "isUser": false,
+          "displayName": "AI 3",
+          "avatarColor": "#000000",
+          "position": "UTG",
+          "startingStack": 1000,
+          "endingStack": 1000,
+          "totalContribution": 0,
+          "netChange": 0
+        },
+        {
+          "seatNumber": 4,
+          "playerId": "00000000-0000-4000-8000-000000000005",
+          "isUser": false,
+          "displayName": "AI 4",
+          "avatarColor": "#000000",
+          "position": "HJ",
+          "startingStack": 1000,
+          "endingStack": 1000,
+          "totalContribution": 0,
+          "netChange": 0
+        },
+        {
+          "seatNumber": 5,
+          "playerId": "00000000-0000-4000-8000-000000000006",
+          "isUser": false,
+          "displayName": "AI 5",
+          "avatarColor": "#000000",
+          "position": "CO",
+          "startingStack": 1000,
+          "endingStack": 1000,
+          "totalContribution": 0,
+          "netChange": 0
+        }
+      ],
+      "phases": [
+        {
+          "phase": "preflop",
+          "communityCards": [],
+          "actions": [
+            {
+              "actionNumber": 1,
+              "eventSeq": 10,
+              "actorSeatNumber": 3,
+              "playerId": "00000000-0000-4000-8000-000000000004",
+              "position": "UTG",
+              "action": {
+                "type": "fold"
+              },
+              "committedAmount": 0,
+              "streetContributionAfterAction": 0,
+              "stackAfterAction": 1000,
+              "potBeforeAction": 30,
+              "potAfterAction": 30
+            }
+          ]
+        },
+        {
+          "phase": "showdown",
+          "terminationReason": "complete",
+          "handCompletedEventSeq": 12,
+          "communityCards": [],
+          "uncalledBetReturns": [
+            {
+              "eventSeq": 11,
+              "seatNumber": 2,
+              "amount": 10
+            }
+          ],
+          "revealedHands": [
+            {
+              "seatNumber": 0,
+              "holeCards": [
+                {
+                  "rank": "8",
+                  "suit": "clubs"
+                },
+                {
+                  "rank": "A",
+                  "suit": "clubs"
+                }
+              ],
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 1,
+              "holeCards": [
+                {
+                  "rank": "3",
+                  "suit": "clubs"
+                },
+                {
+                  "rank": "9",
+                  "suit": "clubs"
+                }
+              ],
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 2,
+              "holeCards": [
+                {
+                  "rank": "4",
+                  "suit": "clubs"
+                },
+                {
+                  "rank": "T",
+                  "suit": "clubs"
+                }
+              ],
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 3,
+              "holeCards": [
+                {
+                  "rank": "5",
+                  "suit": "clubs"
+                },
+                {
+                  "rank": "J",
+                  "suit": "clubs"
+                }
+              ],
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 4,
+              "holeCards": [
+                {
+                  "rank": "6",
+                  "suit": "clubs"
+                },
+                {
+                  "rank": "Q",
+                  "suit": "clubs"
+                }
+              ],
+              "handEvaluation": null
+            },
+            {
+              "seatNumber": 5,
+              "holeCards": [
+                {
+                  "rank": "7",
+                  "suit": "clubs"
+                },
+                {
+                  "rank": "K",
+                  "suit": "clubs"
+                }
+              ],
+              "handEvaluation": null
+            }
+          ],
+          "pots": [
+            {
+              "potIndex": 0,
+              "kind": "main",
+              "amount": 20,
+              "winningSeatNumbers": [2],
+              "awards": [
+                {
+                  "seatNumber": 2,
+                  "amount": 20
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

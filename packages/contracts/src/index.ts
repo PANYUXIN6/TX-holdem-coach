@@ -2235,3 +2235,29 @@ export type DeleteSessionResponse = z.infer<typeof DeleteSessionResponseSchema>
 export type ClearDataRequest = z.infer<typeof ClearDataRequestSchema>
 export type ClearDataResponse = z.infer<typeof ClearDataResponseSchema>
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>
+
+/** HTTP 分页输入；游标内容只由服务端解释。 */
+export const OpaquePageCursorSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .regex(/^[A-Za-z0-9_-]+$/)
+export const HandHistoryPageRequestSchema = z.strictObject({
+  query: HandHistoryListQuerySchema,
+  cursor: OpaquePageCursorSchema.nullable(),
+})
+export const SessionManagementPageRequestSchema = z.strictObject({
+  query: SessionManagementListQuerySchema,
+  cursor: OpaquePageCursorSchema.nullable(),
+})
+export const AgentCallPageRequestSchema = z.strictObject({
+  query: AgentCallListQuerySchema,
+  cursor: OpaquePageCursorSchema.nullable(),
+})
+export type HandHistoryPageRequest = z.infer<
+  typeof HandHistoryPageRequestSchema
+>
+export type SessionManagementPageRequest = z.infer<
+  typeof SessionManagementPageRequestSchema
+>
+export type AgentCallPageRequest = z.infer<typeof AgentCallPageRequestSchema>

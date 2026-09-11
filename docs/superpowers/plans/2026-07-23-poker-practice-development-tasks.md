@@ -1,8 +1,8 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 已完成；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones；M6–M9 待开发，M10/M11 为分阶段后置能力
+- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 已完成；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones；M6.2 已完成并修复审计缓存可见性问题，M6.3–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
-- 最后更新：2026-09-08
+- 最后更新：2026-09-10
 - 本文不包含工期、人数或里程碑时间估算。
 - 2026-08-16 首发前 Schema 收敛：实际开发数据库重建后，以 14 表单一 baseline 为准；删除全局 `protocolVersion`、Settings 版本、重复 JSON 信封版本、无历史责任的 Registry/legacy 兼容、`legacyDiagnosticState` 及尚无消费者的 Coach/Statistics 预埋表。下文已完成任务中的旧字段/旧表文字仅保留实施历史，不得作为后续任务当前契约；M4 仍保留运行审计、重放/精确恢复身份，Execution Budget 直接扩充首发 current 载荷而不发布 V2，M5/M8 在真实 writer 设计确认时再创建最终统计/Coach Schema。
 - 2026-08-30 M4.8 破坏性重基线：首发前开发数据不承担兼容责任，私有事件的 Poker、Session/Accounting 与 Player 协调事件合并为唯一 current `v1`；旧 V1/V2/V3 分派和中间 migration 由唯一 `0000_baseline.sql` 覆盖，远程测试 schema 通过受控重建后只接受该 baseline journal。
@@ -35,7 +35,8 @@
 | M5.4 | 用户确认开发完成；当前工作区已有统计实现，历史验证记录另行收口 |
 | M5.5 | 已完成并验证；分页场次管理与 Hand → Run → Attempt/Capability 查询链已通过离线验证及 m55 两套远程 milestones |
 | M6.1 | 应用壳已实现，离线与开发/preview 浏览器验证通过；待用户页面及真机验收 |
-| M6.2–M9 | 待开发 |
+| M6.2 | [类型安全 API 与 Query](../specs/2026-09-10-m6-2-type-safe-api-query-design.md#12-实施交付记录2026-09-10)已按 A–D 实施并通过离线与浏览器验收；快照接收与 SSE 接线归 M6.3 |
+| M6.3–M9 | 待开发 |
 | M10 Coach 长期漏洞记忆 | 首版后置，等待 M8 数据质量评估后确认 |
 | M11 针对性练习与复测 | 独立后置，等待 M10 质量评估后确认 |
 
@@ -1186,10 +1187,12 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M6.2 建立类型安全 API 客户端与 Query 约定
 
+实施状态（2026-09-10）：已按[类型安全 API 与 Query 设计](../specs/2026-09-10-m6-2-type-safe-api-query-design.md)完成 A–D，目标测试、verify、Web 构建与回环浏览器验收通过，详细记录见设计 §12。设计覆盖现有 JSON API、普通资源 Query/Mutation、游标透传、视图隔离、删除后缓存清理与开发代理，并按 A–D 切片安排实施；场次快照传输在本任务交付，唯一接收器及场次 Query/Mutation 缓存接线由 M6.3 交付。
+
 产出：
 
 - 请求和响应统一经过共享 Zod Schema。
-- 只接受 `packages/contracts` 支持的 `protocolVersion`，不在前端定义或解析私有持久化版本。
+- 按各端点当前共享 Schema 校验协议：不恢复已删除的全局 `protocolVersion`；完成手详情保留其 `protocolVersion: 1` 校验，不在前端定义或解析私有持久化版本及游标内部版本。
 - 建立稳定 Query Key、查询、Mutation 和错误展示约定。
 - Mutation 成功后只失效对应资源。
 - 服务端实体只存在 TanStack Query 缓存。
@@ -1206,6 +1209,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - 维护连接状态和最后处理的 `eventSeq`。
 - 使用 `Last-Event-ID` 重连。
 - SSE 断开时禁止提交新的玩家动作，重连并校准最新快照后恢复。
+- 接续 M6.2 的场次传输与唯一缓存键，完成 active 定位、场次 Query/Mutation 和错误 latestSnapshot 的缓存接线；SSE 与 HTTP 共用普通资源失效策略，删除时停止对应接收生命周期。
 - HTTP Query、Mutation 响应和 SSE 事件必须进入同一个快照接收器；TanStack Query 是唯一服务端实体缓存，Zustand 不保存镜像。
 - 普通增量 SSE 事件在增量模式中应用 `eventSeq <= localEventSeq` 一律忽略；更高 `eventSeq` 即使 `stateVersion` 相同也接收会话协调变化。
 - 新快照的 `stateVersion` 小于本地版本视为协议错误并重新校准；`eventSeq` 出现缺口时暂停动作并重新获取权威快照。

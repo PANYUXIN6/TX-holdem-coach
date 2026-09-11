@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-09-10（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
+更新时间：2026-09-10（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳、M6.2 API/Query 已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
 
 ## 当前目录与职责
 
@@ -54,10 +54,10 @@
 
 - 根 `package.json`：pnpm workspace 的开发、构建、类型检查和测试编排入口。
 - `apps/web/`：React/Vite 手机竖屏 Web 客户端入口；目标可玩宽度为 360–430px，宽屏只居中承载手机画布。其 `public/poker/` 是唯一牌面资源位置，后续只负责前端展示和调用服务端 API。
-- `apps/web/src/main.tsx` → `App.tsx` → `Shell.tsx` / `Pages.tsx`：StrictMode 与根错误边界装配 BrowserRouter，渲染最大 430px 手机画布及普通、牌桌、全屏三种布局；页面错误边界保留标题和导航。`styles.css` 负责安全区、内容滚动、基础深色样式。
+- `apps/web/src/main.tsx` → `App.tsx` → `Shell.tsx` / `Pages.tsx`：StrictMode 与根错误边界装配稳定 QueryClientProvider 和 BrowserRouter，渲染最大 430px 手机画布及普通、牌桌、全屏三种布局；页面错误边界保留标题和导航。`styles.css` 负责安全区、内容滚动、基础深色样式。
 - `apps/web/src/navigation.ts`：实际渲染和 Node 测试共用的路由定义、资源路径生成、受限列表返回策略；不承载查询或业务实体。`Shell.tsx` 统一处理 pathname 焦点/滚动和 coarse 手机横屏提示。
 - `apps/web/src/ErrorBoundary.tsx`：固定中文根级/页面渲染错误恢复；不显示原始异常，不处理异步请求错误。
-- `apps/web/vitest.config.ts`、`apps/web/test/navigation.test.ts`：独立 Node 导航冒烟，只收集 Web `test/**/*.test.ts`；根 `test:web` 独立执行，`test` / `verify` 在后端测试之后执行。M6.1 页面为待接入骨架，未读取 API、未安装 Query/Store。
+- `apps/web/vitest.config.ts`、`apps/web/test/navigation.test.ts`：独立 Node 导航冒烟，只收集 Web `test/**/*.test.ts`；根 `test:web` 独立执行，`test` / `verify` 在后端测试之后执行。M6.1 页面仍为待接入骨架；M6.2 已装配 Query，实体读取与按钮由 M7 接入，UI Store 由 M6.4 接入。
 - `apps/server/`：Node/Hono 本地服务入口；`src/db/schema.ts` 是 14 张 `app_private` 业务表及 Drizzle 可表达约束/索引的唯一入口。首发前全部 Schema 演进已压入唯一 `src/db/migrations/0000_baseline.sql`，journal/snapshot 也只保留该基线；baseline 另保留延迟循环外键、约束触发器、默认 Owner 与权限收紧，`verify:migration-assets` 会阻止这些手工不变量被重新生成覆盖。运行时仍只使用参数化 `postgres.js`，不安装 `supabase-js`；迁移兼容、测试数据库安全和发布制品校验继续复用既有边界。
 - `apps/server/.env.example` 与 `.env.test.example`：前者只描述线上运行/迁移 URL 与 DeepSeek Provider Key，后者只描述两条测试 URL；project ref 只存在于非秘密注册表，不接受环境覆盖，真实 `.env.test.local` 被 Git 忽略。
 - `apps/server/scripts/run-database-integration-tests.mjs`：本地只解析 `.env.test.local`，CI 只接受已注入的两条测试 URL；构造子进程 allowlist，剔除线上 URL 和 ref 环境变量，并按纯计划选择数据库持久化或 PostgreSQL E2E 入口、注入 Run ID 及迁移-only、单里程碑、full 或 cleanup scope；Vitest 子进程在首个失败或阶段超时后停止调度同套后续里程碑。
@@ -153,3 +153,14 @@ M3.4 命令链固定为“严格 `rebuy|startNextHand|endSession` → Session re
 - `apps/server/src/persistence/session-deletion-repository.ts`：M2.8 删除边界；提供 `deleteEndedSessionData()` 与 `clearOwnerSessionData()`，按冻结锁序取消非终态 Run、保留 fencing、原子清理 Player 协调字段并删除 Session 根；所有集合均校验精确影响 ID，返回值确定排序并深冻结。
 
 目标行动链固定为 `PokerTableState + PokerCommand → poker-engine.ts → PokerEngineResult`；开手也只通过同一模块返回 `StartedHandFacts`。M3 不得取得未结算的 `showdown/complete`，也不得自行组合发牌、庄盲、推进与结算模块；M2/M3/M5 可直接消费 `hand-result.ts` 的纯领域数据契约，但不得绕过门面调用行为原语。
+
+## M6.2 API 与 Query
+
+- `apps/web/src/api/client.ts`：所有已安装 JSON API 的具名传输函数，依赖 Contracts 做输入、响应、错误与身份认证；不缓存场次快照。
+- `apps/web/src/api/search.ts`：资源 URL 编解码、严格单值参数、UTC 微秒、规范化筛选与不透明游标；`errors.ts` 只交付脱敏错误和中文映射。
+- `apps/web/src/query/client.ts`、`keys.ts`、`options.ts`、`mutations.ts`：稳定 Client、唯一资源键、普通资源读取和写后取消/失效/关联清理；Run 子页 options 先读取父 Run 再保存 ID meta。
+- `packages/contracts/src/index.ts`：新增三个分页请求组合和 OpaquePageCursorSchema，保留服务端游标实现与已有响应协议。
+- `apps/web/test/api.test.ts`、`query.test.ts`：原生 Response 与真实 QueryClient/Observer/MutationObserver 验证；`browser.html`、`browser.ts`、`proxy-fixture.mjs` 仅供回环浏览器验收，不进入产品构建。
+- `apps/web/vite.config.ts`：dev/preview 均在 127.0.0.1:5173，`/api/` 代理默认 8787，Node 端 API_PROXY_PORT 可调整；Web 独立脚本先构建 Contracts。
+
+M6.3 继续拥有 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mutation 接线与 SSE 生命周期；M6.2 只预留 `['session', sessionId]` 和 `['sessions', 'active']` 键。

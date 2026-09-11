@@ -4,15 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -p tsconfig.json && vite build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "dev": "pnpm --filter @tx-holdem-coach/contracts run build && vite",
+    "build": "pnpm --filter @tx-holdem-coach/contracts run build && tsc -p tsconfig.json && vite build",
+    "typecheck": "pnpm --filter @tx-holdem-coach/contracts run build && tsc -p tsconfig.json --noEmit",
+    "test": "pnpm --filter @tx-holdem-coach/contracts run build && vitest run",
+    "preview": "vite preview"
   },
   "dependencies": {
+    "@tanstack/react-query": "5.102.8",
+    "@tx-holdem-coach/contracts": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router": "7.18.3"
+    "react-router": "7.18.3",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

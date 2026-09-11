@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>M6.2 浏览器验收</title>
+  </head>
+  <body>
+    <div
+      id="checks"
+      style="
+        position: fixed;
+        z-index: 9999;
+        top: 0;
+        left: 0;
+        background: white;
+        color: black;
+        padding: 8px;
+        max-width: 250px;
+        font-size: 12px;
+      "
+    >
+      <button id="read">GET 健康</button><button id="write">POST 检测</button
+      ><button id="identity">检查实例</button>
+      <button id="page-error">模拟页面错误</button
+      ><button id="root-error">模拟根错误</button>
+      <output id="result">待执行</output><output id="client"></output>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="./browser.ts"></script>
+  </body>
+</html>

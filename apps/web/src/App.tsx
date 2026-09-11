@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { createQueryClient } from './query/client.js'
 import { BrowserRouter, useRoutes } from 'react-router'
 import { routes } from './navigation.js'
 import { Page } from './Pages.js'
@@ -19,9 +22,12 @@ function ApplicationRoutes() {
 }
 
 export function App() {
+  const [queryClient] = useState(createQueryClient)
   return (
-    <BrowserRouter>
-      <ApplicationRoutes />
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <ApplicationRoutes />
+      </BrowserRouter>
+    </QueryClientProvider>
   )
 }

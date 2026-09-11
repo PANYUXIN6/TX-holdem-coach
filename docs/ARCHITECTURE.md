@@ -97,8 +97,18 @@ apps/server/src/
 
 ## M6.1 浏览器应用壳
 
-`apps/web/src/main.tsx` 在 StrictMode 内使用 Router 外的根错误边界；`apps/web/src/App.tsx` 稳定装配 BrowserRouter，消费 `apps/web/src/navigation.ts` 的同一份路径定义，嵌套 `apps/web/src/Shell.tsx` 和 `apps/web/src/Pages.tsx`。Shell 统一最大 430px 画布、标题、安全区、内容滚动与焦点；普通布局显示三项主导航，牌桌提供独立操作容器，全屏详情只显示当前内容。页面边界按 pathname 重置，公共壳故障由根边界收敛。
+`apps/web/src/main.tsx` 在 StrictMode 内使用 Router 外的根错误边界；`apps/web/src/App.tsx` 以 useState 惰性创建单个 QueryClient，在 QueryClientProvider 内稳定装配 BrowserRouter，消费 `apps/web/src/navigation.ts` 的同一份路径定义，嵌套 `apps/web/src/Shell.tsx` 和 `apps/web/src/Pages.tsx`。Shell 统一最大 430px 画布、标题、安全区、内容滚动与焦点；普通布局显示三项主导航，牌桌提供独立操作容器，全屏详情只显示当前内容。页面边界按 pathname 重置，公共壳故障由根边界收敛。
 
 横屏提示仅针对 coarse 指针、宽度至少 431px、高度不超过 430px 的 landscape 视口，隐藏并 inert 页面交互树，保留 Router 挂载；旋回后聚焦标题。search 更新保持 URL 与当前焦点/滚动。详情返回只接受已登记的历史/手牌调用列表 `{ pathname, search }`，其余使用确定性上级。
 
-应用壳只拥有导航与展示状态，不保存 Session/Hand/Run 实体；API/Query、SSE、UI Store 由后续 M6.2–M6.4 接入。`pnpm run dev:web` 独立运行，不启动后端。BrowserRouter 根路径部署要求静态宿主对页面 GET 深链接回写 index.html，静态资源正常服务，`/api/*` 交由 Hono；本轮不改变后端或部署拓扑。Web Vitest 3.2.7 固定 Node 环境，与数据库测试隔离。
+应用壳只拥有导航与展示状态，不保存 Session/Hand/Run 实体；M6.2 已装配 API/Query；SSE、UI Store 由后续 M6.3–M6.4 接入。`pnpm run dev:web` 独立运行，不启动后端。BrowserRouter 根路径部署要求静态宿主对页面 GET 深链接回写 index.html，静态资源正常服务，`/api/*` 交由 Hono；本轮不改变后端或部署拓扑。Web Vitest 3.2.7 固定 Node 环境，与数据库测试隔离。
+
+## M6.2 HTTP 与缓存边界
+
+Web 的调用方向为 `页面（M7）→ query/options 或 mutations → api/client → fetch /api/ → Hono`；api 只依赖共享 Contracts/Zod，不依赖 React、Query、Router 或服务器内部模块。search codec 为 URL 和 Query Key 提供相同的规范化参数。HTTP 响应在 JSON、Schema、身份与视图校验后才进入 Query 缓存。
+
+普通 Mutation 生命周期统一取消旧 GET 并定向失效活动查询；详情删除先通知现有订阅资源不可用，再移除缓存。清空保留活动列表订阅对象、清空旧成功状态并重新读取，保留 health/personas/settings。读取刷新失败独立保留在 Query 错误状态，不改变写入成功结论。Attempt/Capability options 先读取父 Run，meta 只保存认证关联 ID。
+
+场次传输不写缓存，M6.3 才把 GET、创建、命令和 SSE 接入同一 `['session', sessionId]` 接收器；active key 只保存 ID/null。M6.2 不提供临时场次 queryFn、自动重发、SSE 控制器或持久化队列。错误只含分类、安全 code/字段路径与认证的可选校准快照，产品使用固定中文映射。
+
+开发与 preview 使用回环 5173 同源代理，changeOrigin 修改 Host 并保留浏览器 Origin；只读取 Node 配置的 API_PROXY_PORT，不加载后端环境。浏览器验收 fixture 是测试工具，不是应用 Mock 模式。

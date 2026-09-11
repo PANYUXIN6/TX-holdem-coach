@@ -1,3 +1,4 @@
+import { SessionRouteBridge } from './session-sync/react.js'
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { Link, matchRoutes, Outlet, useLocation } from 'react-router'
 import { ErrorBoundary, PageError } from './ErrorBoundary.js'
@@ -84,6 +85,7 @@ export function Shell() {
             key={location.pathname}
             fallback={(reset) => <PageError reset={reset} target={target} />}
           >
+            <SessionRouteBridge />
             <Outlet />
           </ErrorBoundary>
         </main>

@@ -1,13 +1,15 @@
 // 手工浏览器验收入口，Vite 产品 build 不包含它。通过 DevTools hook 观察实际 Provider。
+import type { SessionRuntime } from '../src/session-sync/runtime.js'
 import type { QueryClient } from '@tanstack/react-query'
 type Fiber = {
   child?: Fiber
   sibling?: Fiber
-  memoizedProps?: { client?: QueryClient }
+  memoizedProps?: { client?: QueryClient; runtime?: SessionRuntime }
   memoizedState?: { failed?: boolean }
   stateNode?: { setState?: (state: { failed: boolean }) => void }
 }
 const boundaries: NonNullable<Fiber['stateNode']>[] = []
+let runtime: SessionRuntime | undefined
 let current: QueryClient | undefined
 let first: QueryClient | undefined
 function visit(fiber: Fiber | undefined): void {
@@ -17,6 +19,7 @@ function visit(fiber: Fiber | undefined): void {
     fiber.stateNode?.setState
   )
     boundaries.push(fiber.stateNode)
+  runtime = fiber.memoizedProps?.runtime ?? runtime
   const client = fiber.memoizedProps?.client
   if (client && typeof client.getQueryCache === 'function') {
     current = client
@@ -74,3 +77,6 @@ document.getElementById('page-error')!.onclick = () =>
   boundaries.at(-1)?.setState?.({ failed: true })
 document.getElementById('root-error')!.onclick = () =>
   boundaries[0]?.setState?.({ failed: true })
+
+const { installSyncAcceptance } = await import('./sync-browser.js')
+installSyncAcceptance(() => ({ client: current, runtime }))

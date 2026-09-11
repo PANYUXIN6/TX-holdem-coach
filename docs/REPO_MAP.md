@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-09-10（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳、M6.2 API/Query 已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
+更新时间：2026-09-11（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳、M6.2 API/Query、M6.3 SSE 同步已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
 
 ## 当前目录与职责
 
@@ -163,4 +163,17 @@ M3.4 命令链固定为“严格 `rebuy|startNextHand|endSession` → Session re
 - `apps/web/test/api.test.ts`、`query.test.ts`：原生 Response 与真实 QueryClient/Observer/MutationObserver 验证；`browser.html`、`browser.ts`、`proxy-fixture.mjs` 仅供回环浏览器验收，不进入产品构建。
 - `apps/web/vite.config.ts`：dev/preview 均在 127.0.0.1:5173，`/api/` 代理默认 8787，Node 端 API_PROXY_PORT 可调整；Web 独立脚本先构建 Contracts。
 
-M6.3 继续拥有 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mutation 接线与 SSE 生命周期；M6.2 只预留 `['session', sessionId]` 和 `['sessions', 'active']` 键。
+M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mutation 接线与 SSE 生命周期，复用 M6.2 的 `['session', sessionId]` 和 `['sessions', 'active']` 键。
+
+
+## M6.3 场次同步
+
+- `apps/web/src/api/sse.ts`：fetch + eventsource-parser 传输适配，只交付认证的完整 SSE 信封，接收游标由 Query 决定。
+- `apps/web/src/query/session-receiver.ts`：唯一快照接收、数值基线竞速判定、生命周期代次及 Query 最终结构共享保护。
+- `apps/web/src/query/session-resources.ts`：接收前后差异及恢复范围驱动普通资源取消/失效；异步尾部复查数据生命周期。
+- `apps/web/src/session-sync/connection.ts`：连接、snapshot 后 GET 屏障、退避、存活/校准期限和终态，不保存快照副本。
+- `apps/web/src/session-sync/runtime.ts`：协调单次读取、active、创建、五类命令、未决操作及原 Mutation 删除/清空生命周期；`react.tsx` 提供 Provider、路由租用和 M7 消费 hook。
+- `apps/web/src/App.tsx` 稳定创建 QueryClient/runtime；`apps/web/src/Shell.tsx` 在页面错误边界内租用场次，错误卸载也释放流。
+- `apps/web/test/session-receiver.test.ts`、`session-runtime.test.ts`、`sse.test.ts`：Node 离线协议与真实 Query/Mutation 测试。`sync-browser.ts`、`sync-proxy-fixture.ts` 扩展独立浏览器入口，产品构建不含夹具。
+
+完整验收与 M7 接入约定见 [M6.3 设计实施记录](./superpowers/specs/2026-09-11-m6-3-sse-client-cache-coordination-design.md#13-实施记录与-m7-交接2026-09-11)。

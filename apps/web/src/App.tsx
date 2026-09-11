@@ -5,6 +5,8 @@ import { BrowserRouter, useRoutes } from 'react-router'
 import { routes } from './navigation.js'
 import { Page } from './Pages.js'
 import { Shell } from './Shell.js'
+import { createSessionRuntime } from './session-sync/runtime.js'
+import { SessionRuntimeProvider } from './session-sync/react.js'
 import './styles.css'
 
 const pageRoutes = [
@@ -22,12 +24,17 @@ function ApplicationRoutes() {
 }
 
 export function App() {
-  const [queryClient] = useState(createQueryClient)
+  const [{ queryClient, runtime }] = useState(() => {
+    const queryClient = createQueryClient()
+    return { queryClient, runtime: createSessionRuntime(queryClient) }
+  })
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <ApplicationRoutes />
-      </BrowserRouter>
+      <SessionRuntimeProvider runtime={runtime}>
+        <BrowserRouter>
+          <ApplicationRoutes />
+        </BrowserRouter>
+      </SessionRuntimeProvider>
     </QueryClientProvider>
   )
 }

@@ -68,7 +68,14 @@ async function refresh(client: QueryClient, queryKey: readonly unknown[]) {
     { throwOnError: false },
   )
 }
-export function createMutations(client: QueryClient, api: Api = defaultApi) {
+export type DataLifecycle = {
+  freeze: (id?: string) => { finish: (success: boolean) => void }
+}
+export function createMutations(
+  client: QueryClient,
+  api: Api = defaultApi,
+  lifecycle?: DataLifecycle,
+) {
   return {
     checkProvider: () =>
       mutationOptions({
@@ -91,13 +98,24 @@ export function createMutations(client: QueryClient, api: Api = defaultApi) {
     deleteSession: () =>
       mutationOptions({
         ...writePolicy,
+        onMutate: (input: {
+          sessionId: string
+          body: C.DeleteSessionRequest
+        }) => lifecycle?.freeze(input.sessionId),
+        onSettled: (_data, error, _input, context) => context?.finish(!error),
         mutationFn: (input: {
           sessionId: string
           body: C.DeleteSessionRequest
         }) => api.deleteSession(input.sessionId, input.body),
         async onSuccess(data) {
           const id = sessionId(data.deletedSessionId)
-          await client.cancelQueries({ predicate: training })
+          await client.cancelQueries(
+            {
+              predicate: (query) =>
+                belongsTo(query, id) || affectedList(query, id),
+            },
+            { revert: false },
+          )
           removeResources(
             client,
             (query) => training(query) && !list(query) && belongsTo(query, id),
@@ -111,9 +129,11 @@ export function createMutations(client: QueryClient, api: Api = defaultApi) {
     clearData: () =>
       mutationOptions({
         ...writePolicy,
+        onMutate: () => lifecycle?.freeze(),
+        onSettled: (_data, error, _input, context) => context?.finish(!error),
         mutationFn: (input: C.ClearDataRequest) => api.clearData(input),
         async onSuccess() {
-          await client.cancelQueries({ predicate: training })
+          await client.cancelQueries({ predicate: training }, { revert: false })
           // 保留活动列表的订阅对象以真实重新读取；reset 清掉其旧数据。
           const activeLists = new Set(
             client.getQueryCache().findAll({

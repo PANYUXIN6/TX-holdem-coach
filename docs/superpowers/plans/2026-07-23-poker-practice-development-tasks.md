@@ -1,8 +1,8 @@
 # 德州扑克 AI 练习工具：开发任务分解
 
-- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 已完成；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones；M6.2 已完成并修复审计缓存可见性问题，M6.3–M9 待开发，M10/M11 为分阶段后置能力
+- 状态：进行中；M0、M1、M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 已完成；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones；M6.2 已完成并修复审计缓存可见性问题，M6.3 已完成 SSE 客户端与缓存协调，M6.4–M9 待开发，M10/M11 为分阶段后置能力
 - 日期：2026-07-23
-- 最后更新：2026-09-10
+- 最后更新：2026-09-11
 - 本文不包含工期、人数或里程碑时间估算。
 - 2026-08-16 首发前 Schema 收敛：实际开发数据库重建后，以 14 表单一 baseline 为准；删除全局 `protocolVersion`、Settings 版本、重复 JSON 信封版本、无历史责任的 Registry/legacy 兼容、`legacyDiagnosticState` 及尚无消费者的 Coach/Statistics 预埋表。下文已完成任务中的旧字段/旧表文字仅保留实施历史，不得作为后续任务当前契约；M4 仍保留运行审计、重放/精确恢复身份，Execution Budget 直接扩充首发 current 载荷而不发布 V2，M5/M8 在真实 writer 设计确认时再创建最终统计/Coach Schema。
 - 2026-08-30 M4.8 破坏性重基线：首发前开发数据不承担兼容责任，私有事件的 Poker、Session/Accounting 与 Player 协调事件合并为唯一 current `v1`；旧 V1/V2/V3 分派和中间 migration 由唯一 `0000_baseline.sql` 覆盖，远程测试 schema 通过受控重建后只接受该 baseline journal。
@@ -36,7 +36,8 @@
 | M5.5 | 已完成并验证；分页场次管理与 Hand → Run → Attempt/Capability 查询链已通过离线验证及 m55 两套远程 milestones |
 | M6.1 | 应用壳已实现，离线与开发/preview 浏览器验证通过；待用户页面及真机验收 |
 | M6.2 | [类型安全 API 与 Query](../specs/2026-09-10-m6-2-type-safe-api-query-design.md#12-实施交付记录2026-09-10)已按 A–D 实施并通过离线与浏览器验收；快照接收与 SSE 接线归 M6.3 |
-| M6.3–M9 | 待开发 |
+| M6.3 | [SSE 客户端与缓存协调](../specs/2026-09-11-m6-3-sse-client-cache-coordination-design.md#13-实施记录与-m7-交接2026-09-11)已按 A–D 完成，包含生产装配、离线测试及 dev/preview 浏览器验收 |
+| M6.4–M9 | 待开发 |
 | M10 Coach 长期漏洞记忆 | 首版后置，等待 M8 数据质量评估后确认 |
 | M11 针对性练习与复测 | 独立后置，等待 M10 质量评估后确认 |
 
@@ -1203,6 +1204,8 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - Zustand 中没有预设人物、场次、历史、统计或调用记录副本。
 
 ### M6.3 建立 SSE 客户端与缓存协调
+
+实施状态（2026-09-11）：已按[SSE 客户端与缓存协调设计](../specs/2026-09-11-m6-3-sse-client-cache-coordination-design.md#13-实施记录与-m7-交接2026-09-11)完成 A–D。唯一接收器、Query 最终写入保护、SSE 重连与 GET 屏障、场次 Query/Mutation、删除生命周期和真实路由装配已落地；目标测试及 dev/preview 浏览器验收通过。真实牌桌控件、视觉反馈和移动端人工体验由 M6.4/M6.6/M7 接续。
 
 产出：
 

@@ -3,9 +3,4 @@ version = 1
 name = "poke-practice"
 
 [setup]
-script = "export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=http://127.0.0.1:7890"
-
-[[actions]]
-name = "代理"
-icon = "tool"
-command = "export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=http://127.0.0.1:7890"
+script = ""

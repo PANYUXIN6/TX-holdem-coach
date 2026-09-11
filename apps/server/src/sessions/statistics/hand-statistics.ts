@@ -60,10 +60,9 @@ interface HandStatisticsCounters {
   pfrNumerator: bigint
   threeBetNumerator: bigint
   threeBetDenominator: bigint
-  wtsdNumerator: bigint
+  showdownCount: bigint
   wtsdDenominator: bigint
   wsdNumerator: bigint
-  wsdDenominator: bigint
 }
 
 const MAX_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER)
@@ -112,10 +111,9 @@ function emptyCounters(): HandStatisticsCounters {
     pfrNumerator: 0n,
     threeBetNumerator: 0n,
     threeBetDenominator: 0n,
-    wtsdNumerator: 0n,
+    showdownCount: 0n,
     wtsdDenominator: 0n,
     wsdNumerator: 0n,
-    wsdDenominator: 0n,
   }
 }
 
@@ -362,8 +360,7 @@ export function createHandStatisticsAccumulator(): HandStatisticsAccumulator {
         counters.threeBetDenominator += contribution.threeBet.denominator
         if (contribution.sawFlop) counters.wtsdDenominator += 1n
         if (contribution.showdown) {
-          counters.wtsdNumerator += 1n
-          counters.wsdDenominator += 1n
+          counters.showdownCount += 1n
           if (contribution.wonShowdown) counters.wsdNumerator += 1n
         }
       }
@@ -379,8 +376,8 @@ export function createHandStatisticsAccumulator(): HandStatisticsAccumulator {
           counters.threeBetNumerator,
           counters.threeBetDenominator,
         ),
-        wtsd: toRate(counters.wtsdNumerator, counters.wtsdDenominator),
-        wsd: toRate(counters.wsdNumerator, counters.wsdDenominator),
+        wtsd: toRate(counters.showdownCount, counters.wtsdDenominator),
+        wsd: toRate(counters.wsdNumerator, counters.showdownCount),
       }
     },
   }

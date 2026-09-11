@@ -642,7 +642,7 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 
 ## 12. 供应商失败与校验
 
-- Coach 通过 Foundation `ModelGateway` 使用独立的版本化 Route Policy，可以复用底层 DeepSeek 客户端、错误分类和脱敏能力，但不能把 Coach 上下文包装成玩家 `PlayerDecisionPacket`。
+- Coach 通过 Foundation `ModelGateway` 使用独立的版本化 Route Policy；在 M8.5/A7.5 首次接入模型调用时，按 Definition 已固定的引用构造并注入认证实例。可以复用底层 DeepSeek 客户端、错误分类和脱敏能力，但不能复用 Player 策略对象或把 Coach 上下文包装成玩家 `PlayerDecisionPacket`。
 - 内容结构或事实引用失败时，在同一供应商内最多纠错两次。
 - DeepSeek 发生基础设施错误时，本次复盘进入稳定失败。
 - 最终失败将本次 `coachReviewId` 标记为 `failed`，保留调用链并允许用户手动重试。

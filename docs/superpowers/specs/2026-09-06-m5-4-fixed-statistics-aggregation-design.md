@@ -113,6 +113,8 @@
 
 底牌集合、seats、positions 和 playerId 必须一一对应，不能以损坏缺项减少分母。当前已认证结果的 `handEvaluations` 正好表示摊牌未弃牌座位，沿用 M5.2 的判断，不重新评估牌型。非摊牌直接获胜不计 WTSD 分子和 W$SD 样本；返还不是派奖。
 
+WTSD 分子与 W$SD 分母共享同一摊牌参与者计数；看到翻牌的计数与正派奖计数仍分别保存。
+
 平分池的正份额算 W$SD 胜出，即使该手净变化为负；获得多个边池也只计一手胜出。不得用 `netChange > 0`、赢家数组长度或池数量替代正派奖判断。
 
 ### 4.2 3-bet 有限状态投影
@@ -161,7 +163,7 @@ sessionNetChange = finalChips - cumulativeBuyIn
 
 比如某座位累计买入 3000（初始 1000、补码 2000），最终 2700，整场净变化是 −300；不能算成 +1700。此公式不将盲注或下注当成新增买入。
 
-跨场查询对每个 `(sessionId, playerId)` 计算一次，再加总 finalChips、cumulativeBuyIn 和 sessionNetChange。`sessionCount` 去重 Session，`participantSessionCount` 计参与者场次数。无匹配时三项金额及两项计数均为零，不生成一个虚构场次。全体 AI 总收益不必为零；全桌筹码守恒由现有私有状态认证负责。
+跨场查询对每个 `(sessionId, playerId)` 计入一次，以 BigInt 加总 finalChips 和 cumulativeBuyIn，最后以两项总额之差推导 sessionNetChange；不单独传递或累计重复的净值状态。`sessionCount` 去重 Session，`participantSessionCount` 计参与者场次数。无匹配时三项金额及两项计数均为零，不生成一个虚构场次。全体 AI 总收益不必为零；全桌筹码守恒由现有私有状态认证负责。
 
 ## 5. 对外响应与分组
 

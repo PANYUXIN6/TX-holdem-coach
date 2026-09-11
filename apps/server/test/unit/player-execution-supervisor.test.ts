@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { LeasedAgentRun } from '../../src/agents/foundation/agent-run-types.js'
 import { PlayerRuntimeExecutionError } from '../../src/agents/player/player-runtime-executor.js'
 import { createPlayerExecutionSupervisor } from '../../src/agents/player/player-execution-supervisor.js'
@@ -37,48 +37,74 @@ const NO_EFFECTS = Object.freeze({
   queuedRunId: null,
 })
 
+afterEach(() => vi.restoreAllMocks())
+
 describe('Player execution supervisor', () => {
-  test('routes a stable final failure to the pause coordinator only', async () => {
-    const pauseAfterFailure = vi.fn().mockResolvedValue({
-      kind: 'paused',
-      effects: NO_EFFECTS,
-    })
-    const reconcileStale = vi.fn()
-    const executor = {
-      runtimeType: 'player' as const,
-      execute: vi
-        .fn()
-        .mockRejectedValue(
-          new PlayerRuntimeExecutionError('player_decision_dependency_missing'),
-        ),
-    }
-    const supervisor = createPlayerExecutionSupervisor({
-      executor,
-      coordinator: {
-        reconcileCurrentTurn: vi.fn(),
-        pauseAfterFailure,
-        reconcileStale,
-        startIfNeeded: vi.fn(),
-        startCorrectionAttempt: vi.fn(),
-        recoverAfterProcessRestart: vi.fn(),
-      },
-      now: () => '2026-08-28T00:00:10.000Z',
-    })
-
-    await expect(
-      supervisor.execute(RUN, new AbortController().signal),
-    ).resolves.toBeUndefined()
-
-    expect(pauseAfterFailure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: RUN.sessionId,
-        agentRunId: RUN.runId,
-        decisionRequestId: RUN.decisionRequestId,
-        reason: 'player_dependency_unavailable',
+  test.each([
+    {
+      error: new PlayerRuntimeExecutionError(
+        'player_decision_dependency_missing',
+      ),
+      reason: 'player_dependency_unavailable',
+    },
+    {
+      error: Object.assign(new Error('sensitive-message-marker'), {
+        name: 'sensitive-name-marker',
+        code: 'sensitive-code-marker',
+        failure: 'sensitive-failure-marker',
       }),
-    )
-    expect(reconcileStale).not.toHaveBeenCalled()
-  })
+      reason: 'player_internal_failure',
+    },
+  ])(
+    'pauses with $reason and logs only the stable classification',
+    async ({ error, reason }) => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const pauseAfterFailure = vi.fn().mockResolvedValue({
+        kind: 'paused',
+        effects: NO_EFFECTS,
+      })
+      const reconcileStale = vi.fn()
+      const executor = {
+        runtimeType: 'player' as const,
+        execute: vi.fn().mockRejectedValue(error),
+      }
+      const supervisor = createPlayerExecutionSupervisor({
+        executor,
+        coordinator: {
+          reconcileCurrentTurn: vi.fn(),
+          pauseAfterFailure,
+          reconcileStale,
+          startIfNeeded: vi.fn(),
+          startCorrectionAttempt: vi.fn(),
+          recoverAfterProcessRestart: vi.fn(),
+        },
+        now: () => '2026-08-28T00:00:10.000Z',
+      })
+
+      await expect(
+        supervisor.execute(RUN, new AbortController().signal),
+      ).resolves.toBeUndefined()
+
+      expect(pauseAfterFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: RUN.sessionId,
+          agentRunId: RUN.runId,
+          decisionRequestId: RUN.decisionRequestId,
+          reason,
+        }),
+      )
+      expect(reconcileStale).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        JSON.stringify({
+          category: 'player_execution_failed',
+          runId: RUN.runId,
+          sessionId: RUN.sessionId,
+          kind: 'finalFailure',
+          reason,
+        }),
+      )
+    },
+  )
 
   test('keeps deferred persistence failures unsettled and sends stale failures to replacement reconciliation', async () => {
     const pauseAfterFailure = vi.fn()

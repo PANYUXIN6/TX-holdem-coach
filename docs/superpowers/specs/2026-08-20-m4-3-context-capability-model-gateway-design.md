@@ -152,9 +152,7 @@ apps/server/src/
 │   │   ├── provider-error-classifier.ts
 │   │   ├── sensitive-value-scanner.ts
 │   │   └── model-pricing-policy.ts
-│   ├── player/
-│   │   └── route-policy.ts
-│   └── coach/
+│   └── player/
 │       └── route-policy.ts
 ├── persistence/
 │   ├── agent-foundation-audit-repository.ts  # 增加原子预算/Attempt 控制
@@ -444,7 +442,7 @@ player.route-policy@1: deepseek(initial + 2 corrections)
 coach.route-policy@1:  deepseek(initial + 2 corrections)
 ```
 
-两个对象、类型实参和构造认证独立。未来其中一个改变模型或纠错数，只升级自己的 Policy/Runtime Definition，不连带另一 Runtime。首版不提供 Provider 列表、动态注册表或第二路由槽位。
+两种 Runtime 的类型实参和构造认证独立。当前实施范围（2026-09-10 收敛）：Player 已构造并使用策略对象；Coach 在 Definition 中保留独立版本引用，认证实例由 M8/A7 接入 Coach 执行时构造并注入，不提前保留无消费者的模块。未来其中一个改变模型或纠错数，只升级自己的 Policy/Runtime Definition，不连带另一 Runtime。首版不提供 Provider 列表、动态注册表或第二路由槽位。
 
 ### 9.2 模型参数来源
 

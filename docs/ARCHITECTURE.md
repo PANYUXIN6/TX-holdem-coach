@@ -70,7 +70,7 @@ M3.5 调用链固定为“回环 Host/精确 Origin/JSON/大小/查询门禁 →
 
 M2.7–M4.5 已实现严格审计、通用 Context/Gateway、权威 Player 观察和确定性预处理。M4.6 已完成审计快照、最小模型包、第二/第三 Guard、bounded choice 与三阶段持久化；M4.7 Commit Gate、M4.8 失败收敛、M4.9 Memory 与 M4.10 生产启动接线已形成 Player live 主链：
 
-- 共享 Foundation 只机械认证 Runtime/Policy/Context/Prompt、执行代码预定 Capability 与同一 DeepSeek 的最多两次内容纠正；Player 已在业务边界实现 Context section、Prompt 正文、输出 Schema、语义 Validator、Runtime executor 与 Commit Gate，Coach 对应业务能力仍由后续里程碑实现。
+- 共享 Foundation 只机械认证 Runtime/Policy/Context/Prompt、执行代码预定 Capability 与同一 DeepSeek 的最多两次内容纠正；Player 已在业务边界实现 Context section、Prompt 正文、输出 Schema、语义 Validator、Runtime executor 与 Commit Gate，Coach 对应业务能力仍由后续里程碑实现。当前只保留 Coach 的 Route Policy 版本引用，其独立认证实例由 M8/A7 构造并注入，不提前保留无消费者的策略对象。
 - Player Runtime 负责“赢”。当前已实现链路为“running Run → 同事务派生 actor seat/认证观察 → pinned StrategyPack 与固定 Capability Plan → 完整快照先落库 → 最小投影与第二/第三 Guard → 通用 Gateway → bounded choice → accepted Attempt/selected 原子交接 → 认证 ResultPort → Commit Gate 私有 `aiAction`”；所有长计算在事务外，durable stage 可同 Run 恢复，未知在途 Provider 结果不重复调用。
 - Runtime 先保存完整、仅供审计回放的 `DecisionAuditSnapshot`，再生成精简 `PlayerModelProjection`；Provider 候选用 current-only compact tuple 传输，服务端以 descriptor/Codec 可逆展开全部语义，不裁剪当前手或候选。完整快照不得直接发送给模型，模型上下文中同一概念只有一种权威表达，不重复原始行动史、不要求重算 SPR，也不混用总底池与可争夺底池。候选频率/权重只是参考分布，首版 LLM 选择不承诺精确混合频率校准。
 - 所有进入 Player 或 Coach 模型的派生事实都必须可追溯到允许来源、决策截止点、Schema/算法/数据版本和适用假设，并区分 `available | unavailable | notApplicable` 及 `ruleFact | formulaFact | datasetBaseline | statisticalEvidence | heuristicJudgment | modelGeneratedText`。程序结果可复现不代表它就是客观真理；`wet/dry`、范围角色、心理和情绪等解释性结论必须保留证据等级或明确不可用。

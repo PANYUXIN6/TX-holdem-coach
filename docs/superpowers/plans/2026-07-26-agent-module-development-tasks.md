@@ -479,7 +479,7 @@ A2 复用 M2.1 建立的 Drizzle、Supabase Postgres 连接和迁移机制，不
 实现：
 
 - 建立共享模型适配器端口和 DeepSeek 适配器。
-- Player、Coach 各自定义版本化 Route Policy。
+- Player、Coach 各自固定 Route Policy 版本引用；当前构造并接入 Player 实例，Coach 的独立认证实例由 A7.5 接入模型调用时构造。
 - 统一供应商错误分类和使用量元数据。
 - API Key 仅从私有运行环境读取。
 
@@ -923,6 +923,7 @@ Coach 投影：
 
 实现：
 
+- 按 Coach Definition 的 Route Policy 引用构造并注入独立认证策略实例，接入 Foundation `ModelGateway`；不能复用 Player 策略对象。
 - `CoachDecisionAnalyzer` 只解释冻结的规范 spot、原子牌面事实、可争夺底池、当前/候选结果数学、assessment、基准与对手证据。
 - 生成结构化教学理由、替代路线和适用限制。
 - `ProcessAnalysisFreezer` 校验并冻结结果。

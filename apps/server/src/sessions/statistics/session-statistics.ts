@@ -1,7 +1,4 @@
-import type {
-  SessionStatisticsTotals,
-  StatisticsSubject,
-} from '@tx-holdem-coach/contracts'
+import type { SessionStatisticsTotals } from '@tx-holdem-coach/contracts'
 import type { PrivateTableState } from '../authoritative-state/private-table-state.js'
 import type { CompletedHandHistoryRosterEntry } from '../hand-history/completed-hand-history.js'
 import {
@@ -23,7 +20,6 @@ export interface StatisticsSessionFact {
 export interface SessionStatisticsContribution {
   readonly finalChips: bigint
   readonly cumulativeBuyIn: bigint
-  readonly sessionNetChange: bigint
 }
 
 interface SessionStatisticsCounters {
@@ -31,7 +27,6 @@ interface SessionStatisticsCounters {
   participantSessionCount: bigint
   finalChips: bigint
   cumulativeBuyIn: bigint
-  sessionNetChange: bigint
 }
 
 const MAX_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER)
@@ -169,7 +164,6 @@ export function buildSessionStatisticsContributions(
       return {
         finalChips,
         cumulativeBuyIn,
-        sessionNetChange: finalChips - cumulativeBuyIn,
       }
     })
   } catch (error) {
@@ -189,7 +183,6 @@ export function createSessionStatisticsAccumulator(): SessionStatisticsAccumulat
     participantSessionCount: 0n,
     finalChips: 0n,
     cumulativeBuyIn: 0n,
-    sessionNetChange: 0n,
   }
   const accumulator: SessionStatisticsAccumulator = {
     addSession(contributions: readonly SessionStatisticsContribution[]) {
@@ -199,7 +192,6 @@ export function createSessionStatisticsAccumulator(): SessionStatisticsAccumulat
         counters.participantSessionCount += 1n
         counters.finalChips += contribution.finalChips
         counters.cumulativeBuyIn += contribution.cumulativeBuyIn
-        counters.sessionNetChange += contribution.sessionNetChange
       }
     },
     totals() {
@@ -208,7 +200,9 @@ export function createSessionStatisticsAccumulator(): SessionStatisticsAccumulat
         participantSessionCount: safeNumber(counters.participantSessionCount),
         finalChips: safeNumber(counters.finalChips),
         cumulativeBuyIn: safeNumber(counters.cumulativeBuyIn),
-        sessionNetChange: safeNumber(counters.sessionNetChange),
+        sessionNetChange: safeNumber(
+          counters.finalChips - counters.cumulativeBuyIn,
+        ),
       }
     },
   }

@@ -32,7 +32,7 @@
 | M4.9 | 已完成；Memory v1、live 物化、审计 Replay/debug projection 与 historical nonCommit 已落地 |
 | M4.10 | [已完成并验证](../specs/2026-08-31-m4-10-session-integration-player-eval-design.md)：configured Player 生产接线、确定性 Eval、m410 database milestone 与 PostgreSQL E2E milestone 已通过 |
 | M5.1–M5.3 | 已完成；分任务实现与验收范围见 §9，不以 milestone 结果代替 full |
-| M5.4 | 用户确认开发完成；当前工作区已有统计实现，历史验证记录另行收口 |
+| M5.4 | 已完成并由用户验收；离线验证及 m54 database、PostgreSQL E2E milestones 通过，历史 full 范围见设计 §9.5 |
 | M5.5 | 已完成并验证；分页场次管理与 Hand → Run → Attempt/Capability 查询链已通过离线验证及 m55 两套远程 milestones |
 | M6.1 | 应用壳已实现，离线与开发/preview 浏览器验证通过；待用户页面及真机验收 |
 | M6.2 | [类型安全 API 与 Query](../specs/2026-09-10-m6-2-type-safe-api-query-design.md#12-实施交付记录2026-09-10)已按 A–D 实施并通过离线与浏览器验收；快照接收与 SSE 接线归 M6.3 |
@@ -1511,7 +1511,7 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 - `CoachReviewComposer` 确定性合并，`CoachReviewValidator` 校验决策完整性、事实引用、匹配状态和样本边界。
 - `CoachReviewComposer` 确定性生成本手决策优先级摘要：按街道分别统计四种 assessment；仅在 EV 方法可比较时指出本手最大损失决策；只有规则政策认定的高严重度、EV 不可用决策可以单列且不能称为最贵，禁止 LLM 排名。
 - `CoachReviewComposer` 按版本化 `TeachingProjectionPolicy` 默认展开一个核心决策、最多两个次要决策，其余决策压缩但仍可查看；默认只突出一条核心教训和一条自然语言练习建议，LLM 不参与核心决策排序。
-- Coach 通过 Foundation `ModelGateway` 使用独立 Route Policy；只复用底层客户端、超时、错误分类和脱敏规则。
+- 本任务按 Coach Definition 已固定的 Route Policy 引用构造并注入独立认证实例，再接入 Foundation `ModelGateway`；只复用底层客户端、超时、错误分类和脱敏规则。当前 M4 仅接线 Player，不预建 Coach 策略对象。
 - 同厂商内容纠错最多两次，最终失败只影响复盘请求。
 
 后端测试闭环：

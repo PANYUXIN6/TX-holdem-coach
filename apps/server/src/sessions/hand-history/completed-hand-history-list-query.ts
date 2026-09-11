@@ -1,6 +1,5 @@
 import {
   HandHistoryListQuerySchema,
-  StartingHandCategorySchema,
   type HandHistoryListQuery,
 } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
@@ -277,26 +276,14 @@ export function normalizeHandHistoryListQuery(
       sessionId: parseOptionalUuid(values.get('sessionId')),
       position: values.get('position') ?? null,
       result: values.get('result') ?? null,
-      startingHand:
-        values.get('startingHand') === undefined
-          ? null
-          : StartingHandCategorySchema.parse(values.get('startingHand')),
+      startingHand: values.get('startingHand') ?? null,
       personaId,
       personaVersion: parseOptionalPersonaVersion(values.get('personaVersion')),
       personaName: parseOptionalString(values.get('personaName'), 256),
-      configSnapshotKey:
-        values.get('configSnapshotKey') === undefined
-          ? null
-          : values.get('configSnapshotKey'),
+      configSnapshotKey: values.get('configSnapshotKey') ?? null,
       sort: values.get('sort') ?? 'newest',
       limit: parseLimit(values.get('limit')),
     })
-    if (
-      (query.from !== null && query.to !== null && query.from >= query.to) ||
-      (query.personaVersion !== null && query.personaId === null)
-    ) {
-      return invalid()
-    }
     const cursorValue = values.get('cursor')
     if (cursorValue === undefined) return { ...query, after: null }
     const cursor = decodeHandHistoryListCursor(cursorValue)

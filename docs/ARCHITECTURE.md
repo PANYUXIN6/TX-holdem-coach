@@ -101,7 +101,7 @@ apps/server/src/
 
 横屏提示仅针对 coarse 指针、宽度至少 431px、高度不超过 430px 的 landscape 视口，隐藏并 inert 页面交互树，保留 Router 挂载；旋回后聚焦标题。search 更新保持 URL 与当前焦点/滚动。详情返回只接受已登记的历史/手牌调用列表 `{ pathname, search }`，其余使用确定性上级。
 
-应用壳只拥有导航与展示状态，不保存 Session/Hand/Run 实体；M6.2 已装配 API/Query；M6.3 已接入 SSE 同步，UI Store 由 M6.4 接入。`pnpm run dev:web` 独立运行，不启动后端。BrowserRouter 根路径部署要求静态宿主对页面 GET 深链接回写 index.html，静态资源正常服务，`/api/*` 交由 Hono；本轮不改变后端或部署拓扑。Web Vitest 3.2.7 固定 Node 环境，与数据库测试隔离。
+应用壳只拥有导航与展示状态，不保存 Session/Hand/Run 实体；M6.2 已装配 API/Query；M6.3 已接入 SSE 同步，M6.4 已接入页面作用域 UI Store。`pnpm run dev:web` 独立运行，不启动后端。BrowserRouter 根路径部署要求静态宿主对页面 GET 深链接回写 index.html，静态资源正常服务，`/api/*` 交由 Hono；本轮不改变后端或部署拓扑。Web Vitest 3.2.7 固定 Node 环境，与数据库测试隔离。
 
 ## M6.2 HTTP 与缓存边界
 
@@ -120,4 +120,13 @@ Web 的调用方向为 `页面（M7）→ query/options 或 mutations → api/cl
 
 每轮连接必须接收 snapshot 信封，再完成其后的 GET，且流仍有效才能 ready；隐藏、断线、协议失败和数据冻结立即关闸。删除/清空前冻结数据代次、取消不回滚的 GET 并停止流；成功移除缓存后保留不可用标记，阻止 Query 订阅重建自动恢复旧实体。显式读取/重新挂载可建立新的读取，旧操作上下文永久失效。错误页面卸载和离开路由释放租用，重回场次重新校准。
 
-M7 使用 `useSession` 与 `useSessionRuntime` 获取唯一数据和操作入口；创建冲突 Mutation 保留失败并通过 `getCreateTarget()` 提供继续路由；成功命令的同步诊断独立于命令成功结果。未决命令只在本运行期保存，显式 resend 使用原 ID/body/基线，不自动重发或持久化。M6.4/M6.6/M7 仍拥有 UI 草稿、视觉反馈和真实牌桌控件。
+M7 使用 `useSession` 与 `useSessionRuntime` 获取唯一数据和操作入口；创建冲突 Mutation 保留失败并通过 `getCreateTarget()` 提供继续路由；成功命令的同步诊断独立于命令成功结果。未决命令只在本运行期保存，显式 resend 使用原 ID/body/基线，不自动重发或持久化。M6.4 已接入 UI 草稿与效果描述；M6.6/M7 接续视觉反馈和真实牌桌控件。
+
+
+## M6.4 UI 状态与展示效果
+
+App 在 runtime 内稳定创建 OverlayUiProvider；Shell 的 pathname 页面错误边界内创建 PageUiProvider，覆盖页面内容与牌桌 footer。只有 table 路由创建 TableUiStore/TableAnimationStore，只有 Run 详情创建 DebugUiStore；离开、换资源和页面错误均结束原页面作用域。Store 不持久化、不持有实体、请求函数或 pending 镜像，Provider 只传稳定引用，组件按 selector 订阅。
+
+依赖方向为 `页面 → ui React/hooks/adapter → Zustand + Query/runtime`。同步层仅向外发布 `EffectBatch`，不导入 ui；接收器写 Query、维护资源/终态后，runtime 对显式实时来源且接收前后 ready 的新扑克版本通知订阅者。恢复、GET、失败 latestSnapshot、重复候选不生成效果；UI 根据可见性、减少动态效果、最新版本和生命周期只保留一个批次。
+
+下注提交继续经 `ui/table-adapter → runtime.commandOptions → 原命令验证/互斥/传输`。Mutation variables 使用 currentDraft 返回的只读输入引用；执行时核对它仍是同一份有效草稿，防止版本推进或清除后同值重建被当作旧提交的授权。检查与原 mutationFn 同步衔接，命令 ID/版本构造、未决请求与 resend/abandon 仍由 M6.3 拥有。调试行仅引用当前 Query 数据；弹窗仅保存来源和目标，实际确认与 pending UI 由 M6.6/M7 消费原 Mutation。

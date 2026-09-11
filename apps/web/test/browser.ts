@@ -44,39 +44,43 @@ Object.assign(window, {
 const nativeMatchMedia = window.matchMedia.bind(window)
 window.matchMedia = (query) =>
   nativeMatchMedia(query.replace('(pointer: coarse) and ', ''))
-await import('../src/main.js')
-const { api } = await import('../src/api/client.js')
-const { errorMessage } = await import('../src/api/errors.js')
-const result = document.getElementById('result')!
-document.getElementById('read')!.onclick = () => {
-  void api.health().then(
-    (data) => {
-      result.textContent = `GET: ${data.status}/${data.database}`
-    },
-    (error: unknown) => {
-      result.textContent = errorMessage(error)
-    },
-  )
-}
-document.getElementById('write')!.onclick = () => {
-  void api.checkProvider('deepseek', {}).then(
-    (data) => {
-      result.textContent = `POST: ${data.deepSeek.checkStatus}`
-    },
-    (error: unknown) => {
-      result.textContent = errorMessage(error)
-    },
-  )
-}
-document.getElementById('identity')!.onclick = () => {
-  document.getElementById('client')!.textContent =
-    first && first === current ? 'QueryClient 同实例' : 'QueryClient 实例异常'
-}
+if (new URLSearchParams(location.search).has('ui')) {
+  await import('./ui-browser.js')
+} else {
+  await import('../src/main.js')
+  const { api } = await import('../src/api/client.js')
+  const { errorMessage } = await import('../src/api/errors.js')
+  const result = document.getElementById('result')!
+  document.getElementById('read')!.onclick = () => {
+    void api.health().then(
+      (data) => {
+        result.textContent = `GET: ${data.status}/${data.database}`
+      },
+      (error: unknown) => {
+        result.textContent = errorMessage(error)
+      },
+    )
+  }
+  document.getElementById('write')!.onclick = () => {
+    void api.checkProvider('deepseek', {}).then(
+      (data) => {
+        result.textContent = `POST: ${data.deepSeek.checkStatus}`
+      },
+      (error: unknown) => {
+        result.textContent = errorMessage(error)
+      },
+    )
+  }
+  document.getElementById('identity')!.onclick = () => {
+    document.getElementById('client')!.textContent =
+      first && first === current ? 'QueryClient 同实例' : 'QueryClient 实例异常'
+  }
 
-document.getElementById('page-error')!.onclick = () =>
-  boundaries.at(-1)?.setState?.({ failed: true })
-document.getElementById('root-error')!.onclick = () =>
-  boundaries[0]?.setState?.({ failed: true })
+  document.getElementById('page-error')!.onclick = () =>
+    boundaries.at(-1)?.setState?.({ failed: true })
+  document.getElementById('root-error')!.onclick = () =>
+    boundaries[0]?.setState?.({ failed: true })
 
-const { installSyncAcceptance } = await import('./sync-browser.js')
-installSyncAcceptance(() => ({ client: current, runtime }))
+  const { installSyncAcceptance } = await import('./sync-browser.js')
+  installSyncAcceptance(() => ({ client: current, runtime }))
+}

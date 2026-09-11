@@ -23,6 +23,7 @@ import {
 } from '../query/session-receiver.js'
 import { maintainSessionResources } from '../query/session-resources.js'
 import { createMutations } from '../query/mutations.js'
+import { describeEffects, type EffectBatch } from './effects.js'
 import { SessionConnection, terminal } from './connection.js'
 
 type Command = CommandRequest['command']
@@ -58,6 +59,8 @@ export function createSessionRuntime(
   let creating = false
   let clearing = false
   let createTarget: string | null = null
+  const effectListeners = new Map<string, Set<(batch: EffectBatch) => void>>()
+  let effectSource = false
   const operationListeners = new Set<() => void>()
   const notifyOperations = () =>
     operationListeners.forEach((listener) => listener())
@@ -66,6 +69,7 @@ export function createSessionRuntime(
     (previous, next, recovery, eventType) => {
       const id = sessionId(next.sessionId)
       const context = receiver.begin(id)
+      const wasReady = !hidden && entries.get(id)?.connection.status === 'ready'
       maintainSessionResources(
         client,
         previous,
@@ -90,6 +94,24 @@ export function createSessionRuntime(
         entries.get(id)?.connection.finish('ended', undefined, true)
       } else if (next.lifecycleStatus === 'readonlyDiagnostic')
         entries.get(id)?.connection.finish('readonly', undefined, true)
+      if (
+        effectSource &&
+        wasReady &&
+        !hidden &&
+        entries.get(id)?.connection.status === 'ready' &&
+        !recovery &&
+        previous &&
+        next.stateVersion > previous.stateVersion
+      ) {
+        const batch = describeEffects(previous, next)
+        for (const listener of effectListeners.get(id) ?? []) {
+          try {
+            listener(batch)
+          } catch {
+            /* UI failure must not change acceptance. */
+          }
+        }
+      }
     },
   )
   function invalidateActive() {
@@ -119,16 +141,25 @@ export function createSessionRuntime(
     context: ReceiveContext,
     recovery = false,
     eventType?: string,
+    source: 'read' | 'sse' | 'command' = 'read',
   ) {
     if (clearing || entries.get(id)?.frozen) throw new ApiError('cancelled')
-    const result = receiver.receive(
-      id,
-      snapshot,
-      mode,
-      context,
-      recovery,
-      eventType,
-    )
+    const previousSource = effectSource
+    effectSource =
+      source === 'command' || (source === 'sse' && eventType !== 'snapshot')
+    let result
+    try {
+      result = receiver.receive(
+        id,
+        snapshot,
+        mode,
+        context,
+        recovery,
+        eventType,
+      )
+    } finally {
+      effectSource = previousSource
+    }
     if (result.kind === 'protocol') throw new ApiError('protocol')
     if (result.kind === 'invalidated') throw new ApiError('cancelled')
     return result
@@ -182,6 +213,7 @@ export function createSessionRuntime(
           context as ReceiveContext,
           false,
           event.type,
+          'sse',
         )
         return result.kind === 'gap' ? 'gap' : 'ok'
       },
@@ -412,6 +444,7 @@ export function createSessionRuntime(
           operation.context,
           false,
           operation.body.command.type,
+          'command',
         )
         const current = receiver.current(id)
         if (current)
@@ -520,6 +553,16 @@ export function createSessionRuntime(
   }
   const mutations = createMutations(client, api, { freeze })
   return {
+    subscribeEffects(input: string, listener: (batch: EffectBatch) => void) {
+      const id = sessionId(input)
+      let listeners = effectListeners.get(id)
+      if (!listeners) effectListeners.set(id, (listeners = new Set()))
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+        if (!listeners.size) effectListeners.delete(id)
+      }
+    },
     sessionOptions,
     activeOptions,
     read,

@@ -1,3 +1,4 @@
+import { OverlayUiProvider } from './ui/react.js'
 import { useState } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createQueryClient } from './query/client.js'
@@ -31,9 +32,11 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <SessionRuntimeProvider runtime={runtime}>
-        <BrowserRouter>
-          <ApplicationRoutes />
-        </BrowserRouter>
+        <OverlayUiProvider>
+          <BrowserRouter>
+            <ApplicationRoutes />
+          </BrowserRouter>
+        </OverlayUiProvider>
       </SessionRuntimeProvider>
     </QueryClientProvider>
   )

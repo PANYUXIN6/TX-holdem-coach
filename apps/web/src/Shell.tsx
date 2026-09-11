@@ -1,5 +1,11 @@
+import { PageUiProvider } from './ui/react.js'
 import { SessionRouteBridge } from './session-sync/react.js'
-import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import {
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react'
 import { Link, matchRoutes, Outlet, useLocation } from 'react-router'
 import { ErrorBoundary, PageError } from './ErrorBoundary.js'
 import { paths, returnTarget, routes } from './navigation.js'
@@ -25,7 +31,7 @@ const tabs = [
   { id: 'statistics', to: paths.statistics, label: '统计', mark: '↗' },
 ] as const
 
-export function Shell() {
+export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
   const location = useLocation()
   const matched = matchRoutes(routes, location)!.at(-1)!
   const { id, handle } = matched.route
@@ -76,19 +82,39 @@ export function Shell() {
             {handle.title}
           </h1>
         </header>
-        <main
-          ref={content}
-          className="page-content"
-          aria-labelledby="page-title"
+        <ErrorBoundary
+          key={location.pathname}
+          fallback={(reset) => (
+            <main
+              ref={content}
+              className="page-content"
+              aria-labelledby="page-title"
+            >
+              <PageError reset={reset} target={target} />
+            </main>
+          )}
         >
-          <ErrorBoundary
-            key={location.pathname}
-            fallback={(reset) => <PageError reset={reset} target={target} />}
-          >
+          <PageUiProvider>
             <SessionRouteBridge />
-            <Outlet />
-          </ErrorBoundary>
-        </main>
+            <main
+              ref={content}
+              className="page-content"
+              aria-labelledby="page-title"
+            >
+              <Outlet />
+            </main>
+            {handle.layout === 'table' ? (
+              <footer className="table-actions">
+                {tableActions ?? (
+                  <>
+                    <span className="status-dot" aria-hidden="true" />
+                    牌桌操作将在功能接入后开放
+                  </>
+                )}
+              </footer>
+            ) : null}
+          </PageUiProvider>
+        </ErrorBoundary>
         {handle.layout === 'regular' ? (
           <nav className="main-nav" aria-label="主导航">
             {tabs.map((tab) => (
@@ -104,11 +130,6 @@ export function Shell() {
               </Link>
             ))}
           </nav>
-        ) : handle.layout === 'table' ? (
-          <footer className="table-actions">
-            <span className="status-dot" aria-hidden="true" />
-            牌桌操作将在功能接入后开放
-          </footer>
         ) : null}
       </div>
       <section

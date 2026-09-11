@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-09-11（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳、M6.2 API/Query、M6.3 SSE 同步已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
+更新时间：2026-09-11（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳、M6.2 API/Query、M6.3 SSE 同步、M6.4 领域 UI Store 已实现；M3.8 主体接线已由 M4.10 落地，待按专项设计收口；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
 
 ## 当前目录与职责
 
@@ -57,7 +57,7 @@
 - `apps/web/src/main.tsx` → `App.tsx` → `Shell.tsx` / `Pages.tsx`：StrictMode 与根错误边界装配稳定 QueryClientProvider 和 BrowserRouter，渲染最大 430px 手机画布及普通、牌桌、全屏三种布局；页面错误边界保留标题和导航。`styles.css` 负责安全区、内容滚动、基础深色样式。
 - `apps/web/src/navigation.ts`：实际渲染和 Node 测试共用的路由定义、资源路径生成、受限列表返回策略；不承载查询或业务实体。`Shell.tsx` 统一处理 pathname 焦点/滚动和 coarse 手机横屏提示。
 - `apps/web/src/ErrorBoundary.tsx`：固定中文根级/页面渲染错误恢复；不显示原始异常，不处理异步请求错误。
-- `apps/web/vitest.config.ts`、`apps/web/test/navigation.test.ts`：独立 Node 导航冒烟，只收集 Web `test/**/*.test.ts`；根 `test:web` 独立执行，`test` / `verify` 在后端测试之后执行。M6.1 页面仍为待接入骨架；M6.2 已装配 Query，实体读取与按钮由 M7 接入，UI Store 由 M6.4 接入。
+- `apps/web/vitest.config.ts`、`apps/web/test/navigation.test.ts`：独立 Node 导航冒烟，只收集 Web `test/**/*.test.ts`；根 `test:web` 独立执行，`test` / `verify` 在后端测试之后执行。M6.1 页面仍为待接入骨架；M6.2 已装配 Query，实体读取与按钮由 M7 接入，M6.4 已接入页面作用域 UI Store。
 - `apps/server/`：Node/Hono 本地服务入口；`src/db/schema.ts` 是 14 张 `app_private` 业务表及 Drizzle 可表达约束/索引的唯一入口。首发前全部 Schema 演进已压入唯一 `src/db/migrations/0000_baseline.sql`，journal/snapshot 也只保留该基线；baseline 另保留延迟循环外键、约束触发器、默认 Owner 与权限收紧，`verify:migration-assets` 会阻止这些手工不变量被重新生成覆盖。运行时仍只使用参数化 `postgres.js`，不安装 `supabase-js`；迁移兼容、测试数据库安全和发布制品校验继续复用既有边界。
 - `apps/server/.env.example` 与 `.env.test.example`：前者只描述线上运行/迁移 URL 与 DeepSeek Provider Key，后者只描述两条测试 URL；project ref 只存在于非秘密注册表，不接受环境覆盖，真实 `.env.test.local` 被 Git 忽略。
 - `apps/server/scripts/run-database-integration-tests.mjs`：本地只解析 `.env.test.local`，CI 只接受已注入的两条测试 URL；构造子进程 allowlist，剔除线上 URL 和 ref 环境变量，并按纯计划选择数据库持久化或 PostgreSQL E2E 入口、注入 Run ID 及迁移-only、单里程碑、full 或 cleanup scope；Vitest 子进程在首个失败或阶段超时后停止调度同套后续里程碑。
@@ -177,3 +177,15 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/test/session-receiver.test.ts`、`session-runtime.test.ts`、`sse.test.ts`：Node 离线协议与真实 Query/Mutation 测试。`sync-browser.ts`、`sync-proxy-fixture.ts` 扩展独立浏览器入口，产品构建不含夹具。
 
 完整验收与 M7 接入约定见 [M6.3 设计实施记录](./superpowers/specs/2026-09-11-m6-3-sse-client-cache-coordination-design.md#13-实施记录与-m7-交接2026-09-11)。
+
+
+## M6.4 领域 UI 状态
+
+- `apps/web/src/ui/stores.ts`：四个独立 Zustand vanilla 工厂，只保存交互输入、效果描述、调试选择与确认 descriptor；无持久化或实体副本。
+- `apps/web/src/ui/react.tsx`：App 稳定 Overlay Provider、Shell pathname 页面来源作用域、牌桌和 Run 详情 Provider，以及必须传 selector 的 hooks。Shell 页面边界同时覆盖 Outlet 与可组合的 tableActions footer；卸载清理来源弹窗。
+- `apps/web/src/ui/table-adapter.ts`：同步订阅 Query/runtime，清理失效草稿及动画；在真实 Mutation 执行时验证原草稿引用、手/版本与操作条件，随后同步调用原 commandOptions。
+- `apps/web/src/ui/debug-rows.ts`：当前 Query 行与分页选择适配，清除失效 ID；不请求或保存实体。
+- `apps/web/src/session-sync/effects.ts`：从已接受公开快照生成无牌值/金额的展示差异；runtime 的 subscribeEffects 仅通知前台 ready 的实时 SSE/成功命令，不租用连接或补发历史。
+- `apps/web/test/ui-stores.test.ts`、`ui-coordination.test.ts`：实例隔离、旧回调隔离、真实 Mutation 草稿竞态与 HTTP/SSE 效果验收；`ui-browser.tsx` 由独立 `browser.html?ui` 入口加载，消费生产 Provider/hooks/Shell 验证路由生命周期和渲染隔离，不进入产品 build。
+
+下游 API 与验收记录见 [M6.4 实施记录](./superpowers/specs/2026-09-11-m6-4-domain-ui-stores-design.md#11-实施记录与交接)。

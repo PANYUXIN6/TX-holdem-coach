@@ -1,3 +1,4 @@
+import { EmptyState, StatusBadge } from './components/controls.js'
 import { Link, useParams } from 'react-router'
 import { paths, resourcePath, sessionHistoryPath } from './navigation.js'
 import type { PageId } from './navigation.js'
@@ -54,14 +55,15 @@ export function Page({ id }: { id: PageId }) {
     )
   if (id === 'notFound')
     return (
-      <section className="notice">
-        <span className="section-label">404</span>
-        <h2>这条路径没有对应页面</h2>
-        <p>请使用上方入口返回训练首页，继续浏览。</p>
-        <Link className="primary-link" to={paths.home}>
-          返回训练首页 <span aria-hidden="true">↗</span>
-        </Link>
-      </section>
+      <EmptyState
+        title="这条路径没有对应页面"
+        description="请使用上方入口返回训练首页，继续浏览。"
+        action={
+          <Link className="primary-link" to={paths.home}>
+            返回训练首页 <span aria-hidden="true">↗</span>
+          </Link>
+        }
+      />
     )
   const resourceId = params.sessionId ?? params.handId ?? params.runId
   return (
@@ -72,7 +74,7 @@ export function Page({ id }: { id: PageId }) {
         </p>
       ) : null}
       <section className="notice">
-        <span className="section-label">功能待接入</span>
+        <StatusBadge>功能待接入</StatusBadge>
         <h2>
           {id === 'confirm' ? '开场前，再确认一次' : '这里将承载下一步练习'}
         </h2>

@@ -189,3 +189,11 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/test/ui-stores.test.ts`、`ui-coordination.test.ts`：实例隔离、旧回调隔离、真实 Mutation 草稿竞态与 HTTP/SSE 效果验收；`ui-browser.tsx` 由独立 `browser.html?ui` 入口加载，消费生产 Provider/hooks/Shell 验证路由生命周期和渲染隔离，不进入产品 build。
 
 下游 API 与验收记录见 [M6.4 实施记录](./superpowers/specs/2026-09-11-m6-4-domain-ui-stores-design.md#11-实施记录与交接)。
+
+## M6.5 深色视觉基础
+
+- `apps/web/src/components/controls.tsx`：原生 Button/Field、静态 StatusBadge、EmptyState 与 DangerSection；页面消费 props，不读取 Query/Store。
+- `apps/web/src/components/presentation.ts`、`identity.tsx`：Unicode 头像标记、公开 Card 资源映射、互斥 face/back/empty 牌面与金额展示；只依赖 React 和 Contracts 类型，复用 public/poker。
+- `apps/web/src/components/surfaces.tsx`：DrawerSurface 普通 section 的标题、滚动内容、操作表面；模态生命周期由 M6.6 拥有。
+- `apps/web/src/styles.css` 统一深色语义变量、原生交互状态、三类 Shell 布局、表面及二维动效。`Pages.tsx`、`Shell.tsx`、`ErrorBoundary.tsx` 消费基础件；根错误页仍独立。
+- `apps/web/test/presentation.test.ts` 提供最窄取字/映射测试；`apps/web/test/visual.html`、`visual-browser.tsx`、`visual.css` 通过 `build-browser-fixture.mjs` 独立构建，挂载生产组件和 Shell，产品入口不包含样例。

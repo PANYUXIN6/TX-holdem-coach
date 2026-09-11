@@ -130,3 +130,7 @@ App 在 runtime 内稳定创建 OverlayUiProvider；Shell 的 pathname 页面错
 依赖方向为 `页面 → ui React/hooks/adapter → Zustand + Query/runtime`。同步层仅向外发布 `EffectBatch`，不导入 ui；接收器写 Query、维护资源/终态后，runtime 对显式实时来源且接收前后 ready 的新扑克版本通知订阅者。恢复、GET、失败 latestSnapshot、重复候选不生成效果；UI 根据可见性、减少动态效果、最新版本和生命周期只保留一个批次。
 
 下注提交继续经 `ui/table-adapter → runtime.commandOptions → 原命令验证/互斥/传输`。Mutation variables 使用 currentDraft 返回的只读输入引用；执行时核对它仍是同一份有效草稿，防止版本推进或清除后同值重建被当作旧提交的授权。检查与原 mutationFn 同步衔接，命令 ID/版本构造、未决请求与 resend/abandon 仍由 M6.3 拥有。调试行仅引用当前 Query 数据；弹窗仅保存来源和目标，实际确认与 pending UI 由 M6.6/M7 消费原 Mutation。
+
+## M6.5 视觉组件边界
+
+页面或未来 M6.6 Host → `components/` → React、必要的 Contracts 类型与 `styles.css` / 静态牌图。基础组件只消费可见的最小输入，不依赖 Router、Query、runtime 或 Zustand；唯一手机画布、导航焦点、横屏保护仍由 Shell 管理。PlayingCard 的 back/empty 不接收 Card，真实数据选择由调用者负责。DrawerSurface 是可组合视觉 section，M6.6 负责模态、焦点、Escape 与危险确认；二维 CSS 效果不决定业务状态，M7 renderer 按 M6.5 §7 对接 M6.4 batch/ack 生命周期。

@@ -1,3 +1,4 @@
+import { StatusBadge } from './components/controls.js'
 import { PageUiProvider } from './ui/react.js'
 import { SessionRouteBridge } from './session-sync/react.js'
 import {
@@ -107,7 +108,7 @@ export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
               <footer className="table-actions">
                 {tableActions ?? (
                   <>
-                    <span className="status-dot" aria-hidden="true" />
+                    <StatusBadge>功能待接入</StatusBadge>
                     牌桌操作将在功能接入后开放
                   </>
                 )}

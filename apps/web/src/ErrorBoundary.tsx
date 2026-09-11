@@ -1,3 +1,4 @@
+import { Button } from './components/controls.js'
 import { Component } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
@@ -62,15 +63,15 @@ export function PageError({
       <h2>此页面暂时无法显示</h2>
       <p>可以重新显示此页面，或返回上级入口。</p>
       <div className="page-links">
-        <button
-          type="button"
+        <Button
+          variant="secondary"
           onClick={() => {
             reset()
             document.getElementById('page-title')?.focus()
           }}
         >
           重新显示
-        </button>
+        </Button>
         <Link to={target}>{target.label}</Link>
       </div>
     </section>

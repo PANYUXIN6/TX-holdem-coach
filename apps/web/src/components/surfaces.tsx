@@ -3,16 +3,19 @@ import { useId, type ReactNode } from 'react'
 /** Visual section only. M6.6 owns modal host, dismissal and focus lifecycle. */
 export function DrawerSurface({
   title,
+  titleId: suppliedTitleId,
   closeAction,
   children,
   actions,
 }: {
   title: string
+  titleId?: string
   closeAction?: ReactNode
   children: ReactNode
   actions?: ReactNode
 }) {
-  const titleId = useId()
+  const generatedTitleId = useId()
+  const titleId = suppliedTitleId ?? generatedTitleId
   return (
     <section className="drawer-surface" aria-labelledby={titleId}>
       <header className="drawer-header">

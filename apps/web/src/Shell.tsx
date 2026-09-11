@@ -1,7 +1,12 @@
+import { ConfirmationHost } from './ui/confirmation-host.js'
+import { useOverlayUi } from './ui/react.js'
+import { ModalEnvironment } from './components/modal.js'
+import { SessionRouteFeedback } from './session-sync/feedback.js'
 import { StatusBadge } from './components/controls.js'
 import { PageUiProvider } from './ui/react.js'
 import { SessionRouteBridge } from './session-sync/react.js'
 import {
+  useState,
   useLayoutEffect,
   useRef,
   useSyncExternalStore,
@@ -33,6 +38,8 @@ const tabs = [
 ] as const
 
 export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
+  const [destructivePending, setDestructivePending] = useState(false)
+  const confirmationOpen = useOverlayUi((state) => state.active !== null)
   const location = useLocation()
   const matched = matchRoutes(routes, location)!.at(-1)!
   const { id, handle } = matched.route
@@ -58,94 +65,104 @@ export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
   }, [rotated])
 
   return (
-    <div className="phone-canvas">
-      <div
-        className={`page-layout layout-${handle.layout}`}
-        hidden={rotated}
-        inert={rotated}
-      >
-        <header className="page-header">
-          <div className="header-topline">
-            {id === 'home' ? (
-              <span className="wordmark">♠ 扑克练习室</span>
-            ) : (
-              <Link className="back-link" to={target}>
-                ← {target.label}
-              </Link>
-            )}
-            {id === 'home' ? (
-              <Link className="settings-link" to={paths.settings}>
-                设置 ↗
-              </Link>
-            ) : null}
-          </div>
-          <h1 id="page-title" ref={heading} tabIndex={-1}>
-            {handle.title}
-          </h1>
-        </header>
-        <ErrorBoundary
-          key={location.pathname}
-          fallback={(reset) => (
-            <main
-              ref={content}
-              className="page-content"
-              aria-labelledby="page-title"
-            >
-              <PageError reset={reset} target={target} />
-            </main>
-          )}
+    <ModalEnvironment
+      value={{ rotated, routeKey: location.pathname, confirmationOpen }}
+    >
+      <div className="phone-canvas">
+        <div
+          className={`page-layout layout-${handle.layout}`}
+          hidden={rotated}
+          inert={rotated}
         >
-          <PageUiProvider>
-            <SessionRouteBridge />
-            <main
-              ref={content}
-              className="page-content"
-              aria-labelledby="page-title"
-            >
-              <Outlet />
-            </main>
-            {handle.layout === 'table' ? (
-              <footer className="table-actions">
-                {tableActions ?? (
-                  <>
-                    <StatusBadge>功能待接入</StatusBadge>
-                    牌桌操作将在功能接入后开放
-                  </>
-                )}
-              </footer>
-            ) : null}
-          </PageUiProvider>
-        </ErrorBoundary>
-        {handle.layout === 'regular' ? (
-          <nav className="main-nav" aria-label="主导航">
-            {tabs.map((tab) => (
-              <Link
-                key={tab.id}
-                to={tab.to}
-                aria-current={handle.tab === tab.id ? 'page' : undefined}
+          <header className="page-header">
+            <div className="header-topline">
+              {id === 'home' ? (
+                <span className="wordmark">♠ 扑克练习室</span>
+              ) : (
+                <Link className="back-link" to={target}>
+                  ← {target.label}
+                </Link>
+              )}
+              {id === 'home' ? (
+                <Link className="settings-link" to={paths.settings}>
+                  设置 ↗
+                </Link>
+              ) : null}
+            </div>
+            <h1 id="page-title" ref={heading} tabIndex={-1}>
+              {handle.title}
+            </h1>
+          </header>
+          <ErrorBoundary
+            key={location.pathname}
+            fallback={(reset) => (
+              <main
+                ref={content}
+                className="page-content"
+                aria-labelledby="page-title"
               >
-                <span className="nav-mark" aria-hidden="true">
-                  {tab.mark}
-                </span>
-                <span>{tab.label}</span>
-              </Link>
-            ))}
-          </nav>
-        ) : null}
+                <PageError reset={reset} target={target} />
+              </main>
+            )}
+          >
+            <PageUiProvider>
+              <SessionRouteBridge />
+              <SessionRouteFeedback destructivePending={destructivePending}>
+                <main
+                  ref={content}
+                  className="page-content"
+                  aria-labelledby="page-title"
+                >
+                  <Outlet />
+                </main>
+                {handle.layout === 'table' ? (
+                  <footer className="table-actions">
+                    {tableActions ?? (
+                      <>
+                        <StatusBadge>功能待接入</StatusBadge>
+                        牌桌操作将在功能接入后开放
+                      </>
+                    )}
+                  </footer>
+                ) : null}
+              </SessionRouteFeedback>
+            </PageUiProvider>
+          </ErrorBoundary>
+          <ConfirmationHost
+            rotated={rotated}
+            onPending={setDestructivePending}
+          />
+          {handle.layout === 'regular' ? (
+            <nav className="main-nav" aria-label="主导航">
+              {tabs.map((tab) => (
+                <Link
+                  key={tab.id}
+                  to={tab.to}
+                  aria-current={handle.tab === tab.id ? 'page' : undefined}
+                >
+                  <span className="nav-mark" aria-hidden="true">
+                    {tab.mark}
+                  </span>
+                  <span>{tab.label}</span>
+                </Link>
+              ))}
+            </nav>
+          ) : null}
+        </div>
+        <section
+          className="rotation-notice"
+          hidden={!rotated}
+          aria-labelledby="rotation-title"
+        >
+          <span className="rotation-symbol" aria-hidden="true">
+            ↻
+          </span>
+          <h1 id="rotation-title" tabIndex={-1} ref={rotationHeading}>
+            请旋转至竖屏
+          </h1>
+          <p>竖屏呈现完整的练习界面。</p>
+        </section>
       </div>
-      <section
-        className="rotation-notice"
-        hidden={!rotated}
-        aria-labelledby="rotation-title"
-      >
-        <span className="rotation-symbol" aria-hidden="true">
-          ↻
-        </span>
-        <h1 id="rotation-title" tabIndex={-1} ref={rotationHeading}>
-          请旋转至竖屏
-        </h1>
-        <p>竖屏呈现完整的练习界面。</p>
-      </section>
-    </div>
+    </ModalEnvironment>
   )
 }

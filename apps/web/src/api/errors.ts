@@ -38,15 +38,22 @@ export function parseInput<S extends z.ZodType>(
 export function errorMessage(error: unknown): string | null {
   if (!(error instanceof ApiError)) return '操作未完成，请稍后重新读取。'
   if (error.kind === 'cancelled') return null
+  const business: Record<string, string> = {
+    STATE_VERSION_CONFLICT: '状态已变化，请等待校准后重新决策。',
+    ACTIVE_SESSION_EXISTS: '已有活动场次，请继续当前场次。',
+    SESSION_NOT_READY: '场次尚未就绪，请等待同步完成。',
+    SESSION_READONLY_DIAGNOSTIC: '场次处于只读诊断状态，暂不能继续操作。',
+    SESSION_NOT_ENDED: '只能删除已结束的场次，请重新读取场次状态。',
+  }
+  if (error.code && Object.hasOwn(business, error.code))
+    return business[error.code]!
   if (error.kind === 'input') return '请检查并修改请求参数。'
   if (error.kind === 'network') return '无法连接服务，请检查服务后重新读取。'
   if (error.kind === 'protocol')
     return '响应格式不兼容，请刷新页面并确认前后端版本一致。'
   if (error.status === 404) return '资源已不可用。'
-  if (error.code === 'STATE_VERSION_CONFLICT')
-    return '状态已变化，请等待校准后重新决策。'
-  if (error.code === 'SESSION_READONLY_DIAGNOSTIC')
-    return '场次处于只读诊断状态，无法进行牌局操作。'
+  if (error.status === 500 || error.status === 503)
+    return '服务暂不可用，请检查本机服务后重新读取。'
   return '请求未完成，请重新读取当前状态。'
 }
 

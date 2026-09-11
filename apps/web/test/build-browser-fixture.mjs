@@ -11,6 +11,7 @@ await build({
     rollupOptions: {
       input: {
         app: fileURLToPath(new URL('../index.html', import.meta.url)),
+        feedback: fileURLToPath(new URL('./feedback.html', import.meta.url)),
         visual: fileURLToPath(new URL('./visual.html', import.meta.url)),
         acceptance: fileURLToPath(new URL('./browser.html', import.meta.url)),
       },

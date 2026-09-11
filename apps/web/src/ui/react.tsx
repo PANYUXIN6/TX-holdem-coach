@@ -1,3 +1,4 @@
+import { confirmationTargetMatches } from './confirmation.js'
 import {
   createContext,
   useContext,
@@ -79,14 +80,8 @@ export function OverlayUiProvider({ children }: { children: ReactNode }) {
         keys.session(active.sessionId),
       )
       if (
-        !current ||
-        runtime.getStatus(active.sessionId) === 'missing' ||
-        (active.kind === 'deleteSession'
-          ? current.lifecycleStatus !== 'ended'
-          : current.lifecycleStatus !== 'active' ||
-            current.agentRunState !== 'paused' ||
-            current.hand?.handId !== active.handId ||
-            current.stateVersion !== active.stateVersion)
+        !confirmationTargetMatches(active, current) ||
+        runtime.getStatus(active.sessionId) === 'missing'
       )
         store.getState().close(active.instanceId)
     }

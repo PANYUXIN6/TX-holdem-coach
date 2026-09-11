@@ -197,3 +197,12 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/src/components/surfaces.tsx`：DrawerSurface 普通 section 的标题、滚动内容、操作表面；模态生命周期由 M6.6 拥有。
 - `apps/web/src/styles.css` 统一深色语义变量、原生交互状态、三类 Shell 布局、表面及二维动效。`Pages.tsx`、`Shell.tsx`、`ErrorBoundary.tsx` 消费基础件；根错误页仍独立。
 - `apps/web/test/presentation.test.ts` 提供最窄取字/映射测试；`apps/web/test/visual.html`、`visual-browser.tsx`、`visual.css` 通过 `build-browser-fixture.mjs` 独立构建，挂载生产组件和 Shell，产品入口不包含样例。
+
+### M6.6 通用反馈与危险确认
+
+- `apps/web/src/components/feedback.tsx`：纯展示的加载、更新、读取错误、就地反馈与已知字段焦点帮助；沿用 `api/errors.ts` 的中文映射。
+- `apps/web/src/components/modal.tsx`：原生 dialog 生命周期、焦点恢复和背景滚动锁，以及受控 FilterDrawer；从 Shell 接收方向、页面和确认占用环境，不依赖业务 runtime。
+- `apps/web/src/session-sync/feedback.tsx`：生产场次路由的同步反馈、资源不可用隔离、只读诊断安全标识与原未决请求恢复入口；订阅已有 runtime，不额外租用 SSE。
+- `apps/web/src/ui/confirmation.ts`、`confirmation-host.tsx`：确认资格与实际 Mutation 执行时的中止复核、稳定三类确认 Host、先读取的删除入口；复用原删除/清空 options 和 endSession 命令。
+- `apps/web/src/Shell.tsx`：在标题与内容之间装配场次反馈；确认 Host 位于 pathname 错误边界之外，来源弹窗仍由页面作用域清理，迟到结果不会导航或关闭新实例。
+- `apps/web/test/feedback.test.ts`、`confirmation.test.ts`：错误语义、读取在途删除禁用和中止调度竞态。`feedback.html`、`feedback-browser.tsx`、`feedback-transport.ts` 提供独立浏览器验收，内存 HTTP/SSE 经生产 Codec、Query/runtime、Shell/Host，不进入产品构建。

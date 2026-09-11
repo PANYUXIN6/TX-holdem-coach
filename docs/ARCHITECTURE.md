@@ -134,3 +134,11 @@ App 在 runtime 内稳定创建 OverlayUiProvider；Shell 的 pathname 页面错
 ## M6.5 视觉组件边界
 
 页面或未来 M6.6 Host → `components/` → React、必要的 Contracts 类型与 `styles.css` / 静态牌图。基础组件只消费可见的最小输入，不依赖 Router、Query、runtime 或 Zustand；唯一手机画布、导航焦点、横屏保护仍由 Shell 管理。PlayingCard 的 back/empty 不接收 Card，真实数据选择由调用者负责。DrawerSurface 是可组合视觉 section，M6.6 负责模态、焦点、Escape 与危险确认；二维 CSS 效果不决定业务状态，M7 renderer 按 M6.5 §7 对接 M6.4 batch/ack 生命周期。
+
+## M6.6 反馈、模态与确认生命周期
+
+生产流为 `Shell → SessionRouteFeedback → useSession/runtime`，场次租用仍由 SessionRouteBridge 持有；顶部反馈消费同一缓存和连接状态，missing 隔离内容，readonly 与协议恢复失败展示稳定安全诊断标识。未决命令只从 runtime 读取，按钮调用原 refresh/resend/abandon，不复制进 Zustand。
+
+`Shell → ModalEnvironment → Modal/FilterDrawer` 只传方向、页面标识和是否有危险确认；原生 dialog 提供 top layer/inert，组件负责实际内容容器滚动锁、关闭与焦点恢复。方向判断仍唯一属于 Shell，横屏清除打开意图。FilterDrawer 的草稿、校验与 URL 写入由调用者拥有。
+
+`Shell → ConfirmationHost → 原 Mutation options/runtime` 的 Host 稳定处于 pathname 页面错误边界之外；表单按 Overlay instanceId 重建。同步 ref 防连点，全局 Host pending 阻止危险提交并发，原 options 完整拥有取消读取、缓存移除及 freeze 收尾。中止确认在实际 mutationFn 内再次核对目标引用、手、版本、暂停状态与提交资格，随后同步委托原 endSession 入口。失效或离页只关闭视觉，不取消写请求；迟到结果按原 instanceId 处理，不能改变新确认或导航。未确认的 DELETE 必须先读取，再重新完整确认。

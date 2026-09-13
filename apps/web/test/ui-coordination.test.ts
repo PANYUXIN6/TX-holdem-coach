@@ -10,6 +10,7 @@ import type { StreamOptions } from '../src/api/sse.js'
 import { createQueryClient } from '../src/query/client.js'
 import { createSessionRuntime } from '../src/session-sync/runtime.js'
 import { createTableScope } from '../src/ui/table-adapter.js'
+import { completeTable, tableSnapshot } from './table-fixtures.js'
 import { ids, publicSnapshot } from './fixtures.js'
 
 const cleanups: (() => void)[] = []
@@ -60,6 +61,7 @@ function setup() {
     next: PublicSessionSnapshot,
     type: SseEvent['type'] = 'actionCommitted',
   ) {
+    PublicSessionSnapshotSchema.parse(next)
     current = next
     streams.at(-1)!.onEvent({
       eventId: ids.event,
@@ -309,5 +311,153 @@ describe('牌桌适配器与生产同步', () => {
     pause.resolve()
     await expect(pending).rejects.toThrow('失效')
     expect(s.posts).toHaveLength(0)
+  })
+  it.each(['fold', 'call', 'allIn'] as const)(
+    '旧 %s 意图不能穿越版本',
+    async (type) => {
+      const s = setup()
+      await flush()
+      const intent = s.scope.capture({ type })!
+      const pause = deferred<void>()
+      const pending = new MutationObserver(s.client, {
+        ...s.scope.intentOptions(() => true),
+        onMutate: () => pause.promise,
+      }).mutate(intent)
+      await flush()
+      s.emit({ ...s.current(), stateVersion: 5, eventSeq: 9 })
+      pause.resolve()
+      await expect(pending).rejects.toThrow('失效')
+      expect(s.posts).toHaveLength(0)
+    },
+  )
+  it('正常结束确认不能成为新手暂停后的中止', async () => {
+    const s = setup()
+    await flush()
+    const hand = s.current().hand
+    s.emit({
+      ...completeTable({ ...tableSnapshot(6), seats: s.current().seats }),
+      stateVersion: 5,
+      eventSeq: 9,
+    })
+    expect(s.runtime.getStatus(ids.session)).toBe('ready')
+    const intent = s.scope.capture({ type: 'endSession' })!
+    expect(intent).not.toBeNull()
+    const pause = deferred<void>()
+    const pending = new MutationObserver(s.client, {
+      ...s.scope.intentOptions(() => true),
+      onMutate: () => pause.promise,
+    }).mutate(intent)
+    await flush()
+    s.emit({
+      ...s.current(),
+      hand: { ...hand!, handId: crypto.randomUUID(), legalActions: [] },
+      tableDisplay: undefined,
+      lastCompletedHandSummary: null,
+      pokerPhase: 'inHand',
+      agentRunState: 'paused',
+      stateVersion: 6,
+      eventSeq: 10,
+    })
+    pause.resolve()
+    await expect(pending).rejects.toThrow('失效')
+    expect(s.posts).toHaveLength(0)
+  })
+
+  it.each(['call', 'allIn'] as const)(
+    '%s 仅发送动作类型，SSE 先到仍由原请求占用提交',
+    async (type) => {
+      const s = setup()
+      await flush()
+      const intent = s.scope.capture({ type })!
+      const pending = new MutationObserver(
+        s.client,
+        s.scope.intentOptions(() => true),
+      ).mutate(intent)
+      await flush()
+      expect(s.posts).toHaveLength(1)
+      expect(s.posts[0]).toMatchObject({
+        command: { payload: { action: { type } } },
+      })
+      expect(
+        (s.posts[0] as { command: { payload: unknown } }).command.payload,
+      ).toEqual({ action: { type } })
+      s.emit({ ...s.current(), stateVersion: 5, eventSeq: 9 })
+      expect(s.scope.capture({ type: 'fold' })).toBeNull()
+      s.response.resolve(Response.json({ snapshot: s.current() }))
+      await pending
+    },
+  )
+  it('未知结果校准 ready 后拒绝新命令，重发沿用原请求', async () => {
+    const s = setup()
+    await flush()
+    const pending = new MutationObserver(
+      s.client,
+      s.scope.intentOptions(() => true),
+    ).mutate(s.scope.capture({ type: 'call' })!)
+    await flush()
+    s.response.resolve(new Response('bad response'))
+    await expect(pending).rejects.toBeDefined()
+    const refreshing = s.runtime.refresh(ids.session)
+    await flush()
+    s.emit(s.current(), 'snapshot')
+    await refreshing
+    await flush()
+    expect(s.runtime.getStatus(ids.session)).toBe('ready')
+    expect(s.scope.begin('raise')).toBe(false)
+    expect(s.scope.capture({ type: 'fold' })).toBeNull()
+    const operation = s.runtime.pendingOperations(ids.session)[0]!
+    await expect(
+      s.runtime.resend(ids.session, operation.command.commandId),
+    ).rejects.toBeDefined()
+    expect(s.posts).toHaveLength(2)
+    expect(s.posts[1]).toEqual(s.posts[0])
+  })
+  it('部分补码使用追加额；确认关闭后同值重建不复用旧来源', async () => {
+    const s = setup()
+    await flush()
+    s.emit({
+      ...completeTable({ ...tableSnapshot(6), seats: s.current().seats }),
+      stateVersion: 5,
+      eventSeq: 9,
+    })
+    const intent = s.scope.capture({ type: 'rebuy', amount: 50 })!
+    const pending = new MutationObserver(
+      s.client,
+      s.scope.intentOptions(() => true),
+    ).mutate(intent)
+    await flush()
+    expect(s.posts[0]).toMatchObject({
+      command: { type: 'rebuy', payload: { amount: 50 } },
+    })
+    const summary = s.current().lastCompletedHandSummary
+    s.response.resolve(
+      Response.json({
+        snapshot: {
+          ...s.current(),
+          eventSeq: 10,
+          stateVersion: 6,
+          seats: s
+            .current()
+            .seats.map((seat) =>
+              seat.isUser ? { ...seat, stack: seat.stack + 50 } : seat,
+            ),
+        },
+      }),
+    )
+    await pending
+    expect(
+      s.client.getQueryData<{ lastCompletedHandSummary: unknown }>([
+        'session',
+        ids.session,
+      ])?.lastCompletedHandSummary,
+    ).toEqual(summary)
+    const cancelled = s.scope.capture({ type: 'endSession' })!
+    await expect(
+      new MutationObserver(
+        s.client,
+        s.scope.intentOptions(() => false),
+      ).mutate(cancelled),
+    ).rejects.toThrow('失效')
+    expect(s.posts).toHaveLength(1)
   })
 })

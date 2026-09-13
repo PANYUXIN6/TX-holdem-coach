@@ -1,7 +1,8 @@
-import { tableSnapshot } from './table-fixtures.js'
+import { tableSnapshot, completeTable } from './table-fixtures.js'
 import { setupPersonas, rosterPreview } from './setup-fixtures.js'
 import {
   PublicSessionSnapshotSchema,
+  CommandRequestSchema,
   type SessionManagementItem,
 } from '@tx-holdem-coach/contracts'
 import { publicSnapshot, ids } from './fixtures.js'
@@ -56,7 +57,13 @@ export function homeTransport(initial = 'empty') {
   const requests: string[] = []
   const bodies: unknown[] = []
   let created = false
-  const snapshot = PublicSessionSnapshotSchema.parse(tableSnapshot(9))
+  let snapshot = PublicSessionSnapshotSchema.parse(tableSnapshot(9))
+  if (initial === 'actions')
+    snapshot.hand = {
+      ...snapshot.hand!,
+      currentActorSeatNumber: 0,
+      legalActions: [{ type: 'check' }],
+    }
   snapshot.seats = Array.from({ length: 9 }, (_, n) => ({
     ...snapshot.seats[n]!,
     seatNumber: n,
@@ -90,6 +97,39 @@ export function homeTransport(initial = 'empty') {
           { status: 409 },
         )
       return Response.json({ snapshot }, { status: 201 })
+    }
+    if (
+      init?.method === 'POST' &&
+      url.pathname === `/api/sessions/${ids.session}/commands` &&
+      initial === 'actions'
+    ) {
+      const body = CommandRequestSchema.parse(JSON.parse(String(init.body)))
+      bodies.push(body)
+      if (body.command.type === 'playerAction')
+        snapshot = completeTable(snapshot)
+      else if (body.command.type === 'startNextHand') {
+        const next = tableSnapshot(9)
+        const handId = crypto.randomUUID()
+        snapshot = {
+          ...next,
+          eventSeq: snapshot.eventSeq,
+          stateVersion: snapshot.stateVersion,
+          seats: snapshot.seats,
+          hand: { ...next.hand!, handId },
+          tableDisplay: {
+            ...next.tableDisplay!,
+            hand: { ...next.tableDisplay!.hand!, handId },
+          },
+        }
+      } else if (body.command.type === 'endSession')
+        snapshot = { ...snapshot, lifecycleStatus: 'ended' }
+      snapshot = PublicSessionSnapshotSchema.parse({
+        ...snapshot,
+        stateVersion:
+          snapshot.stateVersion + (body.command.type === 'endSession' ? 0 : 1),
+        eventSeq: snapshot.eventSeq + 1,
+      })
+      return Response.json({ snapshot })
     }
     if (url.pathname === '/api/settings/providers/deepseek/check') {
       if (scenario === 'check-refresh-error') failure = 'provider'

@@ -39,6 +39,11 @@ export function errorMessage(error: unknown): string | null {
   if (!(error instanceof ApiError)) return '操作未完成，请稍后重新读取。'
   if (error.kind === 'cancelled') return null
   const business: Record<string, string> = {
+    POKER_ACTION_NOT_LEGAL: '当前不能执行此行动，请重新读取后选择。',
+    POKER_ACTION_TARGET_OUT_OF_RANGE: '下注金额范围已变化，请重新选择金额。',
+    REBUY_AMOUNT_NOT_ALLOWED: '补码金额不符合当前余额，请重新读取后输入。',
+    USER_REBUY_REQUIRED: '筹码已用完，请先买入或结束场次。',
+    COMMAND_NOT_ALLOWED_IN_PHASE: '牌局阶段已变化，请重新读取后选择。',
     STATE_VERSION_CONFLICT: '状态已变化，请等待校准后重新决策。',
     ACTIVE_SESSION_EXISTS: '已有活动场次，请继续当前场次。',
     SESSION_NOT_READY: '场次尚未就绪，请等待同步完成。',

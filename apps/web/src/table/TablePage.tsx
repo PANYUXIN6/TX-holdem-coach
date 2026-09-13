@@ -10,7 +10,7 @@ import { Modal, ModalEnvironment } from '../components/modal.js'
 import { resourcePath, sessionHistoryPath } from '../navigation.js'
 import { useSession } from '../session-sync/react.js'
 import { useTableUi, useTableScope } from '../ui/react.js'
-import { seatAnchors, streetLabel, tableStatus } from './presentation.js'
+import { seatAnchors, streetLabel } from './presentation.js'
 import { TableEffects } from './effects.js'
 import './table.css'
 
@@ -22,26 +22,7 @@ export function TablePage() {
     <EmptyState title="场次地址无效" description="请从训练首页进入有效场次。" />
   )
 }
-export function TableFooter({ id }: { id: string }) {
-  const session = useSession(id)
-  if (!session.data || session.status === 'missing') return null
-  return (
-    <div className="table-footer-status">
-      <strong>
-        {session.status === 'ready' || session.status === 'ended'
-          ? tableStatus(session.data)
-          : '当前牌局等待同步'}
-      </strong>
-      <span>
-        {session.data.lifecycleStatus === 'ended'
-          ? session.data.lastCompletedHandSummary
-            ? '可查看最近一手与本场历史'
-            : '可查看本场历史'
-          : '当前为牌桌展示阶段，操作控件尚未接入'}
-      </span>
-    </div>
-  )
-}
+export { TableFooter } from './TableFooter.js'
 function TableContent({ id }: { id: string }) {
   const { data: snapshot, status, runtime } = useSession(id)
   const [detailHand, setDetailHand] = useState<string | null>(null)
@@ -337,6 +318,70 @@ function TableContent({ id }: { id: string }) {
       >
         <PotDetails snapshot={snapshot} />
       </Modal>
+      {!hand && summary ? (
+        <details
+          key={summary.handId}
+          id="completed-summary"
+          className="completed-summary"
+          aria-controls="completed-summary-content"
+        >
+          <summary>本手结算 · 查看逐席净变化</summary>
+          <div id="completed-summary-content">
+            <PotDetails snapshot={snapshot} />
+            {summary.uncalledBetReturns.length === 0 ? (
+              <p>无未跟注返还</p>
+            ) : null}
+            <h3>各席净变化</h3>
+            {summary.seatResults
+              .slice()
+              .sort((a, b) => a.seatNumber - b.seatNumber)
+              .map((result) => {
+                const name =
+                  snapshot.seats.find(
+                    (seat) => seat.seatNumber === result.seatNumber,
+                  )?.displayName ?? `座位 ${result.seatNumber}`
+                const category = summary.revealedHands.find(
+                  (item) => item.seatNumber === result.seatNumber,
+                )?.handEvaluation?.category
+                const categories = {
+                  highCard: '高牌',
+                  onePair: '一对',
+                  twoPair: '两对',
+                  threeOfAKind: '三条',
+                  straight: '顺子',
+                  flush: '同花',
+                  fullHouse: '葫芦',
+                  fourOfAKind: '四条',
+                  straightFlush: '同花顺',
+                }
+                return (
+                  <section key={result.seatNumber} className="settlement-seat">
+                    <strong>{name}</strong>
+                    <span>
+                      {result.startingStack.toLocaleString('zh-CN')} →{' '}
+                      {result.endingStack.toLocaleString('zh-CN')}
+                    </span>
+                    <b>
+                      {result.netChange > 0 ? '+' : ''}
+                      {result.netChange.toLocaleString('zh-CN')}
+                    </b>
+                    <small>
+                      {summary.terminationReason === 'complete' &&
+                      summary.pots.some((pot) =>
+                        pot.winningSeatNumbers.includes(result.seatNumber),
+                      )
+                        ? '其余玩家弃牌获胜'
+                        : category
+                          ? categories[category]
+                          : '牌型未公开'}
+                    </small>
+                  </section>
+                )
+              })}
+            <Link to={resourcePath('hand', summary.handId)}>查看本手详情</Link>
+          </div>
+        </details>
+      ) : null}
       <TableEffects root={root} snapshot={snapshot} status={status} />
     </section>
   )

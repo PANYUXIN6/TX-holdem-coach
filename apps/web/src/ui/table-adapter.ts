@@ -1,3 +1,10 @@
+import {
+  betweenHands,
+  heroActions,
+  positiveAmount,
+  rebuyLimit,
+  type TableAction,
+} from '../table/actions.js'
 import { mutationOptions, type QueryClient } from '@tanstack/react-query'
 import {
   PokerActionSchema,
@@ -12,6 +19,17 @@ import {
   type BetDraft,
 } from './stores.js'
 
+export class TableIntentError extends Error {}
+export type TableIntent = Readonly<{
+  scope: symbol
+  epoch: number
+  sessionId: string
+  stateVersion: number
+  handId: string | null
+  action: TableAction
+  seenAmount: number | null
+  stack: number
+}>
 export function createTableScope(
   id: string,
   client: QueryClient,
@@ -19,6 +37,9 @@ export function createTableScope(
 ) {
   const table = createTableUiStore()
   const animation = createTableAnimationStore()
+  const token = Symbol(id)
+  let epoch = 0
+  let lastSource = ''
   let mounted = false
   let hidden = false
   let reduced = false
@@ -31,6 +52,7 @@ export function createTableScope(
       hidden ||
       runtime.getStatus(id) !== 'ready' ||
       runtime.isSubmitting(id) ||
+      runtime.pendingOperations(id).length > 0 ||
       current?.lifecycleStatus !== 'active' ||
       current.pokerPhase !== 'inHand' ||
       current.agentRunState !== 'idle' ||
@@ -51,8 +73,31 @@ export function createTableScope(
       !!legalAction(draft.action)
     )
   }
+  const available = () =>
+    mounted &&
+    !hidden &&
+    runtime.getStatus(id) === 'ready' &&
+    !runtime.isSubmitting(id) &&
+    runtime.pendingOperations(id).length === 0
+  const source = (current: PublicSessionSnapshot | undefined) =>
+    JSON.stringify([
+      available(),
+      current?.stateVersion,
+      current?.hand?.handId,
+      current?.lastCompletedHandSummary?.handId,
+      current?.lifecycleStatus,
+      current?.pokerPhase,
+      current?.agentRunState,
+      current?.hand?.currentActorSeatNumber,
+      current?.hand?.legalActions,
+    ])
   function reconcile() {
     const current = snapshot()
+    const nextSource = source(current)
+    if (nextSource !== lastSource) {
+      epoch++
+      lastSource = nextSource
+    }
     if (
       !current ||
       current.lifecycleStatus !== 'active' ||
@@ -80,6 +125,109 @@ export function createTableScope(
   const original = runtime.commandOptions(id)
   return {
     id,
+    capture(
+      action: TableAction,
+      seen?: PublicSessionSnapshot,
+    ): TableIntent | null {
+      const current = snapshot()
+      if (
+        !current ||
+        !available() ||
+        (seen && source(seen) !== source(current))
+      )
+        return null
+      const legal = heroActions(current).find(
+        (item) => item.type === action.type,
+      )
+      if (!legal && !betweenHands(current)) return null
+      return {
+        scope: token,
+        epoch,
+        sessionId: id,
+        stateVersion: current.stateVersion,
+        handId:
+          current.hand?.handId ??
+          current.lastCompletedHandSummary?.handId ??
+          null,
+        action,
+        seenAmount:
+          legal?.type === 'call'
+            ? legal.amount
+            : legal?.type === 'allIn'
+              ? legal.target
+              : null,
+        stack: current.seats.find((seat) => seat.isUser)!.stack,
+      }
+    },
+    intentValid(this: void, intent: TableIntent) {
+      const current = snapshot()
+      if (
+        !current ||
+        !available() ||
+        intent.scope !== token ||
+        intent.epoch !== epoch ||
+        intent.sessionId !== id ||
+        intent.stateVersion !== current.stateVersion ||
+        intent.handId !==
+          (current.hand?.handId ??
+            current.lastCompletedHandSummary?.handId ??
+            null)
+      )
+        return false
+      const action = intent.action
+      if (['fold', 'check', 'call', 'allIn'].includes(action.type)) {
+        const legal = heroActions(current).find(
+          (item) => item.type === action.type,
+        )
+        return (
+          !!legal &&
+          (legal.type !== 'call' || legal.amount === intent.seenAmount) &&
+          (legal.type !== 'allIn' || legal.target === intent.seenAmount)
+        )
+      }
+      if (!betweenHands(current)) return false
+      const stack = current.seats.find((seat) => seat.isUser)!.stack
+      if (action.type === 'rebuy')
+        return (
+          stack === intent.stack &&
+          (stack === 0
+            ? action.amount === 2000
+            : positiveAmount(String(action.amount), 1, rebuyLimit(stack)) !==
+              null)
+        )
+      return (
+        action.type === 'endSession' ||
+        (action.type === 'startNextHand' && stack > 0)
+      )
+    },
+    intentOptions(isCurrent: (intent: TableIntent) => boolean) {
+      const valid = this.intentValid
+      return mutationOptions({
+        ...writePolicy,
+        mutationFn: (intent: TableIntent, context) => {
+          if (!valid(intent) || !isCurrent(intent))
+            throw new TableIntentError('操作意图已失效，请重新选择。')
+          const action = intent.action
+          if (action.type === 'rebuy')
+            return original.mutationFn!(
+              { type: 'rebuy', payload: { amount: action.amount } },
+              context,
+            )
+          if (action.type === 'startNextHand' || action.type === 'endSession')
+            return original.mutationFn!(
+              { type: action.type, payload: {} },
+              context,
+            )
+          return original.mutationFn!(
+            {
+              type: 'playerAction',
+              payload: { action: { type: action.type } },
+            },
+            context,
+          )
+        },
+      })
+    },
     table,
     animation,
     mount() {
@@ -106,6 +254,7 @@ export function createTableScope(
       reconcile()
       return () => {
         mounted = false
+        epoch++
         offRuntime()
         offQuery()
         offEffects()
@@ -161,18 +310,16 @@ export function createTableScope(
           const live = table.getState().betDraft
           // 输入对象本身是本次编辑的引用；清除后重新输入同值也不是旧意图。
           if (!validDraft(draft) || live !== draft)
-            throw new Error('下注草稿已失效，请重新输入。')
+            throw new TableIntentError('下注草稿已失效，请重新输入。')
           const legal = legalAction(draft.action)
           const amount = Number(draft.input)
           if (
-            !/^[1-9]\d*$/.test(draft.input) ||
-            !Number.isSafeInteger(amount) ||
             !legal ||
             (legal.type !== 'bet' && legal.type !== 'raise') ||
-            amount < legal.minTarget ||
-            amount > legal.maxTarget
+            positiveAmount(draft.input, legal.minTarget, legal.maxTarget) ===
+              null
           )
-            throw new Error('请输入合法范围内的正整数金额。')
+            throw new TableIntentError('请输入合法范围内的正整数金额。')
           const action = PokerActionSchema.parse({
             type: draft.action,
             targetStreetCommitment: amount,

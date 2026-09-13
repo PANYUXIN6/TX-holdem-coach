@@ -1,3 +1,4 @@
+import { useTableKeyboardViewport } from './table/keyboard-viewport.js'
 import { SetupScope, SetupErrorReset } from './session-setup/react.js'
 import { ConfirmationHost } from './ui/confirmation-host.js'
 import { useOverlayUi } from './ui/react.js'
@@ -56,6 +57,8 @@ export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
     getOrientation,
     () => false,
   )
+  const canvas = useRef<HTMLDivElement>(null)
+  useTableKeyboardViewport(canvas, id === 'table' && !rotated)
   const heading = useRef<HTMLHeadingElement>(null)
   const content = useRef<HTMLElement>(null)
   const rotationHeading = useRef<HTMLHeadingElement>(null)
@@ -75,7 +78,7 @@ export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
     <ModalEnvironment
       value={{ rotated, routeKey: location.pathname, confirmationOpen }}
     >
-      <div className="phone-canvas">
+      <div className="phone-canvas" ref={canvas}>
         <div
           className={`page-layout layout-${handle.layout}`}
           hidden={rotated}

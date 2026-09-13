@@ -4,6 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, useRoutes } from 'react-router'
 import {
   PublicSessionSnapshotSchema,
+  CommandRequestSchema,
   type PublicSessionSnapshot,
 } from '@tx-holdem-coach/contracts'
 import { Page } from '../src/Pages.js'
@@ -13,7 +14,7 @@ import { createQueryClient } from '../src/query/client.js'
 import { createSessionRuntime } from '../src/session-sync/runtime.js'
 import { SessionRuntimeProvider } from '../src/session-sync/react.js'
 import { OverlayUiProvider } from '../src/ui/react.js'
-import { tableSnapshot, completeTable } from './table-fixtures.js'
+import { tableSnapshot, completeTable, splitTable } from './table-fixtures.js'
 import { ids } from './fixtures.js'
 import '../src/styles.css'
 const search = new URLSearchParams(location.search)
@@ -89,7 +90,9 @@ if (search.has('statuses')) {
     },
   })
 }
+if (search.has('actions')) snapshot.hand!.legalActions = []
 if (search.has('complete')) snapshot = completeTable(snapshot)
+if (search.has('split')) snapshot = splitTable()
 if (search.has('long'))
   snapshot.seats = snapshot.seats.map((seat) => ({
     ...seat,
@@ -99,6 +102,36 @@ if (search.has('long'))
 let failure = ''
 const streams = new Set<ReadableStreamDefaultController<Uint8Array>>()
 const requests: string[] = []
+const commands: unknown[] = []
+let commandMode = 'normal'
+let releaseCommand: (() => void) | null = null
+let held: Promise<void> | null = null
+let lastCommandId = ''
+const hero = () =>
+  PublicSessionSnapshotSchema.parse({
+    ...snapshot,
+    agentRunState: 'idle',
+    activeDecision: null,
+    hand: {
+      ...snapshot.hand!,
+      currentActorSeatNumber: 0,
+      legalActions: [
+        { type: 'fold' },
+        { type: 'call', amount: 80 },
+        {
+          type: 'raise',
+          minTarget: 200,
+          maxTarget: 1999,
+          suggestedTargets: [
+            { kind: 'minimum', targetStreetCommitment: 200 },
+            { kind: 'halfPot', targetStreetCommitment: 300 },
+            { kind: 'pot', targetStreetCommitment: 600 },
+          ],
+        },
+        { type: 'allIn', target: 2000 },
+      ],
+    },
+  })
 const errors: string[] = []
 window.addEventListener('unhandledrejection', (event) =>
   errors.push(String(event.reason)),
@@ -115,7 +148,74 @@ const frame = (
 window.fetch = async (input, init) => {
   const path = String(input)
   requests.push(`${init?.method ?? 'GET'} ${path}`)
-  if (init?.method === 'POST') throw new Error('牌桌展示不得发送扑克命令')
+  if (init?.method === 'POST') {
+    if (!search.has('actions')) throw new Error('牌桌展示不得发送扑克命令')
+    const body = CommandRequestSchema.parse(JSON.parse(String(init.body)))
+    commands.push(body)
+    if (commandMode === 'unknown') {
+      commandMode = 'normal'
+      throw new TypeError('受控断线')
+    }
+    if (commandMode === 'conflict') {
+      commandMode = 'normal'
+      snapshot = {
+        ...snapshot,
+        stateVersion: snapshot.stateVersion + 1,
+        eventSeq: snapshot.eventSeq + 1,
+      }
+      return Response.json(
+        {
+          code: 'STATE_VERSION_CONFLICT',
+          message: '冲突',
+          latestSnapshot: snapshot,
+        },
+        { status: 409 },
+      )
+    }
+    if (lastCommandId !== body.command.commandId) {
+      lastCommandId = body.command.commandId
+      const command = body.command
+      if (command.type === 'playerAction') snapshot = completeTable(snapshot)
+      else if (command.type === 'rebuy')
+        snapshot = {
+          ...snapshot,
+          seats: snapshot.seats.map((seat) =>
+            seat.isUser
+              ? { ...seat, stack: seat.stack + command.payload.amount }
+              : seat,
+          ),
+        }
+      else if (command.type === 'startNextHand') {
+        const next = tableSnapshot(count)
+        const handId = crypto.randomUUID()
+        snapshot = {
+          ...next,
+          stateVersion: snapshot.stateVersion,
+          eventSeq: snapshot.eventSeq,
+          seats: snapshot.seats.map((seat) => ({
+            ...seat,
+            stack: seat.stack || 2000,
+          })),
+          hand: { ...next.hand!, handId },
+          tableDisplay: {
+            ...next.tableDisplay!,
+            hand: { ...next.tableDisplay!.hand!, handId },
+          },
+        }
+      } else if (command.type === 'endSession')
+        snapshot = { ...snapshot, lifecycleStatus: 'ended' }
+      snapshot = PublicSessionSnapshotSchema.parse({
+        ...snapshot,
+        stateVersion:
+          snapshot.stateVersion + (command.type === 'endSession' ? 0 : 1),
+        eventSeq: snapshot.eventSeq + 1,
+      })
+    }
+    if (commandMode === 'sse-first')
+      streams.forEach((stream) => frame(stream, 'actionCommitted'))
+    if (held) await held
+    return Response.json({ snapshot })
+  }
   if (failure)
     return Response.json(
       {
@@ -324,6 +424,47 @@ Object.assign(window, {
     errors,
     runtime,
     snapshot: () => snapshot,
+    commands,
+    hero: (kind?: 'allIn' | 'bet') => {
+      const next = hero()
+      if (kind === 'allIn')
+        next.hand!.legalActions = [{ type: 'allIn', target: 2000 }]
+      if (kind === 'bet')
+        next.hand!.legalActions = [
+          { type: 'check' },
+          {
+            type: 'bet',
+            minTarget: 20,
+            maxTarget: 1999,
+            suggestedTargets: [{ kind: 'minimum', targetStreetCommitment: 20 }],
+          },
+          { type: 'allIn', target: 2000 },
+        ]
+      update(next)
+    },
+    setHidden,
+    setReduced,
+    zero: () =>
+      update({
+        ...completeTable(snapshot.hand ? snapshot : tableSnapshot(count)),
+        seats: snapshot.seats.map((seat) => ({
+          ...seat,
+          stack: seat.isUser || seat.seatNumber === 1 ? 0 : seat.stack,
+        })),
+      }),
+    mode: (mode: string) => {
+      commandMode = mode
+    },
+    hold: () => {
+      held = new Promise((resolve) => {
+        releaseCommand = resolve
+      })
+    },
+    release: () => {
+      releaseCommand?.()
+      held = null
+      releaseCommand = null
+    },
   },
 })
 if (search.has('controls')) {
@@ -506,3 +647,8 @@ environmentCheck.onclick = () => {
     })
 }
 if (search.has('controls')) document.body.append(environmentCheck)
+
+if (search.has('actions'))
+  void import('./table-action-checks.js').then((module) =>
+    module.installActionChecks(),
+  )

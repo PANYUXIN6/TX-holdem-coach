@@ -1,3 +1,4 @@
+import { ModalEnvironment } from '../components/modal.js'
 import { confirmationTargetMatches } from './confirmation.js'
 import {
   createContext,
@@ -108,9 +109,11 @@ export function TableUiProvider({
   const client = useQueryClient()
   const runtime = useSessionRuntime()
   const [scope] = useState(() => createTableScope(id, client, runtime))
+  const { rotated } = useContext(ModalEnvironment)
   useLayoutEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const environment = () => scope.environment(document.hidden, media.matches)
+    const environment = () =>
+      scope.environment(document.hidden || rotated, media.matches)
     environment()
     const release = scope.mount()
     document.addEventListener('visibilitychange', environment)
@@ -120,7 +123,7 @@ export function TableUiProvider({
       media.removeEventListener('change', environment)
       release()
     }
-  }, [scope])
+  }, [scope, rotated])
   return <TableContext value={scope}>{children}</TableContext>
 }
 export function DebugUiProvider({

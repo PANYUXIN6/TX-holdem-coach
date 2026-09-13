@@ -170,3 +170,11 @@ Web 跨页草稿仅存在于两个组桌路由的 React Provider；实体属于 
 Shell 的原 table footer 组合 `TableFooter`，原 PageUiProvider 同时覆盖正文与 footer；`TablePage` 只订阅已有 Query，不额外租用 SSE。工具状态使用原 TableUiStore，底池模态仅保存来源 handId；换手、缺失、离页和危险确认占用使其失效。普通与短屏都使用唯一 main 滚动区，侧席和中央牌面分行，用户固定在底行中央。
 
 原动画批次与 Query 通知可能先后渲染，renderer 对已经接收但尚未绘制的新版本先等待 Query；实际播放核对 Session/版本/手和 Shell 方向。所有动画立即呈现权威终态，有界执行，取消拒绝由 allSettled 消费，旧回调只能 ack 自己的批次。隐藏、减少动态效果、校准、失去资源与终态均停止效果；派奖通过当前摘要的获奖席和中央池同时强调，不以余额差推测轨迹。
+
+## M7.5 行动来源与结算边界
+
+原链扩展为 `TableFooter → ui/table-adapter → runtime.commandOptions → 原 API`。普通下注仍使用不可变 BetDraft 引用；离散行动与两手间控制保存当前页面作用域、版本/手、操作和已见金额，适配器在 Mutation 真正执行时同步复核。来源有效期随环境、同步和业务资格变化失效，不预生成 commandId、不改 runtime 的 canSubmit/resend 语义；存在未决原请求时仅阻止新牌桌命令。
+
+结算只读上一手公开 pots/awards、返还与 seatResults；补码资格读取当前座位余额。正常 endSession 只允许 active/betweenHands/idle 且 hand=null，打开确认后进入新手或 paused 会使原确认失效，暂停中止继续由 M7.6 拥有。正常结束接收沿用 eventSeq/stateVersion 双序列，留在只读牌桌。
+
+Shell 继续拥有唯一画布和方向保护；牌桌金额聚焦时按 VisualViewport 约束画布，可视空间不足时 footer 自身有界滚动，完整结算仍在 main 正文。生产无新增接口、数据库字段、依赖或客户端扑克计算。

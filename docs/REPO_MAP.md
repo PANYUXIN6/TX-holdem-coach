@@ -239,3 +239,11 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/src/table/presentation.ts` 只负责 roster 到九席锚点的固定映射及中文状态；`TablePage.tsx` 从原 `useSession` 读取当前牌、位置、投入和完成手分配，组合工具导航、底池 Modal 与 `TableFooter`。Shell 继续拥有唯一滚动区、方向保护和底部安全区。
 - `apps/web/src/table/effects.tsx` 消费原 TableAnimationStore 的最新批次；原生动画只装饰当前 DOM，等待对应 Query 快照完成渲染后消费，取消或结束时 ack 原批次。`table.css` 使用显式网格行与按内容区高度折叠的工具区。
 - `apps/web/test/table.test.ts`、`session-runtime.test.ts`、`table-browser.tsx`/`table-fixtures.ts` 覆盖锚点、旧块恢复及生产组件生命周期；`test/table.html` 纳入独立浏览器构建，产品没有 Mock 开关。服务端 projector 单元测试与 PostgreSQL E2E m31/m36/m37 分别验证兼容读取、生产出口与旧事件重放校准。
+
+## M7.5 玩家行动与完成手控制
+
+- `apps/web/src/table/TableFooter.tsx`：在原 Shell footer 内渲染合法行动、精确目标与独立全下、补码/下一手/正常结束；局部选择绑定适配器来源，统一禁用 pending 与未决请求的新写入口。
+- `apps/web/src/table/actions.ts`：合法动作展示、两手间资格与精确金额的纯派生；`ui/table-adapter.ts` 复用这些函数，在实际 Mutation 执行时核对作用域、版本、阶段、已见金额、原选择引用和恢复门禁，再同步调用原 runtime。
+- `apps/web/src/table/TablePage.tsx`：正文原生折叠结算复用 PotDetails，逐席读取冻结 seatResults 和公开牌型；footer 只保留紧凑结果及展开导航。
+- `apps/web/src/table/keyboard-viewport.ts`：由 Shell 在牌桌金额聚焦时接入 VisualViewport，释放失焦、隐藏、路由与横屏时的临时布局；无真机键盘通过声明。
+- `apps/web/test/table-actions.test.ts`、`ui-coordination.test.ts` 覆盖金额、来源竞态、未决请求与原请求重发；`table-action-checks.ts`、`table-browser.tsx?actions` 以及 `home-transport.ts` 的 actions 场景以受控 HTTP/SSE 验证真实页面旅程。展示夹具仍保留独立零 POST 断言。

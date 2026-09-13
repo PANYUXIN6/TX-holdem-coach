@@ -178,3 +178,44 @@ export function completeTable(
     },
   })
 }
+
+/** 固定九席、多池、奇数筹码平分与未跟注返还的公开结算样本。 */
+export function splitTable(): PublicSessionSnapshot {
+  const snapshot = completeTable(tableSnapshot(9))
+  const summary = snapshot.lastCompletedHandSummary!
+  summary.pots[0] = {
+    potIndex: 0,
+    kind: 'main',
+    amount: 899,
+    winningSeatNumbers: [0, 8],
+    awards: [
+      { seatNumber: 8, amount: 450 },
+      { seatNumber: 0, amount: 449 },
+    ],
+  }
+  summary.uncalledBetReturns = [{ seatNumber: 1, amount: 1 }]
+  for (const result of summary.seatResults) {
+    const difference =
+      result.seatNumber === 0
+        ? 449
+        : result.seatNumber === 1
+          ? 1
+          : result.seatNumber === 8
+            ? -450
+            : 0
+    result.endingStack += difference
+    result.netChange += difference
+  }
+  snapshot.seats = snapshot.seats.map((seat) => ({
+    ...seat,
+    stack: summary.seatResults.find(
+      (result) => result.seatNumber === seat.seatNumber,
+    )!.endingStack,
+  }))
+  summary.revealedHands = summary.revealedHands.map((hand) =>
+    hand.seatNumber === 1
+      ? { ...hand, holeCards: null, handEvaluation: null }
+      : hand,
+  )
+  return PublicSessionSnapshotSchema.parse(snapshot)
+}

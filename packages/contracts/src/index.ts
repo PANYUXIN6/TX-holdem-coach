@@ -1912,6 +1912,52 @@ export const PublicHandSnapshotSchema = z.strictObject({
   actionTimeline: z.array(PublicActionTimelineEntrySchema),
 })
 
+export const PublicTableDisplaySchema = z.strictObject({
+  completedHandCount: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(Number.MAX_SAFE_INTEGER),
+  blinds: z.strictObject({
+    smallBlind: z.literal(10),
+    bigBlind: z.literal(20),
+  }),
+  hand: z
+    .strictObject({
+      handId: HandIdSchema,
+      buttonSeatNumber: SeatNumberSchema,
+      seats: z
+        .array(
+          z.strictObject({
+            seatNumber: SeatNumberSchema,
+            position: PublicLogicalPositionSchema,
+            streetContribution: ChipAmountSchema,
+          }),
+        )
+        .min(6)
+        .max(9),
+      potBreakdown: z.strictObject({
+        pots: z
+          .array(
+            z.strictObject({
+              potIndex: z.number().int().nonnegative(),
+              kind: z.enum(['main', 'side']),
+              amount: ChipAmountSchema.refine((value) => value > 0),
+            }),
+          )
+          .max(9),
+        unmatchedContribution: z
+          .strictObject({
+            seatNumber: SeatNumberSchema,
+            amount: ChipAmountSchema.refine((value) => value > 0),
+          })
+          .nullable(),
+      }),
+    })
+    .nullable(),
+})
+export type PublicTableDisplay = z.infer<typeof PublicTableDisplaySchema>
+
 export const PublicSessionSnapshotSchema = z
   .strictObject({
     sessionId: SessionIdSchema,
@@ -1921,11 +1967,56 @@ export const PublicSessionSnapshotSchema = z
     lifecycleStatus: SessionLifecycleSchema,
     agentRunState: AgentRunStateSchema,
     activeDecision: AgentDecisionSummarySchema.nullable(),
+    tableDisplay: PublicTableDisplaySchema.optional(),
     seats: z.array(PublicSeatSchema).min(6).max(9),
     hand: PublicHandSnapshotSchema.nullable(),
     lastCompletedHandSummary: PublicCompletedHandSummarySchema.nullable(),
   })
   .superRefine((snapshot, context) => {
+    const display = snapshot.tableDisplay
+    if (display !== undefined) {
+      const hand = display.hand
+      const invalid = () =>
+        context.addIssue({
+          code: 'custom',
+          path: ['tableDisplay'],
+          message: '牌桌展示必须与同手座位、庄家及底池一致。',
+        })
+      if ((hand === null) !== (snapshot.hand === null)) invalid()
+      if (hand !== null) {
+        const expected = snapshot.seats.filter((seat) => seat.status !== 'out')
+        const unmatched = hand.potBreakdown.unmatchedContribution
+        const total = hand.potBreakdown.pots.reduce(
+          (sum, pot) => sum + pot.amount,
+          unmatched?.amount ?? 0,
+        )
+        if (
+          hand.handId !== snapshot.hand?.handId ||
+          hand.seats.length !== expected.length ||
+          hand.seats.some(
+            (seat, index) => seat.seatNumber !== expected[index]?.seatNumber,
+          ) ||
+          new Set(hand.seats.map((seat) => seat.position)).size !==
+            hand.seats.length ||
+          hand.seats.find((seat) => seat.position === 'BTN')?.seatNumber !==
+            hand.buttonSeatNumber ||
+          !hand.seats.some((seat) => seat.position === 'SB') ||
+          !hand.seats.some((seat) => seat.position === 'BB') ||
+          (unmatched !== null &&
+            !hand.seats.some(
+              (seat) => seat.seatNumber === unmatched.seatNumber,
+            )) ||
+          hand.potBreakdown.pots.some(
+            (pot, index) =>
+              pot.potIndex !== index ||
+              pot.kind !== (index === 0 ? 'main' : 'side'),
+          ) ||
+          !Number.isSafeInteger(total) ||
+          total !== snapshot.hand?.pot
+        )
+          invalid()
+      }
+    }
     const seatNumbers = new Set<number>()
     let userCount = 0
 

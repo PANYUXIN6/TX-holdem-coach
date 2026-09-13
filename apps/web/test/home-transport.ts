@@ -1,3 +1,4 @@
+import { tableSnapshot } from './table-fixtures.js'
 import { setupPersonas, rosterPreview } from './setup-fixtures.js'
 import {
   PublicSessionSnapshotSchema,
@@ -55,9 +56,9 @@ export function homeTransport(initial = 'empty') {
   const requests: string[] = []
   const bodies: unknown[] = []
   let created = false
-  const snapshot = PublicSessionSnapshotSchema.parse(publicSnapshot)
+  const snapshot = PublicSessionSnapshotSchema.parse(tableSnapshot(9))
   snapshot.seats = Array.from({ length: 9 }, (_, n) => ({
-    ...snapshot.seats[n % 6]!,
+    ...snapshot.seats[n]!,
     seatNumber: n,
     isUser: n === 0,
     displayName: n === 0 ? '玩家' : `善于思考的长名字对手 ${n}`,

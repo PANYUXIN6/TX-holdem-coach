@@ -1,3 +1,7 @@
+import {
+  PublicSessionSnapshotSchema,
+  SseEventSchema,
+} from '@tx-holdem-coach/contracts'
 import { randomUUID } from 'node:crypto'
 import type { Sql } from 'postgres'
 import { expect } from 'vitest'
@@ -45,6 +49,19 @@ export async function assertM36PublicProjectionRuntime(
       }
     }
     expect(createdBody.snapshot.eventSeq).toBe(1)
+    const createdSnapshot = PublicSessionSnapshotSchema.parse(
+      createdBody.snapshot,
+    )
+    expect(createdSnapshot.tableDisplay).toMatchObject({
+      completedHandCount: 0,
+      blinds: { smallBlind: 10, bigBlind: 20 },
+      hand: { handId: createdSnapshot.hand!.handId },
+    })
+    expect(
+      createdSnapshot
+        .tableDisplay!.hand!.seats.map((seat) => seat.streetContribution)
+        .sort((a, b) => a - b),
+    ).toEqual([0, 0, 0, 0, 10, 20])
 
     const active = await app.request(`${BASE_URL}/api/sessions/active`)
     const byId = await app.request(
@@ -52,7 +69,12 @@ export async function assertM36PublicProjectionRuntime(
     )
     expect(active.status).toBe(200)
     expect(byId.status).toBe(200)
-    expect(await active.json()).toEqual(await byId.json())
+    const activeBody = await active.json()
+    const readBody = await byId.json()
+    expect(activeBody).toEqual(readBody)
+    expect(readBody).toMatchObject({
+      snapshot: { tableDisplay: createdSnapshot.tableDisplay },
+    })
 
     const rows = await sql<
       { readonly eventSeq: number; readonly publicEvent: unknown }[]
@@ -63,6 +85,12 @@ export async function assertM36PublicProjectionRuntime(
     ORDER BY event_seq
   `
     expect(rows.map((row) => row.eventSeq)).toEqual([0, 1])
+    for (const row of rows) {
+      const event = SseEventSchema.parse(row.publicEvent)
+      expect(event.payload.snapshot.tableDisplay).toEqual(
+        createdSnapshot.tableDisplay,
+      )
+    }
     const serialized = JSON.stringify(rows)
     for (const forbidden of [
       'remainingDeck',

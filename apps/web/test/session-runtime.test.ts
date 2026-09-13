@@ -1,3 +1,4 @@
+import { tableSnapshot } from './table-fixtures.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MutationObserver, QueryObserver } from '@tanstack/react-query'
 import {
@@ -632,4 +633,35 @@ it('没有实时消费者时 refresh 保留显式读取，不等待不存在的�
   const { runtime, streams } = setup()
   await expect(runtime.refresh(ids.session)).resolves.toEqual(snap())
   expect(streams).toHaveLength(0)
+})
+
+it('M7.4 旧事件不借用另一版本展示块，同游标 GET 校准补齐且不补播', async () => {
+  let current = { ...tableSnapshot(6), stateVersion: 4, eventSeq: 8 }
+  const { runtime, client, streams, acquire, fetcher } = setup(async () =>
+    json({ snapshot: current }),
+  )
+  const effects = vi.fn()
+  cleanup.push(runtime.subscribeEffects(ids.session, effects))
+  acquire()
+  streams[0]!.options.onEvent(event())
+  await flush()
+  expect(runtime.getStatus(ids.session)).toBe('ready')
+  expect(client.getQueryData(keys.session(ids.session))).toEqual(current)
+  const { tableDisplay: _, ...old } = current
+  const legacy = { ...old, stateVersion: 5, eventSeq: 9 }
+  const replay = {
+    ...event(9, 5, 'actionCommitted'),
+    payload: { snapshot: legacy },
+  }
+  streams[0]!.options.onEvent(replay)
+  expect(client.getQueryData(keys.session(ids.session))).toEqual(legacy)
+  const calls = effects.mock.calls.length
+  streams[0]!.options.onEvent(replay)
+  expect(effects).toHaveBeenCalledTimes(calls)
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  current = { ...current, stateVersion: 5, eventSeq: 9 }
+  streams[0]!.options.onEvent({ ...replay, type: 'snapshot' })
+  await flush()
+  expect(client.getQueryData(keys.session(ids.session))).toEqual(current)
+  expect(effects).toHaveBeenCalledTimes(calls)
 })

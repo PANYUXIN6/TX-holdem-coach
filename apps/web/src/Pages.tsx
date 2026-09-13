@@ -1,13 +1,12 @@
+import { TablePage } from './table/TablePage.js'
 import { SetupPage } from './session-setup/SetupPage.js'
 import { EmptyState, StatusBadge } from './components/controls.js'
 import { Home } from './home/Home.js'
 import { Link, useParams } from 'react-router'
-import { paths, resourcePath, sessionHistoryPath } from './navigation.js'
+import { paths } from './navigation.js'
 import type { PageId } from './navigation.js'
 
 const descriptions: Partial<Record<PageId, string>> = {
-  table:
-    '牌桌控件将在后续接入。此地址指定目标场次，场次是否可用以服务端状态为准。',
   currentHand: '本手流程视图将在后续接入。',
   agents: 'AI 状态详情将在调用查询接入后显示。',
   history: '历史列表与筛选将在查询功能接入后开放。当前尚未读取手牌记录。',
@@ -21,6 +20,7 @@ const descriptions: Partial<Record<PageId, string>> = {
 
 export function Page({ id }: { id: PageId }) {
   const params = useParams()
+  if (id === 'table') return <TablePage />
   if (id === 'home') return <Home />
   if (id === 'newSession' || id === 'confirm')
     return <SetupPage confirm={id === 'confirm'} />
@@ -54,19 +54,6 @@ export function Page({ id }: { id: PageId }) {
           <Link to={paths.debug}>
             调试入口说明 <span aria-hidden="true">↗</span>
           </Link>
-        ) : null}
-        {id === 'table' ? (
-          <>
-            <Link to={resourcePath('currentHand', params.sessionId!)}>
-              本手流程 <span aria-hidden="true">↗</span>
-            </Link>
-            <Link to={resourcePath('agents', params.sessionId!)}>
-              AI 状态 <span aria-hidden="true">↗</span>
-            </Link>
-            <Link to={sessionHistoryPath(params.sessionId!)}>
-              本场历史 <span aria-hidden="true">↗</span>
-            </Link>
-          </>
         ) : null}
       </div>
     </>

@@ -3,7 +3,8 @@ import { ConfirmationHost } from './ui/confirmation-host.js'
 import { useOverlayUi } from './ui/react.js'
 import { ModalEnvironment } from './components/modal.js'
 import { SessionRouteFeedback } from './session-sync/feedback.js'
-import { StatusBadge } from './components/controls.js'
+import { SessionPathParamsSchema } from '@tx-holdem-coach/contracts'
+import { TableFooter } from './table/TablePage.js'
 import { PageUiProvider } from './ui/react.js'
 import { SessionRouteBridge } from './session-sync/react.js'
 import {
@@ -125,12 +126,13 @@ export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
                   </main>
                   {handle.layout === 'table' ? (
                     <footer className="table-actions">
-                      {tableActions ?? (
-                        <>
-                          <StatusBadge>功能待接入</StatusBadge>
-                          牌桌操作将在功能接入后开放
-                        </>
-                      )}
+                      {tableActions ??
+                        (SessionPathParamsSchema.safeParse(matched.params)
+                          .success ? (
+                          <TableFooter
+                            id={matched.params.sessionId!.toLowerCase()}
+                          />
+                        ) : null)}
                     </footer>
                   ) : null}
                 </SessionRouteFeedback>

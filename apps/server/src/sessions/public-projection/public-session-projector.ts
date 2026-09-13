@@ -1,3 +1,6 @@
+import { assignLogicalPositions } from '../../poker/positioning.js'
+import { projectContributionLayers } from '../../poker/contribution-layers.js'
+import type { PublicTableDisplay } from '@tx-holdem-coach/contracts'
 import {
   PublicSessionSnapshotSchema,
   type PublicCompletedHandSummary,
@@ -130,7 +133,7 @@ function mergeCurrentHandEvents(
 
 export function projectPublicSessionSnapshot(
   facts: PublicSessionProjectionFacts,
-): PublicSessionSnapshot {
+): PublicSessionSnapshot & { tableDisplay: PublicTableDisplay } {
   try {
     const { state, session } = facts
     if (
@@ -244,7 +247,61 @@ export function projectPublicSessionSnapshot(
         : null
     if (session.agentRunState === 'thinking' && activeDecision === null) fail()
 
+    const participants = seats.filter((seat) =>
+      state.poker.hand?.holeCards.some(
+        (cards) => cards.seatNumber === seat.seatNumber,
+      ),
+    )
+    const layers =
+      hand === null
+        ? null
+        : projectContributionLayers({ pot: hand.pot, seats: participants })
+    const unmatched = layers?.uncalledContributionCandidate
+    const tableDisplay: PublicTableDisplay = {
+      completedHandCount: state.completedHandCount,
+      blinds: {
+        smallBlind: state.poker.blinds.smallBlind,
+        bigBlind: state.poker.blinds.bigBlind,
+      },
+      hand:
+        hand === null
+          ? null
+          : {
+              handId: hand.handId,
+              buttonSeatNumber: state.poker.buttonSeatNumber,
+              seats: [
+                ...assignLogicalPositions(
+                  state.poker.buttonSeatNumber,
+                  participants.map((seat) => seat.seatNumber),
+                ),
+              ]
+                .sort((a, b) => a.seatNumber - b.seatNumber)
+                .map(({ seatNumber, position }) => ({
+                  seatNumber,
+                  position,
+                  streetContribution: participants.find(
+                    (seat) => seat.seatNumber === seatNumber,
+                  )!.streetContribution,
+                })),
+              potBreakdown: {
+                pots: layers!.layers
+                  .filter((layer) => layer.layerIndex !== unmatched?.layerIndex)
+                  .map((layer, potIndex) => ({
+                    potIndex,
+                    kind: potIndex === 0 ? 'main' : 'side',
+                    amount: layer.amount,
+                  })),
+                unmatchedContribution: unmatched
+                  ? {
+                      seatNumber: unmatched.seatNumber,
+                      amount: unmatched.amount,
+                    }
+                  : null,
+              },
+            },
+    }
     const snapshot = PublicSessionSnapshotSchema.parse({
+      tableDisplay,
       sessionId: session.sessionId,
       stateVersion: state.stateVersion,
       eventSeq: facts.eventSeq,
@@ -260,7 +317,7 @@ export function projectPublicSessionSnapshot(
           ? mapCompletedHandSummary(state.lastCompletedHandSummary)
           : null,
     })
-    return deepFreeze(snapshot)
+    return deepFreeze({ ...snapshot, tableDisplay })
   } catch (error) {
     if (error instanceof PublicProjectionInvariantError) throw error
     throw new PublicProjectionInvariantError()

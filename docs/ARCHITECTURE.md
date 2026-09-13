@@ -162,3 +162,11 @@ Web 跨页草稿仅存在于两个组桌路由的 React Provider；实体属于 
 `ConfirmPage → session-setup/opening → Query / session runtime → API`。草稿仅增加目标席；历史目标集合保持原占席集合。确认页显式 GET 配置，手动检测保留原 Mutation 的摘要刷新生命周期；检测结果不替代 `canCreateSession`。
 
 点击开场捕获草稿引用并同步互斥，取消旧读取后复核 active、配置和对应来源。Query 对象/状态变化或页面失效均终止旧授权；最终 Schema 校验与原 `createOptions().mutationFn` 同步衔接。写入后的快照、active 与全局 creating 由原 runtime 拥有，确认页只导航和展示恢复入口；活动冲突保持失败 Mutation 并进入认证目标，其余不确定结果要求重新定位或用户重新确认，不自动重发。离页后旧页面不导航、不清理新草稿；成功离开两步 Provider 时自然释放原草稿，牌桌路由接管已有快照与同步租用。
+
+## M7.4 公开展示与 DOM 效果边界
+
+同步 `public-session-projector → Contracts.tableDisplay → 原 HTTP/SSE/命令出口 → Session Query → table/` 补齐完成手数、庄盲位置、本街投入与进行中底池层。分层复用 poker 的 contribution-layers，单人最高层仅在展示中标为未匹配投入；完成手分配与返还始终读取公开摘要。历史公开事件和账本可缺省整块，但坏块拒绝；新 projector 返回类型强制完整，不迁移或重写旧数据。Web 不跨版本拼接展示块，不改变原 canSubmit 或同步屏障。
+
+Shell 的原 table footer 组合 `TableFooter`，原 PageUiProvider 同时覆盖正文与 footer；`TablePage` 只订阅已有 Query，不额外租用 SSE。工具状态使用原 TableUiStore，底池模态仅保存来源 handId；换手、缺失、离页和危险确认占用使其失效。普通与短屏都使用唯一 main 滚动区，侧席和中央牌面分行，用户固定在底行中央。
+
+原动画批次与 Query 通知可能先后渲染，renderer 对已经接收但尚未绘制的新版本先等待 Query；实际播放核对 Session/版本/手和 Shell 方向。所有动画立即呈现权威终态，有界执行，取消拒绝由 allSettled 消费，旧回调只能 ack 自己的批次。隐藏、减少动态效果、校准、失去资源与终态均停止效果；派奖通过当前摘要的获奖席和中央池同时强调，不以余额差推测轨迹。

@@ -232,3 +232,10 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/src/session-setup/ConfirmPage.tsx`：确认路由的固定规则、版本/座位控件、Provider 挂载读取与显式检测；页面操作引用保护、错误恢复及导航。离开两步流程由原 Provider 卸载清理草稿。
 - `apps/web/src/session-setup/opening.ts`：取消旧 GET 后重新读取 active、Provider 及所需来源，核对 Query 对象/状态和当前草稿，再同步委托原 runtime 创建 Mutation；不拥有 API POST 或快照。
 - `apps/web/test/session-opening.test.ts`、`session-setup.test.ts`、`query.test.ts` 与独立 `home-browser.tsx`/`home-transport.ts`：排座、全员绑定、复核失效、单写恢复、检测刷新分离与浏览器交接证据。牌桌同步仍由 `SessionRouteBridge` 租用，真实牌桌控件属于 M7.4/M7.5。
+
+## M7.4 牌桌公开展示
+
+- `packages/contracts/src/index.ts` 的 `PublicTableDisplaySchema` 提供完整展示块校验；历史公开载荷允许整块缺省。`apps/server/src/sessions/public-projection/public-session-projector.ts` 强制输出展示块，复用 poker positioning 与 contribution-layers，不增加查询或私有数据出口。
+- `apps/web/src/table/presentation.ts` 只负责 roster 到九席锚点的固定映射及中文状态；`TablePage.tsx` 从原 `useSession` 读取当前牌、位置、投入和完成手分配，组合工具导航、底池 Modal 与 `TableFooter`。Shell 继续拥有唯一滚动区、方向保护和底部安全区。
+- `apps/web/src/table/effects.tsx` 消费原 TableAnimationStore 的最新批次；原生动画只装饰当前 DOM，等待对应 Query 快照完成渲染后消费，取消或结束时 ack 原批次。`table.css` 使用显式网格行与按内容区高度折叠的工具区。
+- `apps/web/test/table.test.ts`、`session-runtime.test.ts`、`table-browser.tsx`/`table-fixtures.ts` 覆盖锚点、旧块恢复及生产组件生命周期；`test/table.html` 纳入独立浏览器构建，产品没有 Mock 开关。服务端 projector 单元测试与 PostgreSQL E2E m31/m36/m37 分别验证兼容读取、生产出口与旧事件重放校准。

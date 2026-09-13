@@ -35,6 +35,7 @@ function createPublicSeat(seatNumber: number) {
   }
 }
 
+// 有意保留旧公开载荷；M7.4 新生产形态见 table-fixtures.ts。
 export const publicSnapshot = {
   sessionId: ids.session,
   stateVersion: 4,

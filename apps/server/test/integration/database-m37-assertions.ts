@@ -76,6 +76,14 @@ export async function assertM37SessionEventReplay(
       }
     }
 
+    // A persisted pre-M7.4 event has no display block. Preserve its replay,
+    // while calibration is regenerated from the current private state.
+    await sql`
+      UPDATE app_private.session_events
+      SET public_event_payload = public_event_payload #- '{payload,snapshot,tableDisplay}'
+      WHERE session_id = ${createdBody.snapshot.sessionId}::uuid
+    `
+
     const replayResponse = await app.request(
       `${BASE_URL}/api/sessions/${createdBody.snapshot.sessionId}/events`,
       { headers: { Origin: ORIGIN, 'Last-Event-ID': '0' } },
@@ -86,6 +94,12 @@ export async function assertM37SessionEventReplay(
       [1, 'handStarted'],
       [1, 'snapshot'],
     ])
+
+    expect(replay[0]!.payload.snapshot.tableDisplay).toBeUndefined()
+    expect(replay[1]!.payload.snapshot.tableDisplay).toMatchObject({
+      completedHandCount: 0,
+      blinds: { smallBlind: 10, bigBlind: 20 },
+    })
 
     const initialResponse = await app.request(
       `${BASE_URL}/api/sessions/${createdBody.snapshot.sessionId}/events`,

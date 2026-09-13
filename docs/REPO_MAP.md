@@ -212,7 +212,7 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/src/Pages.tsx` 的 home 分支 → `apps/web/src/home/Home.tsx`：编排活动定位、最近五场、独立 ended 存在性、Provider 与活动手数查询，独立呈现错误及恢复入口；沿用 Shell 和基础视觉组件。
 - `apps/web/src/home/model.ts`：有界列表参数、准备入口资格、本地时间和服务端结算展示；不保存实体、不负责创建。
 - 首页使用原 `runtime.activeOptions()` 接收快照，在子组件通过 `session-sync/react.tsx` 的 `useSession(id, { enabled: false })` 观察原 Session 键，并订阅该键有效性以响应移除/失效；读取开关由 hook 拥有，默认调用行为保持启用，不租用 SSE、不发额外详情 GET。
-- `apps/web/src/navigation.ts` 的 `newSessionPath/parseRosterSource` 统一组桌来源意图；M7.2 `session-setup/` 消费有效/非法 URL，承接真实选择与确认摘要。
+- `apps/web/src/navigation.ts` 的 `newSessionPath/parseRosterSource` 统一组桌来源意图；M7.2 `session-setup/` 消费有效/非法 URL，承接真实选择与确认开场。
 - `apps/web/test/home.test.ts` 覆盖入口、结算、URL 与真实 Query/runtime；`home-transport.ts`、`home-browser.tsx`、`home.html`、`home-vite.config.ts` 提供独立传输与页面刷新验收；`session-hook-browser.tsx` 验证真实 hook 的禁用/默认读取、缓存更新与无 SSE 租用。`build-browser-fixture.mjs` 编译独立目录，生产构建不包含夹具。
 
 
@@ -221,6 +221,14 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/server/src/persistence/roster-preview-repository.ts`：在同一 repeatable-read 只读事务定位最新 ended 与认证全员快照；沿用 `session-repository.ts` 的结束时间排序和 Codec。
 - `apps/server/src/sessions/roster-preview-service.ts` → `http/session-routes.ts` 的 `GET /api/sessions/roster-preview/latest-ended`：检查模型准入后逐字段投影公开历史人物，不读取记忆或 Provider 配置。
 - Contracts 的预览响应与可选 preview 绑定 → `sessions/roster-preparation.ts` preflight → 原 `session-creation-repository.ts` 锁内再次认证全员配置、占用座位集合并按目标座位匹配新身份。无 preview 的原创建语义保留。
-- `apps/web/src/session-setup/model.ts`、`react.tsx`、`SetupPage.tsx`：纯引用草稿、两步限定 Provider、目录和历史选择页及确认摘要。Shell 在 pathname 错误边界外装配并在错误 fallback 清理草稿；离开两步或切换来源卸载。
+- `apps/web/src/session-setup/model.ts`、`react.tsx`、`SetupPage.tsx`：纯引用草稿（含目标座位）、两步限定 Provider、目录和历史选择页。Shell 在 pathname 错误边界外装配并在错误 fallback 清理草稿；离开两步或切换来源卸载。
 - Web `api/client.ts` / `query/options.ts` 提供精确预览；`query/mutations.ts` 在删除、清空时取消并 reset 预览以通知现有观察者；`query/session-resources.ts` 接入结束、recovery、创建失效。
-- `apps/server/test/integration/roster-preview-assertions.ts` 纳入 database m23；绑定创建纳入 PostgreSQL E2E m32。Web `test/session-setup.test.ts`、`query.test.ts` 以及独立首页浏览器夹具覆盖引用规则和产品交接。M7.3 接续排座 UI、提交刷新及实际开场。
+- `apps/server/test/integration/roster-preview-assertions.ts` 纳入 database m23；绑定创建纳入 PostgreSQL E2E m32。Web `test/session-setup.test.ts`、`query.test.ts` 以及独立首页浏览器夹具覆盖引用规则和产品交接。M7.3 已接入排座 UI、提交复核及实际开场。
+
+
+## M7.3 确认开场
+
+- `apps/web/src/session-setup/model.ts`：普通最小空席分配、交换与随机置换、历史占席集合认证及经 Schema 校验的创建请求派生。
+- `apps/web/src/session-setup/ConfirmPage.tsx`：确认路由的固定规则、版本/座位控件、Provider 挂载读取与显式检测；页面操作引用保护、错误恢复及导航。离开两步流程由原 Provider 卸载清理草稿。
+- `apps/web/src/session-setup/opening.ts`：取消旧 GET 后重新读取 active、Provider 及所需来源，核对 Query 对象/状态和当前草稿，再同步委托原 runtime 创建 Mutation；不拥有 API POST 或快照。
+- `apps/web/test/session-opening.test.ts`、`session-setup.test.ts`、`query.test.ts` 与独立 `home-browser.tsx`/`home-transport.ts`：排座、全员绑定、复核失效、单写恢复、检测刷新分离与浏览器交接证据。牌桌同步仍由 `SessionRouteBridge` 租用，真实牌桌控件属于 M7.4/M7.5。

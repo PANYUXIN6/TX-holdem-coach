@@ -69,7 +69,7 @@ createRoot(document.getElementById('root')!).render(
 // 控件位于手机画布外，用于手动触发真实请求恢复。
 const controls = document.createElement('aside')
 controls.style.cssText =
-  'position:fixed;right:4px;bottom:4px;z-index:100;background:#131d19;max-width:140px;font-size:12px'
+  'position:relative;background:#131d19;max-width:430px;font-size:12px'
 const button = document.createElement('button')
 button.textContent = '夹具：恢复请求'
 button.onclick = () => transport.fail('')
@@ -94,12 +94,15 @@ controls.append(hookCheck, hookResult)
 const requestLog = document.createElement('pre')
 requestLog.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere'
 for (const [label, action] of [
+  ['夹具：暂停活动读取', () => transport.holdActive()],
+  ['夹具：完成活动读取', () => transport.releaseActive()],
   ['夹具：页面错误', () => setPageFailure(true)],
   ['夹具：恢复页面', () => setPageFailure(false)],
   [
     '夹具：查看请求',
     () => {
-      requestLog.textContent = transport.requests.join('\n')
+      requestLog.textContent =
+        transport.requests.join('\n') + '\n' + JSON.stringify(transport.bodies)
     },
   ],
   [

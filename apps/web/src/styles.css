@@ -1002,3 +1002,10 @@ textarea.field-control {
 .persona-card > p {
   margin-top: 14px;
 }
+
+.confirm-seat .persona-heading { flex-wrap: wrap; }
+.confirm-seat h3 { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+.confirm-seat .field { margin-top: 12px; }
+.confirm-seat .field-control { width: 100%; min-width: 0; min-height: 44px; }
+.confirm-seats { display: grid; gap: 12px; }
+.setup-provider-actions { display: grid; gap: 10px; margin-top: 16px; }

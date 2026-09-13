@@ -574,3 +574,39 @@ it('热预览缓存挂载后删除，重置重读成功可接受新阵容并继�
     stopCache()
   }
 })
+
+it('检测成功后的摘要刷新失败保留 Mutation 成功与 Query 错误', async () => {
+  const cache = client()
+  let checked = false
+  const summary = {
+    deepSeek: {
+      configured: true,
+      canCreateSession: true,
+      checkStatus: 'unavailable',
+      lastCheckedAt: '2026-09-10T00:00:00.000Z',
+      errorCode: 'provider_timeout',
+    },
+  }
+  const api = createApi(async (_url, init) => {
+    if (init?.method === 'POST') {
+      checked = true
+      return json(summary)
+    }
+    if (checked) throw new TypeError('offline')
+    return json(summary)
+  })
+  const query = createQueries(api).providers()
+  await cache.fetchQuery(query)
+  const observer = new QueryObserver(cache, { ...query, staleTime: Infinity })
+  const unsubscribe = observer.subscribe(() => {})
+  const mutation = new MutationObserver(
+    cache,
+    createMutations(cache, api).checkProvider(),
+  )
+  expect(await mutation.mutate({ provider: 'deepseek', body: {} })).toEqual(
+    summary,
+  )
+  expect(mutation.getCurrentResult().status).toBe('success')
+  expect(cache.getQueryState(keys.providers())?.status).toBe('error')
+  unsubscribe()
+})

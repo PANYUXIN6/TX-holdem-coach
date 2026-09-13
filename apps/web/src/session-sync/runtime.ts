@@ -711,7 +711,9 @@ export function createSessionRuntime(
     createOptions: () =>
       mutationOptions({
         ...writePolicy,
-        mutationFn: async (body: CreateSessionRequest) => {
+        mutationFn: async (
+          body: CreateSessionRequest,
+        ): Promise<{ sessionId: string | null }> => {
           if (creating || clearing) throw new ApiError('input')
           creating = true
           createTarget = null

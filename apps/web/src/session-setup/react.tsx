@@ -23,12 +23,13 @@ import {
   initialDraft,
   previewMatches,
   readReady,
+  seatsValid,
   setupReducer,
 } from './model.js'
 
 // QueryObserver 的挂载计数不会随 resetQueries 清零；记录本流程内的重置，
 // 让重置后的成功读取重新取得推进资格，仍拒绝仅有挂载前缓存的结果。
-function useSetupQuery<T, K extends QueryKey>(
+export function useSetupQuery<T, K extends QueryKey>(
   options: UseQueryOptions<T, Error, T, K>,
 ) {
   const client = useQueryClient()
@@ -110,7 +111,11 @@ function useSetupState(source: 'current' | 'latestEnded') {
     source === 'current'
       ? readReady(catalog) && catalogMatches(draft, catalog.data?.personas)
       : readReady(preview) && previewMatches(draft.preview, preview.data)
-  const canContinue = sourceReady && readReady(active) && active.data === null
+  const canContinue =
+    sourceReady &&
+    seatsValid(draft, source) &&
+    readReady(active) &&
+    active.data === null
   return { source, draft, dispatch, catalog, preview, active, canContinue }
 }
 const SetupContext = createContext<ReturnType<typeof useSetupState> | null>(

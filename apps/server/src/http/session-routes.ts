@@ -1,4 +1,5 @@
 import {
+  LatestEndedRosterPreviewResponseSchema,
   CommandRequestSchema,
   CommandResponseSchema,
   CreateSessionRequestSchema,
@@ -25,6 +26,7 @@ export interface PublicSessionQueryService {
 }
 
 export interface SessionHttpPorts {
+  readonly rosterPreview: import('../sessions/roster-preview-service.js').RosterPreviewService
   readonly creation: SessionCreationService
   readonly query: PublicSessionQueryService
   readonly commands: SessionCommandExecutor
@@ -51,6 +53,14 @@ export function registerSessionRoutes(
     }
     return jsonResponse(context, ErrorResponseSchema, result.response, 409)
   })
+
+  app.get('/api/sessions/roster-preview/latest-ended', async (context) =>
+    jsonResponse(
+      context,
+      LatestEndedRosterPreviewResponseSchema,
+      await ports.rosterPreview.read(),
+    ),
+  )
 
   app.get('/api/sessions/active', async (context) => {
     const snapshot = await ports.query.findActive()

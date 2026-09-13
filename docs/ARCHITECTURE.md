@@ -147,4 +147,11 @@ App 在 runtime 内稳定创建 OverlayUiProvider；Shell 的 pathname 页面错
 
 生产 `/` 经 `Pages → home/Home` 并列消费原 active、sessions(all/ended) 和 providers 查询，仅确认 active ID 后读取活动场次管理摘要。公开快照仍只由 runtime 接收；首页通过 `useSession(id, { enabled: false })` 观察原 Session 键，禁用自动读取的 Query 观察者由 hook 内部拥有，默认调用仍启用读取。首页另订阅 QueryCache 中该键的存在性、生命周期与显式失效标记，处理禁用观察者不会因 removeQueries 更新的边界。失效时通过原 active 查询重新定位，不建立首页数据副本；SSE 租用仍只由 SessionRouteBridge / SessionLease 持有。
 
-准备入口只有本次活动定位成功为 null 且读取结束时开放；Provider 摘要不决定进入组桌的资格。首页仅传 `rosterSource=latestEnded` URL 意图，导航帮助函数严格解析，目标骨架消费但不创建或预览阵容。阵容精确预览与最终创建来源一致性仍由 M7.2/M7.3 设计解决。
+准备入口只有本次活动定位成功为 null 且读取结束时开放；Provider 摘要不决定进入组桌的资格。首页仅传 `rosterSource=latestEnded` URL 意图，导航帮助函数严格解析；M7.2 接续精确预览、两步草稿及可选创建绑定，M7.3 接续实际开场。
+
+
+## M7.2 阵容来源与流程边界
+
+`session-setup → Query/API → Session HTTP → roster-preview-service → roster-preview-repository` 是独立只读链，采用已有事务帮助函数设置 repeatable-read/read-only，并在同一视图读取来源及认证快照。公开响应逐字段投影，配置和记忆仍留在服务端。创建保持原 Owner → active → 来源 Session 锁序，preview 只增加来源/全员配置键/座位置换约束；锁内配置通过目标座位映射到新身份，原首手与空记忆仍原子提交。
+
+Web 跨页草稿仅存在于两个组桌路由的 React Provider；实体属于 Query，草稿只引用用户已见版本/配置键。目录每次流程入口重新读取，历史后台更新不会自动替换已接受基线；删除和清空使用现有 Query 生命周期取消、reset 并通知观察者。来源变化、错误、活动定位未完成时关闭推进，确认直达无内存草稿 replace 回同来源选择页。M7.2 确认页为只读交接，未安装开场 Mutation。

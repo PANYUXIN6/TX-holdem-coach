@@ -10,6 +10,7 @@ export const keys = {
   persona: (id: string) => ['personas', 'detail', personaId(id)] as const,
   sessions: (page: C.SessionManagementPageRequest) =>
     ['sessions', 'list', page.query, page.cursor] as const,
+  rosterPreview: () => ['sessions', 'roster-preview', 'latestEnded'] as const,
   active: () => ['sessions', 'active'] as const,
   session: (id: string) => ['session', sessionId(id)] as const,
   hands: (page: C.HandHistoryPageRequest) =>

@@ -1,3 +1,5 @@
+import { createRosterPreviewService } from './sessions/roster-preview-service.js'
+import { readLatestEndedRosterPreview } from './persistence/roster-preview-repository.js'
 import { randomUUID } from 'node:crypto'
 import type { Server } from 'node:http'
 import { serve } from '@hono/node-server'
@@ -389,7 +391,14 @@ export async function createApiRuntime(
     }),
     personaCatalog,
     deletion: createSessionDataDeletionService({ sql: database.sql, owner }),
-    sessionHttp: { creation, query, commands },
+    sessionHttp: {
+      creation,
+      query,
+      commands,
+      rosterPreview: createRosterPreviewService(() =>
+        readLatestEndedRosterPreview(database.sql, owner),
+      ),
+    },
     sessionEvents,
     handHistory,
     handHistoryList,

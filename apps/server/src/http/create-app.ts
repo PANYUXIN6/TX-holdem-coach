@@ -80,6 +80,7 @@ function isKnownRoute(method: string, path: string): boolean {
   method = routeLookupMethod(method)
   const fixed = new Set([
     'GET /api/health',
+    'GET /api/sessions/roster-preview/latest-ended',
     'GET /api/settings/providers',
     'GET /api/settings/agent',
     'PATCH /api/settings/agent',

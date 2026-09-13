@@ -1,3 +1,7 @@
+import { createConfigSnapshotKey } from '../../src/personas/config.js'
+import { readLatestEndedRosterPreview } from '../../src/persistence/roster-preview-repository.js'
+import { createRosterPreviewService } from '../../src/sessions/roster-preview-service.js'
+import { readSessionAgentSnapshots } from '../../src/persistence/session-repository.js'
 import { randomUUID } from 'node:crypto'
 import type { PublicSessionSnapshot } from '@tx-holdem-coach/contracts'
 import type { Sql, TransactionSql } from 'postgres'
@@ -1402,6 +1406,7 @@ export async function assertM32SessionCreation(
   try {
     await assertSixToNinePlayerCreation(sql)
     await assertLatestEndedReuse(sql)
+    await assertBoundPreviewCreation(sql)
     await assertRollbackOnMutationFailures(sql)
     await assertSameOwnerConflict(sql, runtimeUrl)
     await assertDifferentOwnersEnterInParallel(sql, runtimeUrl)
@@ -1412,4 +1417,100 @@ export async function assertM32SessionCreation(
   } finally {
     await clearLocalOwnerSessions(sql)
   }
+}
+
+async function assertBoundPreviewCreation(sql: Sql): Promise<void> {
+  await clearLocalOwnerSessions(sql)
+  const source = await createEndedSource(sql, '2026-08-09T14:00:00.000Z')
+  const owner = await resolveOwnerScope(sql, { ownerId: 'local-user' })
+  const preview = await createRosterPreviewService(() =>
+    readLatestEndedRosterPreview(sql, owner),
+  ).read()
+  const binding = {
+    sourceSessionId: preview.sourceSessionId,
+    assignments: preview.agents.map((a) => ({
+      sourceSeatNumber: a.sourceSeatNumber,
+      configSnapshotKey: a.configSnapshotKey,
+      seatNumber:
+        a.sourceSeatNumber === 1
+          ? 2
+          : a.sourceSeatNumber === 2
+            ? 1
+            : a.sourceSeatNumber,
+    })),
+  }
+  const sourceAgents = await readSessionAgentSnapshots(
+    sql,
+    owner,
+    source.sessionId,
+  )
+  // 同一来源 fixture 的失败请求不会创建任何新 Session。
+  for (const invalid of [
+    { ...binding, sourceSessionId: randomUUID() },
+    {
+      ...binding,
+      assignments: binding.assignments.map((a, i) =>
+        i === 0 ? { ...a, configSnapshotKey: '0'.repeat(64) } : a,
+      ),
+    },
+  ]) {
+    await expect(
+      createM32Service(sql, () => {}).create({
+        rosterSource: { type: 'latestEnded', preview: invalid },
+      }),
+    ).rejects.toBeInstanceOf(RosterSourceChangedServiceError)
+  }
+  const repository = createSessionCreationRepository()
+  await expect(
+    createM32Service(sql, () => {}, {
+      creationRepository: {
+        ...repository,
+        async lockLatestEndedRosterForCreation(
+          transaction,
+          lockedOwner,
+          preflight,
+          identity,
+        ) {
+          const changed = {
+            ...sourceAgents[0]!.configPayload,
+            name: '预览后配置变更',
+          }
+          await transaction`UPDATE app_private.session_agents SET config_payload = ${transaction.json(changed)}, display_name = ${changed.name}, config_snapshot_key = ${createConfigSnapshotKey(1, changed)} WHERE participant_id = ${sourceAgents[0]!.participantId}::uuid`
+          return repository.lockLatestEndedRosterForCreation(
+            transaction,
+            lockedOwner,
+            preflight,
+            identity,
+          )
+        },
+      },
+    }).create({ rosterSource: { type: 'latestEnded', preview: binding } }),
+  ).rejects.toBeInstanceOf(RosterSourceChangedServiceError)
+  const before = await sql<
+    { count: number }[]
+  >`SELECT count(*)::int AS count FROM app_private.sessions WHERE owner_id = ${owner.databaseOwnerId}::uuid`
+  expect(before[0]?.count).toBe(1)
+  let identity: SessionCreationIdentityGraph | undefined
+  const result = requireCreated(
+    await createM32Service(sql, (value) => {
+      identity = value
+    }).create({ rosterSource: { type: 'latestEnded', preview: binding } }),
+  )
+  if (!identity) throw new Error('绑定创建缺少身份图')
+  await assertCommittedCreation(sql, identity, 6)
+  const agents = await readSessionAgentSnapshots(sql, owner, identity.sessionId)
+  expect(agents[0]?.configSnapshotKey).toBe(sourceAgents[1]?.configSnapshotKey)
+  expect(agents[1]?.configSnapshotKey).toBe(sourceAgents[0]?.configSnapshotKey)
+  expect(
+    agents.every(
+      (a) => !sourceAgents.some((s) => s.participantId === a.participantId),
+    ),
+  ).toBe(true)
+  expect(result.response.snapshot.pokerPhase).toBe('inHand')
+  await endSession(sql, identity.sessionId, '2026-08-09T14:01:00.000Z')
+  await expect(
+    createM32Service(sql, () => {}).create({
+      rosterSource: { type: 'latestEnded', preview: binding },
+    }),
+  ).rejects.toBeInstanceOf(RosterSourceChangedServiceError)
 }

@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react'
+import type { PageId } from '../src/navigation.js'
 // 仅测试入口替换 HTTP，挂载生产 Shell、首页与全部路由。
 import { createRoot } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -33,13 +35,22 @@ if (target === '/test/home.html') history.replaceState(null, '', '/')
 else if (search.has('target')) history.replaceState(null, '', target)
 const client = createQueryClient()
 const runtime = createSessionRuntime(client)
+let setPageFailure: (value: boolean) => void = () => {}
+function FixturePage({ id, fail }: { id: PageId; fail: boolean }) {
+  if (fail) throw new Error('夹具页面错误')
+  return <Page id={id} />
+}
 function ApplicationRoutes() {
+  const [fail, setFail] = useState(false)
+  useEffect(() => {
+    setPageFailure = setFail
+  }, [])
   return useRoutes([
     {
       element: <Shell />,
       children: routes.map((route) => ({
         ...route,
-        element: <Page id={route.id} />,
+        element: <FixturePage id={route.id} fail={fail} />,
       })),
     },
   ])
@@ -83,6 +94,8 @@ controls.append(hookCheck, hookResult)
 const requestLog = document.createElement('pre')
 requestLog.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere'
 for (const [label, action] of [
+  ['夹具：页面错误', () => setPageFailure(true)],
+  ['夹具：恢复页面', () => setPageFailure(false)],
   [
     '夹具：查看请求',
     () => {
@@ -102,6 +115,30 @@ for (const [label, action] of [
             ),
           },
       )
+    },
+  ],
+  [
+    '夹具：目录刷新失败',
+    () => {
+      transport.fail('catalog')
+      void client.refetchQueries({ queryKey: keys.personas(), exact: true })
+    },
+  ],
+  [
+    '夹具：更新历史来源',
+    () => {
+      transport.scenario('updated')
+      void client.refetchQueries({
+        queryKey: keys.rosterPreview(),
+        exact: true,
+      })
+    },
+  ],
+  [
+    '夹具：出现活动场次',
+    () => {
+      transport.scenario('active')
+      void client.refetchQueries({ queryKey: keys.active(), exact: true })
     },
   ],
   [

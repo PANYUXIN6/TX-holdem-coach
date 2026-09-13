@@ -15,7 +15,7 @@ const training = (query: Query) =>
   )
 const list = (query: Query) =>
   ((query.queryKey[0] === 'sessions' || query.queryKey[0] === 'hands') &&
-    query.queryKey[1] === 'list') ||
+    (query.queryKey[1] === 'list' || query.queryKey[1] === 'roster-preview')) ||
   query.queryKey[0] === 'statistics'
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object'
@@ -112,7 +112,10 @@ export function createMutations(
           await client.cancelQueries(
             {
               predicate: (query) =>
-                belongsTo(query, id) || affectedList(query, id),
+                belongsTo(query, id) ||
+                affectedList(query, id) ||
+                (query.queryKey[0] === 'sessions' &&
+                  query.queryKey[1] === 'roster-preview'),
             },
             { revert: false },
           )
@@ -120,10 +123,16 @@ export function createMutations(
             client,
             (query) => training(query) && !list(query) && belongsTo(query, id),
           )
-          await client.invalidateQueries(
-            { predicate: (query) => affectedList(query, id) },
-            { throwOnError: false },
-          )
+          await Promise.all([
+            client.resetQueries(
+              { queryKey: keys.rosterPreview(), exact: true },
+              { throwOnError: false },
+            ),
+            client.invalidateQueries(
+              { predicate: (query) => affectedList(query, id) },
+              { throwOnError: false },
+            ),
+          ])
         },
       }),
     clearData: () =>

@@ -1,8 +1,10 @@
+import { LatestEndedRosterPreviewBindingSchema } from '@tx-holdem-coach/contracts'
 import type { TransactionSql } from 'postgres'
 import { z } from 'zod'
 import { SESSION_DIAGNOSTIC_CODES } from '../sessions/authoritative-state/recovery-decision.js'
 import {
   assertRosterSnapshotsUseActiveModels,
+  assertRosterPreviewBinding,
   isPreparedCurrentCatalogRoster,
 } from '../sessions/roster-preparation.js'
 import {
@@ -57,6 +59,7 @@ const LockedSessionRowSchema = z.strictObject({
   activeDecisionRequestId: z.uuid().nullable(),
 })
 const LatestEndedPreflightSchema = z.strictObject({
+  preview: LatestEndedRosterPreviewBindingSchema.optional(),
   sourceSessionId: z.uuid().transform((value) => value.toLowerCase()),
   aiSeatNumbers: z.array(z.number().int().min(1).max(8)).min(5).max(8),
 })
@@ -749,19 +752,35 @@ export function createSessionCreationRepository(): SessionCreationRepository {
       ) {
         throw new RosterSourceChangedError()
       }
-      const agents = snapshots.map((snapshot, index) => ({
-        seatNumber: snapshot.seatNumber,
-        agentParticipantId:
-          normalizedParticipants[index]?.agentParticipantId ?? '',
-        displayName: snapshot.displayName,
-        avatarColor: snapshot.avatarColor,
-        personaId: snapshot.personaId,
-        personaVersion: snapshot.personaVersion,
-        configSnapshotKey: snapshot.configSnapshotKey,
-        configPayloadVersion: snapshot.configPayloadVersion,
-        configPayload: snapshot.configPayload,
-        initialMemory: INITIAL_AGENT_MEMORY,
-      }))
+      const preview = parsedPreflight.data.preview
+      if (preview !== undefined)
+        assertRosterPreviewBinding(
+          parsedPreflight.data.sourceSessionId,
+          snapshots,
+          preview,
+        )
+      const agents = snapshots
+        .map((snapshot) => {
+          const seatNumber =
+            preview?.assignments.find(
+              (a) => a.sourceSeatNumber === snapshot.seatNumber,
+            )?.seatNumber ?? snapshot.seatNumber
+          return {
+            seatNumber,
+            agentParticipantId:
+              normalizedParticipants.find((p) => p.seatNumber === seatNumber)
+                ?.agentParticipantId ?? '',
+            displayName: snapshot.displayName,
+            avatarColor: snapshot.avatarColor,
+            personaId: snapshot.personaId,
+            personaVersion: snapshot.personaVersion,
+            configSnapshotKey: snapshot.configSnapshotKey,
+            configPayloadVersion: snapshot.configPayloadVersion,
+            configPayload: snapshot.configPayload,
+            initialMemory: INITIAL_AGENT_MEMORY,
+          }
+        })
+        .sort((a, b) => a.seatNumber - b.seatNumber)
       const input: InsertSessionRosterSnapshotInput = Object.freeze({
         owner: metadata.owner,
         sessionId: parsedIdentity.data.sessionId,

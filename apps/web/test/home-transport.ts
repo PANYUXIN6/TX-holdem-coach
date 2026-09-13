@@ -1,3 +1,4 @@
+import { setupPersonas, rosterPreview } from './setup-fixtures.js'
 import {
   PublicSessionSnapshotSchema,
   type SessionManagementItem,
@@ -63,6 +64,25 @@ export function homeTransport(initial = 'empty') {
     await new Promise((resolve) => setTimeout(resolve, 50))
     const error = (code: string, status: number) =>
       Response.json({ code, message: '夹具错误' }, { status })
+    if (url.pathname === '/api/agent-personas')
+      return failure === 'catalog'
+        ? error('SERVICE_UNAVAILABLE', 503)
+        : Response.json({ personas: setupPersonas })
+    if (url.pathname === '/api/sessions/roster-preview/latest-ended') {
+      if (scenario === 'empty') return error('ROSTER_SOURCE_NOT_FOUND', 404)
+      return Response.json(
+        scenario === 'updated'
+          ? {
+              ...rosterPreview,
+              sourceSessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+              agents: rosterPreview.agents.map((p) => ({
+                ...p,
+                name: `更新 · ${p.name}`,
+              })),
+            }
+          : rosterPreview,
+      )
+    }
     if (url.pathname === '/api/sessions/active') {
       if (failure === 'active') return error('SERVICE_UNAVAILABLE', 503)
       if (scenario === 'diagnostic')

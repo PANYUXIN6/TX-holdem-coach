@@ -73,7 +73,7 @@ async function querySessionRecords(
   return rows.map(parseSessionRecord)
 }
 
-function createSessionRecordProjection(sql: Sql) {
+function createSessionRecordProjection(sql: Sql | TransactionSql) {
   return sql`
     id::text AS "id",
     lifecycle_status AS "lifecycleStatus",
@@ -92,7 +92,7 @@ function createSessionRecordProjection(sql: Sql) {
 }
 
 export async function findLatestEndedSessionForRosterReuse(
-  sql: Sql,
+  sql: Sql | TransactionSql,
   owner: ResolvedOwnerScope,
 ): Promise<SessionRecord | null> {
   if (!isResolvedOwnerScope(owner)) throw new RepositoryInputValidationError()

@@ -77,3 +77,17 @@ it('资源入口只编码一次，保留目标标识与本场历史筛选', () =
   )
   expect(sessionHistoryPath('table / A')).toBe('/history?sessionId=table+%2F+A')
 })
+
+it('确认页返回保留规范历史来源，非法来源不带回选择页', () => {
+  expect(
+    returnTarget('confirm', {}, null, '?rosterSource=latestEnded').search,
+  ).toBe('?rosterSource=latestEnded')
+  expect(
+    returnTarget(
+      'confirm',
+      {},
+      null,
+      '?rosterSource=latestEnded&rosterSource=latestEnded',
+    ).search,
+  ).toBe('')
+})

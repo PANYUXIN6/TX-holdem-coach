@@ -1,4 +1,7 @@
-import type { AgentPersonaId } from '@tx-holdem-coach/contracts'
+import type {
+  LatestEndedRosterPreviewBinding,
+  AgentPersonaId,
+} from '@tx-holdem-coach/contracts'
 import type { Sql } from 'postgres'
 import { z } from 'zod'
 import type { PersonaCatalog } from '../personas/catalog.js'
@@ -20,6 +23,7 @@ import {
   ActiveModelConfigurationError,
   RepositoryInputValidationError,
   ResourceNotFoundError,
+  RosterSourceChangedError,
 } from '../persistence/errors.js'
 import { type ResolvedOwnerScope } from '../persistence/owner-scope.js'
 import {
@@ -110,6 +114,7 @@ export function isPreparedCurrentCatalogRoster(
 
 export interface LatestEndedRosterPreflight {
   readonly sourceSessionId: string
+  readonly preview?: DeepReadonly<LatestEndedRosterPreviewBinding>
   readonly aiSeatNumbers: readonly number[]
 }
 
@@ -232,6 +237,7 @@ export function prepareCurrentCatalogRoster(
 export async function prepareLatestEndedRosterPreflight(
   sql: Sql,
   owner: ResolvedOwnerScope,
+  preview?: LatestEndedRosterPreviewBinding,
 ): Promise<LatestEndedRosterPreflight> {
   const latestEndedSession = await findLatestEndedSessionForRosterReuse(
     sql,
@@ -249,8 +255,41 @@ export async function prepareLatestEndedRosterPreflight(
     snapshots,
     ActiveModelConfigurationSchema,
   )
+  if (preview !== undefined)
+    assertRosterPreviewBinding(latestEndedSession.id, snapshots, preview)
   return deepFreeze({
+    ...(preview === undefined ? {} : { preview }),
     sourceSessionId: latestEndedSession.id,
     aiSeatNumbers: snapshots.map((snapshot) => snapshot.seatNumber),
   })
+}
+
+export function assertRosterPreviewBinding(
+  sourceSessionId: string,
+  snapshots: readonly Pick<
+    SessionAgentSnapshot,
+    'seatNumber' | 'configSnapshotKey'
+  >[],
+  preview: LatestEndedRosterPreviewBinding,
+): void {
+  const seats = new Set(snapshots.map((snapshot) => snapshot.seatNumber))
+  if (
+    preview.sourceSessionId !== sourceSessionId ||
+    preview.assignments.length !== snapshots.length ||
+    new Set(preview.assignments.map((a) => a.sourceSeatNumber)).size !==
+      snapshots.length ||
+    new Set(preview.assignments.map((a) => a.seatNumber)).size !==
+      snapshots.length ||
+    preview.assignments.some(
+      (a) =>
+        !seats.has(a.seatNumber) ||
+        !snapshots.some(
+          (s) =>
+            s.seatNumber === a.sourceSeatNumber &&
+            s.configSnapshotKey === a.configSnapshotKey,
+        ),
+    )
+  ) {
+    throw new RosterSourceChangedError()
+  }
 }

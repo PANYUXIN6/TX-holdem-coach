@@ -53,7 +53,10 @@ export function maintainSessionResources(
     )
   const matches = (query: Query) => {
     const key = query.queryKey
-    if (key[0] === 'sessions') return key[1] === 'list' && sessions
+    if (key[0] === 'sessions')
+      return key[1] === 'roster-preview'
+        ? recovery || ended || eventType === 'sessionCreated'
+        : key[1] === 'list' && sessions
     const filter = object(key[key[0] === 'statistics' ? 1 : 2]).sessionId
     const inScope =
       filter == null ||

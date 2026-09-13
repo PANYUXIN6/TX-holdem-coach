@@ -1,3 +1,4 @@
+import { assertRosterPreview } from './roster-preview-assertions.js'
 import { assertM22DatabaseSchema } from './database-schema-assertions.js'
 import { assertM35AtomicPlayerSettingsPersistence } from './database-m35-assertions.js'
 import { assertM44PlayerObservationPersistence } from './database-m44-assertions.js'
@@ -42,8 +43,13 @@ registerDatabaseMilestoneTest(
   assertM22DatabaseSchema,
   300_000,
 )
-registerDatabaseMilestoneTest('m23', 'M2.3 repositories', (sql) =>
-  assertM23Repositories(sql),
+registerDatabaseMilestoneTest(
+  'm23',
+  'M2.3 repositories',
+  async (sql, runtimeUrl) => {
+    await assertM23Repositories(sql)
+    await assertRosterPreview(sql, runtimeUrl)
+  },
 )
 registerDatabaseMilestoneTest('m24', 'M2.4 command ledger', (sql, runtimeUrl) =>
   assertM24CommandLedgerRepository(sql, runtimeUrl),

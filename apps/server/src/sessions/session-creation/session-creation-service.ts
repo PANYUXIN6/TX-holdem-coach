@@ -220,9 +220,11 @@ export function createSessionCreationService(input: {
           : null
       const latestEndedPreflight =
         rosterSource.type === 'latestEnded'
-          ? await prepareLatestEndedRosterPreflight(sql, owner).catch(
-              mapLatestEndedError,
-            )
+          ? await prepareLatestEndedRosterPreflight(
+              sql,
+              owner,
+              rosterSource.preview,
+            ).catch(mapLatestEndedError)
           : null
       const aiSeatNumbers =
         selections?.map((selection) => selection.seatNumber) ??

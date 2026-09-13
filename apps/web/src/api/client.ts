@@ -119,6 +119,12 @@ export function createApi(fetcher: typeof fetch = (...args) => fetch(...args)) {
     return parsed.data
   }
   return {
+    rosterPreview: (options?: RequestOptions) =>
+      request(
+        'sessions/roster-preview/latest-ended',
+        C.LatestEndedRosterPreviewResponseSchema,
+        options,
+      ),
     health: (options?: RequestOptions) =>
       request('health', C.HealthResponseSchema, options),
     providers: (options?: RequestOptions) =>

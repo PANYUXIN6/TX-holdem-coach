@@ -77,6 +77,34 @@ export const CreateSessionPersonaSelectionSchema = z
       seatNumbers.add(selection.seatNumber)
     })
   })
+export const LatestEndedRosterPreviewBindingSchema = z.strictObject({
+  sourceSessionId: SessionIdSchema,
+  assignments: z
+    .array(
+      z.strictObject({
+        sourceSeatNumber: AiSeatNumberSchema,
+        configSnapshotKey: z.string().regex(/^[a-f0-9]{64}$/),
+        seatNumber: AiSeatNumberSchema,
+      }),
+    )
+    .min(5)
+    .max(8)
+    .superRefine((items, context) => {
+      for (const field of ['sourceSeatNumber', 'seatNumber'] as const) {
+        if (new Set(items.map((item) => item[field])).size !== items.length) {
+          context.addIssue({
+            code: 'custom',
+            message: '座位不得重复。',
+            path: [field],
+          })
+        }
+      }
+    }),
+})
+export type LatestEndedRosterPreviewBinding = z.infer<
+  typeof LatestEndedRosterPreviewBindingSchema
+>
+
 export const CreateSessionRosterSourceSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('currentCatalog'),
@@ -84,6 +112,7 @@ export const CreateSessionRosterSourceSchema = z.discriminatedUnion('type', [
   }),
   z.strictObject({
     type: z.literal('latestEnded'),
+    preview: LatestEndedRosterPreviewBindingSchema.optional(),
   }),
 ])
 export const CreateSessionRequestSchema = z.strictObject({
@@ -552,7 +581,14 @@ export const AgentPersonaPathParamsSchema = z.strictObject({
 })
 
 export const AgentPersonaListResponseSchema = z.strictObject({
-  personas: z.array(AgentPersonaSummarySchema),
+  personas: z
+    .array(AgentPersonaSummarySchema)
+    .refine(
+      (personas) =>
+        new Set(personas.map((persona) => persona.personaId)).size ===
+        personas.length,
+      '人物不得重复。',
+    ),
 })
 
 export const AgentPersonaDetailResponseSchema = z.strictObject({
@@ -883,6 +919,45 @@ export const HandHistoryListQuerySchema = z
       })
     }
   })
+
+export const LatestEndedRosterPreviewResponseSchema = z.strictObject({
+  sourceSessionId: SessionIdSchema,
+  endedAt: z.iso.datetime({ precision: 6 }),
+  agents: z
+    .array(
+      z.strictObject({
+        sourceSeatNumber: AiSeatNumberSchema,
+        configSnapshotKey: HistoricalConfigSnapshotKeySchema,
+        personaId: HistoricalPersonaIdSchema,
+        personaVersion: HistoricalPersonaVersionSchema,
+        name: AgentPersonaSummarySchema.shape.name,
+        avatarColor: AgentPersonaSummarySchema.shape.avatarColor,
+        backgroundDescription:
+          AgentPersonaSummarySchema.shape.backgroundDescription,
+        teachingSummary: AgentPersonaSummarySchema.shape.teachingSummary,
+        style: AgentPersonaStyleSchema,
+      }),
+    )
+    .min(5)
+    .max(8)
+    .superRefine((agents, context) => {
+      if (
+        new Set(agents.map((a) => a.personaId)).size !== agents.length ||
+        agents.some(
+          (a, i) =>
+            i > 0 && a.sourceSeatNumber <= agents[i - 1]!.sourceSeatNumber,
+        )
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: '人物须唯一，来源座位须唯一且升序。',
+        })
+      }
+    }),
+})
+export type LatestEndedRosterPreviewResponse = z.infer<
+  typeof LatestEndedRosterPreviewResponseSchema
+>
 
 export const HistoricalPersonaSnapshotSummarySchema = z.strictObject({
   seatNumber: AiSeatNumberSchema,

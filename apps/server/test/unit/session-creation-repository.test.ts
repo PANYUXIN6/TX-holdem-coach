@@ -323,3 +323,67 @@ describe('session creation repository', () => {
     expect(boundary.calls).toHaveLength(3)
   })
 })
+
+test('预览绑定交换两席，以目标身份写入原配置和空记忆', async () => {
+  const snapshots = currentSnapshotRows()
+  const boundary = createTransaction([
+    [{ databaseOwnerId }],
+    [],
+    [{ sessionId: sourceSessionId }],
+    [{ sessionId: sourceSessionId, lifecycleStatus: 'ended' }],
+    [{ sessionId: sourceSessionId }],
+    snapshots,
+  ])
+  const written: unknown[] = []
+  boundary.transaction.json = ((value: unknown) => {
+    written.push(value)
+    return value
+  }) as typeof boundary.transaction.json
+  const repository = createSessionCreationRepository()
+  const owner = await repository.lockOwnerForSessionCreation(
+    boundary.transaction,
+    await resolvedOwner(),
+  )
+  await repository.checkActiveSessionForCreation(boundary.transaction, owner)
+  const roster = await repository.lockLatestEndedRosterForCreation(
+    boundary.transaction,
+    owner,
+    {
+      sourceSessionId,
+      aiSeatNumbers: [1, 2, 3, 4, 5],
+      preview: {
+        sourceSessionId,
+        assignments: snapshots.map((s) => ({
+          sourceSeatNumber: s.seatNumber,
+          seatNumber:
+            s.seatNumber === 1 ? 2 : s.seatNumber === 2 ? 1 : s.seatNumber,
+          configSnapshotKey: s.configSnapshotKey,
+        })),
+      },
+    },
+    {
+      sessionId,
+      userParticipantId,
+      agentParticipants: [1, 2, 3, 4, 5].map((seatNumber) => ({
+        seatNumber,
+        agentParticipantId: agentParticipantId(seatNumber),
+      })),
+    },
+  )
+  await repository.insertLockedSessionRoster(boundary.transaction, roster)
+  expect(written[0]).toMatchObject([
+    {
+      participant_id: agentParticipantId(1),
+      persona_id: snapshots[1]!.personaId,
+      config_snapshot_key: snapshots[1]!.configSnapshotKey,
+      current_memory_revision: 0,
+    },
+    {
+      participant_id: agentParticipantId(2),
+      persona_id: snapshots[0]!.personaId,
+      config_snapshot_key: snapshots[0]!.configSnapshotKey,
+      current_memory_revision: 0,
+    },
+    ...snapshots.slice(2).map((s) => ({ persona_id: s.personaId })),
+  ])
+})

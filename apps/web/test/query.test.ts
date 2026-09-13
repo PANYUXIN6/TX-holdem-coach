@@ -464,3 +464,113 @@ it('缓存揭牌后撤销审计意图，拒绝审计 observer 并只订阅 publi
     unsubscribe()
   }
 })
+
+it('删除任意场次清掉 Observer 旧预览，迟到 GET 不复活，并保留人物目录', async () => {
+  const { rosterPreview } = await import('./setup-fixtures.js')
+  const cache = client()
+  const late = deferred<Response>()
+  const next = deferred<Response>()
+  let reads = 0
+  const api = createApi(async (_url, options) => {
+    if (options?.method === 'DELETE')
+      return json({ deletedSessionId: otherSession, invalidatedRunCount: 0 })
+    reads++
+    if (reads === 1) return json(rosterPreview)
+    return reads === 2 ? late.promise : next.promise
+  })
+  cache.setQueryData(keys.personas(), { personas: [agentPersonaSummary] })
+  const observer = new QueryObserver(cache, createQueries(api).rosterPreview())
+  const states: unknown[] = []
+  const unsubscribe = observer.subscribe((result) => states.push(result.data))
+  await observer.refetch()
+  const old = observer.refetch()
+  const mutation = new MutationObserver(
+    cache,
+    createMutations(cache, api).deleteSession(),
+  )
+  const deleting = mutation.mutate({
+    sessionId: otherSession,
+    body: { confirmation: '永久删除本场' },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(observer.getCurrentResult().data).toBeUndefined()
+  late.resolve(json(rosterPreview))
+  await old
+  expect(observer.getCurrentResult().data).toBeUndefined()
+  next.resolve(
+    json({ code: 'ROSTER_SOURCE_NOT_FOUND', message: '没有来源' }, 404),
+  )
+  await deleting
+  expect(observer.getCurrentResult().isError).toBe(true)
+  expect(cache.getQueryData(keys.personas())).toBeDefined()
+  expect(states).toContain(undefined)
+  unsubscribe()
+})
+
+it('热预览缓存挂载后删除，重置重读成功可接受新阵容并继续', async () => {
+  const { rosterPreview } = await import('./setup-fixtures.js')
+  const { readReady, initialDraft, setupReducer, previewMatches } =
+    await import('../src/session-setup/model.js')
+  const cache = client()
+  const next = deferred<Response>()
+  const updated = { ...rosterPreview, sourceSessionId: otherSession }
+  let reads = 0
+  const api = createApi(async (_url, options) => {
+    if (options?.method === 'DELETE')
+      return json({ deletedSessionId: ids.session, invalidatedRunCount: 0 })
+    return ++reads === 1 ? json(rosterPreview) : next.promise
+  })
+  cache.setQueryData(keys.rosterPreview(), rosterPreview)
+  const observer = new QueryObserver(cache, {
+    ...createQueries(api).rosterPreview(),
+    refetchOnMount: 'always',
+  })
+  let wasResetSinceMount = false
+  let draft = setupReducer(initialDraft(), {
+    type: 'accept',
+    preview: rosterPreview,
+  })
+  const stopCache = cache.getQueryCache().subscribe((event) => {
+    if (
+      event.type === 'updated' &&
+      event.action.type === 'setState' &&
+      event.query.queryKey[1] === 'roster-preview' &&
+      event.query.state.data === undefined
+    ) {
+      wasResetSinceMount = true
+      draft = setupReducer(draft, { type: 'clearHistory' })
+    }
+  })
+  const ready = () =>
+    readReady({ ...observer.getCurrentResult(), wasResetSinceMount })
+  const stop = observer.subscribe(() => {})
+  try {
+    expect(ready()).toBe(false)
+    await observer.refetch({ cancelRefetch: false })
+    expect(ready()).toBe(true)
+    const mutation = new MutationObserver(
+      cache,
+      createMutations(cache, api).deleteSession(),
+    )
+    const deleting = mutation.mutate({
+      sessionId: ids.session,
+      body: { confirmation: '永久删除本场' },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(ready()).toBe(false)
+    expect(draft.preview).toBeNull()
+    next.resolve(json(updated))
+    await deleting
+    expect(observer.getCurrentResult().isFetchedAfterMount).toBe(false)
+    expect(ready()).toBe(true)
+    expect(previewMatches(draft.preview, updated)).toBe(false)
+    draft = setupReducer(draft, { type: 'accept', preview: updated })
+    expect(
+      ready() &&
+        previewMatches(draft.preview, observer.getCurrentResult().data),
+    ).toBe(true)
+  } finally {
+    stop()
+    stopCache()
+  }
+})

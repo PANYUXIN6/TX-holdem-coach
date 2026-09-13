@@ -20,6 +20,13 @@ export function createQueries(api: Api = defaultApi) {
       meta: { resourceDetail: true },
     })
   return {
+    rosterPreview: () =>
+      queryOptions({
+        ...readPolicy,
+        staleTime: 0,
+        queryKey: keys.rosterPreview(),
+        queryFn: ({ signal }) => api.rosterPreview({ signal }),
+      }),
     health: () =>
       queryOptions({
         ...readPolicy,

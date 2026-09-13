@@ -72,6 +72,7 @@ export function returnTarget(
   id: PageId,
   params: Record<string, string | undefined>,
   state: unknown,
+  search = '',
 ): ReturnTarget {
   if (id === 'hand' || id === 'run') {
     const source = listReturnTarget(state)
@@ -91,7 +92,14 @@ export function returnTarget(
   if (id === 'debug')
     return { pathname: paths.settings, search: '', label: '返回设置' }
   if (id === 'confirm')
-    return { pathname: paths.newSession, search: '', label: '返回选择阵容' }
+    return {
+      pathname: paths.newSession,
+      search:
+        parseRosterSource(search) === 'latestEnded'
+          ? '?rosterSource=latestEnded'
+          : '',
+      label: '返回选择阵容',
+    }
   return {
     pathname: paths.home,
     search: '',

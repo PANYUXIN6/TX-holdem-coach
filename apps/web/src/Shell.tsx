@@ -1,3 +1,4 @@
+import { SetupScope, SetupErrorReset } from './session-setup/react.js'
 import { ConfirmationHost } from './ui/confirmation-host.js'
 import { useOverlayUi } from './ui/react.js'
 import { ModalEnvironment } from './components/modal.js'
@@ -43,7 +44,12 @@ export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
   const location = useLocation()
   const matched = matchRoutes(routes, location)!.at(-1)!
   const { id, handle } = matched.route
-  const target = returnTarget(id, matched.params, location.state)
+  const target = returnTarget(
+    id,
+    matched.params,
+    location.state,
+    location.search,
+  )
   const rotated = useSyncExternalStore(
     subscribeOrientation,
     getOrientation,
@@ -93,41 +99,44 @@ export function Shell({ tableActions }: { tableActions?: ReactNode } = {}) {
               {handle.title}
             </h1>
           </header>
-          <ErrorBoundary
-            key={location.pathname}
-            fallback={(reset) => (
-              <main
-                ref={content}
-                className="page-content"
-                aria-labelledby="page-title"
-              >
-                <PageError reset={reset} target={target} />
-              </main>
-            )}
-          >
-            <PageUiProvider>
-              <SessionRouteBridge />
-              <SessionRouteFeedback destructivePending={destructivePending}>
+          <SetupScope>
+            <ErrorBoundary
+              key={location.pathname}
+              fallback={(reset) => (
                 <main
                   ref={content}
                   className="page-content"
                   aria-labelledby="page-title"
                 >
-                  <Outlet />
+                  <SetupErrorReset />
+                  <PageError reset={reset} target={target} />
                 </main>
-                {handle.layout === 'table' ? (
-                  <footer className="table-actions">
-                    {tableActions ?? (
-                      <>
-                        <StatusBadge>功能待接入</StatusBadge>
-                        牌桌操作将在功能接入后开放
-                      </>
-                    )}
-                  </footer>
-                ) : null}
-              </SessionRouteFeedback>
-            </PageUiProvider>
-          </ErrorBoundary>
+              )}
+            >
+              <PageUiProvider>
+                <SessionRouteBridge />
+                <SessionRouteFeedback destructivePending={destructivePending}>
+                  <main
+                    ref={content}
+                    className="page-content"
+                    aria-labelledby="page-title"
+                  >
+                    <Outlet />
+                  </main>
+                  {handle.layout === 'table' ? (
+                    <footer className="table-actions">
+                      {tableActions ?? (
+                        <>
+                          <StatusBadge>功能待接入</StatusBadge>
+                          牌桌操作将在功能接入后开放
+                        </>
+                      )}
+                    </footer>
+                  ) : null}
+                </SessionRouteFeedback>
+              </PageUiProvider>
+            </ErrorBoundary>
+          </SetupScope>
           <ConfirmationHost
             rotated={rotated}
             onPending={setDestructivePending}

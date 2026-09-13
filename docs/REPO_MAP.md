@@ -206,3 +206,11 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/src/ui/confirmation.ts`、`confirmation-host.tsx`：确认资格与实际 Mutation 执行时的中止复核、稳定三类确认 Host、先读取的删除入口；复用原删除/清空 options 和 endSession 命令。
 - `apps/web/src/Shell.tsx`：在标题与内容之间装配场次反馈；确认 Host 位于 pathname 错误边界之外，来源弹窗仍由页面作用域清理，迟到结果不会导航或关闭新实例。
 - `apps/web/test/feedback.test.ts`、`confirmation.test.ts`：错误语义、读取在途删除禁用和中止调度竞态。`feedback.html`、`feedback-browser.tsx`、`feedback-transport.ts` 提供独立浏览器验收，内存 HTTP/SSE 经生产 Codec、Query/runtime、Shell/Host，不进入产品构建。
+
+## M7.1 训练首页
+
+- `apps/web/src/Pages.tsx` 的 home 分支 → `apps/web/src/home/Home.tsx`：编排活动定位、最近五场、独立 ended 存在性、Provider 与活动手数查询，独立呈现错误及恢复入口；沿用 Shell 和基础视觉组件。
+- `apps/web/src/home/model.ts`：有界列表参数、准备入口资格、本地时间和服务端结算展示；不保存实体、不负责创建。
+- 首页使用原 `runtime.activeOptions()` 接收快照，在子组件通过 `session-sync/react.tsx` 的 `useSession(id, { enabled: false })` 观察原 Session 键，并订阅该键有效性以响应移除/失效；读取开关由 hook 拥有，默认调用行为保持启用，不租用 SSE、不发额外详情 GET。
+- `apps/web/src/navigation.ts` 的 `newSessionPath/parseRosterSource` 统一组桌来源意图；`Pages.tsx` 最小消费有效/非法 URL，复用骨架不发创建请求。
+- `apps/web/test/home.test.ts` 覆盖入口、结算、URL 与真实 Query/runtime；`home-transport.ts`、`home-browser.tsx`、`home.html`、`home-vite.config.ts` 提供独立传输与页面刷新验收；`session-hook-browser.tsx` 验证真实 hook 的禁用/默认读取、缓存更新与无 SSE 租用。`build-browser-fixture.mjs` 编译独立目录，生产构建不包含夹具。

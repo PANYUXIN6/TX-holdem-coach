@@ -1,6 +1,12 @@
 import { EmptyState, StatusBadge } from './components/controls.js'
-import { Link, useParams } from 'react-router'
-import { paths, resourcePath, sessionHistoryPath } from './navigation.js'
+import { Home } from './home/Home.js'
+import { Link, useParams, useLocation } from 'react-router'
+import {
+  paths,
+  resourcePath,
+  sessionHistoryPath,
+  parseRosterSource,
+} from './navigation.js'
 import type { PageId } from './navigation.js'
 
 const descriptions: Partial<Record<PageId, string>> = {
@@ -23,35 +29,27 @@ const descriptions: Partial<Record<PageId, string>> = {
 
 export function Page({ id }: { id: PageId }) {
   const params = useParams()
-  if (id === 'home')
+  const location = useLocation()
+  const rosterSource = parseRosterSource(location.search)
+  if (id === 'home') return <Home />
+  if (id === 'newSession' && rosterSource !== 'current')
     return (
-      <>
-        <section className="training-intro">
-          <p className="eyebrow">德州扑克 · AI 对练</p>
-          <h2>
-            把每一次决策，
-            <br />
-            变成下一手的底气。
-          </h2>
-          <p className="intro-copy">
-            从组建一桌开始，在练习中思考，在回看中进步。
-          </p>
-          <Link className="primary-link" to={paths.newSession}>
-            开始组桌 <span aria-hidden="true">↗</span>
-          </Link>
-        </section>
-        <section className="notice">
-          <span className="section-label">练习准备</span>
-          <h2>你的练习室，正在就位</h2>
-          <p>
-            现在可以浏览组桌、历史、统计和设置页面。阵容、牌局与数据功能将陆续接入。
-          </p>
-        </section>
-        <div className="home-note">
-          <span aria-hidden="true">♣</span>
-          <p>留一点时间，给每一手思考。</p>
-        </div>
-      </>
+      <section className="notice">
+        <StatusBadge>功能待接入</StatusBadge>
+        <h2>
+          {rosterSource === 'invalid'
+            ? '组桌入口参数无效'
+            : '已选择沿用上一场阵容'}
+        </h2>
+        <p>
+          {rosterSource === 'invalid'
+            ? '请返回普通组桌重新选择入口。'
+            : '阵容预览与确认开场尚待接入'}
+        </p>
+        <Link className="primary-link" to={paths.newSession}>
+          返回普通组桌
+        </Link>
+      </section>
     )
   if (id === 'notFound')
     return (

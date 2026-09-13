@@ -715,3 +715,108 @@ textarea.field-control {
 .confirmation-check { display: flex; align-items: center; gap: 12px; min-height: 48px; }
 .confirmation-check input { width: 24px; height: 24px; flex: none; accent-color: var(--accent); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+/* M7.1：沿用 Shell 画布，首页仅编排读取摘要与入口。 */
+.training-home {
+  display: grid;
+  gap: 24px;
+}
+.home-hero {
+  padding: 20px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: var(--table);
+}
+.home-hero h2 {
+  margin: 8px 0 20px;
+  font-size: 1.5rem;
+}
+.home-preparation,
+.home-active {
+  display: grid;
+  gap: 12px;
+}
+.home-active {
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.home-preparation .button,
+.home-preparation .primary-link,
+.home-active .primary-link {
+  width: 100%;
+  justify-content: space-between;
+}
+.home-section {
+  display: grid;
+  gap: 12px;
+}
+.home-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+}
+.home-heading a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+.home-muted {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.home-stack {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.home-stack .chip-amount {
+  font-size: 1.5rem;
+}
+.home-roster {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.home-roster li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.home-roster .avatar {
+  flex-shrink: 0;
+}
+.home-recent {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.home-recent li {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+.home-net {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.home-empty {
+  color: var(--muted);
+  padding: 20px 0;
+}
+.home-section > .status-badge {
+  justify-self: start;
+}

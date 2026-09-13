@@ -128,3 +128,19 @@ function listReturnTarget(state: unknown): ReturnTarget | undefined {
     label: route.id === 'history' ? '返回历史' : '返回手牌关联调用',
   }
 }
+
+/** 组桌 URL 只携带来源意图，不绑定历史实体。 */
+export function newSessionPath(source: 'current' | 'latestEnded' = 'current') {
+  return source === 'current'
+    ? paths.newSession
+    : `${paths.newSession}?rosterSource=latestEnded`
+}
+export function parseRosterSource(
+  search: string,
+): 'current' | 'latestEnded' | 'invalid' {
+  const values = new URLSearchParams(search).getAll('rosterSource')
+  if (values.length === 0) return 'current'
+  return values.length === 1 && values[0] === 'latestEnded'
+    ? 'latestEnded'
+    : 'invalid'
+}

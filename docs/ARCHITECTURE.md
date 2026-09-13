@@ -142,3 +142,9 @@ App 在 runtime 内稳定创建 OverlayUiProvider；Shell 的 pathname 页面错
 `Shell → ModalEnvironment → Modal/FilterDrawer` 只传方向、页面标识和是否有危险确认；原生 dialog 提供 top layer/inert，组件负责实际内容容器滚动锁、关闭与焦点恢复。方向判断仍唯一属于 Shell，横屏清除打开意图。FilterDrawer 的草稿、校验与 URL 写入由调用者拥有。
 
 `Shell → ConfirmationHost → 原 Mutation options/runtime` 的 Host 稳定处于 pathname 页面错误边界之外；表单按 Overlay instanceId 重建。同步 ref 防连点，全局 Host pending 阻止危险提交并发，原 options 完整拥有取消读取、缓存移除及 freeze 收尾。中止确认在实际 mutationFn 内再次核对目标引用、手、版本、暂停状态与提交资格，随后同步委托原 endSession 入口。失效或离页只关闭视觉，不取消写请求；迟到结果按原 instanceId 处理，不能改变新确认或导航。未确认的 DELETE 必须先读取，再重新完整确认。
+
+## M7.1 首页读取与导航边界
+
+生产 `/` 经 `Pages → home/Home` 并列消费原 active、sessions(all/ended) 和 providers 查询，仅确认 active ID 后读取活动场次管理摘要。公开快照仍只由 runtime 接收；首页通过 `useSession(id, { enabled: false })` 观察原 Session 键，禁用自动读取的 Query 观察者由 hook 内部拥有，默认调用仍启用读取。首页另订阅 QueryCache 中该键的存在性、生命周期与显式失效标记，处理禁用观察者不会因 removeQueries 更新的边界。失效时通过原 active 查询重新定位，不建立首页数据副本；SSE 租用仍只由 SessionRouteBridge / SessionLease 持有。
+
+准备入口只有本次活动定位成功为 null 且读取结束时开放；Provider 摘要不决定进入组桌的资格。首页仅传 `rosterSource=latestEnded` URL 意图，导航帮助函数严格解析，目标骨架消费但不创建或预览阵容。阵容精确预览与最终创建来源一致性仍由 M7.2/M7.3 设计解决。

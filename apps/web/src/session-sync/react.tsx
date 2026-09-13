@@ -42,11 +42,14 @@ export function useSessionRuntime() {
   if (!runtime) throw new Error('SessionRuntimeProvider missing')
   return runtime
 }
-/** M7 订阅唯一 Query 快照；连接租用由路由桥接统一持有。 */
-export function useSession(input: string) {
+/** M7 订阅唯一快照；enabled 仅控制自动读取，连接租用由路由桥接持有。 */
+export function useSession(
+  input: string,
+  { enabled = true }: { enabled?: boolean } = {},
+) {
   const runtime = useSessionRuntime()
   const id = sessionId(input)
-  const query = useQuery(runtime.sessionOptions(id))
+  const query = useQuery({ ...runtime.sessionOptions(id), enabled })
   const status = useSyncExternalStore(
     (listener) => runtime.subscribe(id, listener),
     () => runtime.getStatus(id),

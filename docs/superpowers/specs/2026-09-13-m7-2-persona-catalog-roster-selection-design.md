@@ -1,12 +1,14 @@
 # M7.2 预设人物目录与阵容选择设计
 
 - 日期：2026-09-13
-- 状态：2026-09-13 用户要求按本文进入开发；实现与验收进行中。用户已确认“完整沿用旧阵容，可调整座位；换人需从当前目录重新选择”。
+- 状态：A–D 已实现；离线、浏览器及必要远程定向验收已完成（见 §11）。用户已确认“完整沿用旧阵容，可调整座位；换人需从当前目录重新选择”。
 - 任务来源：[开发任务 M7.2](../plans/2026-07-23-poker-practice-development-tasks.md#m72-预设人物目录与阵容选择)
 - 上位设计：[前端交互与页面设计 §3.2](./2026-07-23-poker-practice-frontend-design.md#32-新建训练场)、[PRD §5.1–5.2](./2026-07-23-poker-practice-prd.md#51-选择-ai-预设人物)
 - 继承契约：[M3.2 创建与阵容快照](./2026-08-09-m3-2-session-creation-roster-snapshot-design.md)、[M6.2 API/Query](./2026-09-10-m6-2-type-safe-api-query-design.md)、[M6.3 场次同步](./2026-09-11-m6-3-sse-client-cache-coordination-design.md)、[M6.4 UI 状态](./2026-09-11-m6-4-domain-ui-stores-design.md)、[M6.5 视觉基础](./2026-09-11-m6-5-mobile-dark-cardroom-visual-foundation-design.md)、[M6.6 通用反馈](./2026-09-11-m6-6-common-feedback-confirmation-design.md)
 - 前置交接：[M7.1 设计 §6、实施 §10–11](./2026-09-12-m7-1-training-home-design.md#6-导航与沿用阵容交接)
 - 下游：M7.3 确认开场。本文拥有两步共享的阵容来源、草稿生命周期与预览绑定契约；M7.3 设计需直接引用本文，不重新定义这些契约。
+
+> 状态同步（2026-09-14）：当前实现与验收以本文 §11 及[总任务状态](../plans/2026-07-23-poker-practice-development-tasks.md)为准。设计阶段的仓库缺口、待授权及后续交接措辞描述当时基线，不代表当前仍未实现；历史测试结果保留原执行范围。M6.1–M6.6、M7.1–M7.6 已实现，真机等未验证项目仍按实施记录保留。
 
 ## 1. 结论与完成范围
 
@@ -289,9 +291,9 @@ A → B → C → D 串行集成，不要求另建子设计或自动创建 Codex
 
 最终 verify 与 build 日志分别保存在本机 `/tmp/m72-verify.log`、`/tmp/m72-build.log`。
 
-远程验收（用户已确认网络可用）：database m23 已尝试但未通过；direct endpoint 在当前环境解析/连接失败（IPv6 无可达路由），按运行手册临时使用 IPv4 session pooler 后 migration 兼容性检查通过，但事务读取超时。受控清理检查后，以临时阶段日志定向诊断：原有首个 `assertRosterAndSettings` 尚未结束时，测试锁心跳出现 `ETIMEDOUT`，触发 `DatabaseTestSuiteLockLostError` 中止写入，新增预览断言尚未执行。没有增加 timeout、重试或绕过锁认证。最终受控 `db:test:cleanup` 通过，终止 1 个遗留测试连接；原环境配置和临时诊断代码均已恢复。
+历史远程阻塞记录（已由下方“网络恢复后的远程验收”解除）：database m23 当时已尝试但未通过；direct endpoint 在当前环境解析/连接失败（IPv6 无可达路由），按运行手册临时使用 IPv4 session pooler 后 migration 兼容性检查通过，但事务读取超时。受控清理检查后，以临时阶段日志定向诊断：原有首个 `assertRosterAndSettings` 尚未结束时，测试锁心跳出现 `ETIMEDOUT`，触发 `DatabaseTestSuiteLockLostError` 中止写入，新增预览断言尚未执行。没有增加 timeout、重试或绕过锁认证。最终受控 `db:test:cleanup` 通过，终止 1 个遗留测试连接；原环境配置和临时诊断代码均已恢复。
 
-因连接持续稳定性尚未满足，database m28、`db:test:full` 未执行；PostgreSQL E2E m32、`postgres:e2e:full` 均未执行。M7.2 保持待远程验收状态，需在 direct IPv6 可达或 session pooler 可稳定持锁的环境按顺序完成 m23 → m28 → PostgreSQL E2E m32。诊断及清理日志：本机 `/tmp/m72-db-m23-diagnostic.log`、`/tmp/m72-db-cleanup-final.log`。本次未修改共享事务帮助函数、锁顺序、持久化 Schema/migration 或测试连接/锁基础设施。
+因连接持续稳定性尚未满足，database m28、`db:test:full` 未执行；PostgreSQL E2E m32、`postgres:e2e:full` 均未执行。当时 M7.2 保持待远程验收状态，需在 direct IPv6 可达或 session pooler 可稳定持锁的环境按顺序完成 m23 → m28 → PostgreSQL E2E m32。诊断及清理日志：本机 `/tmp/m72-db-m23-diagnostic.log`、`/tmp/m72-db-cleanup-final.log`。本次未修改共享事务帮助函数、锁顺序、持久化 Schema/migration 或测试连接/锁基础设施。
 
 
 ### 网络恢复后的远程验收

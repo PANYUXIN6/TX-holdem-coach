@@ -9,6 +9,8 @@
 - 后端前置：[M3.6 公开投影](./2026-08-12-m3-6-public-snapshot-sse-safe-projection-design.md)、[M3.7 SSE 补发](./2026-08-13-m3-7-sse-reconnection-event-replay-design.md)
 - 下游：M6.4 UI Store、M6.6 通用反馈、M7 真实产品页面
 
+> 状态同步（2026-09-14）：当前实现与验收以本文 §13 及[总任务状态](../plans/2026-07-23-poker-practice-development-tasks.md)为准。设计阶段的仓库缺口、待授权及后续交接措辞描述当时基线，不代表当前仍未实现；历史测试结果保留原执行范围。M6.1–M6.6、M7.1–M7.6 已实现，真机等未验证项目仍按实施记录保留。
+
 ## 1. 设计结论与范围
 
 在现有 Web API/Query 层上建立一个场次同步运行时：以 TanStack Query 中的 `['session', sessionId]` 为唯一快照，通过同一接收器处理场次 GET、创建、成功命令、错误 `latestSnapshot` 与 SSE。采用原生 fetch 读取 SSE，使用独立解析库处理文本分帧；接收器决定游标是否提交，连接控制器决定何时重连及开放命令。

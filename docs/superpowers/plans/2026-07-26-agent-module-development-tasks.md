@@ -1,14 +1,16 @@
 # Agent 大模块开发任务
 
-- 状态：待开发
+- 状态：部分完成；Foundation 与 Player 主链已由 M4.1–M4.10 实施并完成生产接线，Player 审计与 Eval 已交付。Coach Runtime、Coach 策略投影及完整发布验收仍待后续 M8/M9，A10/A11 继续后置；A 工作包含跨阶段范围，不将 Player 完成视为整个工作包全部完成。
 - 日期：2026-07-26
-- 最后更新：2026-08-16
+- 最后更新：2026-09-14（实施状态同步）
 - 总体架构：[Agent Foundation 与受限 Runtime](../specs/2026-07-26-agent-foundation-runtime-architecture.md)
 - Player 设计：[Player Agent Runtime 专项设计](../specs/2026-07-23-poker-practice-agent-harness-design.md)
 - Coach 设计：[Coach Agent Runtime](../specs/2026-07-26-poker-coach-agent-design.md)
 - 后端设计：[后端、牌局引擎与数据设计](../specs/2026-07-23-poker-practice-backend-design.md)
 - 数据库设计：[Supabase Postgres 与 Drizzle 迁移设计](../specs/2026-07-29-supabase-postgres-drizzle-migration-design.md)
 - 总开发计划：[项目开发任务](./2026-07-23-poker-practice-development-tasks.md)
+
+> 当前进展以[总开发计划](./2026-07-23-poker-practice-development-tasks.md)及 M4 专项实施记录为准。下文保留原工作包拆分和验收契约；共享启动链的 M3.8 专项收口仍待完成，Coach 未安装，不能把整个 Agent 大模块标记为完成。
 
 ## 1. 目的与执行原则
 

@@ -1,7 +1,7 @@
 # M5.2 完成手历史可见性与详情接口设计
 
 - 日期：2026-09-04
-- 状态：设计稿，待用户确认；尚未实施
+- 状态：已实现；共享协议、公开/揭示投影、查询服务、HTTP 与生产装配已接入，PostgreSQL E2E m52 已通过（见 §11）。
 - 任务来源：[项目开发任务 M5.2](../plans/2026-07-23-poker-practice-development-tasks.md#m52-实现历史可见性投影)
 - 上位设计：[非 Agent 运行时架构重基线](./2026-07-28-non-agent-runtime-architecture-rebaseline.md)
 - 产品事实源：[PRD 5.4、9.1、9.2](./2026-07-23-poker-practice-prd.md)、[前端设计 3.4](./2026-07-23-poker-practice-frontend-design.md)
@@ -356,7 +356,7 @@ pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=
 
 不能把 m52 通过写成 E2E full 通过，也不能把 database m51 通过写成 HTTP/E2E 通过。
 
-## 10. 设计核对与交接
+## 10. 设计阶段核对与交接（历史）
 
 当前没有必须依赖用户补充信息才能成文的技术问题。文档选择了与现有契约一致的推荐方案；用户确认本文后，研发以以下内容为共同验收依据：
 
@@ -367,3 +367,10 @@ pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=
 5. A→B→C→D 顺序实施；覆盖真实生产装配的 PostgreSQL E2E，同时保留离线层的精确可见性断言。
 
 本轮只新增本文和开发任务中的设计入口，保留现有实现。研发完成后再同步 `docs/REPO_MAP.md`、`docs/ARCHITECTURE.md`、运行手册与 M5.2 实施/验收状态，不将拟新增文件提前记成已实现架构。
+
+
+## 11. 实施状态同步（2026-09-14）
+
+依据[总任务 M5.2](../plans/2026-07-23-poker-practice-development-tasks.md#m52-实现历史可见性投影)的既有实施记录，M5.2 已完成 Contracts、`public | auditReveal` 投影、`GET /api/hands/:handId` 和生产装配，PostgreSQL E2E m52 已通过。源码与测试位于 `apps/server/src/sessions/hand-history/completed-hand-history-view-projector.ts`、`completed-hand-history-query-service.ts`、`apps/server/src/http/hand-history-routes.ts` 及 `apps/server/test/integration/postgres-e2e-m52-assertions.ts`。
+
+本文此前“尚未实施”和 §10 的交接描述属于设计阶段历史；本次只同步状态，未重新运行测试，不补记 database milestone 或两套 full 的通过结论。

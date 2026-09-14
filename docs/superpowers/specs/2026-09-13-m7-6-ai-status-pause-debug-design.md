@@ -1,13 +1,15 @@
 # M7.6 AI 状态、暂停与调试视图设计
 
-- 状态：2026-09-14 A–D 已实现，离线与浏览器验收通过；E 的 m55 PostgreSQL E2E 因连接超时待复测，真机验收待完成。
+- 状态：2026-09-14 A–D 已实现，离线与浏览器验收通过；必要远程定向验收已完成（m55 PostgreSQL E2E 于 2026-09-14 由用户确认通过），真机验收待完成。
 - 实施授权说明：本文原“本轮只写设计/尚未授权”描述保留为设计阶段历史；本轮用户已明确要求阅读本文并进入开发阶段，共享接口和命令目标增量据此实施。
 - 日期：2026-09-13
 - 任务来源：[开发任务 M7.6](../plans/2026-07-23-poker-practice-development-tasks.md#m76-ai-状态暂停与调试视图)
 - 产品依据：[PRD §6.2、§7、§10](./2026-07-23-poker-practice-prd.md)、[前端总体设计 §3.8、§8](./2026-07-23-poker-practice-frontend-design.md)。本文拥有本任务各切片的共享协议、页面行为与集成验收。
 - 继承约束：[M6.3 唯一快照与命令恢复](./2026-09-11-m6-3-sse-client-cache-coordination-design.md)、[M6.4 UI 状态生命周期](./2026-09-11-m6-4-domain-ui-stores-design.md)、[M6.6 反馈与危险确认](./2026-09-11-m6-6-common-feedback-confirmation-design.md)、[M5.5 调用链摘要与可见性](./2026-09-06-m5-5-session-management-agent-call-query-design.md)。
-- 服务端约束：[M4.8 暂停、人工重试及替代运行](./2026-08-28-m4-8-player-failure-pause-stale-replacement-design.md)、[M3.4 暂停中止与回退](./2026-08-09-m3-4-rebuy-next-hand-session-end-design.md)、[M4.10 生产调度与重启恢复](./2026-08-31-m4-10-session-integration-player-eval-design.md)。本文 §5 提议在既有命令上增加可选目标校验，不改变这些设计的扑克、账务、替代运行或锁序语义；批准前不视为已生效协议。
+- 服务端约束：[M4.8 暂停、人工重试及替代运行](./2026-08-28-m4-8-player-failure-pause-stale-replacement-design.md)、[M3.4 暂停中止与回退](./2026-08-09-m3-4-rebuy-next-hand-session-end-design.md)、[M4.10 生产调度与重启恢复](./2026-08-31-m4-10-session-integration-player-eval-design.md)。本文 §5 已在既有命令上增加可选目标校验，不改变这些设计的扑克、账务、替代运行或锁序语义；该增量已按用户开发授权实施。
 - 前序交接：[M7.5 实施记录 §12](./2026-09-13-m7-5-player-actions-hand-completion-design.md#12-实施记录与后续交接2026-09-13)。正常结束已完成，暂停中止由本任务接续；本手流程、普通历史和完整手牌详情仍由 M7.7 接续，Coach 属于 M8。
+
+> 状态同步（2026-09-14）：当前实现与验收以本文 §12 及[总任务状态](../plans/2026-07-23-poker-practice-development-tasks.md)为准。设计阶段的仓库缺口、待授权及后续交接措辞描述当时基线，不代表当前仍未实现；历史测试结果保留原执行范围。M6.1–M6.6、M7.1–M7.6 已实现，真机等未验证项目仍按实施记录保留。
 
 ## 1. 目标与完成标准
 
@@ -286,13 +288,13 @@ Vite dev 与独立 build preview 均测试真实页面，夹具只替换 HTTP/SS
 
 任何实际远程连接前必须暂停询问用户网络是否可用；本轮写设计不连接数据库。若尚未确认网络，先完成已授权离线工作，远程验收保持待执行。
 
-## 11. 设计交付与待审阅决定
+## 11. 设计阶段交付记录（历史）
 
-本稿完整覆盖 M7.6 六项产出和三项人工验收，按 A–E 编排研发。重点审阅两项增量：§4 的窄 AI 只读接口、§5 的可选失败 Run 前置条件及 M7.6 UI 强制使用；其他页面和调用字段沿用已有契约。当前没有必须靠猜测补齐的产品选择，接口及命令调整尚未实施。
+本稿完整覆盖 M7.6 六项产出和三项人工验收，按 A–E 编排研发。重点审阅两项增量：§4 的窄 AI 只读接口、§5 的可选失败 Run 前置条件及 M7.6 UI 强制使用；其他页面和调用字段沿用已有契约。当前没有必须靠猜测补齐的产品选择，设计交付时接口及命令调整尚未实施；后续已完成，见 §12。
 
 本轮只新增本文和总任务清单入口，不修改产品代码、测试、地图或其他已确认设计，不创建 commit。设计自检覆盖需求映射、状态/请求身份、历史人物、错误脱敏、分页与取消、中止导航、研发依赖和本地链接；下方验证记录仅证明文档和当前基线，不代表 M7.6 功能通过。
 
-### 11.1 本轮验证记录
+### 11.1 设计阶段验证记录（历史）
 
 - 38 个本地文件链接及所含锚点检查通过；文档独立空白检查和 `git diff --check` 通过。任务清单已增加设计入口，当前 HEAD 仍为 `7eb607f`。
 - `pnpm run verify` 完整通过：地图关键路径 160 项、牌图 55 项、确定性 Player Eval 12 个场景、格式及类型检查；Contracts 36、服务端单元 1,041、服务测试 52、Web 125 项通过。日志为本机 `/tmp/m76-design-verify.log`，这是现有代码基线，不是 M7.6 功能验收。
@@ -324,15 +326,23 @@ Vite dev 与独立 build preview 均测试真实页面，夹具只替换 HTTP/SS
 
 ### 12.3 远程测试范围
 
-用户已确认网络可用；以下测试严格串行且使用隔离测试库与受控 Provider transport。
+当前结论：database m55 以及 PostgreSQL E2E m34、m48、m54 已由本任务执行通过；2026-09-14 用户确认 PostgreSQL E2E m55 已通过，原连接阻塞已解除。此次状态同步采用用户确认，未重新执行远程测试，也不补写未提供的通过日志、耗时或断言数量。两套 full 不因 milestone 通过而改记为通过。
+
+以下为此前执行历史：用户已确认网络可用；测试严格串行且使用隔离测试库与受控 Provider transport。
 
 - database：`db:test:milestone -- --milestone=m55` 已通过。验证固化历史人物、跨 Owner 不可见、诊断错误、固定读取量、无私有输出和独立连接删除下的一致视图。首次执行发现旧夹具缺少正式结束事件及零事件诊断分支问题，已修正并增加离线回归；一次复测因远端连接关闭中断，连接恢复后的同里程碑通过。未执行 `db:test:full`，未执行其他 database milestone。
-- PostgreSQL E2E：m34、m48 及为排障追加的原始 m54 已通过；m48 覆盖原空 payload 重放、同版本二次失败、旧目标拒绝、新目标重试/中止竞争及目标摘要幂等。初次 m48 的新断言错误地预期 executor 返回拒绝对象，已改为认证既有 `CommandPayloadConflictError` 契约后通过。m55 已执行但未通过：第一次在统计 GET 收到 503；第二次四个 Player Run 均 completed 后，Session GET 收到 503；第三次为先验证尚未执行的暂停链临时交换两个独立场景的顺序，仍在暂停后的 Session GET 收到 503，脱敏诊断确认底层 `ETIMEDOUT`。m55 的新 AI GET 在首次成功链返回 200，但目标中止与清空后的整条 HTTP 链尚无通过结论。临时诊断与场景换序均已移除；用户再次确认网络恢复后，已按原顺序复测 m55，仍在统计 GET 收到 503；原始 m54 统计 E2E 定向排查通过（约 35 秒）。临时多连接对照在创建 fixture 时即出现 DatabaseOperationError，未到并发读取，不能据此归因为连接池；此对照改动已移除。当前停止重复运行，m55 保持未通过；需在稳定数据库连接条件下重新执行原顺序的 m55。未执行 `postgres:e2e:full`。
+- PostgreSQL E2E：m34、m48 及为排障追加的原始 m54 已通过；m48 覆盖原空 payload 重放、同版本二次失败、旧目标拒绝、新目标重试/中止竞争及目标摘要幂等。初次 m48 的新断言错误地预期 executor 返回拒绝对象，已改为认证既有 `CommandPayloadConflictError` 契约后通过。m55 在此前执行中未通过：第一次在统计 GET 收到 503；第二次四个 Player Run 均 completed 后，Session GET 收到 503；第三次为先验证尚未执行的暂停链临时交换两个独立场景的顺序，仍在暂停后的 Session GET 收到 503，脱敏诊断确认底层 `ETIMEDOUT`。m55 的新 AI GET 在首次成功链返回 200，但目标中止与清空后的整条 HTTP 链尚无通过结论。临时诊断与场景换序均已移除；用户再次确认网络恢复后，已按原顺序复测 m55，仍在统计 GET 收到 503；原始 m54 统计 E2E 定向排查通过（约 35 秒）。临时多连接对照在创建 fixture 时即出现 DatabaseOperationError，未到并发读取，不能据此归因为连接池；此对照改动已移除。当时停止重复运行并等待稳定连接复测；该阻塞现已由用户确认的 m55 通过解除。未执行 `postgres:e2e:full`。
 
 - 2026-09-14 12:33 用户报告已修复异常中断后的回滚/清理问题后，再次按原顺序执行完整 m55：迁移准备通过，成功查询链约 133 秒后直接报 `read ETIMEDOUT`，整套约 142 秒退出；暂停中止链因 bail 未执行。日志 `/tmp/m76-e2e-m55-after-cleanup-fix.log`。本次日志没有额外清理错误或具体 SQL/锁等待信息，不能据此确认或排除远端残留事务；本地受控入口及 Vitest 进程已退出。本轮未重跑 database 或任一 full。
 
 ### 12.4 待完成验收
 
-m55 PostgreSQL E2E 是当前远程验收阻塞项；其余离线、浏览器与上述远程通过结论保持有效。诊断期间未增加 timeout/retry、修改 SQL 业务行为或削弱断言。失败日志保留于 `/tmp/m76-e2e-m55.log`、`/tmp/m76-e2e-m55-network-failure.log`，m54 原始通过日志为 `/tmp/m76-e2e-m54-diagnostic.log`。
+m55 PostgreSQL E2E 已由用户确认通过，不再作为远程验收阻塞项。其余离线、浏览器与上述远程通过结论保持有效。诊断期间未增加 timeout/retry、修改 SQL 业务行为或削弱断言。失败日志保留于 `/tmp/m76-e2e-m55.log`、`/tmp/m76-e2e-m55-network-failure.log`，m54 原始通过日志为 `/tmp/m76-e2e-m54-diagnostic.log`。
 
 没有真实 iOS/Android 设备，本轮未验证 iOS Safari / Android Chrome 的系统字体、安全区、焦点和手势回退；取得设备后按 §10.2 完成人工验收。桌面移动 viewport 结果不能替代真机结论。未调用真实付费 Provider。
+
+### 12.5 暂停轮询修复与最新离线验证（2026-09-14）
+
+已修复 AI 当前摘要误用调试页轮询策略的问题。摘要按 thinking/paused 协调状态控制 Run、Hand、Attempt interval，暂停或 Run 终态完成收尾读取后停读；调试页保留进行中 Hand 的可见性复核。实现已纳入提交 `c5c0dc9`。
+
+真实 Chromium 回归通过，断言保存在 `apps/web/test/ai-status-polling-browser.mjs`：暂停与终态后的请求计数在超过两个轮询周期内不再增长，手动读取及恢复思考后刷新正常，调试页继续读取 Run/Hand。最新 `pnpm run verify` 全部通过：Contracts 38、服务端单元 1,063、服务测试 53、Web 127 项，以及地图、牌图、确定性 Eval、格式和类型检查。日志为本机 `/tmp/poke-pause-verify.log`。此次前端修复未重跑 database 或 PostgreSQL E2E 的 milestone/full；§12.3 单独记录远程证据。

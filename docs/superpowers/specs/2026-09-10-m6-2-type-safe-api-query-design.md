@@ -8,6 +8,8 @@
 - 前置交付：[M6.1 应用壳](./2026-09-08-m6-1-react-vite-application-shell-design.md)；M3–M5 已安装的公开 HTTP 契约
 - 下游：M6.3 快照接收与 SSE、M6.4 UI Store、M6.6 通用反馈、M7 产品页面
 
+> 状态同步（2026-09-14）：当前实现与验收以本文 §12 及[总任务状态](../plans/2026-07-23-poker-practice-development-tasks.md)为准。设计阶段的仓库缺口、待授权及后续交接措辞描述当时基线，不代表当前仍未实现；历史测试结果保留原执行范围。M6.1–M6.6、M7.1–M7.6 已实现，真机等未验证项目仍按实施记录保留。
+
 ## 1. 设计结论与交付范围
 
 在现有 Web 应用中引入 TanStack Query v5，使用浏览器原生 fetch 与共享 Zod Schema 建立请求边界。客户端只依赖 `packages/contracts`，请求、响应和错误在进入业务消费者前完成校验；普通服务端资源由唯一 QueryClient 缓存，页面不维护实体副本。

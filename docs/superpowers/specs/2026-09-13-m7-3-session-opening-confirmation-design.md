@@ -8,6 +8,8 @@
 - 继承：[M3.2 原子创建](./2026-08-09-m3-2-session-creation-roster-snapshot-design.md)、[M6.2 API/Query](./2026-09-10-m6-2-type-safe-api-query-design.md)、[M6.3 场次同步](./2026-09-11-m6-3-sse-client-cache-coordination-design.md)、[M6.6 反馈与确认](./2026-09-11-m6-6-common-feedback-confirmation-design.md)。视觉与 UI 状态沿用已实现的 M6.4/M6.5。
 - 下游：M7.4 牌桌布局、M7.5 玩家操作、M7.9 设置页。本文不以这些页面完成为前置，也不将它们的能力计入本任务验收。
 
+> 状态同步（2026-09-14）：当前实现与验收以本文 §11 及[总任务状态](../plans/2026-07-23-poker-practice-development-tasks.md)为准。设计阶段的仓库缺口、待授权及后续交接措辞描述当时基线，不代表当前仍未实现；历史测试结果保留原执行范围。M6.1–M6.6、M7.1–M7.6 已实现，真机等未验证项目仍按实施记录保留。
+
 ## 1. 结论与范围
 
 将 `/sessions/new/confirm` 从 M7.2 的只读交接摘要补齐为可以实际开场的确认页：展示最终座位、人物版本、固定规则和 DeepSeek 配置/检测结果，允许调整或随机排列 AI，点击“确认开场”后通过原创建 runtime 进入服务端返回的场次。

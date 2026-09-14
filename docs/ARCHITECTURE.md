@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-09-10（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5 与 M6.1 应用壳已实现；M3.8 主体接线已由 M4.10 落地；M5.5 已通过离线验证及 m55 database、PostgreSQL E2E milestones）
+更新时间：2026-09-14（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.6 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
 
 ## Workspace 边界
 
@@ -188,3 +188,5 @@ Shell 继续拥有唯一画布和方向保护；牌桌金额聚焦时按 VisualV
 浏览器 `session-ai-status` Query 不写入唯一 Session Key。动态状态必须对齐 sessionId/stateVersion/eventSeq/hand/actor/request；领先时调用原 runtime 校准，落后时重新读取。恢复意图只保存身份和序列，Mutation 复核后同步调用原 commandOptions。服务端原 retry/end Handler 在 Session 锁内复验 expectedPausedRunId，verifier 认证关系计划，账本摘要保留完整目标；相同 ID 重放仍优先于当前状态判断。
 
 调试 Hand/Run 查询独立于 Session SSE。进行中 Hand 或非终态 Run 前台有界刷新；Hand 中止或查询失败时不显示旧 normalizedAction，404 清除当前资源，子查询传播取消。子页 tab/selection 由既有 Debug Store 管理，游标只属于页面。中止仍走原 checkpoint 回退事务，只有权威高版本 ended 才离开原页面；首页只接收 handId 导航标识，余额与普通历史不从路由状态恢复。
+
+AI 当前技术摘要按协调状态使用独立于调试详情页的轮询策略：thinking 前台读取，paused 重新挂载完成收尾读取后停止 Run/Hand/Attempt interval，Run 终态也完成子摘要收尾并停读；手动读取仍可用。调试页在 Hand 仍 inProgress 时继续复核 Run/Hand 可见性。

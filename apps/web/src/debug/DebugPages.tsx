@@ -98,6 +98,22 @@ function HandRuns({ id }: { id: string }) {
             >
               返回本场 AI
             </Link>
+            {query.data.hand.status !== 'aborted' ? (
+              <Link
+                className="audit-link"
+                to={
+                  query.data.hand.status === 'completed'
+                    ? resourcePath('hand', id)
+                    : resourcePath('currentHand', query.data.hand.sessionId)
+                }
+              >
+                {query.data.hand.status === 'completed'
+                  ? '返回已完成手详情'
+                  : '返回本手流程'}
+              </Link>
+            ) : (
+              <p>此手已中止，仅保留技术记录。</p>
+            )}
             <p>按创建时间升序排列；本页不代表最新请求。</p>
             <p>
               最近读取：{new Date(query.dataUpdatedAt).toLocaleTimeString()}

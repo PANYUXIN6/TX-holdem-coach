@@ -11,6 +11,7 @@ await build({
     rollupOptions: {
       input: {
         app: fileURLToPath(new URL('../index.html', import.meta.url)),
+        history: fileURLToPath(new URL('./history.html', import.meta.url)),
         aiStatus: fileURLToPath(new URL('./ai-status.html', import.meta.url)),
         table: fileURLToPath(new URL('./table.html', import.meta.url)),
         home: fileURLToPath(new URL('./home.html', import.meta.url)),

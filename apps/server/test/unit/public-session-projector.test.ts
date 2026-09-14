@@ -1,8 +1,10 @@
 import {
   PublicSessionSnapshotSchema,
+  PublicActionTimelineEntrySchema,
   SseEventSchema,
 } from '@tx-holdem-coach/contracts'
 import { describe, expect, test } from 'vitest'
+import { STANDARD_DECK } from '../../src/poker/cards.js'
 import { applyPokerAction } from '../../src/poker/poker-engine.js'
 import { createPrivateTableState } from '../../src/sessions/authoritative-state/private-table-state.js'
 import { projectPublicSessionSnapshot } from '../../src/sessions/public-projection/public-session-projector.js'
@@ -103,6 +105,77 @@ describe('public session projector', () => {
     expect(serialized).not.toContain('progression')
     expect(serialized).not.toContain('Q\",\"suit\":\"hearts')
     expect(Object.isFrozen(snapshot)).toBe(true)
+  })
+
+  test('BB 补跟收街仍展示本次 40 和本街累计 60', () => {
+    const base = createFacts()
+    const initial = createTestBettingPokerState()
+    const dealt = initial.hand!.holeCards.flatMap(({ cards }) => cards)
+    let poker = createTestBettingPokerState({
+      hand: {
+        remainingDeck: STANDARD_DECK.filter(
+          (card) =>
+            !dealt.some((c) => c.rank === card.rank && c.suit === card.suit),
+        ),
+      },
+    })
+    for (const seat of [3, 4, 5, 0, 1]) {
+      poker = applyPokerAction(poker, {
+        actorSeatNumber: seat,
+        action:
+          seat === 3
+            ? { type: 'raise', targetStreetCommitment: 60 }
+            : { type: 'call' },
+      }).state
+    }
+    const result = applyPokerAction(poker, {
+      actorSeatNumber: 2,
+      action: { type: 'call' },
+    })
+    const snapshot = projectPublicSessionSnapshot({
+      ...base,
+      state: createPrivateTableState({ ...base.state, poker: result.state }),
+      newPrivateEvents: result.eventDrafts,
+    })
+    expect(snapshot.hand?.street).toBe('flop')
+    expect(snapshot.hand?.actionTimeline[0]).toMatchObject({
+      actionDisplay: { committedAmount: 40, streetContributionAfterAction: 60 },
+      potAfter: 360,
+    })
+  })
+
+  test('旧时间线可缺省整块，坏金额块拒绝，投影不输出失衡金额', () => {
+    const facts = createFacts()
+    const entry = projectPublicSessionSnapshot(facts).hand!.actionTimeline[0]!
+    expect(entry.actionDisplay).toEqual({
+      committedAmount: 0,
+      streetContributionAfterAction: 0,
+    })
+    const { actionDisplay: _, ...legacy } = entry
+    expect(PublicActionTimelineEntrySchema.parse(legacy)).toEqual(legacy)
+    for (const actionDisplay of [
+      {},
+      { committedAmount: 0 },
+      { committedAmount: -1, streetContributionAfterAction: 0 },
+      { ...entry.actionDisplay, private: true },
+    ])
+      expect(
+        PublicActionTimelineEntrySchema.safeParse({ ...entry, actionDisplay })
+          .success,
+      ).toBe(false)
+    const corrupted = structuredClone(facts)
+    const event = corrupted.newPrivateEvents[0]!
+    if (event.type !== 'actionCommitted') throw new Error('expected action')
+    const invalidEvent = {
+      ...event,
+      after: { ...event.after, pot: event.after.pot + 1 },
+    }
+    expect(() =>
+      projectPublicSessionSnapshot({
+        ...facts,
+        newPrivateEvents: [invalidEvent],
+      }),
+    ).toThrow(PublicProjectionInvariantError)
   })
 
   test('无行动的首手公开庄盲、投入和未匹配额，旧格式仍可读取', () => {

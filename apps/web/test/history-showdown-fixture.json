@@ -1,0 +1,639 @@
+{
+  "protocolVersion": 1,
+  "view": "public",
+  "history": {
+    "sessionId": "22222222-2222-4222-8222-222222222222",
+    "handId": "40000000-0000-4000-8000-000000000001",
+    "handNumber": 1,
+    "startedAt": "2026-09-03T12:00:00.000Z",
+    "completedAt": "2026-09-03T12:01:00.000Z",
+    "participantSeatNumbers": [0, 1, 2, 3, 4, 5],
+    "buttonSeatNumber": 0,
+    "smallBlindSeatNumber": 1,
+    "bigBlindSeatNumber": 2,
+    "participants": [
+      {
+        "seatNumber": 0,
+        "playerId": "00000000-0000-4000-8000-000000000001",
+        "isUser": true,
+        "displayName": "玩家",
+        "avatarColor": "#0F766E",
+        "position": "BTN",
+        "startingStack": 100,
+        "endingStack": 100,
+        "totalContribution": 100,
+        "netChange": 0
+      },
+      {
+        "seatNumber": 1,
+        "playerId": "00000000-0000-4000-8000-000000000002",
+        "isUser": false,
+        "displayName": "AI 1",
+        "avatarColor": "#000000",
+        "position": "SB",
+        "startingStack": 200,
+        "endingStack": 200,
+        "totalContribution": 200,
+        "netChange": 0
+      },
+      {
+        "seatNumber": 2,
+        "playerId": "00000000-0000-4000-8000-000000000003",
+        "isUser": false,
+        "displayName": "AI 2",
+        "avatarColor": "#000000",
+        "position": "BB",
+        "startingStack": 300,
+        "endingStack": 300,
+        "totalContribution": 300,
+        "netChange": 0
+      },
+      {
+        "seatNumber": 3,
+        "playerId": "00000000-0000-4000-8000-000000000004",
+        "isUser": false,
+        "displayName": "AI 3",
+        "avatarColor": "#000000",
+        "position": "UTG",
+        "startingStack": 400,
+        "endingStack": 400,
+        "totalContribution": 400,
+        "netChange": 0
+      },
+      {
+        "seatNumber": 4,
+        "playerId": "00000000-0000-4000-8000-000000000005",
+        "isUser": false,
+        "displayName": "AI 4",
+        "avatarColor": "#000000",
+        "position": "HJ",
+        "startingStack": 500,
+        "endingStack": 500,
+        "totalContribution": 500,
+        "netChange": 0
+      },
+      {
+        "seatNumber": 5,
+        "playerId": "00000000-0000-4000-8000-000000000006",
+        "isUser": false,
+        "displayName": "AI 5",
+        "avatarColor": "#000000",
+        "position": "CO",
+        "startingStack": 600,
+        "endingStack": 600,
+        "totalContribution": 600,
+        "netChange": 0
+      }
+    ],
+    "phases": [
+      {
+        "phase": "preflop",
+        "communityCards": [],
+        "actions": [
+          {
+            "actionNumber": 1,
+            "eventSeq": 20,
+            "actorSeatNumber": 3,
+            "playerId": "00000000-0000-4000-8000-000000000004",
+            "position": "UTG",
+            "action": {
+              "type": "allIn"
+            },
+            "committedAmount": 400,
+            "streetContributionAfterAction": 400,
+            "stackAfterAction": 0,
+            "potBeforeAction": 30,
+            "potAfterAction": 430
+          },
+          {
+            "actionNumber": 2,
+            "eventSeq": 21,
+            "actorSeatNumber": 4,
+            "playerId": "00000000-0000-4000-8000-000000000005",
+            "position": "HJ",
+            "action": {
+              "type": "allIn"
+            },
+            "committedAmount": 500,
+            "streetContributionAfterAction": 500,
+            "stackAfterAction": 0,
+            "potBeforeAction": 430,
+            "potAfterAction": 930
+          },
+          {
+            "actionNumber": 3,
+            "eventSeq": 22,
+            "actorSeatNumber": 5,
+            "playerId": "00000000-0000-4000-8000-000000000006",
+            "position": "CO",
+            "action": {
+              "type": "allIn"
+            },
+            "committedAmount": 600,
+            "streetContributionAfterAction": 600,
+            "stackAfterAction": 0,
+            "potBeforeAction": 930,
+            "potAfterAction": 1530
+          },
+          {
+            "actionNumber": 4,
+            "eventSeq": 23,
+            "actorSeatNumber": 0,
+            "playerId": "00000000-0000-4000-8000-000000000001",
+            "position": "BTN",
+            "action": {
+              "type": "allIn"
+            },
+            "committedAmount": 100,
+            "streetContributionAfterAction": 100,
+            "stackAfterAction": 0,
+            "potBeforeAction": 1530,
+            "potAfterAction": 1630
+          },
+          {
+            "actionNumber": 5,
+            "eventSeq": 24,
+            "actorSeatNumber": 1,
+            "playerId": "00000000-0000-4000-8000-000000000002",
+            "position": "SB",
+            "action": {
+              "type": "allIn"
+            },
+            "committedAmount": 190,
+            "streetContributionAfterAction": 200,
+            "stackAfterAction": 0,
+            "potBeforeAction": 1630,
+            "potAfterAction": 1820
+          },
+          {
+            "actionNumber": 6,
+            "eventSeq": 25,
+            "actorSeatNumber": 2,
+            "playerId": "00000000-0000-4000-8000-000000000003",
+            "position": "BB",
+            "action": {
+              "type": "allIn"
+            },
+            "committedAmount": 280,
+            "streetContributionAfterAction": 300,
+            "stackAfterAction": 0,
+            "potBeforeAction": 1820,
+            "potAfterAction": 2100
+          }
+        ]
+      },
+      {
+        "phase": "flop",
+        "communityCards": [
+          {
+            "rank": "3",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "4",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "5",
+            "suit": "diamonds"
+          }
+        ],
+        "actions": []
+      },
+      {
+        "phase": "turn",
+        "communityCards": [
+          {
+            "rank": "3",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "4",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "5",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          }
+        ],
+        "actions": []
+      },
+      {
+        "phase": "river",
+        "communityCards": [
+          {
+            "rank": "3",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "4",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "5",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "9",
+            "suit": "diamonds"
+          }
+        ],
+        "actions": []
+      },
+      {
+        "phase": "showdown",
+        "terminationReason": "showdown",
+        "handCompletedEventSeq": 27,
+        "communityCards": [
+          {
+            "rank": "3",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "4",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "5",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "9",
+            "suit": "diamonds"
+          }
+        ],
+        "uncalledBetReturns": [
+          {
+            "eventSeq": 26,
+            "seatNumber": 5,
+            "amount": 100
+          }
+        ],
+        "revealedHands": [
+          {
+            "seatNumber": 0,
+            "holeCards": [
+              {
+                "rank": "8",
+                "suit": "clubs"
+              },
+              {
+                "rank": "A",
+                "suit": "clubs"
+              }
+            ],
+            "handEvaluation": {
+              "category": "flush",
+              "bestFive": [
+                {
+                  "rank": "9",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "7",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "5",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "4",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "3",
+                  "suit": "diamonds"
+                }
+              ]
+            }
+          },
+          {
+            "seatNumber": 1,
+            "holeCards": [
+              {
+                "rank": "3",
+                "suit": "clubs"
+              },
+              {
+                "rank": "9",
+                "suit": "clubs"
+              }
+            ],
+            "handEvaluation": {
+              "category": "flush",
+              "bestFive": [
+                {
+                  "rank": "9",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "7",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "5",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "4",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "3",
+                  "suit": "diamonds"
+                }
+              ]
+            }
+          },
+          {
+            "seatNumber": 2,
+            "holeCards": [
+              {
+                "rank": "4",
+                "suit": "clubs"
+              },
+              {
+                "rank": "T",
+                "suit": "clubs"
+              }
+            ],
+            "handEvaluation": {
+              "category": "flush",
+              "bestFive": [
+                {
+                  "rank": "9",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "7",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "5",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "4",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "3",
+                  "suit": "diamonds"
+                }
+              ]
+            }
+          },
+          {
+            "seatNumber": 3,
+            "holeCards": [
+              {
+                "rank": "5",
+                "suit": "clubs"
+              },
+              {
+                "rank": "J",
+                "suit": "clubs"
+              }
+            ],
+            "handEvaluation": {
+              "category": "flush",
+              "bestFive": [
+                {
+                  "rank": "9",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "7",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "5",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "4",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "3",
+                  "suit": "diamonds"
+                }
+              ]
+            }
+          },
+          {
+            "seatNumber": 4,
+            "holeCards": [
+              {
+                "rank": "6",
+                "suit": "clubs"
+              },
+              {
+                "rank": "Q",
+                "suit": "clubs"
+              }
+            ],
+            "handEvaluation": {
+              "category": "flush",
+              "bestFive": [
+                {
+                  "rank": "9",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "7",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "5",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "4",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "3",
+                  "suit": "diamonds"
+                }
+              ]
+            }
+          },
+          {
+            "seatNumber": 5,
+            "holeCards": [
+              {
+                "rank": "7",
+                "suit": "clubs"
+              },
+              {
+                "rank": "K",
+                "suit": "clubs"
+              }
+            ],
+            "handEvaluation": {
+              "category": "flush",
+              "bestFive": [
+                {
+                  "rank": "9",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "7",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "5",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "4",
+                  "suit": "diamonds"
+                },
+                {
+                  "rank": "3",
+                  "suit": "diamonds"
+                }
+              ]
+            }
+          }
+        ],
+        "pots": [
+          {
+            "potIndex": 0,
+            "kind": "main",
+            "amount": 600,
+            "winningSeatNumbers": [0, 1, 2, 3, 4, 5],
+            "awards": [
+              {
+                "seatNumber": 1,
+                "amount": 100
+              },
+              {
+                "seatNumber": 2,
+                "amount": 100
+              },
+              {
+                "seatNumber": 3,
+                "amount": 100
+              },
+              {
+                "seatNumber": 4,
+                "amount": 100
+              },
+              {
+                "seatNumber": 5,
+                "amount": 100
+              },
+              {
+                "seatNumber": 0,
+                "amount": 100
+              }
+            ]
+          },
+          {
+            "potIndex": 1,
+            "kind": "side",
+            "amount": 500,
+            "winningSeatNumbers": [1, 2, 3, 4, 5],
+            "awards": [
+              {
+                "seatNumber": 1,
+                "amount": 100
+              },
+              {
+                "seatNumber": 2,
+                "amount": 100
+              },
+              {
+                "seatNumber": 3,
+                "amount": 100
+              },
+              {
+                "seatNumber": 4,
+                "amount": 100
+              },
+              {
+                "seatNumber": 5,
+                "amount": 100
+              }
+            ]
+          },
+          {
+            "potIndex": 2,
+            "kind": "side",
+            "amount": 400,
+            "winningSeatNumbers": [2, 3, 4, 5],
+            "awards": [
+              {
+                "seatNumber": 2,
+                "amount": 100
+              },
+              {
+                "seatNumber": 3,
+                "amount": 100
+              },
+              {
+                "seatNumber": 4,
+                "amount": 100
+              },
+              {
+                "seatNumber": 5,
+                "amount": 100
+              }
+            ]
+          },
+          {
+            "potIndex": 3,
+            "kind": "side",
+            "amount": 300,
+            "winningSeatNumbers": [3, 4, 5],
+            "awards": [
+              {
+                "seatNumber": 3,
+                "amount": 100
+              },
+              {
+                "seatNumber": 4,
+                "amount": 100
+              },
+              {
+                "seatNumber": 5,
+                "amount": 100
+              }
+            ]
+          },
+          {
+            "potIndex": 4,
+            "kind": "side",
+            "amount": 200,
+            "winningSeatNumbers": [4, 5],
+            "awards": [
+              {
+                "seatNumber": 4,
+                "amount": 100
+              },
+              {
+                "seatNumber": 5,
+                "amount": 100
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -190,3 +190,10 @@ Shell 继续拥有唯一画布和方向保护；牌桌金额聚焦时按 VisualV
 调试 Hand/Run 查询独立于 Session SSE。进行中 Hand 或非终态 Run 前台有界刷新；Hand 中止或查询失败时不显示旧 normalizedAction，404 清除当前资源，子查询传播取消。子页 tab/selection 由既有 Debug Store 管理，游标只属于页面。中止仍走原 checkpoint 回退事务，只有权威高版本 ended 才离开原页面；首页只接收 handId 导航标识，余额与普通历史不从路由状态恢复。
 
 AI 当前技术摘要按协调状态使用独立于调试详情页的轮询策略：thinking 前台读取，paused 重新挂载完成收尾读取后停止 Run/Hand/Attempt interval，Run 终态也完成子摘要收尾并停读；手动读取仍可用。调试页在 Hand 仍 inProgress 时继续复核 Run/Hand 可见性。
+
+
+## M7.7 历史查询与可见性
+
+历史列表和完成手详情通过原 search codec → Query → `/api/hands` 链读取；URL 拥有已应用条件，抽屉草稿及 audit 揭牌意图仅属于页面。普通进入不会装配 audit observer，即使缓存已有审计数据也只渲染 public；隐藏、离页、换手与资源缺失撤销意图，audit 错误回退 public 并等待显式重试。
+
+本手流程通过 SessionRouteBridge 的既有租用读取唯一快照，按 streetBefore 分街。公开 projector 原位认证 actionDisplay 金额，Web 只格式化 DTO；旧公开事件和命令响应允许整块缺省。hand 消失时仅以匹配的 lastCompletedHandSummary 读取 public 终局，新手和删除优先决定当前渲染目标。详情和调用页的返回只携带白名单路径/查询参数或认证资源 ID，不传递扑克实体。

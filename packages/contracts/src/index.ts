@@ -624,6 +624,12 @@ export const PublicActionSeatStateSchema = z.strictObject({
   totalContribution: ChipAmountSchema,
 })
 export const PublicActionTimelineEntrySchema = z.strictObject({
+  actionDisplay: z
+    .strictObject({
+      committedAmount: ChipAmountSchema,
+      streetContributionAfterAction: ChipAmountSchema,
+    })
+    .optional(),
   eventSeq: EventSequenceSchema,
   handId: HandIdSchema,
   streetBefore: HandStreetSchema,

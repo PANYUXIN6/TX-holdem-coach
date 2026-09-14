@@ -131,9 +131,49 @@ function mergeCurrentHandEvents(
   return merged
 }
 
+type GeneratedHand = NonNullable<PublicSessionSnapshot['hand']> & {
+  actionTimeline: (NonNullable<
+    PublicSessionSnapshot['hand']
+  >['actionTimeline'][number] & {
+    actionDisplay: {
+      committedAmount: number
+      streetContributionAfterAction: number
+    }
+  })[]
+}
+function actionDisplay(
+  event: Extract<PrivateEvent, { type: 'actionCommitted' }>,
+) {
+  const before = event.before.seats.filter(
+    (seat) => seat.seatNumber === event.actorSeatNumber,
+  )
+  const after = event.after.seats.filter(
+    (seat) => seat.seatNumber === event.actorSeatNumber,
+  )
+  if (before.length !== 1 || after.length !== 1) fail()
+  const committedAmount =
+    after[0]!.totalContribution - before[0]!.totalContribution
+  const streetContributionAfterAction =
+    before[0]!.streetContribution + committedAmount
+  if (
+    ![committedAmount, streetContributionAfterAction].every(
+      (value) => Number.isSafeInteger(value) && value >= 0,
+    ) ||
+    committedAmount !== before[0]!.stack - after[0]!.stack ||
+    committedAmount !== event.after.pot - event.before.pot ||
+    (['fold', 'check'].includes(event.command.action.type) &&
+      committedAmount !== 0)
+  )
+    fail()
+  return { committedAmount, streetContributionAfterAction }
+}
+
 export function projectPublicSessionSnapshot(
   facts: PublicSessionProjectionFacts,
-): PublicSessionSnapshot & { tableDisplay: PublicTableDisplay } {
+): PublicSessionSnapshot & {
+  tableDisplay: PublicTableDisplay
+  hand: GeneratedHand | null
+} {
   try {
     const { state, session } = facts
     if (
@@ -185,7 +225,7 @@ export function projectPublicSessionSnapshot(
       }
     })
     const mergedEvents = mergeCurrentHandEvents(facts)
-    const hand =
+    const hand: GeneratedHand | null =
       state.poker.hand === null
         ? null
         : {
@@ -195,9 +235,9 @@ export function projectPublicSessionSnapshot(
             pot: state.poker.hand.pot,
             currentActorSeatNumber: state.poker.hand.currentActorSeatNumber,
             heroHoleCards:
-              state.poker.hand.holeCards.find(
-                (holeCards) => holeCards.seatNumber === 0,
-              )?.cards ?? null,
+              state.poker.hand.holeCards
+                .find((holeCards) => holeCards.seatNumber === 0)
+                ?.cards.map((card) => ({ ...card })) ?? null,
             legalActions:
               session.lifecycleStatus === 'active' &&
               session.agentRunState === 'idle' &&
@@ -209,6 +249,7 @@ export function projectPublicSessionSnapshot(
               if (event.type !== 'actionCommitted') return []
               return [
                 {
+                  actionDisplay: actionDisplay(event),
                   eventSeq: fact.eventSeq,
                   handId: event.handId,
                   streetBefore: event.before.street,
@@ -317,7 +358,7 @@ export function projectPublicSessionSnapshot(
           ? mapCompletedHandSummary(state.lastCompletedHandSummary)
           : null,
     })
-    return deepFreeze({ ...snapshot, tableDisplay })
+    return deepFreeze({ ...snapshot, tableDisplay, hand })
   } catch (error) {
     if (error instanceof PublicProjectionInvariantError) throw error
     throw new PublicProjectionInvariantError()

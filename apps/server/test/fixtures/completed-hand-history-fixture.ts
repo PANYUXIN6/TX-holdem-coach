@@ -72,7 +72,9 @@ export function createDirectWinCompletedHandHistoryFacts(): CompletedHandHistory
   }
 }
 
-export function createShowdownCompletedHandHistoryFacts(): CompletedHandHistoryFacts {
+export function createShowdownCompletedHandHistoryFacts(
+  allInRunout = false,
+): CompletedHandHistoryFacts {
   const handId = '40000000-0000-4000-8000-000000000001'
   const initialPoker = initializePokerTable(
     Array.from({ length: 6 }, (_, seatNumber) => ({
@@ -81,7 +83,7 @@ export function createShowdownCompletedHandHistoryFacts(): CompletedHandHistoryF
         .toString()
         .padStart(12, '0')}`,
       isUser: seatNumber === 0,
-      stack: 1_000,
+      stack: allInRunout ? (seatNumber + 1) * 100 : 1_000,
       status: 'active' as const,
       streetContribution: 0,
       totalContribution: 0,
@@ -118,8 +120,9 @@ export function createShowdownCompletedHandHistoryFacts(): CompletedHandHistoryF
     }
     const legalActions = getLegalActions(state)
     const actionIndex = actionCount++
-    const action =
-      actionIndex === 1 || actionIndex === 3
+    const action = allInRunout
+      ? { type: 'allIn' as const }
+      : actionIndex === 1 || actionIndex === 3
         ? { type: 'fold' as const }
         : legalActions.some((candidate) => candidate.type === 'call')
           ? { type: 'call' as const }

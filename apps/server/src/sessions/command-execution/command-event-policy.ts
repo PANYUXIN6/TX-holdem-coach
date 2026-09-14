@@ -321,6 +321,14 @@ function startNextHandMirrors(input: CommandMutationConsistencyInput): boolean {
 
 function endSessionMirrors(input: CommandMutationConsistencyInput): boolean {
   const relationPlan = parseEndSessionRelationPlan(input.relationPlan)
+  if (
+    input.command.type === 'endSession' &&
+    'expectedPausedRunId' in input.command.payload &&
+    (relationPlan?.kind !== 'abortHand' ||
+      relationPlan.failedPlayerRunId.toLowerCase() !==
+        input.command.payload.expectedPausedRunId.toLowerCase())
+  )
+    return false
   if (input.lifecycleAfter !== 'ended' || input.currentHandIdAfter !== null) {
     return false
   }
@@ -605,6 +613,9 @@ function retryAgentMirrors(input: CommandMutationConsistencyInput): boolean {
   return (
     input.command.type === 'retryAgent' &&
     plan !== null &&
+    (!('expectedPausedRunId' in input.command.payload) ||
+      input.command.payload.expectedPausedRunId.toLowerCase() ===
+        plan.predecessorRunId.toLowerCase()) &&
     input.stateEffectKind === 'stateUnchanged' &&
     stateContentEquals(input.stateBefore, input.stateAfter) &&
     input.lifecycleAfter === 'active' &&

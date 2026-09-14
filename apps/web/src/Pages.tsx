@@ -1,3 +1,5 @@
+import { DebugEntry, HandRunsPage, RunPage } from './debug/DebugPages.js'
+import { AiStatusPage } from './ai-status/AiStatusPage.js'
 import { TablePage } from './table/TablePage.js'
 import { SetupPage } from './session-setup/SetupPage.js'
 import { EmptyState, StatusBadge } from './components/controls.js'
@@ -20,6 +22,10 @@ const descriptions: Partial<Record<PageId, string>> = {
 
 export function Page({ id }: { id: PageId }) {
   const params = useParams()
+  if (id === 'debug') return <DebugEntry />
+  if (id === 'handRuns') return <HandRunsPage />
+  if (id === 'run') return <RunPage />
+  if (id === 'agents') return <AiStatusPage />
   if (id === 'table') return <TablePage />
   if (id === 'home') return <Home />
   if (id === 'newSession' || id === 'confirm')

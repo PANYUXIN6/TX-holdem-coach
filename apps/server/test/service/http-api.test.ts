@@ -85,6 +85,7 @@ function runtime() {
       handHistoryList: { list: async () => ({ items: [], nextCursor: null }) },
       statistics: {} as never,
       sessionManagement: {} as never,
+      sessionAiStatus: {} as never,
       agentCalls: {} as never,
     } satisfies ApiRuntime,
     update,

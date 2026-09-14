@@ -1103,3 +1103,32 @@ describe('command ledger repository', () => {
     ).resolves.toBeUndefined()
   })
 })
+
+test('暂停目标进入完整账本摘要，UUID 大小写规范化且换目标改变摘要', () => {
+  const expectedPausedRunId = 'ABCDEFAB-ABCD-4ABC-8ABC-ABCDEFABCDEF'
+  for (const type of ['endSession', 'retryAgent'] as const) {
+    const target = {
+      sessionId,
+      commandId,
+      expectedStateVersion: 12,
+      type,
+      payload: { expectedPausedRunId },
+    }
+    const upper = prepareCommandRegistration(target)
+    const lower = prepareCommandRegistration({
+      ...target,
+      payload: { expectedPausedRunId: expectedPausedRunId.toLowerCase() },
+    })
+    const changed = prepareCommandRegistration({
+      ...target,
+      payload: { expectedPausedRunId: sessionId },
+    })
+    expect(upper.canonicalPayloadDigest).toBe(lower.canonicalPayloadDigest)
+    expect(upper.command.payload).toEqual({
+      expectedPausedRunId: expectedPausedRunId.toLowerCase(),
+    })
+    expect(changed.canonicalPayloadDigest).not.toBe(
+      upper.canonicalPayloadDigest,
+    )
+  }
+})

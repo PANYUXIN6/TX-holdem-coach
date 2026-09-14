@@ -1,6 +1,6 @@
 import type { PublicSessionSnapshot } from '@tx-holdem-coach/contracts'
 import { keys } from '../query/keys.js'
-import { matchRoutes, useLocation } from 'react-router'
+import { matchRoutes, useLocation, useNavigate } from 'react-router'
 import { routes } from '../navigation.js'
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
@@ -37,6 +37,7 @@ type Result = {
   unknown: boolean
   failed: boolean
   commandId?: string
+  sourceKey?: string
 }
 /** 稳定在 pathname 错误边界外；局部表单卸载不丢弃 Mutation 生命周期。 */
 export function ConfirmationHost({
@@ -51,11 +52,14 @@ export function ConfirmationHost({
   const store = useOverlayStore()
   const active = useOverlayUi((s) => s.active)
   const location = useLocation()
+  const navigate = useNavigate()
+  const locationRef = useRef(location)
+  locationRef.current = location
   const route = matchRoutes(routes, location)?.at(-1)
   const deletion = useMutation(runtime.mutations.deleteSession())
   const clear = useMutation(runtime.mutations.clearData())
   const current = (target: OverlayDescriptor) =>
-    store.getState().active === target
+    store.getState().active === target && !document.hidden && !rotated
   const abort = useMutation(abortConfirmationOptions(client, runtime, current))
   const gate = useRef(false)
   const [pending, setPending] = useState(false)
@@ -98,6 +102,12 @@ export function ConfirmationHost({
     const id = result.target.sessionId
     const check = () => {
       if (
+        result.target.kind === 'abortHandAndEndSession' &&
+        client.getQueryData<PublicSessionSnapshot>(keys.session(id))
+          ?.lifecycleStatus === 'ended'
+      )
+        return
+      if (
         !runtime
           .pendingOperations(id)
           .some((operation) => operation.command.commandId === result.commandId)
@@ -109,7 +119,35 @@ export function ConfirmationHost({
     const unsubscribe = runtime.subscribe(id, check)
     check()
     return unsubscribe
-  }, [result, runtime])
+  }, [result, runtime, client])
+  useLayoutEffect(() => {
+    if (
+      !result ||
+      result.target.kind !== 'abortHandAndEndSession' ||
+      result.sourceKey !== locationRef.current.key
+    )
+      return
+    const target = result.target
+    const check = () => {
+      const snapshot = client.getQueryData<PublicSessionSnapshot>(
+        keys.session(target.sessionId),
+      )
+      if (
+        snapshot?.lifecycleStatus === 'ended' &&
+        snapshot.stateVersion > target.stateVersion &&
+        result.sourceKey === locationRef.current.key
+      ) {
+        setResult(null)
+        void navigate('/', {
+          replace: true,
+          state: { abortedHandId: target.handId },
+        })
+      }
+    }
+    const off = client.getQueryCache().subscribe(check)
+    check()
+    return off
+  }, [result, client, navigate, location.key])
   const commandFeedbackVisible =
     !!result?.commandId &&
     route &&
@@ -124,6 +162,7 @@ export function ConfirmationHost({
     if (rotated && active) store.getState().close(active.instanceId)
   }, [rotated, active, store])
   const submit = async (target: OverlayDescriptor) => {
+    const sourceKey = locationRef.current.key
     if (
       gate.current ||
       result?.unknown ||
@@ -149,6 +188,7 @@ export function ConfirmationHost({
         !['ready', 'ended'].includes(runtime.getStatus(target.sessionId))
       setResult({
         target,
+        sourceKey,
         message: unsynced
           ? '操作已完成，最新状态暂未同步。请重新读取。'
           : `${labels[target.kind]}已完成。`,
@@ -166,6 +206,7 @@ export function ConfirmationHost({
           : undefined
       setResult({
         target,
+        sourceKey,
         message: unresolved
           ? '结束请求结果尚未确认，请关闭弹窗，使用牌局顶部的重新读取或原请求恢复操作。'
           : unknown

@@ -53,6 +53,8 @@ export function maintainSessionResources(
     )
   const matches = (query: Query) => {
     const key = query.queryKey
+    if (key[0] === 'session-ai-status')
+      return key[1] === next.sessionId && (calls || ended)
     if (key[0] === 'sessions')
       return key[1] === 'roster-preview'
         ? recovery || ended || eventType === 'sessionCreated'

@@ -247,3 +247,13 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/src/table/TablePage.tsx`：正文原生折叠结算复用 PotDetails，逐席读取冻结 seatResults 和公开牌型；footer 只保留紧凑结果及展开导航。
 - `apps/web/src/table/keyboard-viewport.ts`：由 Shell 在牌桌金额聚焦时接入 VisualViewport，释放失焦、隐藏、路由与横屏时的临时布局；无真机键盘通过声明。
 - `apps/web/test/table-actions.test.ts`、`ui-coordination.test.ts` 覆盖金额、来源竞态、未决请求与原请求重发；`table-action-checks.ts`、`table-browser.tsx?actions` 以及 `home-transport.ts` 的 actions 场景以受控 HTTP/SSE 验证真实页面旅程。展示夹具仍保留独立零 POST 断言。
+
+## M7.6 AI 状态、暂停与调试
+
+- `packages/contracts/src/index.ts` 的 `SessionAiStatusResponseSchema` / `CurrentPlayerRunSchema` 定义窄 AI 摘要；`retryAgent`、`endSession` 保留空 payload 并接受严格 `expectedPausedRunId` 分支。
+- `apps/server/src/persistence/session-ai-status-repository.ts` 在只读 repeatable-read 事务中读取 Owner-scoped Session/当前快照、固化人物和精确 live Player Run，认证镜像后只投影公开字段；不扫描整手事件或当前人物目录。
+- `apps/server/src/http/session-ai-status-routes.ts` 提供 `GET|HEAD /api/sessions/:sessionId/ai-status`，拒绝 query；`bootstrap.ts` 为两种 runtime 装配真实 Reader。原 retry/end Handler 在 Session 锁内比较失败 leaf，原 verifier 再认证目标，账本完整保存规范化目标并支持原命令重放。
+- `apps/web/src/ai-status/adapter.ts` 拥有快照与 AI 摘要对齐和恢复意图复核；`AiStatusPage.tsx` / `CurrentRunAudit.tsx` 组合人物卡、技术摘要与恢复入口，牌桌复用紧凑暂停区。`queries.ts` 处理摘要领先/落后校准与前台只读生命周期。
+- `apps/web/src/debug/DebugPages.tsx` / `queries.ts` / `AuditFields.tsx` 提供 debug、handRuns、run 页面，沿用 Query 和 Debug Store，独立保存子页游标并根据 Hand/Run 终态收尾、取消和重新认证行动可见性；调试路由不租用 Session SSE。
+- `ui/confirmation.ts`、`confirmation-host.tsx` 的中止目标包含 Run/eventSeq，仍委托原 runtime；高版本 ended 后仅在来源页面导航首页并携带被中止手的审计入口。
+- `apps/web/test/ai-status-browser.tsx` / `ai-status.html` 是生产 Shell/Page/runtime 的受控 HTTP/SSE 浏览器夹具，纳入独立构建；协议、Repository、HTTP、Mutation 和 m55/m48 远程目标测试分别提供边界证据。验收执行状态见 M7.6 设计文档实施记录。

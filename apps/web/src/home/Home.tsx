@@ -4,7 +4,8 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from '@tanstack/react-query'
-import { Link } from 'react-router'
+import { Link, useLocation } from 'react-router'
+import { HandHistoryPathParamsSchema } from '@tx-holdem-coach/contracts'
 import {
   ApiError,
   providerErrorMessages,
@@ -150,6 +151,10 @@ function ActiveCard({
   )
 }
 export function Home() {
+  const location = useLocation()
+  const aborted = HandHistoryPathParamsSchema.safeParse({
+    handId: location.state?.abortedHandId,
+  })
   const runtime = useSessionRuntime()
   const active = useQuery(runtime.activeOptions())
   const recent = useQuery(queries.sessions(homeSessions('all')))
@@ -183,6 +188,16 @@ export function Home() {
           : null
   return (
     <div className="training-home">
+      {aborted.success ? (
+        <Feedback
+          title="本手已中止"
+          action={
+            <Link to={resourcePath('handRuns', aborted.data.handId)}>
+              查看本手技术审计
+            </Link>
+          }
+        />
+      ) : null}
       <section className="home-hero" aria-labelledby="home-title">
         <p className="eyebrow">德州扑克 · AI 对练</p>
         <h2 id="home-title">
@@ -198,6 +213,16 @@ export function Home() {
             title="只读诊断：暂不能继续操作"
             description={
               <>
+                {aborted.success ? (
+                  <Feedback
+                    title="本手已中止"
+                    action={
+                      <Link to={resourcePath('handRuns', aborted.data.handId)}>
+                        查看本手技术审计
+                      </Link>
+                    }
+                  />
+                ) : null}
                 安全错误标识：<code>SESSION_READONLY_DIAGNOSTIC</code>
                 。请重新读取；若仍无法恢复，请保留此标识检查服务。
               </>

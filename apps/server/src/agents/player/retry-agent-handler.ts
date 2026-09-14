@@ -228,6 +228,10 @@ export function createRetryAgentHandlerBinding(input: {
     commandType: 'retryAgent',
     handler: {
       async prepare({ command, state, session, reads }) {
+        const expected =
+          'expectedPausedRunId' in command.payload
+            ? command.payload.expectedPausedRunId
+            : null
         const hand = state.poker.hand
         const actorSeatNumber = hand?.currentActorSeatNumber
         if (
@@ -244,7 +248,12 @@ export function createRetryAgentHandlerBinding(input: {
         ) {
           return {
             kind: 'rejected',
-            rejection: { kind: 'agentRetryNotAllowed' },
+            rejection: {
+              kind:
+                expected === null
+                  ? 'agentRetryNotAllowed'
+                  : 'pausedRunConflict',
+            },
           }
         }
         const actor = state.poker.seats.find(
@@ -253,7 +262,12 @@ export function createRetryAgentHandlerBinding(input: {
         if (actor === undefined) {
           return {
             kind: 'rejected',
-            rejection: { kind: 'agentRetryNotAllowed' },
+            rejection: {
+              kind:
+                expected === null
+                  ? 'agentRetryNotAllowed'
+                  : 'pausedRunConflict',
+            },
           }
         }
         const predecessor = await reads.loadFailedPlayerLeafForRetry({
@@ -265,8 +279,16 @@ export function createRetryAgentHandlerBinding(input: {
         if (predecessor === null) {
           return {
             kind: 'rejected',
-            rejection: { kind: 'agentRetryNotAllowed' },
+            rejection: {
+              kind:
+                expected === null
+                  ? 'agentRetryNotAllowed'
+                  : 'pausedRunConflict',
+            },
           }
+        }
+        if (expected !== null && !sameUuid(predecessor.runId, expected)) {
+          return { kind: 'rejected', rejection: { kind: 'pausedRunConflict' } }
         }
         try {
           const definition = input.registry.resolveExact(

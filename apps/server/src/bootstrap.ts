@@ -1,3 +1,4 @@
+import { createSessionAiStatusRepository } from './persistence/session-ai-status-repository.js'
 import { createRosterPreviewService } from './sessions/roster-preview-service.js'
 import { readLatestEndedRosterPreview } from './persistence/roster-preview-repository.js'
 import { randomUUID } from 'node:crypto'
@@ -404,6 +405,10 @@ export async function createApiRuntime(
     handHistoryList,
     statistics,
     sessionManagement,
+    sessionAiStatus: createSessionAiStatusRepository({
+      sql: database.sql,
+      owner,
+    }),
     agentCalls,
     ...(playerRuntime === undefined ? {} : { playerRuntime }),
   })

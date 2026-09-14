@@ -4,8 +4,11 @@ import {
   type PublicSessionSnapshot,
 } from '@tx-holdem-coach/contracts'
 import { ids, publicSnapshot } from './fixtures.js'
+import { aiStatusFixture, uniquePlayers } from './ai-fixtures.js'
 export function feedbackTransport() {
-  let snapshot = PublicSessionSnapshotSchema.parse(publicSnapshot)
+  let snapshot = uniquePlayers(
+    PublicSessionSnapshotSchema.parse(publicSnapshot),
+  )
   let exists = true
   let failure:
     'none' | 'read' | 'write' | 'conflict' | 'sync-after-write' | 'readonly' =
@@ -99,6 +102,8 @@ export function feedbackTransport() {
         { code: 'SERVICE_UNAVAILABLE', message: '服务暂不可用' },
         { status: 503 },
       )
+    if (path.endsWith('/ai-status'))
+      return Response.json(aiStatusFixture(snapshot))
     if (path.endsWith('/events')) {
       let controller!: ReadableStreamDefaultController<Uint8Array>
       const stream = new ReadableStream<Uint8Array>({
@@ -123,7 +128,9 @@ export function feedbackTransport() {
     reset() {
       exists = true
       failure = 'none'
-      snapshot = PublicSessionSnapshotSchema.parse(publicSnapshot)
+      snapshot = uniquePlayers(
+        PublicSessionSnapshotSchema.parse(publicSnapshot),
+      )
       writes.length = 0
     },
     set(next: Partial<PublicSessionSnapshot>) {

@@ -416,6 +416,10 @@ export function createSessionRuntime(
         if (error instanceof ApiError && error.kind === 'input') throw error
         const failure =
           error instanceof ApiError ? error : new ApiError('network')
+        if (failure.kind === 'http' && failure.code === 'PAUSED_RUN_CONFLICT') {
+          entry.pending.delete(operation.body.command.commandId)
+          void client.invalidateQueries({ queryKey: keys.sessionAiStatus(id) })
+        }
         try {
           const status = handleError(id, failure, operation.context)
           if (status) entry.connection.finish(status, failure)

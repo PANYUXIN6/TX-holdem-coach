@@ -1,0 +1,14 @@
+.ai-status-page { display: grid; gap: 1rem; min-width: 0; }
+.ai-status-card, .ai-persona-card, .audit-card { min-width: 0; border: 1px solid var(--line, #303b3a); border-radius: 16px; background: var(--panel, #152321); padding: 1rem; }
+.ai-persona-card header { display: flex; gap: .75rem; align-items: center; }
+.ai-persona-card header > div { min-width: 0; }
+.ai-persona-card h2 { margin: 0; font-size: 1.1rem; }
+.ai-actions { display: grid; gap: .75rem; margin-block: 1rem; }
+.audit-fields, .audit-fields > div, .audit-fields dd, .audit-fields dt, .audit-fields code { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.audit-fields { margin: 1rem 0; }
+.audit-fields dt { color: #abbab5; font-size: .85rem; margin-top: .75rem; }
+.audit-fields dd { margin: .25rem 0 0; }
+.ai-status-page p, .ai-status-page h2, .audit-card p { overflow-wrap: anywhere; }
+.audit-link { display: inline-flex; min-height: 44px; align-items: center; overflow-wrap: anywhere; }
+.ai-persona-card summary { min-height: 44px; align-content: center; cursor: pointer; }
+.audit-tabs, .audit-pagination { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: 1rem; }

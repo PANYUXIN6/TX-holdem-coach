@@ -21,6 +21,7 @@ export type StableCommandRejection =
   | { readonly kind: 'rebuyAmountNotAllowed' }
   | { readonly kind: 'userRebuyRequired' }
   | { readonly kind: 'agentRetryNotAllowed' }
+  | { readonly kind: 'pausedRunConflict' }
 
 export type StableCommandRejectionCode =
   | 'COMMAND_NOT_ALLOWED_IN_PHASE'
@@ -30,6 +31,7 @@ export type StableCommandRejectionCode =
   | 'REBUY_AMOUNT_NOT_ALLOWED'
   | 'USER_REBUY_REQUIRED'
   | 'AGENT_RETRY_NOT_ALLOWED'
+  | 'PAUSED_RUN_CONFLICT'
 
 const StableCommandRejectionSchema = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -42,6 +44,7 @@ const StableCommandRejectionSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('rebuyAmountNotAllowed') }),
   z.strictObject({ kind: z.literal('userRebuyRequired') }),
   z.strictObject({ kind: z.literal('agentRetryNotAllowed') }),
+  z.strictObject({ kind: z.literal('pausedRunConflict') }),
 ])
 
 export function parseStableCommandRejection(
@@ -77,6 +80,13 @@ export function parseStableCommandRejection(
     return context.command.type === 'startNextHand' &&
       context.state.poker.pokerPhase === 'betweenHands' &&
       userSeat?.stack === 0
+      ? Object.freeze(rejection)
+      : null
+  }
+  if (rejection.kind === 'pausedRunConflict') {
+    return (context.command.type === 'retryAgent' ||
+      context.command.type === 'endSession') &&
+      'expectedPausedRunId' in context.command.payload
       ? Object.freeze(rejection)
       : null
   }
@@ -141,6 +151,11 @@ export function mapCommandRejectionToErrorResponse(
         return {
           code: 'USER_REBUY_REQUIRED',
           message: '筹码为零，请先补入 2,000 或结束本场。',
+        }
+      case 'pausedRunConflict':
+        return {
+          code: 'PAUSED_RUN_CONFLICT',
+          message: '暂停请求已变化，请重新读取并确认。',
         }
       case 'agentRetryNotAllowed':
         return {

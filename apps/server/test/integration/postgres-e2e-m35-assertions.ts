@@ -86,6 +86,7 @@ export async function assertM35SettingsHttpPostgresSmoke(
       handHistoryList: { list: async () => ({ items: [], nextCursor: null }) },
       statistics: {} as never,
       sessionManagement: {} as never,
+      sessionAiStatus: {} as never,
       agentCalls: {} as never,
     } satisfies ApiRuntime
     const app = createApp(runtime, {

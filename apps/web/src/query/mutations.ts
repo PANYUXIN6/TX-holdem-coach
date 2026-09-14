@@ -10,9 +10,14 @@ import { keys } from './keys.js'
 import { writePolicy } from './client.js'
 
 const training = (query: Query) =>
-  ['session', 'sessions', 'hands', 'agent-runs', 'statistics'].includes(
-    String(query.queryKey[0]),
-  )
+  [
+    'session',
+    'session-ai-status',
+    'sessions',
+    'hands',
+    'agent-runs',
+    'statistics',
+  ].includes(String(query.queryKey[0]))
 const list = (query: Query) =>
   ((query.queryKey[0] === 'sessions' || query.queryKey[0] === 'hands') &&
     (query.queryKey[1] === 'list' || query.queryKey[1] === 'roster-preview')) ||

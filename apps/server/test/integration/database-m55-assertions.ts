@@ -1,3 +1,4 @@
+import { createSessionAiStatusRepository } from '../../src/persistence/session-ai-status-repository.js'
 import { randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import type { JSONValue, Sql, TransactionSql } from 'postgres'
@@ -590,11 +591,12 @@ export async function assertM55SessionAndAgentCallQueries(
       catalog: historicalCatalog,
     })
     sessionIds.push(ended.identity.sessionId)
-    await sql`
-      UPDATE app_private.sessions
-      SET lifecycle_status = 'ended', ended_at = clock_timestamp()
-      WHERE id = ${ended.identity.sessionId}::uuid
-    `
+    await endSessionThroughMutationRepository(
+      sql,
+      ended.owner,
+      ended.identity.sessionId,
+      ended.state,
+    )
     const diagnostic = await seedM55QueryFixture(sql)
     sessionIds.push(diagnostic.identity.sessionId)
     const removedDiagnosticSnapshots = await sql.begin(async (transaction) => {
@@ -638,6 +640,33 @@ export async function assertM55SessionAndAgentCallQueries(
         owner: fixture.owner,
       }),
     })
+    const aiMeasurements: SqlMeasurement[] = []
+    const aiReader = createSessionAiStatusRepository({
+      sql: observeReadSql(sql, async (m) => {
+        aiMeasurements.push(m)
+      }),
+      owner: fixture.owner,
+    })
+    const historicalAi = await aiReader.getById(ended.identity.sessionId)
+    expect(historicalAi).toMatchObject({
+      lifecycleStatus: 'ended',
+      coordination: { state: 'idle' },
+    })
+    expect(historicalAi?.personas).toHaveLength(5)
+    expect(
+      historicalAi?.personas.find((p) => p.personaId === 'nit_fish'),
+    ).toMatchObject({ displayName: 'M5.5 历史紧弱鱼', avatarColor: '#123456' })
+    expect(aiMeasurements).toHaveLength(2)
+    expect(
+      aiMeasurements.every((m) => /^\s*(SELECT|WITH)\b/i.test(m.statement)),
+    ).toBe(true)
+    expect(JSON.stringify(historicalAi)).not.toMatch(
+      /strategyDescription|models|configPayload|remainingDeck|holeCards/,
+    )
+    expect(await aiReader.getById(otherSessionId)).toBeNull()
+    await expect(
+      aiReader.getById(diagnostic.identity.sessionId),
+    ).rejects.toMatchObject({ code: 'SESSION_READONLY_DIAGNOSTIC' })
     const rootPageMeasurements: SqlMeasurement[] = []
     const measuredSessions = createSessionManagementQueryService({
       reader: createSessionManagementFactsRepository({
@@ -1610,12 +1639,29 @@ export async function assertM55SessionAndAgentCallQueries(
         AND processing_status = 'completed'
     `
 
-    await runDatabaseTransaction(sql, (transaction) =>
-      deleteEndedSessionData(transaction, ended.owner, {
-        sessionId: ended.identity.sessionId,
-        deletedAt: new Date().toISOString(),
-      }),
+    const aiDeleteSql = createDatabaseTestSqlForRole(
+      runtimeUrl,
+      'm76-ai-delete',
     )
+    try {
+      const consistentAi = createSessionAiStatusRepository({
+        owner: ended.owner,
+        sql: afterFirstBusinessReadSql(sql, async () => {
+          await runDatabaseTransaction(aiDeleteSql, (transaction) =>
+            deleteEndedSessionData(transaction, ended.owner, {
+              sessionId: ended.identity.sessionId,
+              deletedAt: new Date().toISOString(),
+            }),
+          )
+        }),
+      })
+      expect(await consistentAi.getById(ended.identity.sessionId)).toEqual(
+        historicalAi,
+      )
+      expect(await aiReader.getById(ended.identity.sessionId)).toBeNull()
+    } finally {
+      await aiDeleteSql.end({ timeout: 0 })
+    }
     await expect(
       calls.listRuns(ended.identity.handId, { limit: 1, after: null }),
     ).rejects.toThrow()

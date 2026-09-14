@@ -112,6 +112,8 @@ export type OverlayTarget =
       sessionId: string
       handId: string
       stateVersion: number
+      eventSeq: number
+      expectedPausedRunId: string
     }
 export type OverlayDescriptor = OverlayTarget & {
   scope: string

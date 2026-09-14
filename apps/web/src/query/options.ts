@@ -20,6 +20,13 @@ export function createQueries(api: Api = defaultApi) {
       meta: { resourceDetail: true },
     })
   return {
+    sessionAiStatus: (id: string) =>
+      queryOptions({
+        ...readPolicy,
+        queryKey: keys.sessionAiStatus(id),
+        queryFn: ({ signal }) => api.sessionAiStatus(id, { signal }),
+        meta: { resourceDetail: true, sessionId: id },
+      }),
     rosterPreview: () =>
       queryOptions({
         ...readPolicy,

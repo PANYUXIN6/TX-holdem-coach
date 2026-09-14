@@ -154,6 +154,19 @@ function uuidEquals(left: string, right: string): boolean {
 }
 
 function normalizeLedgerCommand(command: LedgerCommand): LedgerCommand {
+  if (
+    (command.type === 'retryAgent' || command.type === 'endSession') &&
+    'expectedPausedRunId' in command.payload
+  ) {
+    return {
+      ...command,
+      sessionId: normalizeUuid(command.sessionId),
+      commandId: normalizeUuid(command.commandId),
+      payload: {
+        expectedPausedRunId: normalizeUuid(command.payload.expectedPausedRunId),
+      },
+    }
+  }
   return {
     ...command,
     sessionId: normalizeUuid(command.sessionId),

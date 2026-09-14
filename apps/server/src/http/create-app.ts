@@ -1,3 +1,5 @@
+import { registerSessionAiStatusRoutes } from './session-ai-status-routes.js'
+import type { SessionAiStatusReader } from '../persistence/session-ai-status-repository.js'
 import { randomUUID } from 'node:crypto'
 import { ErrorResponseSchema } from '@tx-holdem-coach/contracts'
 import { Hono, type Context } from 'hono'
@@ -33,6 +35,7 @@ import {
 import { registerSessionEventRoutes } from './session-event-routes.js'
 
 export interface ApiRuntime {
+  readonly sessionAiStatus: SessionAiStatusReader
   readonly health: HealthService
   readonly providerHealth: ProviderHealthService
   readonly playerAgentSettings: PlayerAgentSettingsService
@@ -290,6 +293,7 @@ export function createApp(
   registerStatisticsRoutes(app, runtime.statistics)
   registerSessionManagementRoutes(app, runtime.sessionManagement)
   registerAgentCallRoutes(app, runtime.agentCalls)
+  registerSessionAiStatusRoutes(app, runtime.sessionAiStatus)
   registerSessionRoutes(app, runtime.sessionHttp)
   registerSessionEventRoutes(app, runtime.sessionEvents)
 

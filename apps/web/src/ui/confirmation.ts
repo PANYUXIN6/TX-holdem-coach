@@ -1,3 +1,4 @@
+import { pauseIntentMatches } from '../ai-status/adapter.js'
 import { mutationOptions, type QueryClient } from '@tanstack/react-query'
 import type { PublicSessionSnapshot } from '@tx-holdem-coach/contracts'
 import { ApiError } from '../api/errors.js'
@@ -19,7 +20,8 @@ export function confirmationTargetMatches(
     current.pokerPhase === 'inHand' &&
     current.agentRunState === 'paused' &&
     current.hand?.handId === target.handId &&
-    current.stateVersion === target.stateVersion
+    current.stateVersion === target.stateVersion &&
+    current.eventSeq === target.eventSeq
   )
 }
 
@@ -42,6 +44,7 @@ export function confirmationEligible(
     return false
   if (target.kind === 'deleteSession') return true
   return (
+    pauseIntentMatches(target, client) &&
     runtime.getStatus(target.sessionId) === 'ready' &&
     !runtime.isSubmitting(target.sessionId) &&
     runtime.pendingOperations(target.sessionId).length === 0
@@ -62,7 +65,10 @@ export function abortConfirmationOptions(
         throw new ApiError('input', undefined, 'SESSION_NOT_READY')
       // 与原入口同步衔接，Mutation 调度后仍不可用旧确认授权新版本。
       return runtime.commandOptions(target.sessionId).mutationFn!(
-        { type: 'endSession', payload: {} },
+        {
+          type: 'endSession',
+          payload: { expectedPausedRunId: target.expectedPausedRunId },
+        },
         context,
       )
     },

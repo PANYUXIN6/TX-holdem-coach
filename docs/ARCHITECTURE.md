@@ -180,3 +180,11 @@ Shell 的原 table footer 组合 `TableFooter`，原 PageUiProvider 同时覆盖
 结算只读上一手公开 pots/awards、返还与 seatResults；补码资格读取当前座位余额。正常 endSession 只允许 active/betweenHands/idle 且 hand=null，打开确认后进入新手或 paused 会使原确认失效，暂停中止继续由 M7.6 拥有。正常结束接收沿用 eventSeq/stateVersion 双序列，留在只读牌桌。
 
 Shell 继续拥有唯一画布和方向保护；牌桌金额聚焦时按 VisualViewport 约束画布，可视空间不足时 footer 自身有界滚动，完整结算仍在 main 正文。生产无新增接口、数据库字段、依赖或客户端扑克计算。
+
+## M7.6 当前 AI 投影与恢复边界
+
+`GET /api/sessions/:sessionId/ai-status → SessionAiStatusReader → Session/快照 + 固化人物 + 当前 Run` 是独立的只读入口，事务为 `REPEATABLE READ READ ONLY`。人物由已有 Codec/快照键认证，当前 Run 由指针或唯一 failed live leaf 认证；只返回公开摘要，不扩张 PublicSessionSnapshot/SSE 或加载审计正文。
+
+浏览器 `session-ai-status` Query 不写入唯一 Session Key。动态状态必须对齐 sessionId/stateVersion/eventSeq/hand/actor/request；领先时调用原 runtime 校准，落后时重新读取。恢复意图只保存身份和序列，Mutation 复核后同步调用原 commandOptions。服务端原 retry/end Handler 在 Session 锁内复验 expectedPausedRunId，verifier 认证关系计划，账本摘要保留完整目标；相同 ID 重放仍优先于当前状态判断。
+
+调试 Hand/Run 查询独立于 Session SSE。进行中 Hand 或非终态 Run 前台有界刷新；Hand 中止或查询失败时不显示旧 normalizedAction，404 清除当前资源，子查询传播取消。子页 tab/selection 由既有 Debug Store 管理，游标只属于页面。中止仍走原 checkpoint 回退事务，只有权威高版本 ended 才离开原页面；首页只接收 handId 导航标识，余额与普通历史不从路由状态恢复。

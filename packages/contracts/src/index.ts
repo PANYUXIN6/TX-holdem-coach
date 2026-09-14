@@ -373,12 +373,18 @@ export const SessionCommandSchema = z.discriminatedUnion('type', [
   z.strictObject({
     ...commandBaseShape,
     type: z.literal('endSession'),
-    payload: z.strictObject({}),
+    payload: z.union([
+      z.strictObject({}),
+      z.strictObject({ expectedPausedRunId: z.uuid() }),
+    ]),
   }),
   z.strictObject({
     ...commandBaseShape,
     type: z.literal('retryAgent'),
-    payload: z.strictObject({}),
+    payload: z.union([
+      z.strictObject({}),
+      z.strictObject({ expectedPausedRunId: z.uuid() }),
+    ]),
   }),
 ])
 
@@ -2427,3 +2433,94 @@ export type SessionManagementPageRequest = z.infer<
   typeof SessionManagementPageRequestSchema
 >
 export type AgentCallPageRequest = z.infer<typeof AgentCallPageRequestSchema>
+
+export const CurrentPlayerRunSchema = z.strictObject({
+  runId: z.uuid(),
+  decisionRequestId: z.uuid(),
+  participantId: PlayerIdSchema,
+  actorSeatNumber: AiSeatNumberSchema,
+  sourceStateVersion: StateVersionSchema,
+  trigger: z.enum([
+    'initial',
+    'manualRetry',
+    'staleReplacement',
+    'processRestart',
+  ]),
+  parentRunId: z.uuid().nullable(),
+})
+
+export const SessionAiStatusResponseSchema = z
+  .strictObject({
+    sessionId: SessionIdSchema,
+    stateVersion: StateVersionSchema,
+    eventSeq: EventSequenceSchema,
+    lifecycleStatus: z.enum(['active', 'ended']),
+    handId: HandIdSchema.nullable(),
+    personas: z
+      .array(
+        z.strictObject({
+          participantId: PlayerIdSchema,
+          seatNumber: AiSeatNumberSchema,
+          personaId: HistoricalPersonaIdSchema,
+          personaVersion: HistoricalPersonaVersionSchema,
+          configSnapshotKey: HistoricalConfigSnapshotKeySchema,
+          displayName: z.string().min(1),
+          avatarColor: z.string().min(1),
+          backgroundDescription: z.string().min(1),
+          teachingSummary: z.string().min(1),
+          style: AgentPersonaStyleSchema,
+        }),
+      )
+      .min(5)
+      .max(8),
+    coordination: z.discriminatedUnion('state', [
+      z.strictObject({ state: z.literal('idle') }),
+      z.strictObject({
+        state: z.literal('thinking'),
+        run: CurrentPlayerRunSchema,
+      }),
+      z.strictObject({
+        state: z.literal('paused'),
+        run: CurrentPlayerRunSchema,
+        reasonCode: AgentAuditPublicCodeSchema,
+      }),
+    ]),
+  })
+  .superRefine((value, context) => {
+    if (
+      new Set(value.personas.map((p) => p.participantId)).size !==
+        value.personas.length ||
+      value.personas.some(
+        (p, i) => i > 0 && p.seatNumber <= value.personas[i - 1]!.seatNumber,
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['personas'],
+        message: '人物必须按唯一座位升序排列。',
+      })
+    }
+    if (value.coordination.state !== 'idle') {
+      const run = value.coordination.run
+      if (
+        value.lifecycleStatus !== 'active' ||
+        value.handId === null ||
+        run.sourceStateVersion !== value.stateVersion ||
+        !value.personas.some(
+          (p) =>
+            p.participantId === run.participantId &&
+            p.seatNumber === run.actorSeatNumber,
+        )
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['coordination'],
+          message: '当前请求必须与场次和人物一致。',
+        })
+      }
+    }
+  })
+export type SessionAiStatusResponse = z.infer<
+  typeof SessionAiStatusResponseSchema
+>
+export type CurrentPlayerRun = z.infer<typeof CurrentPlayerRunSchema>

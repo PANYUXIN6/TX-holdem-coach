@@ -266,3 +266,55 @@ describe('end session handler', () => {
     }
   })
 })
+
+test('带失败目标的中止拒绝旧 Run，且不能退化为普通结束', async () => {
+  const binding = createEndSessionHandlerBinding({ owner: await owner() })
+  const { current, checkpoint } = pausedFixture()
+  const target = { ...command, payload: { expectedPausedRunId: commandId } }
+  const reads = {
+    loadPausedAbortContext: vi.fn(async () => ({
+      handId,
+      checkpoint,
+      failedPlayerRunId,
+      failureReasonCode: 'provider_timeout',
+    })),
+  }
+  expect(
+    await binding.handler.prepare({
+      command: target,
+      state: current,
+      session: {
+        ...idleSession,
+        currentHandId: handId,
+        agentRunState: 'paused',
+      },
+      reads,
+    }),
+  ).toEqual({ kind: 'rejected', rejection: { kind: 'pausedRunConflict' } })
+  expect(
+    await binding.handler.prepare({
+      command: target,
+      state: betweenHandsState(),
+      session: idleSession,
+      reads,
+    }),
+  ).toEqual({ kind: 'rejected', rejection: { kind: 'pausedRunConflict' } })
+  expect(
+    await binding.handler.prepare({
+      command: {
+        ...target,
+        payload: { expectedPausedRunId: failedPlayerRunId },
+      },
+      state: current,
+      session: {
+        ...idleSession,
+        currentHandId: handId,
+        agentRunState: 'paused',
+      },
+      reads,
+    }),
+  ).toMatchObject({
+    kind: 'prepared',
+    mutation: { relationPlan: { kind: 'abortHand', failedPlayerRunId } },
+  })
+})

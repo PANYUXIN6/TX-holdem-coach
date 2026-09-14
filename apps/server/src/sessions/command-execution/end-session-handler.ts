@@ -135,6 +135,18 @@ export function createEndSessionHandlerBinding(input: {
     commandType: 'endSession',
     handler: {
       async prepare({ command, state, session, reads }) {
+        const expected =
+          'expectedPausedRunId' in command.payload
+            ? command.payload.expectedPausedRunId
+            : null
+        if (
+          expected !== null &&
+          (session.lifecycleStatus !== 'active' ||
+            state.poker.pokerPhase !== 'inHand' ||
+            session.agentRunState !== 'paused')
+        ) {
+          return { kind: 'rejected', rejection: { kind: 'pausedRunConflict' } }
+        }
         if (session.lifecycleStatus !== 'active') {
           throw new EndSessionHandlerInvariantError()
         }
@@ -205,6 +217,12 @@ export function createEndSessionHandlerBinding(input: {
           !uuidEquals(abortContext.checkpoint.startedHand.handId, hand.handId)
         ) {
           throw new EndSessionHandlerInvariantError()
+        }
+        if (
+          expected !== null &&
+          !uuidEquals(expected, abortContext.failedPlayerRunId)
+        ) {
+          return { kind: 'rejected', rejection: { kind: 'pausedRunConflict' } }
         }
         const checkpointState = abortContext.checkpoint.stateBeforeStartCommand
         const handAborted = createPrivateEvent({

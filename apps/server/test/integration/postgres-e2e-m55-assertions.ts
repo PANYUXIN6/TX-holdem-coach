@@ -328,12 +328,16 @@ async function assertSuccessfulMainChain(sql: Sql, runtimeUrl: string) {
 
     const stable = await readSession(app, sessionId)
     const footprintBeforeGets = await readGetFootprint(sql, sessionId)
-    const [sessions, history, statistics, calls] = await Promise.all([
+    const [sessions, history, statistics, calls, aiStatus] = await Promise.all([
       requestJson(app, '/api/sessions?limit=1'),
       requestJson(app, `/api/hands?sessionId=${sessionId}`),
       requestJson(app, `/api/statistics?scope=hands&sessionId=${sessionId}`),
       requestJson(app, `/api/hands/${handId}/agent-calls?limit=1`),
+      requestJson(app, `/api/sessions/${sessionId}/ai-status`),
     ])
+    expect(aiStatus.response.status).toBe(200)
+    expect(aiStatus.body.coordination).toEqual({ state: 'idle' })
+    expect(aiStatus.body.personas).toHaveLength(5)
     expect(sessions.response.status).toBe(200)
     expect(history.response.status).toBe(200)
     expect(statistics.response.status).toBe(200)
@@ -472,6 +476,38 @@ async function assertPauseAbortAndClearChain(sql: Sql, runtimeUrl: string) {
       onSelected: async ({ sessionId, handId, runId }) => {
         const paused = await readSession(app, sessionId)
         expect(paused.agentRunState).toBe('paused')
+        const beforeAiGet = await readGetFootprint(sql, sessionId)
+        const ai = await requestJson(
+          app,
+          `/api/sessions/${sessionId}/ai-status`,
+        )
+        expect(ai.response.status).toBe(200)
+        expect(ai.body.coordination).toMatchObject({
+          state: 'paused',
+          run: { runId, sourceStateVersion: paused.stateVersion },
+        })
+        expect(await readGetFootprint(sql, sessionId)).toEqual(beforeAiGet)
+        const wrongTarget = await requestJson(
+          app,
+          `/api/sessions/${sessionId}/commands`,
+          mutation('POST', {
+            command: {
+              sessionId,
+              commandId: randomUUID(),
+              expectedStateVersion: paused.stateVersion,
+              type: 'endSession',
+              payload: { expectedPausedRunId: randomUUID() },
+            },
+          }),
+        )
+        expect(wrongTarget.response.status).toBe(409)
+        expect(wrongTarget.body.code).toBe('PAUSED_RUN_CONFLICT')
+        const rejectedFootprint = await readGetFootprint(sql, sessionId)
+        expect(rejectedFootprint).toEqual({
+          ...beforeAiGet,
+          ledgerCount: beforeAiGet!.ledgerCount + 1,
+        })
+
         const calls = await requestJson(app, `/api/hands/${handId}/agent-calls`)
         expect(calls.response.status).toBe(200)
         expect(JSON.stringify(calls.body)).not.toMatch(
@@ -495,7 +531,7 @@ async function assertPauseAbortAndClearChain(sql: Sql, runtimeUrl: string) {
         await executeCommand(app, sessionId, {
           stateVersion: paused.stateVersion,
           type: 'endSession',
-          payload: {},
+          payload: { expectedPausedRunId: runId },
         })
         const aborted = await requestJson(
           app,

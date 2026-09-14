@@ -1,3 +1,4 @@
+import { AiStatusPanel } from '../ai-status/AiStatusPage.js'
 import { useContext, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import {
@@ -63,6 +64,9 @@ function TableContent({ id }: { id: string }) {
       : null
   return (
     <section className="table-page" ref={root} aria-label="公开牌桌">
+      {snapshot.agentRunState === 'paused' ? (
+        <AiStatusPanel id={id} compact />
+      ) : null}
       <div className="table-summary">
         <span>
           {display
@@ -149,6 +153,12 @@ function TableContent({ id }: { id: string }) {
           </Link>
           <Link to={sessionHistoryPath(id)} onClick={closeTools}>
             本场历史
+          </Link>
+          <Link
+            to={hand ? resourcePath('handRuns', hand.handId) : '/debug'}
+            onClick={closeTools}
+          >
+            调试
           </Link>
         </nav>
       </div>

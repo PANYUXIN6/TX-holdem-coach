@@ -44,6 +44,7 @@ export function errorMessage(error: unknown): string | null {
     REBUY_AMOUNT_NOT_ALLOWED: '补码金额不符合当前余额，请重新读取后输入。',
     USER_REBUY_REQUIRED: '筹码已用完，请先买入或结束场次。',
     COMMAND_NOT_ALLOWED_IN_PHASE: '牌局阶段已变化，请重新读取后选择。',
+    PAUSED_RUN_CONFLICT: '暂停请求已变化，请重新读取并确认。',
     STATE_VERSION_CONFLICT: '状态已变化，请等待校准后重新决策。',
     ACTIVE_SESSION_EXISTS: '已有活动场次，请继续当前场次。',
     SESSION_NOT_READY: '场次尚未就绪，请等待同步完成。',

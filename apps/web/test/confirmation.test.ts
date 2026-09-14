@@ -1,3 +1,5 @@
+import { aiStatusFixture, uniquePlayers } from './ai-fixtures.js'
+import { keys } from '../src/query/keys.js'
 import { expect, it } from 'vitest'
 import { MutationObserver } from '@tanstack/react-query'
 import { PublicSessionSnapshotSchema } from '@tx-holdem-coach/contracts'
@@ -16,11 +18,17 @@ const flush = async () => {
 }
 
 it('中止实际 Mutation 调度时复核旧版本，合法确认沿用原命令构造', async () => {
-  let snapshot = PublicSessionSnapshotSchema.parse({
-    ...publicSnapshot,
-    agentRunState: 'paused',
-    hand: { ...publicSnapshot.hand, legalActions: [] },
-  })
+  let snapshot = uniquePlayers(
+    PublicSessionSnapshotSchema.parse({
+      ...publicSnapshot,
+      agentRunState: 'paused',
+      hand: {
+        ...publicSnapshot.hand,
+        currentActorSeatNumber: 1,
+        legalActions: [],
+      },
+    }),
+  )
   const requests: unknown[] = []
   let stream!: StreamOptions
   const client = createQueryClient()
@@ -52,8 +60,14 @@ it('中止实际 Mutation 调度时复核旧版本，合法确认沿用原命令
     await flush()
     const store = createOverlayUiStore()
     const open = () => {
+      client.setQueryData(
+        keys.sessionAiStatus(ids.session),
+        aiStatusFixture(snapshot),
+      )
       store.getState().open('page', {
         kind: 'abortHandAndEndSession',
+        expectedPausedRunId: '40000000-0000-4000-8000-000000000001',
+        eventSeq: snapshot.eventSeq,
         sessionId: ids.session,
         handId: ids.hand,
         stateVersion: snapshot.stateVersion,
@@ -91,7 +105,9 @@ it('中止实际 Mutation 调度时复核旧版本，合法确认沿用原命令
           sessionId: ids.session,
           expectedStateVersion: 5,
           type: 'endSession',
-          payload: {},
+          payload: {
+            expectedPausedRunId: '40000000-0000-4000-8000-000000000001',
+          },
         },
       },
     ])

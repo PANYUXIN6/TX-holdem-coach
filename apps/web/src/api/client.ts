@@ -166,6 +166,14 @@ export function createApi(fetcher: typeof fetch = (...args) => fetch(...args)) {
         { ...options, accepts: (data) => data.persona.personaId === key },
       )
     },
+    sessionAiStatus(id: string, options?: RequestOptions) {
+      const key = sessionId(id)
+      return request(
+        `sessions/${segment(key)}/ai-status`,
+        C.SessionAiStatusResponseSchema,
+        { ...options, accepts: (data) => matches(data.sessionId, key) },
+      )
+    },
     activeSession: (options?: RequestOptions) =>
       request('sessions/active', C.SessionSnapshotResponseSchema, options),
     session(id: string, options?: RequestOptions) {

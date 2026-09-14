@@ -12,6 +12,9 @@ import { Shell } from '../src/Shell.js'
 import { routes, resourcePath } from '../src/navigation.js'
 import { createQueryClient } from '../src/query/client.js'
 import { createApi } from '../src/api/client.js'
+import { createQueries } from '../src/query/options.js'
+import { keys } from '../src/query/keys.js'
+import type { PublicSessionSnapshot } from '@tx-holdem-coach/contracts'
 import { createSessionStream } from '../src/api/sse.js'
 import { createSessionRuntime } from '../src/session-sync/runtime.js'
 import {
@@ -91,6 +94,11 @@ function Probe() {
   const [draft, setDraft] = useState('20')
   const [fieldError, setFieldError] = useState<string>()
   const [output, setOutput] = useState(report)
+  useLayoutEffect(() => {
+    const update = () => setOutput(report)
+    window.addEventListener('feedback-report', update)
+    return () => window.removeEventListener('feedback-report', update)
+  }, [])
   const [running, setRunning] = useState(false)
   useLayoutEffect(() => {
     if (drawer && fieldError) document.getElementById('fixture-limit')?.focus()
@@ -364,8 +372,15 @@ function Probe() {
       click('取消')
       await until(() => !document.querySelector('dialog[open]'))
       transport.release()
-      await until(() =>
-        document.body.textContent!.includes('中止本手并结束场次已完成'),
+      await until(
+        () =>
+          client.getQueryData<PublicSessionSnapshot>(keys.session(ids.session))
+            ?.lifecycleStatus === 'ended',
+      )
+      verify(
+        client.getQueryData<PublicSessionSnapshot>(keys.session(ids.session))
+          ?.lifecycleStatus === 'ended',
+        '中止接受权威结束快照',
       )
       report += '回归验收通过。\n'
     } catch (error) {
@@ -374,6 +389,7 @@ function Probe() {
       transport.release()
       navigate('/')
       setOutput(report)
+      window.dispatchEvent(new Event('feedback-report'))
       setRunning(false)
     }
   }
@@ -509,6 +525,9 @@ function Probe() {
 }
 function TableProbe() {
   const session = useSession(ids.session)
+  const ai = useQuery(
+    createQueries(createApi(transport.fetcher)).sessionAiStatus(ids.session),
+  )
   const scope = usePageScope()
   const overlay = useOverlayStore()
   return (
@@ -519,12 +538,17 @@ function TableProbe() {
       <Button
         disabled={
           !session.canSubmit ||
+          !ai.data ||
+          ai.isFetching ||
+          ai.isError ||
           session.data?.agentRunState !== 'paused' ||
           !session.data.hand
         }
         onClick={() =>
           overlay.getState().open(scope, {
             kind: 'abortHandAndEndSession',
+            expectedPausedRunId: '40000000-0000-4000-8000-000000000001',
+            eventSeq: session.data!.eventSeq,
             sessionId: ids.session,
             handId: session.data!.hand!.handId,
             stateVersion: session.data!.stateVersion,
@@ -537,7 +561,11 @@ function TableProbe() {
         onClick={() =>
           transport.set({
             agentRunState: 'paused',
-            hand: { ...transport.get().hand!, legalActions: [] },
+            hand: {
+              ...transport.get().hand!,
+              currentActorSeatNumber: 1,
+              legalActions: [],
+            },
             eventSeq: transport.get().eventSeq + 1,
           })
         }

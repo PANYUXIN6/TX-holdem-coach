@@ -306,6 +306,8 @@ button.onclick = () => {
     )!
     overlay.getState().open(owner, {
       kind: 'abortHandAndEndSession',
+      expectedPausedRunId: '40000000-0000-4000-8000-000000000001',
+      eventSeq: snapshot.eventSeq,
       sessionId: ids.session,
       handId: snapshot.hand!.handId,
       stateVersion: snapshot.stateVersion,

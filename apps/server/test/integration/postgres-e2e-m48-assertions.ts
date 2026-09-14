@@ -1,3 +1,5 @@
+import { createEndSessionHandlerBinding } from '../../src/sessions/command-execution/end-session-handler.js'
+import { createSessionAiStatusRepository } from '../../src/persistence/session-ai-status-repository.js'
 import { randomUUID } from 'node:crypto'
 import type { Sql } from 'postgres'
 import { expect } from 'vitest'
@@ -314,27 +316,31 @@ export async function assertM48PlayerCoordinationApplicationFlow(
       ])
 
       const commandId = randomUUID()
-      const commands = createSessionCommandExecutor({
-        sql,
-        owner,
-        handlers: createSessionCommandHandlerMap({
-          bindings: [
-            createRetryAgentHandlerBinding({
-              owner,
-              registry: productionRuntimeRegistry,
-              strategyPackRepository,
-              nextRunId: randomUUID,
-              nextDecisionRequestId: randomUUID,
-            }),
-          ],
-        }),
-        mutationRepository: productionSessionMutationRepository,
-        recoveryRepository: productionSessionRecoveryRepository,
-        snapshotProjectorBinding: createPublicSessionBindings(owner).command,
-        now: () => nextTimestamp(pausedAt),
-        nextEventId: randomUUID,
-        committedEventPublisher: { publish: () => undefined },
-      })
+      let commandAt = nextTimestamp(pausedAt)
+      const makeCommands = () =>
+        createSessionCommandExecutor({
+          sql,
+          owner,
+          handlers: createSessionCommandHandlerMap({
+            bindings: [
+              createEndSessionHandlerBinding({ owner }),
+              createRetryAgentHandlerBinding({
+                owner,
+                registry: productionRuntimeRegistry,
+                strategyPackRepository,
+                nextRunId: randomUUID,
+                nextDecisionRequestId: randomUUID,
+              }),
+            ],
+          }),
+          mutationRepository: productionSessionMutationRepository,
+          recoveryRepository: productionSessionRecoveryRepository,
+          snapshotProjectorBinding: createPublicSessionBindings(owner).command,
+          now: () => commandAt,
+          nextEventId: randomUUID,
+          committedEventPublisher: { publish: () => undefined },
+        })
+      const commands = makeCommands()
       const command = {
         sessionId: identity.sessionId,
         commandId,
@@ -396,6 +402,94 @@ export async function assertM48PlayerCoordinationApplicationFlow(
       expect(retrySurface[0]?.activePlayerRunId).toBe(
         retrySurface[0]?.replacementRunId,
       )
+      // 第二次失败仍是同一个扑克版本，旧目标必须在锁内拒绝。
+      const replacementId = retrySurface[0]!.activePlayerRunId!
+      const replacementRequest = retrySurface[0]!.activeDecisionRequestId!
+      const secondClaim = await runCoordinator.workerControl.claimNext({
+        runtimeType: 'player',
+        leaseOwner: 'm76-second-failure',
+      })
+      if (secondClaim.kind !== 'claimed')
+        throw new Error('M7.6 未领取替代运行。')
+      expect(
+        (await runCoordinator.workerControl.markRunning(secondClaim.authority))
+          .runId,
+      ).toBe(replacementId)
+      const secondAuthority = issueRuntimeCommitAuthority({
+        runtimeType: 'player',
+        runId: replacementId,
+        leaseOwner: secondClaim.authority.leaseOwner,
+        fencingToken: secondClaim.authority.fencingToken,
+      })
+      const secondPausedAt = new Date(Date.now() + 1_000).toISOString()
+      expect(
+        (
+          await coordinator.pauseAfterFailure({
+            sessionId: identity.sessionId,
+            agentRunId: replacementId,
+            decisionRequestId: replacementRequest,
+            authority: secondAuthority,
+            reason: 'provider_timeout',
+            settledAt: secondPausedAt,
+          })
+        ).kind,
+      ).toBe('paused')
+      commandAt = nextTimestamp(secondPausedAt)
+      const aiReader = createSessionAiStatusRepository({ sql, owner })
+      const secondPaused = await aiReader.getById(identity.sessionId)
+      expect(secondPaused).toMatchObject({
+        stateVersion: prepared.state.stateVersion,
+        coordination: {
+          state: 'paused',
+          run: { runId: replacementId, trigger: 'manualRetry' },
+        },
+      })
+      for (const type of ['retryAgent', 'endSession'] as const) {
+        const rejected = await commands.execute({
+          ...command,
+          commandId: randomUUID(),
+          type,
+          payload: { expectedPausedRunId: originalRunId },
+        })
+        expect(rejected).toMatchObject({
+          kind: 'rejected',
+          response: { code: 'PAUSED_RUN_CONFLICT' },
+        })
+      }
+      expect(await aiReader.getById(identity.sessionId)).toEqual(secondPaused)
+      expect(await readPrivateState(sql, identity.sessionId)).toEqual(
+        prepared.state,
+      )
+      const targetCommand = {
+        ...command,
+        commandId: randomUUID(),
+        payload: { expectedPausedRunId: replacementId },
+      }
+      const independentCommands = makeCommands()
+      const competition = await Promise.all([
+        commands.execute(targetCommand),
+        independentCommands.execute({
+          ...targetCommand,
+          commandId: randomUUID(),
+          type: 'endSession',
+        }),
+      ])
+      expect(competition.filter((r) => r.kind === 'completed')).toHaveLength(1)
+      expect(competition.filter((r) => r.kind === 'rejected')).toHaveLength(1)
+      if (competition[0]!.kind === 'completed') {
+        expect(await commands.execute(targetCommand)).toMatchObject({
+          kind: 'completed',
+          origin: 'replay',
+        })
+        await expect(
+          commands.execute({
+            ...targetCommand,
+            payload: { expectedPausedRunId: originalRunId },
+          }),
+        ).rejects.toMatchObject({
+          name: 'CommandPayloadConflictError',
+        })
+      }
     },
     () =>
       runDatabaseTransaction(sql, async (transaction) => {

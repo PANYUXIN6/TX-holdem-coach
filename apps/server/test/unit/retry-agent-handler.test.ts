@@ -259,3 +259,31 @@ describe('retryAgent handler', () => {
     })
   })
 })
+
+test('同版本再次暂停后，旧失败目标不得创建新运行', async () => {
+  const nextRunId = vi.fn(() => replacementRunId)
+  const binding = createRetryAgentHandlerBinding({
+    owner: {} as never,
+    registry: { resolveExact: () => playerRuntimeDefinition } as never,
+    strategyPackRepository,
+    nextRunId,
+    nextDecisionRequestId: () => requestId,
+  })
+  const result = await binding.handler.prepare({
+    command: {
+      sessionId,
+      commandId,
+      expectedStateVersion: 7,
+      type: 'retryAgent',
+      payload: { expectedPausedRunId: replacementRunId },
+    },
+    state: state(),
+    session: session(),
+    reads: { loadFailedPlayerLeafForRetry: async () => predecessor },
+  })
+  expect(result).toEqual({
+    kind: 'rejected',
+    rejection: { kind: 'pausedRunConflict' },
+  })
+  expect(nextRunId).not.toHaveBeenCalled()
+})

@@ -3,6 +3,8 @@ import { handId, personaId, runId, sessionId } from '../api/client.js'
 
 /** 参数为 search codec 的同一个认证结果；options 同时用于 key 与 HTTP。 */
 export const keys = {
+  sessionAiStatus: (id: string) =>
+    ['session-ai-status', sessionId(id)] as const,
   health: () => ['health'] as const,
   providers: () => ['settings', 'providers'] as const,
   agent: () => ['settings', 'agent'] as const,

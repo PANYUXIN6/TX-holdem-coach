@@ -170,6 +170,8 @@ export function registerPersistentDatabasePreparation(): void {
         'migration compatibility',
         phaseSignal,
         preparePersistentTestDatabase,
+        undefined,
+        suiteLock.signal,
       )
       persistentDatabasePrepared = true
     } finally {
@@ -207,21 +209,27 @@ export function registerDatabaseMilestoneTest(
         () => waitForDatabaseTestAbortCleanup(phaseSignal),
         30_000,
       )
-      await runAbortableDatabasePhase(label, phaseSignal, async (signal) => {
-        const { runtimeUrl } = loadTestDatabaseConnections(process.env)
-        const runId = requireDatabaseTestRunId()
-        const sql = createDatabaseTestSql(
-          runtimeUrl,
-          runId,
-          `${milestone}-primary`,
-        )
-        try {
-          await assertNoConflictingDatabaseTestConnections(sql, runId)
-          await assertion(sql, runtimeUrl, signal)
-        } finally {
-          await sql.end({ timeout: 0 })
-        }
-      })
+      await runAbortableDatabasePhase(
+        label,
+        phaseSignal,
+        async (signal) => {
+          const { runtimeUrl } = loadTestDatabaseConnections(process.env)
+          const runId = requireDatabaseTestRunId()
+          const sql = createDatabaseTestSql(
+            runtimeUrl,
+            runId,
+            `${milestone}-primary`,
+          )
+          try {
+            await assertNoConflictingDatabaseTestConnections(sql, runId)
+            await assertion(sql, runtimeUrl, signal)
+          } finally {
+            await sql.end({ timeout: 0 })
+          }
+        },
+        undefined,
+        persistentDatabaseSuiteLock?.lock.signal,
+      )
     },
     timeout,
   )

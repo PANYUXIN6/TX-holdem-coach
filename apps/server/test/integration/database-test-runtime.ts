@@ -11,6 +11,7 @@ export {
   type DatabaseTestSuiteLock,
 } from '../../src/db/database-test-suite-lock.js'
 import { DATABASE_TEST_APPLICATION_PREFIX } from '../../src/db/test-database-safety.js'
+import { protectDatabaseTestTransactions } from './database-test-client.js'
 
 const DATABASE_TEST_SUITE_LOCK_APPLICATION_PATTERN = `^${DATABASE_TEST_APPLICATION_PREFIX}:[a-f0-9]{16}:suite-lock$`
 
@@ -34,6 +35,12 @@ type AbortableDatabaseTestClient = Pick<Sql, 'end'>
 
 interface DatabaseTestAbortScope {
   readonly signal: AbortSignal
+  cleanupAuthority: AbortSignal | undefined
+  readonly clientStops: Set<() => Promise<void>>
+  readonly startedClientStops: Set<() => Promise<void>>
+  readonly clientStopTasks: Set<Promise<void>>
+  readonly cleanupClientClosers: Set<() => Promise<void>>
+  cleanupClientsClosed?: Promise<void>
   readonly cleanupCallbacks: Set<() => Promise<void>>
   readonly startedCleanups: Map<() => Promise<void>, Promise<void>>
   readonly cleanupTasks: Set<Promise<void>>
@@ -43,10 +50,68 @@ interface DatabaseTestAbortScope {
 
 const databaseTestAbortScopeStorage =
   new AsyncLocalStorage<DatabaseTestAbortScope>()
+const databaseTestCleanupStorage = new AsyncLocalStorage<boolean>()
 const databaseTestAbortScopes = new WeakMap<
   AbortSignal,
   DatabaseTestAbortScope
 >()
+
+export async function runDatabaseTestCleanup<Result>(
+  cleanup: () => Promise<Result>,
+): Promise<Result> {
+  const scope = databaseTestAbortScopeStorage.getStore()
+  const completion = (async () => {
+    if (scope?.signal.aborted) await stopDatabaseTestClients(scope)
+    scope?.cleanupAuthority?.throwIfAborted()
+    return databaseTestCleanupStorage.run(true, cleanup)
+  })()
+  scope?.cleanupCompletions.add(completion)
+  try {
+    return await completion
+  } finally {
+    scope?.cleanupCompletions.delete(completion)
+  }
+}
+
+export function throwIfDatabaseTestAborted(): void {
+  const scope = databaseTestAbortScopeStorage.getStore()
+  if (databaseTestCleanupStorage.getStore())
+    scope?.cleanupAuthority?.throwIfAborted()
+  else scope?.signal.throwIfAborted()
+}
+
+async function stopDatabaseTestClients(
+  scope: DatabaseTestAbortScope,
+): Promise<void> {
+  for (const stop of scope.clientStops) {
+    if (scope.startedClientStops.has(stop)) continue
+    scope.startedClientStops.add(stop)
+    const completion = Promise.resolve()
+      .then(stop)
+      .catch((error: unknown) => {
+        scope.cleanupFailures.push(error)
+      })
+      .finally(() => scope.clientStopTasks.delete(completion))
+    scope.clientStopTasks.add(completion)
+  }
+  while (scope.clientStopTasks.size > 0)
+    await Promise.all([...scope.clientStopTasks])
+}
+
+async function closeDatabaseTestCleanupClients(
+  scope: DatabaseTestAbortScope,
+): Promise<void> {
+  scope.cleanupClientsClosed ??= Promise.all(
+    [...scope.cleanupClientClosers].map(async (close) => {
+      try {
+        await close()
+      } catch (error) {
+        scope.cleanupFailures.push(error)
+      }
+    }),
+  ).then(() => undefined)
+  await scope.cleanupClientsClosed
+}
 
 function getDatabaseTestAbortScope(
   signal: AbortSignal,
@@ -57,6 +122,11 @@ function getDatabaseTestAbortScope(
   }
   const scope: DatabaseTestAbortScope = {
     signal,
+    cleanupAuthority: undefined,
+    clientStops: new Set(),
+    startedClientStops: new Set(),
+    clientStopTasks: new Set(),
+    cleanupClientClosers: new Set(),
     cleanupCallbacks: new Set(),
     startedCleanups: new Map(),
     cleanupTasks: new Set(),
@@ -67,6 +137,7 @@ function getDatabaseTestAbortScope(
   signal.addEventListener(
     'abort',
     () => {
+      void stopDatabaseTestClients(scope)
       for (const cleanup of scope.cleanupCallbacks) {
         startDatabaseTestAbortCleanup(scope, cleanup)
       }
@@ -84,7 +155,11 @@ function startDatabaseTestAbortCleanup(
     return
   }
   const task = Promise.resolve()
-    .then(cleanup)
+    .then(() =>
+      databaseTestAbortScopeStorage.run(scope, () =>
+        runDatabaseTestCleanup(cleanup),
+      ),
+    )
     .catch((error: unknown) => {
       scope.cleanupFailures.push(error)
     })
@@ -169,7 +244,8 @@ export function bindDatabaseTestClientToAbortSignal(
   signal: AbortSignal,
 ): void {
   const scope = getDatabaseTestAbortScope(signal)
-  registerDatabaseTestAbortCleanup(scope, () => client.end({ timeout: 0 }))
+  scope.clientStops.add(() => client.end({ timeout: 5 }))
+  if (signal.aborted) void stopDatabaseTestClients(scope)
 }
 
 function describeDatabaseTestCleanupFailure(error: unknown): string {
@@ -206,7 +282,7 @@ export async function runDatabaseTestWithCleanup<Result>(
   const abortScope = databaseTestAbortScopeStorage.getStore()
   let cleanupPromise: Promise<void> | undefined
   const runCleanup = (): Promise<void> => {
-    cleanupPromise ??= cleanup()
+    cleanupPromise ??= runDatabaseTestCleanup(cleanup)
     return cleanupPromise
   }
   const unregisterAbortCleanup =
@@ -284,7 +360,7 @@ export function createDatabaseTestSql(
     throw new Error('数据库测试连接池大小无效。')
   }
   const scope = databaseTestAbortScopeStorage.getStore()
-  scope?.signal.throwIfAborted()
+  throwIfDatabaseTestAborted()
   const sql = postgres(url, {
     ...createDatabaseTestConnectionOptions(runId, role),
     max: maximumConnections,
@@ -292,7 +368,56 @@ export function createDatabaseTestSql(
   if (scope !== undefined) {
     bindDatabaseTestClientToAbortSignal(sql, scope.signal)
   }
-  return sql
+  const protectedSql = protectDatabaseTestTransactions(
+    sql,
+    `${DATABASE_TEST_APPLICATION_PREFIX}:${runId}:${role}`,
+    scope?.signal,
+  )
+  if (scope === undefined) return protectedSql
+  let cleanupSql: Sql | undefined
+  const currentClient = (): Sql => {
+    if (!databaseTestCleanupStorage.getStore()) return protectedSql
+    scope.cleanupAuthority?.throwIfAborted()
+    if (cleanupSql === undefined) {
+      const cleanupClient = postgres(url, {
+        ...createDatabaseTestConnectionOptions(runId, role),
+        max: maximumConnections,
+      })
+      cleanupSql = protectDatabaseTestTransactions(
+        cleanupClient,
+        `${DATABASE_TEST_APPLICATION_PREFIX}:${runId}:${role}`,
+        scope.cleanupAuthority,
+      )
+      const closeOnAuthorityLoss = () => {
+        void cleanupClient.end({ timeout: 0 }).catch((error: unknown) => {
+          scope.cleanupFailures.push(error)
+        })
+      }
+      scope.cleanupAuthority?.addEventListener('abort', closeOnAuthorityLoss, {
+        once: true,
+      })
+      scope.cleanupClientClosers.add(async () => {
+        scope.cleanupAuthority?.removeEventListener(
+          'abort',
+          closeOnAuthorityLoss,
+        )
+        await cleanupClient.end({ timeout: 5 })
+      })
+    }
+    return cleanupSql
+  }
+  return new Proxy(protectedSql, {
+    apply(_target, thisArgument, argumentsList) {
+      return Reflect.apply(currentClient(), thisArgument, argumentsList)
+    },
+    get(target, property) {
+      // 原工作连接的 finally 不得提前关闭仍被夹具恢复使用的连接。
+      return Reflect.get(
+        property === 'end' ? target : currentClient(),
+        property,
+      )
+    },
+  })
 }
 
 export function createDatabaseTestSqlForRole(
@@ -318,13 +443,23 @@ export async function assertNoConflictingDatabaseTestConnections(
       application_name AS "applicationName",
       state,
       age(clock_timestamp(), xact_start)::text AS "transactionAge"
-    FROM pg_stat_activity
+    FROM pg_stat_activity AS activity
     WHERE datname = current_database()
-      AND application_name LIKE ${`${DATABASE_TEST_APPLICATION_PREFIX}:%`}
+      AND pid <> pg_backend_pid()
       AND application_name NOT LIKE ${`${DATABASE_TEST_APPLICATION_PREFIX}:${runId}:%`}
       AND (
-        xact_start IS NOT NULL
-        OR application_name ~ ${DATABASE_TEST_SUITE_LOCK_APPLICATION_PATTERN}
+        (application_name LIKE ${`${DATABASE_TEST_APPLICATION_PREFIX}:%`}
+          AND (xact_start IS NOT NULL
+            OR application_name ~ ${DATABASE_TEST_SUITE_LOCK_APPLICATION_PATTERN}))
+        OR (xact_start IS NOT NULL
+          AND application_name NOT LIKE ${`${DATABASE_TEST_APPLICATION_PREFIX}:%`}
+          AND EXISTS (
+            SELECT 1 FROM pg_locks AS held
+            JOIN pg_class AS relation ON relation.oid = held.relation
+            JOIN pg_namespace AS schema ON schema.oid = relation.relnamespace
+            WHERE held.pid = activity.pid AND held.granted
+              AND schema.nspname = 'app_private'
+          ))
       )
     ORDER BY xact_start, pid
   `
@@ -337,6 +472,16 @@ export async function assertNoConflictingDatabaseTestConnections(
         `PID ${row.pid}，状态 ${row.state ?? 'unknown'}，事务年龄 ${row.transactionAge ?? 'unknown'}`,
     )
     .join('；')
+  if (
+    rows.some(
+      (row) =>
+        !row.applicationName.startsWith(`${DATABASE_TEST_APPLICATION_PREFIX}:`),
+    )
+  ) {
+    throw new Error(
+      `检测到未标记的数据库事务持有 app_private 锁：${details}。请确认连接归属后处理；自动测试连接清理不会终止它。`,
+    )
+  }
   throw new Error(
     `检测到其他数据库测试事务：${details}。请先运行 pnpm --filter @tx-holdem-coach/server run db:test:cleanup。`,
   )
@@ -428,25 +573,33 @@ export async function runAbortableDatabasePhase<Result>(
     now: Date.now,
     write: (message) => process.stderr.write(message),
   },
+  cleanupAuthority?: AbortSignal,
 ): Promise<Result> {
   const scope = getDatabaseTestAbortScope(signal)
+  scope.cleanupAuthority =
+    cleanupAuthority ??
+    databaseTestAbortScopeStorage.getStore()?.cleanupAuthority
   return databaseTestAbortScopeStorage.run(scope, async () => {
     signal.throwIfAborted()
+    const completion = runTimedDatabasePhase(
+      label,
+      () => operation(signal),
+      reporter,
+    )
+    const unregister = trackDatabaseTestAbortCleanupCompletion(completion)
     try {
-      const result = await runTimedDatabasePhase(
-        label,
-        () => operation(signal),
-        reporter,
-      )
+      const result = await completion
       signal.throwIfAborted()
       return result
     } catch (error) {
       if (signal.aborted) signal.throwIfAborted()
       throw error
     } finally {
+      unregister()
       if (signal.aborted) {
         await waitForDatabaseTestAbortCleanup(signal, reporter)
       }
+      await closeDatabaseTestCleanupClients(scope)
     }
   })
 }
@@ -462,6 +615,7 @@ export async function waitForDatabaseTestAbortCleanup(
     return
   }
   if (signal.aborted) {
+    await stopDatabaseTestClients(scope)
     for (const cleanup of scope.cleanupCallbacks) {
       startDatabaseTestAbortCleanup(scope, cleanup)
     }
@@ -472,6 +626,7 @@ export async function waitForDatabaseTestAbortCleanup(
       ...scope.cleanupCompletions,
     ])
   }
+  await closeDatabaseTestCleanupClients(scope)
   const cleanupFailures = scope.cleanupFailures.splice(0)
   if (cleanupFailures.length > 0) {
     reporter.write(

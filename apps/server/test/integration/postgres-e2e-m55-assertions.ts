@@ -20,6 +20,7 @@ import {
 import {
   createDatabaseTestSqlForRole,
   runDatabaseTestWithCleanup,
+  throwIfDatabaseTestAborted,
 } from './database-test-runtime.js'
 import {
   clearLocalOwnerSessions,
@@ -79,6 +80,7 @@ async function waitFor(
 ) {
   const deadline = Date.now() + maximumWaitMs
   do {
+    throwIfDatabaseTestAborted()
     if (await assertion()) return
     await new Promise((resolve) => setTimeout(resolve, 1_000))
   } while (Date.now() < deadline)

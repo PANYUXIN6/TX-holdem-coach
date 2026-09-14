@@ -1,5 +1,6 @@
 import type { JSONValue, Sql } from 'postgres'
 import type { ResolvedOwnerScope } from '../../src/persistence/owner-scope.js'
+import { runDatabaseTestCleanup } from '../integration/database-test-runtime.js'
 import {
   lockPlayerTimeoutSettings,
   PLAYER_TIMEOUT_SETTING_KEY,
@@ -35,15 +36,16 @@ export async function restorePlayerTimeoutSettingsRow(input: {
   readonly owner: ResolvedOwnerScope
   readonly original: PlayerTimeoutSettingsRowSnapshot | undefined
 }): Promise<void> {
-  await input.sql.begin(async (transaction) => {
-    await lockPlayerTimeoutSettings(transaction, input.owner)
-    await transaction`
+  await runDatabaseTestCleanup(() =>
+    input.sql.begin(async (transaction) => {
+      await lockPlayerTimeoutSettings(transaction, input.owner)
+      await transaction`
       DELETE FROM app_private.app_settings
       WHERE owner_id = ${input.owner.databaseOwnerId}::uuid
         AND setting_key = ${PLAYER_TIMEOUT_SETTING_KEY}
     `
-    if (input.original === undefined) return
-    await transaction`
+      if (input.original === undefined) return
+      await transaction`
       INSERT INTO app_private.app_settings (
         id, owner_id, setting_key, setting_payload, updated_at
       ) VALUES (
@@ -54,5 +56,6 @@ export async function restorePlayerTimeoutSettingsRow(input: {
         ${input.original.updatedAt}::timestamptz
       )
     `
-  })
+    }),
+  )
 }

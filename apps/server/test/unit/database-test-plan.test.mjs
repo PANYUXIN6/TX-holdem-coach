@@ -141,11 +141,24 @@ describe('database test plan', () => {
 
   test.each([
     [[], { kind: 'migration', suite: 'database' }],
+    [['--connections'], { kind: 'connections', suite: 'database' }],
     [['--full'], { kind: 'full', suite: 'database' }],
     [['--suite=e2e', '--full'], { kind: 'full', suite: 'e2e' }],
     [['--cleanup-stale'], { kind: 'cleanup', suite: 'database' }],
   ])('accepts the controlled plan %j', (arguments_, expected) => {
     expect(parseDatabaseTestArguments(arguments_)).toEqual(expected)
+  })
+
+  test('runs connection fault checks through a dedicated controlled entry', () => {
+    expect(
+      createDatabaseVitestArguments({ kind: 'connections', suite: 'database' }),
+    ).toEqual([
+      'exec',
+      'vitest',
+      'run',
+      '--bail=1',
+      'test/integration/database-connections.test.ts',
+    ])
   })
 
   test('creates the explicit launcher environment for a milestone', () => {
@@ -180,6 +193,7 @@ describe('database test plan', () => {
     ['--suite=database', '--milestone=m37'],
     ['--suite=e2e', '--milestone=m27'],
     ['--suite=e2e', '--cleanup-stale'],
+    ['--suite=e2e', '--connections'],
     ['--suite=e2e'],
     ['--suite=unknown', '--full'],
     ['--full', '--cleanup-stale'],

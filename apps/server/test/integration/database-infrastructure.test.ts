@@ -1,4 +1,5 @@
 import { assertRosterPreview } from './roster-preview-assertions.js'
+import { assertDatabaseConnectionProtection } from './database-connection-assertions.js'
 import { assertM22DatabaseSchema } from './database-schema-assertions.js'
 import { assertM35AtomicPlayerSettingsPersistence } from './database-m35-assertions.js'
 import { assertM44PlayerObservationPersistence } from './database-m44-assertions.js'
@@ -40,7 +41,10 @@ registerPersistentDatabasePreparation()
 registerDatabaseMilestoneTest(
   'm22',
   'M2.2 schema',
-  assertM22DatabaseSchema,
+  async (sql, runtimeUrl, signal) => {
+    await assertDatabaseConnectionProtection(runtimeUrl, signal)
+    await assertM22DatabaseSchema(sql, runtimeUrl)
+  },
   300_000,
 )
 registerDatabaseMilestoneTest(

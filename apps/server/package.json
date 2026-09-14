@@ -22,6 +22,7 @@
     "postgres:e2e:full": "node scripts/run-database-integration-tests.mjs --suite=e2e --full",
     "db:test:rebaseline": "pnpm run build && pnpm run verify:migration-assets && node scripts/rebaseline-test-database.mjs",
     "db:test:cleanup": "node scripts/run-database-integration-tests.mjs --suite=database --cleanup-stale",
+    "db:test:connections": "node scripts/run-database-integration-tests.mjs --suite=database --connections",
     "verify:migration-assets": "node scripts/verify-migration-assets.mjs"
   },
   "dependencies": {

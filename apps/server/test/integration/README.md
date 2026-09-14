@@ -15,6 +15,8 @@
 - 只能通过仓库受控入口连接隔离测试库，禁止连接或清理生产数据库。
 - 套件级 advisory lock 必须独占 `TEST_DATABASE_MIGRATION_URL` 的 `5432` 连接，并以 session lock、backend PID 心跳和连接关闭信号共同认证锁仍由同一 PostgreSQL backend 持有；本机可访问 IPv6 时优先配置 `db.<project-ref>.supabase.co` direct endpoint，shared session pooler 只作为 IPv4 环境的备选。业务测试事务继续走 `TEST_DATABASE_URL` 的 `6543` transaction pooler。不得用跨整套测试的长事务承载全局锁，也不得用重试掩盖持锁连接中断。
 - 测试必须自包含，不依赖执行顺序或前序残留；共享配置、fixture 和连接必须在 `finally` 中恢复或清理。
+- `createDatabaseTestSql*` 返回的客户端在每次 `begin` 内通过 `SET LOCAL` 设置测试标签、90 秒语句超时与 60 秒空闲事务超时，再用 `SHOW` 校验实际值；启动参数仅作为连接提示，不能证明 transaction pooler 后端已应用配置。初始化不执行 `SELECT`，保留调用方随后设置 `REPEATABLE READ` 的能力。自动提交语句不拥有跨语句的会话配置保证。
+- 取消后拒绝新的业务 SQL，工作连接给事务最多 5 秒收敛时间，再强制关闭；已登记的夹具清理在工作连接停止后通过独立、同样受保护的连接执行，最后关闭清理连接。`runDatabaseTestWithCleanup` 管理清理回调；需要在内层 `finally` 恢复设置时使用 `runDatabaseTestCleanup`。轮询等待应检查 `throwIfDatabaseTestAborted`。套件锁丢失后禁止清理写入。
 - 禁止多个远程测试进程同时运行；套件级 advisory lock 仅作为误操作保护。Worker heartbeat、业务长事务和锁竞争参与者必须使用独立连接。
 - 时间语义使用数据库时钟。普通流程应显式设置并断言足够的 deadline；短 deadline 只用于过期测试，不得通过提高 Vitest timeout 或重试掩盖 lease、deadline、锁或性能问题。
 - 正常读写必须走公开 Repository API；直接 SQL 只用于损坏载荷和数据库约束场景。锁等待必须由数据库锁事实证明，不得仅凭耗时推断。
@@ -36,11 +38,14 @@ pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=
 pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m55
 pnpm --filter @tx-holdem-coach/server run postgres:e2e:milestone -- --milestone=m55
 pnpm --filter @tx-holdem-coach/server run db:test:cleanup
+pnpm --filter @tx-holdem-coach/server run db:test:connections
 ```
 
 - 先运行失败或受影响的 milestone；两层都受影响时依次运行 database、E2E。full 的触发条件和报告口径遵循仓库根 `AGENTS.md`。
 - full 失败后先定向诊断失败 milestone，不得反复重跑 full。
 - `db:test:cleanup` 仅用于确认没有其他任务运行后的遗留测试连接；它不得删除业务行，也不得用于生产数据库。
+- 预检同时报告未带测试标签但仍持有 `app_private` 锁的事务；自动清理仍只终止有测试标签的连接。未标记的连接必须先确认归属，不能按 `Supavisor` 名称批量终止。
+- `db:test:connections` 独占同一套件锁，验证真实 pooler 配置、空闲事务到期释放锁、取消回滚与独立连接清理，只使用自身事务级 advisory lock，不迁移或修改应用数据；同一断言也纳入 database `m22`/full。该入口通过不等于 database milestone/full 或 PostgreSQL E2E 通过。
 - `ENOTFOUND` 属于网络或沙箱 DNS 问题；恢复联网后只重跑当前 milestone。
 - 发生 timeout、authority/fencing 异常或未观察到预期锁等待时，先检查并发测试进程、连接隔离、数据库锁事实、lease 和 deadline。
 

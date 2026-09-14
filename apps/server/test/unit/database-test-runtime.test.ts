@@ -10,6 +10,7 @@ import {
   readTransactionBackendPid,
   runAbortableDatabasePhase,
   runDatabaseTestWithCleanup,
+  runDatabaseTestCleanup,
   startDatabaseTestOperation,
   runTimedDatabasePhase,
   shouldRunDatabaseMilestone,
@@ -241,7 +242,7 @@ describe('database test runtime', () => {
     controller.abort(abortFailure)
 
     await expect(phase).rejects.toBe(abortFailure)
-    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 0 })
+    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 5 })
     expect(cleanup).toHaveBeenCalledTimes(1)
   })
 
@@ -281,7 +282,7 @@ describe('database test runtime', () => {
     controller.abort(lockLoss)
 
     await expect(phase).rejects.toBe(lockLoss)
-    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 0 })
+    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 5 })
   })
 
   test('preserves an aborted phase failure and sanitizes abort cleanup diagnostics', async () => {
@@ -332,6 +333,74 @@ describe('database test runtime', () => {
     expect(output.join('')).toContain('PostgresError(code=55P03)')
     expect(output.join('')).not.toContain('password')
     expect(output.join('')).not.toContain('postgresql://')
+  })
+
+  test('waits for business connections to stop before starting aborted fixture cleanup', async () => {
+    const controller = new AbortController()
+    const primaryFailure = new Error('phase timed out')
+    const order: string[] = []
+    let releaseShutdown!: () => void
+    const shutdown = new Promise<void>((resolve) => {
+      releaseShutdown = resolve
+    })
+    let reportStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      reportStarted = resolve
+    })
+    const phase = runAbortableDatabasePhase(
+      'ordered cleanup',
+      controller.signal,
+      async (signal) => {
+        bindDatabaseTestClientToAbortSignal(
+          {
+            end: async () => {
+              order.push('stop')
+              await shutdown
+              order.push('stopped')
+            },
+          },
+          signal,
+        )
+        reportStarted()
+        await runDatabaseTestWithCleanup(
+          async () => {
+            await new Promise<void>((resolve) =>
+              signal.addEventListener('abort', () => resolve(), { once: true }),
+            )
+            signal.throwIfAborted()
+          },
+          async () => {
+            order.push('cleanup')
+          },
+        )
+      },
+      { now: () => 0, write: () => undefined },
+    )
+    await started
+    controller.abort(primaryFailure)
+    await vi.waitFor(() => expect(order).toEqual(['stop']))
+    releaseShutdown()
+    await expect(phase).rejects.toBe(primaryFailure)
+    expect(order).toEqual(['stop', 'stopped', 'cleanup'])
+  })
+
+  test('refuses cleanup writes after suite-lock authority has been lost', async () => {
+    const controller = new AbortController()
+    const authority = new AbortController()
+    const cleanup = vi.fn()
+    await expect(
+      runAbortableDatabasePhase(
+        'lost authority',
+        controller.signal,
+        async () => {
+          authority.abort(new Error('suite lock lost'))
+          await runDatabaseTestCleanup(cleanup)
+        },
+        { now: () => 0, write: () => undefined },
+        authority.signal,
+      ),
+    ).rejects.toThrow('suite lock lost')
+    expect(cleanup).not.toHaveBeenCalled()
   })
 
   test('waits for tracked process termination before abort cleanup settles', async () => {
@@ -522,7 +591,7 @@ describe('database test runtime', () => {
     await expect(phase).rejects.toThrow(
       '数据库测试全局锁已丢失，已中止后续数据库写入。',
     )
-    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 0 })
+    expect(closeClient).toHaveBeenCalledExactlyOnceWith({ timeout: 5 })
     const releaseFailure: unknown = await lock.release().then(
       () => undefined,
       (error: unknown) => error,
@@ -605,6 +674,23 @@ describe('database test runtime', () => {
     await expect(
       terminateConflictingDatabaseTestConnections(sql, '0123456789abcdef'),
     ).resolves.toEqual([4242])
+  })
+
+  test('reports untagged transactions holding application locks without proposing automatic termination', async () => {
+    const sql = (() =>
+      Promise.resolve([
+        {
+          pid: 443087,
+          applicationName: 'Supavisor',
+          state: 'idle in transaction',
+          transactionAge: '00:13:00',
+        },
+      ])) as unknown as Sql
+    await expect(
+      assertNoConflictingDatabaseTestConnections(sql, '0123456789abcdef'),
+    ).rejects.toThrow(
+      '检测到未标记的数据库事务持有 app_private 锁：PID 443087，状态 idle in transaction，事务年龄 00:13:00。请确认连接归属后处理；自动测试连接清理不会终止它。',
+    )
   })
 
   test('preflight and cleanup include an idle foreign suite lock by its strict tag', async () => {

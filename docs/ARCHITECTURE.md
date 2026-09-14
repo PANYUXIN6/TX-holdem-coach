@@ -23,6 +23,8 @@
 - `packages/contracts` 提供前后端共享的严格 Zod 外部协议，包括 M5.5 的场次管理、Hand 调用列表、Run 详情、Attempt 与 Capability 摘要。Contracts 不包含数据库行模型、人物 Prompt／完整模型配置、候选集、Memory、牌堆、burn card、未公开底牌、私有下注轮或迁移结果。
 - 公开快照只承载当前手的最小行动时间线及两手之间的最小完成手摘要；M3 以后只能从私有事件与 M1.9 私有 `participantHands` 作可见性投影，Contracts 不导入服务器类型、评估比较等级、牌堆、burn 或未公开底牌。
 
+远程测试连接保护只属于测试层：显式事务在 pooler 分配的同一后端设置并校验局部标签与超时；取消后的业务连接停止和夹具恢复分阶段执行，恢复使用独立连接且仍受套件锁约束。连接故障回归由 `db:test:connections` 或 database m22/full 验证，不改变生产 Repository 的事务边界。
+
 ## 依赖方向
 
 共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M4 读取链为 `persistence authority → agents/player 窄端口 → 认证观察/reference → Player facade`；Player facade 只把无 UUID/brand/人物/SQL 的最小 DTO 交给 `poker/*` 纯分析，并把 `CoreFactSourceRef` 穷尽映射为 observation-bound 来源。`poker/betting.ts`、`hand-progression.ts`、settlement、M4.4 观察链和 M4.5 分析共同向下依赖共享下注/贡献内核，`poker/` 不反向依赖 Session、Agent 或 Persistence。静态 `poker-strategy/` 不读取数据库或网络。Foundation、ModelGateway 与 Contracts 均不导入 Player 观察业务模块；Provider Adapter 不读取数据库；生产 Player Commit Gate 仍由 M4.7 实现。

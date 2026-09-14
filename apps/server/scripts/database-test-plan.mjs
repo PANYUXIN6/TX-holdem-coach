@@ -101,6 +101,13 @@ export function parseDatabaseTestArguments(arguments_) {
   }
   if (
     planArguments.length === 1 &&
+    planArguments[0] === '--connections' &&
+    suite === 'database'
+  ) {
+    return { kind: 'connections', suite }
+  }
+  if (
+    planArguments.length === 1 &&
     planArguments[0] === '--cleanup-stale' &&
     suite === 'database'
   ) {
@@ -139,8 +146,10 @@ export function createDatabaseTestPlanEnvironment(plan, runId) {
 
 export function createDatabaseVitestArguments(plan) {
   const testFile =
-    plan.suite === 'database'
-      ? 'test/integration/database-infrastructure.test.ts'
-      : 'test/integration/postgres-application-e2e.test.ts'
+    plan.kind === 'connections'
+      ? 'test/integration/database-connections.test.ts'
+      : plan.suite === 'database'
+        ? 'test/integration/database-infrastructure.test.ts'
+        : 'test/integration/postgres-application-e2e.test.ts'
   return ['exec', 'vitest', 'run', '--bail=1', testFile]
 }

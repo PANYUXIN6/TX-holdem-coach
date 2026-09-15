@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-09-14（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.6 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
+更新时间：2026-09-15（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.8 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
 
 ## Workspace 边界
 

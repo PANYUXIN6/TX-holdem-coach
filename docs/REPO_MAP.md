@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-09-14（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.7 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
+更新时间：2026-09-15（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.8 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
 
 ## 当前目录与职责
 
@@ -57,7 +57,7 @@
 - `apps/web/src/main.tsx` → `App.tsx` → `Shell.tsx` / `Pages.tsx`：StrictMode 与根错误边界装配稳定 QueryClientProvider 和 BrowserRouter，渲染最大 430px 手机画布及普通、牌桌、全屏三种布局；页面错误边界保留标题和导航。`styles.css` 负责安全区、内容滚动、基础深色样式。
 - `apps/web/src/navigation.ts`：实际渲染和 Node 测试共用的路由定义、资源路径生成、受限列表返回策略；不承载查询或业务实体。`Shell.tsx` 统一处理 pathname 焦点/滚动和 coarse 手机横屏提示。
 - `apps/web/src/ErrorBoundary.tsx`：固定中文根级/页面渲染错误恢复；不显示原始异常，不处理异步请求错误。
-- `apps/web/vitest.config.ts`、`apps/web/test/navigation.test.ts`：独立 Node 导航冒烟，只收集 Web `test/**/*.test.ts`；根 `test:web` 独立执行，`test` / `verify` 在后端测试之后执行。M6.2 已装配 Query，M6.4 已接入页面作用域 UI Store；M7.1–M7.7 已接入实体读取和产品控件，M7.8 起的未实现路由继续保留占位。
+- `apps/web/vitest.config.ts`、`apps/web/test/navigation.test.ts`：独立 Node 导航冒烟，只收集 Web `test/**/*.test.ts`；根 `test:web` 独立执行，`test` / `verify` 在后端测试之后执行。M6.2 已装配 Query，M6.4 已接入页面作用域 UI Store；M7.1–M7.8 已接入实体读取和产品控件；统计路由已接入真实查询，M7.9 设置页仍保留占位。
 - `apps/server/`：Node/Hono 本地服务入口；`src/db/schema.ts` 是 14 张 `app_private` 业务表及 Drizzle 可表达约束/索引的唯一入口。首发前全部 Schema 演进已压入唯一 `src/db/migrations/0000_baseline.sql`，journal/snapshot 也只保留该基线；baseline 另保留延迟循环外键、约束触发器、默认 Owner 与权限收紧，`verify:migration-assets` 会阻止这些手工不变量被重新生成覆盖。运行时仍只使用参数化 `postgres.js`，不安装 `supabase-js`；迁移兼容、测试数据库安全和发布制品校验继续复用既有边界。
 - `apps/server/.env.example` 与 `.env.test.example`：前者只描述线上运行/迁移 URL 与 DeepSeek Provider Key，后者只描述两条测试 URL；project ref 只存在于非秘密注册表，不接受环境覆盖，真实 `.env.test.local` 被 Git 忽略。
 - `apps/server/scripts/run-database-integration-tests.mjs`：本地只解析 `.env.test.local`，CI 只接受已注入的两条测试 URL；构造子进程 allowlist，剔除线上 URL 和 ref 环境变量，并按纯计划选择数据库持久化或 PostgreSQL E2E 入口、注入 Run ID 及迁移-only、单里程碑、full 或 cleanup scope；Vitest 子进程在首个失败或阶段超时后停止调度同套后续里程碑。

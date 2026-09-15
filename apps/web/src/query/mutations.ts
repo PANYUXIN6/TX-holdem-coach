@@ -129,12 +129,27 @@ export function createMutations(
             (query) => training(query) && !list(query) && belongsTo(query, id),
           )
           await Promise.all([
+            // 删除后撤下统计贡献和场次 roster；普通后台刷新仍保留成功结果。
+            client.resetQueries(
+              {
+                predicate: (query) =>
+                  (query.queryKey[0] === 'statistics' ||
+                    query.queryKey[0] === 'sessions') &&
+                  affectedList(query, id),
+              },
+              { throwOnError: false },
+            ),
             client.resetQueries(
               { queryKey: keys.rosterPreview(), exact: true },
               { throwOnError: false },
             ),
             client.invalidateQueries(
-              { predicate: (query) => affectedList(query, id) },
+              {
+                predicate: (query) =>
+                  query.queryKey[0] !== 'statistics' &&
+                  query.queryKey[0] !== 'sessions' &&
+                  affectedList(query, id),
+              },
               { throwOnError: false },
             ),
           ])

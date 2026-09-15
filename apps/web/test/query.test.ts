@@ -4,6 +4,7 @@ import {
   QueryObserver,
   onlineManager,
 } from '@tanstack/react-query'
+import { managementItem } from './home-transport.js'
 import { ApiError } from '../src/api/errors.js'
 import { createApi } from '../src/api/client.js'
 import { createQueryClient } from '../src/query/client.js'
@@ -11,6 +12,7 @@ import { createQueries } from '../src/query/options.js'
 import { createMutations } from '../src/query/mutations.js'
 import { keys } from '../src/query/keys.js'
 import {
+  statisticsSearch,
   callsSearch,
   historySearch,
   sessionsSearch,
@@ -258,8 +260,10 @@ it('删除取消延迟 GET，目标关联详情不复活，其他场次与设置
   expect(cache.getQueryData(keys.handCalls(otherHand, page))).toBeDefined()
   expect(cache.getQueryData(keys.personas())).toBeDefined()
   expect(cache.getQueryData(keys.agent())).toBeDefined()
-  for (const key of related)
-    expect(cache.getQueryState(key)?.isInvalidated).toBe(true)
+  for (const key of related) {
+    if (key[0] === 'sessions') expect(cache.getQueryData(key)).toBeUndefined()
+    else expect(cache.getQueryState(key)?.isInvalidated).toBe(true)
+  }
   expect(cache.getQueryState(unrelated)?.isInvalidated).toBe(false)
 })
 it('清空移除两种 Session key 与训练域，活动列表重新读取，保留基础配置', async () => {
@@ -608,5 +612,100 @@ it('检测成功后的摘要刷新失败保留 Mutation 成功与 Query 错误',
   )
   expect(mutation.getCurrentResult().status).toBe('success')
   expect(cache.getQueryState(keys.providers())?.status).toBe('error')
+  unsubscribe()
+})
+
+it('删除单场立即撤下受影响统计，迟到响应不能恢复删除前样本', async () => {
+  const cache = client()
+  const late = deferred<Response>()
+  const next = deferred<Response>()
+  let reads = 0
+  const api = createApi(async (_url, init) => {
+    if (init?.method === 'DELETE')
+      return json({ deletedSessionId: ids.session, invalidatedRunCount: 0 })
+    reads++
+    return reads === 1 ? json(data) : reads === 2 ? late.promise : next.promise
+  })
+  const query = statisticsSearch.decode('')
+  const zero = { numerator: 0, denominator: 0, percentage: null }
+  const data = {
+    scope: 'hands',
+    query,
+    timeBasis: 'handStartedAt',
+    totals: {
+      handCount: 1,
+      distinctHandCount: 1,
+      handNetChange: 300,
+      vpip: zero,
+      pfr: zero,
+      threeBet: zero,
+      wtsd: zero,
+      wsd: zero,
+    },
+    byPosition: [],
+  }
+  const observer = new QueryObserver(
+    cache,
+    createQueries(api).statistics(query),
+  )
+  const unsubscribe = observer.subscribe(() => {})
+  await observer.refetch()
+  const old = observer.refetch()
+  const deleting = new MutationObserver(
+    cache,
+    createMutations(cache, api).deleteSession(),
+  ).mutate({ sessionId: ids.session, body: { confirmation: '永久删除本场' } })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(observer.getCurrentResult().data).toBeUndefined()
+  late.resolve(json(data))
+  await old
+  expect(observer.getCurrentResult().data).toBeUndefined()
+  next.resolve(
+    json({
+      ...data,
+      totals: {
+        ...data.totals,
+        handCount: 0,
+        distinctHandCount: 0,
+        handNetChange: 0,
+      },
+    }),
+  )
+  await deleting
+  expect(observer.getCurrentResult().data?.totals).toMatchObject({
+    handCount: 0,
+    handNetChange: 0,
+  })
+  unsubscribe()
+})
+
+it('删除成功后历史选项撤下旧 roster，重新读取前不保留可选配置', async () => {
+  const cache = client()
+  const next = deferred<Response>()
+  let reads = 0
+  const page = sessionsSearch.decode('')
+  const data = {
+    query: page.query,
+    timeBasis: 'sessionCreatedAt',
+    items: [managementItem()],
+    nextCursor: null,
+  }
+  const api = createApi(async (_url, init) => {
+    if (init?.method === 'DELETE')
+      return json({ deletedSessionId: ids.session, invalidatedRunCount: 0 })
+    return ++reads === 1 ? json(data) : next.promise
+  })
+  const observer = new QueryObserver(cache, createQueries(api).sessions(page))
+  const unsubscribe = observer.subscribe(() => {})
+  await observer.refetch()
+  const deleting = new MutationObserver(
+    cache,
+    createMutations(cache, api).deleteSession(),
+  ).mutate({ sessionId: ids.session, body: { confirmation: '永久删除本场' } })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(observer.getCurrentResult().data).toBeUndefined()
+  next.resolve(json({ ...data, items: [] }))
+  await deleting
+  expect(observer.getCurrentResult().data?.items).toEqual([])
   unsubscribe()
 })

@@ -197,3 +197,9 @@ AI 当前技术摘要按协调状态使用独立于调试详情页的轮询策�
 历史列表和完成手详情通过原 search codec → Query → `/api/hands` 链读取；URL 拥有已应用条件，抽屉草稿及 audit 揭牌意图仅属于页面。普通进入不会装配 audit observer，即使缓存已有审计数据也只渲染 public；隐藏、离页、换手与资源缺失撤销意图，audit 错误回退 public 并等待显式重试。
 
 本手流程通过 SessionRouteBridge 的既有租用读取唯一快照，按 streetBefore 分街。公开 projector 原位认证 actionDisplay 金额，Web 只格式化 DTO；旧公开事件和命令响应允许整块缺省。hand 消失时仅以匹配的 lastCompletedHandSummary 读取 public 终局，新手和删除优先决定当前渲染目标。详情和调用页的返回只携带白名单路径/查询参数或认证资源 ID，不传递扑克实体。
+
+## M7.8 固定统计消费
+
+`Pages → statistics/ → queries.statistics → api.statistics → 原 M5.4` 消费单个严格判别联合查询。URL 拥有已应用的模式/主体/日期/场次/人物/位置条件；局部状态仅持有筛选草稿与位置展开，服务端结果只存在 Query。`filters/` 承载 history/statistics 共用的日期转换和有界场次选项；选项游标不进入统计查询。
+
+单场删除成功后，原 Web mutation 边界重置受影响统计和场次列表，以撤下已删除贡献及 roster，并继续原取消/重读机制；普通刷新失败仍显示同 Key 上次成功结果。清空和 SSE 失效仍由原 runtime/Query 协调。统计页不租用 Session SSE、不重算公式或总计，不新增后端和持久化职责。

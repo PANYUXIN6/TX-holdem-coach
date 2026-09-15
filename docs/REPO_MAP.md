@@ -268,3 +268,12 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/src/history/HandFlow.tsx` / `presentation.ts` / `history.css`：共享分街动作、牌面、逐池派奖及独立返还展示，日期日界和相邻分组适配；不重算下注或牌型。`DebugPages.tsx` 依据已认证 Hand 状态提供内容返回。
 - `apps/server/src/sessions/public-projection/public-session-projector.ts`：当前动作公开金额由同一事件 before/after 投入、筹码及底池差额认证；新返回类型要求 actionDisplay，Contracts 允许旧载荷整块缺省，原事件和账本不改写。
 - `apps/web/test/history-browser.tsx` / `history-acceptance-browser.mjs` / `history-vite.config.ts`：真实 Shell/Page/Query/SessionRuntime 受控 HTTP/SSE 验收，独立 dev 与 build preview；`history-showdown-fixture.json` 来自服务端领域投影的全下多池公开样本。远程和真机状态见 M7.7 设计文档 §12。
+
+## M7.8 统计页
+
+- `apps/web/src/statistics/StatisticsPage.tsx`：`Pages` 接入统计路由；严格 URL 解码后仅订阅当前 `queries.statistics`，拥有模式/主体切换、筛选摘要与刷新状态。结果不使用跨 Key 占位数据，页面不租用 SSE。
+- `apps/web/src/statistics/adapter.ts` / `StatisticsFilters.tsx`：模式切换清除位置、保留共同条件；抽屉草稿仅在应用时提交 URL，日期仅转换已编辑端，人物版本保留原始输入用于严格校验。
+- `apps/web/src/statistics/StatisticsResults.tsx` / `statistics.css`：直接展示服务端总计、九位置和场次账务，中文定义来自 Contracts；完整整数、带名分子分母与零分母说明使用纵向卡片。
+- `apps/web/src/filters/dates.ts` / `HistoricalOptions.tsx`：history/statistics 的日期日界与按需场次/固化人物选项；历史 presentation 保留日期导出，选项按批读取原 Session Query。
+- `apps/web/src/query/mutations.ts`：单场删除成功后取消旧读取并重置受影响统计及场次列表，撤下旧贡献/roster；清空继续使用原 runtime 和活动列表 reset。普通刷新仍保留同 Key 上次成功结果。
+- `apps/web/test/statistics.test.ts` / `statistics-browser.tsx` / `statistics-acceptance-browser.mjs` / `statistics-vite.config.ts`：适配测试及真实 Shell/Page/Query/runtime 的受控 HTTP 浏览器旅程；独立 dev 与 build preview，产品入口没有夹具开关。

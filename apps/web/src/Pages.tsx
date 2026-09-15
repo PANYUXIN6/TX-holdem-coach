@@ -1,3 +1,4 @@
+import { StatisticsPage } from './statistics/StatisticsPage.js'
 import { HistoryPage } from './history/HistoryPage.js'
 import { HandPage, CurrentHandPage } from './history/HandPages.js'
 import { DebugEntry, HandRunsPage, RunPage } from './debug/DebugPages.js'
@@ -24,6 +25,7 @@ const descriptions: Partial<Record<PageId, string>> = {
 
 export function Page({ id }: { id: PageId }) {
   const params = useParams()
+  if (id === 'statistics') return <StatisticsPage />
   if (id === 'history') return <HistoryPage />
   if (id === 'hand') return <HandPage />
   if (id === 'currentHand') return <CurrentHandPage />

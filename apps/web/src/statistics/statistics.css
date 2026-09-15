@@ -1,0 +1,117 @@
+.statistics-page {
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+  padding-bottom: 1rem;
+  overflow-wrap: anywhere;
+}
+.statistics-intro {
+  border-top: 2px solid var(--accent, #dbbb78);
+  padding-top: 1rem;
+}
+.statistics-page h2 {
+  font-size: 1.3rem;
+  margin: 0.4rem 0 1rem;
+}
+.statistics-page p {
+  line-height: 1.65;
+}
+.statistics-switch {
+  border: 0;
+  padding: 0;
+  margin: 1rem 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.statistics-switch legend {
+  font-size: 0.85rem;
+  color: var(--text-muted, #aab3bb);
+  margin-bottom: 0.5rem;
+}
+.statistics-switch label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #48535e;
+  border-radius: 0.6rem;
+  cursor: pointer;
+}
+.statistics-switch label:has(:checked) {
+  border-color: var(--accent, #dbbb78);
+  background: #302c22;
+}
+.statistics-switch input {
+  accent-color: var(--accent, #dbbb78);
+  flex-shrink: 0;
+}
+.statistics-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+.statistics-value,
+.statistics-card {
+  min-width: 0;
+  border: 1px solid #303a42;
+  background: var(--surface, #171e25);
+  border-radius: 0.85rem;
+  padding: 1rem;
+}
+.statistics-value dt {
+  font-size: 0.875rem;
+  color: var(--text-muted, #aab3bb);
+}
+.statistics-value dd {
+  margin: 0.65rem 0 0;
+  font-size: 1.85rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.statistics-value small {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 400;
+  margin-top: 0.25rem;
+}
+.statistics-note {
+  color: var(--text-muted, #aab3bb);
+  font-size: 0.875rem;
+}
+.statistics-rates,
+.statistics-positions {
+  display: grid;
+  gap: 0.75rem;
+}
+.statistics-card h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+.statistics-card .statistics-percentage {
+  font-size: 2rem;
+  line-height: 1.2;
+  margin: 0.8rem 0;
+  font-variant-numeric: tabular-nums;
+}
+.statistics-counts {
+  font-variant-numeric: tabular-nums;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #303a42;
+}
+.statistics-positions {
+  margin-top: 1.75rem;
+}
+.statistics-positions summary {
+  min-height: 44px;
+  cursor: pointer;
+  line-height: 1.7;
+}
+.statistics-positions summary span {
+  display: block;
+  font-variant-numeric: tabular-nums;
+}

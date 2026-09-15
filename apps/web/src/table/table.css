@@ -263,9 +263,6 @@
     display: flex;
   }
 }
-.table-seat .card-value {
-  display: none;
-}
 .table-seat .seat-position {
   display: inline;
   margin-right: 3px;
@@ -276,9 +273,6 @@
 .table-seat .chip-amount::before {
   content: '筹码 ';
   font-size: 0.625rem;
-}
-.table-board .card-value {
-  display: none;
 }
 .action-panel {
   display: grid;

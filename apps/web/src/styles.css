@@ -532,16 +532,6 @@ textarea.field-control {
   height: auto;
   aspect-ratio: 153 / 216;
 }
-.card-value {
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1.5;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.card-red {
-  color: var(--danger);
-}
 .card-empty {
   background: var(--surface-raised);
   color: var(--muted);

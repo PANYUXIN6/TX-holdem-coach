@@ -70,14 +70,6 @@ export function PlayingCard(props: PlayingCardProps) {
           <span className="card-slot-mark">—</span>
         )}
       </span>
-      {face ? (
-        <span
-          aria-hidden="true"
-          className={`card-value ${face.red ? 'card-red' : ''}`}
-        >
-          {face.text}
-        </span>
-      ) : null}
     </span>
   )
 }

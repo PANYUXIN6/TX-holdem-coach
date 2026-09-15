@@ -11,8 +11,6 @@ describe('人物与牌面展示契约', () => {
     expect(cardPresentation({ suit: 'hearts', rank: 'T' })).toEqual({
       src: '/poker/heart_10.png',
       label: '红桃 10',
-      text: '♥10',
-      red: true,
     })
     expect(cardPresentation({ suit: 'clubs', rank: 'A' }).src).toBe(
       '/poker/club_A.png',

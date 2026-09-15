@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-09-15（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.8 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
+更新时间：2026-09-15（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.9 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
 
 ## Workspace 边界
 
@@ -203,3 +203,10 @@ AI 当前技术摘要按协调状态使用独立于调试详情页的轮询策�
 `Pages → statistics/ → queries.statistics → api.statistics → 原 M5.4` 消费单个严格判别联合查询。URL 拥有已应用的模式/主体/日期/场次/人物/位置条件；局部状态仅持有筛选草稿与位置展开，服务端结果只存在 Query。`filters/` 承载 history/statistics 共用的日期转换和有界场次选项；选项游标不进入统计查询。
 
 单场删除成功后，原 Web mutation 边界重置受影响统计和场次列表，以撤下已删除贡献及 roster，并继续原取消/重读机制；普通刷新失败仍显示同 Key 上次成功结果。清空和 SSE 失效仍由原 runtime/Query 协调。统计页不租用 Session SSE、不重算公式或总计，不新增后端和持久化职责。
+
+
+## M7.9 设置与数据管理消费
+
+`Pages → settings/ → 原 queries / runtime.mutations → Settings、Health、Session Management HTTP`。Provider、Player、Health 和目录独立读取；Provider 检测只有显式 POST，预算草稿通过完整 Schema 后只提交变化字段。服务端结果继续由 Query 拥有，表单只保存编辑基线与字符串草稿。
+
+目录点击删除后才经 `runtime.sessionOptions` 读取唯一快照，再打开原 ConfirmationHost；准备意图按页面寿命及新确认目标失效。稳定 Host 保留原 freeze、取消读取、移除资源和 reset 列表生命周期，以协议返回的删除数量及失效 Run 数反馈结果。设置页没有 Session SSE 租用，清空不移除 Provider、Player 设置、Health 与人物目录；服务端、共享 Contracts、持久化和并发语义不变。

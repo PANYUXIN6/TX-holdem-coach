@@ -1,3 +1,4 @@
+import { SettingsPage } from './settings/SettingsPage.js'
 import { StatisticsPage } from './statistics/StatisticsPage.js'
 import { HistoryPage } from './history/HistoryPage.js'
 import { HandPage, CurrentHandPage } from './history/HandPages.js'
@@ -17,7 +18,6 @@ const descriptions: Partial<Record<PageId, string>> = {
   history: '历史列表与筛选将在查询功能接入后开放。当前尚未读取手牌记录。',
   hand: '手牌详情将在查询功能接入后显示。手牌是否存在及是否已完成，以服务端响应为准。',
   statistics: '统计将在聚合查询接入后显示。这里将帮助你回看练习表现。',
-  settings: '人物、模型供应商与数据管理设置将在后续接入。',
   debug: '调用查询接入后，可从手牌或 AI 状态进入对应的调用记录。',
   handRuns: '手牌关联调用将在查询功能接入后显示。当前尚未读取调用记录。',
   run: '调用详情将在查询功能接入后显示。当前尚未读取调用结果。',
@@ -25,6 +25,7 @@ const descriptions: Partial<Record<PageId, string>> = {
 
 export function Page({ id }: { id: PageId }) {
   const params = useParams()
+  if (id === 'settings') return <SettingsPage />
   if (id === 'statistics') return <StatisticsPage />
   if (id === 'history') return <HistoryPage />
   if (id === 'hand') return <HandPage />
@@ -62,13 +63,6 @@ export function Page({ id }: { id: PageId }) {
           </p>
         ) : null}
       </section>
-      <div className="page-links">
-        {id === 'settings' ? (
-          <Link to={paths.debug}>
-            调试入口说明 <span aria-hidden="true">↗</span>
-          </Link>
-        ) : null}
-      </div>
     </>
   )
 }

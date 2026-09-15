@@ -3,12 +3,7 @@ import { keys } from '../query/keys.js'
 import { matchRoutes, useLocation, useNavigate } from 'react-router'
 import { routes } from '../navigation.js'
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import {
-  useMutation,
-  useQueries,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query'
+import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
 import { ApiError, errorMessage } from '../api/errors.js'
 import { Button, Field } from '../components/controls.js'
 import {
@@ -174,14 +169,17 @@ export function ConfirmationHost({
     setPending(true)
     setResult(null)
     try {
-      if (target.kind === 'clearData')
-        await clear.mutateAsync({ confirmation: labels.clearData })
-      else if (target.kind === 'deleteSession')
-        await deletion.mutateAsync({
+      let successMessage = `${labels[target.kind]}已完成。`
+      if (target.kind === 'clearData') {
+        const data = await clear.mutateAsync({ confirmation: labels.clearData })
+        successMessage = `已清空 ${data.deletedSessionCount} 个场次；已使 ${data.invalidatedRunCount} 个未终态模型运行失效。`
+      } else if (target.kind === 'deleteSession') {
+        const data = await deletion.mutateAsync({
           sessionId: target.sessionId,
           body: { confirmation: labels.deleteSession },
         })
-      else await abort.mutateAsync(target)
+        successMessage = `已删除本场 ${data.deletedSessionId}；已使 ${data.invalidatedRunCount} 个未终态模型运行失效。`
+      } else await abort.mutateAsync(target)
       store.getState().close(target.instanceId)
       const unsynced =
         target.kind === 'abortHandAndEndSession' &&
@@ -191,7 +189,7 @@ export function ConfirmationHost({
         sourceKey,
         message: unsynced
           ? '操作已完成，最新状态暂未同步。请重新读取。'
-          : `${labels[target.kind]}已完成。`,
+          : successMessage,
         unknown: false,
         failed: false,
       })
@@ -404,7 +402,8 @@ function ConfirmationForm({
         {target.kind === 'clearData' ? (
           <>
             <p>
-              将删除当前活动场次、全部训练记录和统计，活动模型请求会失效。保留预设人物和设置。无法通过应用恢复。
+              将删除当前活动场次、全部训练记录和统计，活动模型请求会失效。保留预设人物、Player
+              设置、部署配置和静态资源。无法通过应用恢复。
             </p>
             <Field
               id="clear-confirmation"
@@ -469,28 +468,65 @@ function ConfirmationForm({
 /** 列表删除入口先读取唯一快照，不从列表摘要推断可删除资格。 */
 export function DeleteSessionTrigger({ sessionId }: { sessionId: string }) {
   const runtime = useSessionRuntime()
-  const query = useQuery(runtime.sessionOptions(sessionId))
+  const client = useQueryClient()
   const store = useOverlayStore()
+  const active = useOverlayUi((state) => state.active)
   const scope = usePageScope()
+  const intent = useRef<object | null>(null)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  useLayoutEffect(() => {
+    const unsubscribe = store.subscribe((state) => {
+      if (state.active) {
+        intent.current = null
+        setPending(false)
+      }
+    })
+    return () => {
+      unsubscribe()
+      intent.current = null
+    }
+  }, [scope, sessionId, store])
+  async function prepare() {
+    if (pending || store.getState().active) return
+    const token = {}
+    intent.current = token
+    // 同一页面只保留最新点击意图；不持有场次结果副本。
+    deletionIntents.set(store, token)
+    setPending(true)
+    setError(null)
+    try {
+      const snapshot = await client.fetchQuery({
+        ...runtime.sessionOptions(sessionId),
+        staleTime: 0,
+      })
+      if (
+        intent.current !== token ||
+        deletionIntents.get(store) !== token ||
+        store.getState().active
+      )
+        return
+      if (snapshot.lifecycleStatus !== 'ended')
+        throw new ApiError('http', 409, 'SESSION_NOT_ENDED')
+      store.getState().open(scope, { kind: 'deleteSession', sessionId })
+    } catch (failure) {
+      if (intent.current === token && deletionIntents.get(store) === token)
+        setError(failure)
+    } finally {
+      if (intent.current === token) setPending(false)
+    }
+  }
   return (
     <>
-      {query.isPending ? <LoadingFeedback /> : null}
-      {query?.error ? (
-        <RequestError error={query.error} retry={() => void query.refetch()} />
-      ) : null}
+      {error ? <RequestError error={error} /> : null}
       <Button
         variant="danger"
-        disabled={
-          query.isFetching ||
-          query.isError ||
-          query.data?.lifecycleStatus !== 'ended'
-        }
-        onClick={() =>
-          store.getState().open(scope, { kind: 'deleteSession', sessionId })
-        }
+        disabled={pending || !!active}
+        onClick={() => void prepare()}
       >
-        删除本场
+        {pending ? '正在确认场次状态' : '删除本场'}
       </Button>
     </>
   )
 }
+const deletionIntents = new WeakMap<object, object>()

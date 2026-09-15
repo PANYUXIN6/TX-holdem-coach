@@ -1,0 +1,77 @@
+.settings-page {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.settings-section {
+  border-top: 1px solid var(--border);
+  padding: 24px 0;
+  min-width: 0;
+}
+.settings-section h2 {
+  margin: 4px 0 20px;
+}
+.settings-section p {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.settings-section dl {
+  margin: 20px 0;
+  display: grid;
+  gap: 16px;
+}
+.settings-section dl > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.settings-section dt {
+  color: var(--muted);
+  font-size: 0.875em;
+}
+.settings-section dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.settings-section ul {
+  margin: 0;
+  padding-left: 20px;
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 20px;
+}
+.settings-actions > * {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.settings-section form {
+  display: grid;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.settings-directory {
+  display: grid;
+  gap: 20px;
+  margin-top: 24px;
+}
+.settings-session {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  min-width: 0;
+}
+.settings-page .button {
+  min-height: 44px;
+  white-space: normal;
+}
+.settings-page .field-control {
+  min-width: 0;
+  width: 100%;
+}

@@ -1450,11 +1450,15 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M8.1 定义 Coach 共享协议与信息边界
 
+设计文档：[M8.1 Coach 共享协议与信息边界设计](../specs/2026-09-15-m8-1-coach-contracts-information-boundaries-design.md)（A–D 已实施，2026-09-15；包含严格公开协议、单决策来源认证、过程冻结、三道 Guard、受限纠错及报告完整性校验。离线目标测试 33 项通过（含 2026-09-16 审查修复），`pnpm run verify` 通过；真实算法和运行接线仍按 M8.2–M8.8 交接）。
+
+2026-09-16 来源时序同步：M8.1 私有入口改为不含 auditTruth 的安全过程来源，完整案例准入延后至全手过程冻结；含新增 7 项回归的 Server Coach 33 项及全仓 verify 通过。详见 [M8.1 §14.3](../specs/2026-09-15-m8-1-coach-contracts-information-boundaries-design.md#143-来源与事后读取时序修订2026-09-16)。
+
 产出：
 
 - 在 `packages/contracts` 定义 Coach 请求状态、`CoachReview`、逐决策四层分析、`decisionGrade`、`teachingProjection`、基准匹配状态和 `rangeChartSpec` 的严格 Zod Schema。
 - 动作频率使用 `0..1` 的 `actionFrequency`；下注尺度使用独立的 `betSize` 结构，禁止 `cbet 75%` 等模糊字符串。
-- 服务端私有定义 `HandReviewCase`、决策分析输入和事后解释输入；私有审计事实不进入共享协议。
+- 服务端私有定义安全过程来源 `CoachDecisionSource`、事后完整 `HandReviewCase`、决策分析输入和事后解释输入；完整案例仅在全手过程冻结后由 Projector 读取并校验，私有审计事实不进入共享协议。
 - `PlayerDecisionPacket`、玩家输出 Schema、Coach 决策上下文、Coach 事后上下文和 Coach 输出 Schema 互不转换。
 - 服务端实现 `DecisionContextBoundaryGuard`、`HindsightContextBoundaryGuard` 和 Model Adapter Boundary Guard。
 

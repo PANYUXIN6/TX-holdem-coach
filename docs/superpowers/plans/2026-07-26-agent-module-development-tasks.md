@@ -835,9 +835,11 @@ Coach 投影：
 
 ### A7.2 实现 Coach 三道信息边界
 
+状态：已与 [M8.1](../specs/2026-09-15-m8-1-coach-contracts-information-boundaries-design.md#14-m81-实施交接2026-09-15) 同步完成离线协议与 Guard（2026-09-15）。真实 Foundation + 假 Provider 的初次/两次纠错、全手过程冻结后进入 Hindsight、来源错配及完整报告投影已验证；真实来源、算法、Worker 与持久化仍由后续任务接入。
+
 实现：
 
-- `DecisionContextBoundaryGuard`：保证决策分析阶段看不到 audit truth。
+- `DecisionContextBoundaryGuard`：基于不含 auditTruth 的可信安全过程来源认证单决策；全手冻结后 beginHindsight 才允许 Projector 从预加载内存准入完整案例，零决策也须事后来源准入。
 - `HindsightContextBoundaryGuard`：只放入冻结 ProcessAnalysis 与最小事后事实。
 - `ModelAdapterBoundaryGuard`：在每次供应商请求前复验最终载荷。
 

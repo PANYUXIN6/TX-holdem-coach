@@ -134,9 +134,11 @@ Coach 采用“确定性证据与分类流水线 + LLM 教学合成”，不采�
 ```text
 用户手动请求 completed 手牌复盘
     ↓
-CoachReviewService 校验手牌状态与请求幂等
+CoachReviewService 校验手牌状态与请求幂等，认证持久 Run
     ↓
-HandReviewCaseBuilder 构建当时信息集并隔离完整审计事实
+一次加载目标手完整事实并校验，释放数据库连接，受信来源适配器持有私有内存快照
+    ↓
+HandReviewCaseBuilder 构建安全过程来源 CoachDecisionSource（不含 auditTruth）
     ↓
 ReviewOrchestrator 对每个用户决策点固定执行
     ├── normalize_decision_spot + compute_decision_metrics
@@ -152,7 +154,7 @@ CoachDecisionAnalyzer 在看不到 auditTruth 时解释冻结判断
     ↓
 冻结 ProcessAnalysis
     ↓
-HindsightFactProjector 冻结牌型比较、实际后续与结算事实
+HindsightFactProjector 此时从已加载内存构造 HandReviewCase 并冻结最小事后事实，不再次查询手牌
     ↓
 CoachHindsightExplainer 只解释冻结的事后事实
     ↓
@@ -187,6 +189,10 @@ Coach 运行在共享 Agent Foundation 上，但 Context Builder、信息防火�
 Coach 使用独立持久化队列和一个首版专属 Worker 槽位，不占用 Player 的保留槽位。Coach 的超时与成本预算独立固化，不能读取或消耗 Player 完整决策 deadline。
 
 ## 5. `HandReviewCase`
+
+历史复盘在任何过程分析前一次加载目标手完整事实、完成存储校验并释放数据库连接；受信来源适配器私有持有本次不可变快照，向 Builder 提供安全前缀，向 Projector 提供冻结后可用的内存接口。数据库加载不受全手过程冻结门禁限制；完整事实不得直接传给过程生产者或模型。
+
+过程入口使用 `CoachDecisionSource`：只含手牌/执行绑定、规则、桌型、完成事件序号及按权威顺序排列的安全 heroDecisions。Builder 不读取或构造 auditTruth，首道 Guard 对照可信安全来源认证单决策。下述完整 HandReviewCase 仅在所有过程决策冻结、第一阶段发送关闭后由 HindsightFactProjector 内部形成；不作为首道 Guard 的先决条件。完整源须与安全来源的身份、版本、完成事件和全部决策一致，通过完整审计校验后才允许报告完成。零决策也必须执行该事后来源准入。
 
 Coach 不直接读取数据库表或完整服务端快照。服务端为每次请求构建经过私有 Schema 校验的 `HandReviewCase`。
 
@@ -475,12 +481,12 @@ usableForExploit
 | 组件 | 职责 |
 | --- | --- |
 | `LogicalPositionResolver` | 根据权威座位和按钮计算 6–9 人逻辑位置 |
-| `HandReviewCaseBuilder` | 构建当时信息集与事后事实 |
+| `HandReviewCaseBuilder` | 构建当时信息集及安全过程来源，不读取或构造事后事实 |
 | `SpotNormalizer` | 把决策时点可见状态规范化为与 Player 同版本的策略节点 |
 | `ContestablePotProjector` | 按主池/边池资格和逐对手有效筹码计算 Hero 可争夺金额 |
 | `CandidateOutcomeProjector` | 计算实际动作与基准候选的执行后筹码结构，不推进牌局 |
 | `DecisionContextBoundaryGuard` | 拒绝事后事实、隐藏牌、未来牌和跨用户数据进入决策阶段 |
-| `HindsightFactProjector` | 从正常完成手的权威事实冻结牌型比较、实际后续、返还和结算结果 |
+| `HindsightFactProjector` | 全手过程冻结后从预加载私有内存构造并校验完整案例、核对安全来源，冻结最小牌型比较、实际后续、返还和结算事实；不再读取数据库 |
 | `HindsightContextBoundaryGuard` | 只允许冻结过程分析和 `HindsightFactProjector` 输出进入 Hindsight |
 | `ReviewOrchestrator` | 保证每个用户决策点执行全部必需工具 |
 | `StrategyBaselineRepository` | 读取版本化策略数据与覆盖清单 |
@@ -583,7 +589,7 @@ Step 0：用户在正常完成手牌详情中点击“请求教练复盘”
     ↓
 Step 1：CoachReviewService 校验手牌状态为 completed、请求身份和幂等；aborted 明确拒绝
     ↓
-Step 2：HandReviewCaseBuilder 为每个用户决策重建当时信息集
+Step 2：认证持久 Run，一次取齐目标手完整事实并完成存储校验，释放数据库连接；受信适配器投影安全前缀，HandReviewCaseBuilder 重建当时信息集，返回不含 auditTruth 的安全过程来源
     ↓
 Step 3：SpotNormalizer、HandFeatureAnalyzer、ContestablePotProjector 与 DecisionMetricsEngine 计算规范 spot、原子可见牌结构、可争夺底池和当前数学
     ↓
@@ -599,7 +605,7 @@ Step 8：CoachDecisionAnalyzer 在看不到 auditTruth 时解释冻结判断并�
     ↓
 Step 9：ProcessAnalysisFreezer 冻结完整过程分析
     ↓
-Step 10：HindsightFactProjector 从权威完成手生成 revealedHandRanks、runoutTransitions、actualContinuation、potAwards、uncalledReturns、heroNetChips 和 showdownComparisonsByPot
+Step 10：关闭第一阶段发送；HindsightFactProjector 从同一预加载内存构造完整案例，校验与过程来源一致，并生成 revealedHandRanks、runoutTransitions、actualContinuation、potAwards、uncalledReturns、heroNetChips 和 showdownComparisonsByPot
     ↓
 Step 11：CoachHindsightExplainer 只解释冻结的最小事后事实
     ↓
@@ -723,7 +729,7 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 
 - 每个决策评价只收到当时可见信息。
 - Decision、Hindsight 和 Model Adapter 三类 Boundary Guard 均有禁止字段负向测试。
-- 只有 `HindsightFactProjector` 可以读取完整底牌和实际后续公共牌；Hindsight 模型只接收其最小冻结投影。
+- 存储与受信来源适配器在分析前一次加载、校验并私有持有完整复盘事实，允许其中包含完整底牌和实际后续公共牌；Builder 只接收安全前缀，过程生产者和模型不能访问完整来源。全手过程冻结后，只有 `HindsightFactProjector` 可把事后事实投影到 Hindsight；Hindsight 模型只接收其最小冻结投影，不再次查询目标手。
 - burn card、未发牌和完整牌堆不进入 Coach 上下文。
 - 对手证据严格截止到该决策发生前。
 - 后续手牌数据不会改变旧复盘的证据快照。

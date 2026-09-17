@@ -72,7 +72,7 @@ M3.5 调用链固定为“回环 Host/精确 Origin/JSON/大小/查询门禁 →
 
 M2.7–M4.5 已实现严格审计、通用 Context/Gateway、权威 Player 观察和确定性预处理。M4.6 已完成审计快照、最小模型包、第二/第三 Guard、bounded choice 与三阶段持久化；M4.7 Commit Gate、M4.8 失败收敛、M4.9 Memory 与 M4.10 生产启动接线已形成 Player live 主链：
 
-- 共享 Foundation 只机械认证 Runtime/Policy/Context/Prompt、执行代码预定 Capability 与同一 DeepSeek 的最多两次内容纠正；Player 已在业务边界实现 Context section、Prompt 正文、输出 Schema、语义 Validator、Runtime executor 与 Commit Gate，Coach 对应业务能力仍由后续里程碑实现。当前只保留 Coach 的 Route Policy 版本引用，其独立认证实例由 M8/A7 构造并注入，不提前保留无消费者的策略对象。
+- 共享 Foundation 只机械认证 Runtime/Policy/Context/Prompt、执行代码预定 Capability 与同一 DeepSeek 的最多两次内容纠正；Player 已在业务边界实现 Context section、Prompt 正文、输出 Schema、语义 Validator、Runtime executor 与 Commit Gate，Coach 在 M8.1 已实现单决策 Context/Prompt、阶段 Schema/Validator 绑定与离线 Guard；真实业务算法、Runtime executor 与 Commit Gate 仍由后续里程碑实现。当前只保留 Coach 的 Route Policy 版本引用，其独立认证实例由 M8/A7 构造并注入，不提前保留无消费者的策略对象。
 - Player Runtime 负责“赢”。当前已实现链路为“running Run → 同事务派生 actor seat/认证观察 → pinned StrategyPack 与固定 Capability Plan → 完整快照先落库 → 最小投影与第二/第三 Guard → 通用 Gateway → bounded choice → accepted Attempt/selected 原子交接 → 认证 ResultPort → Commit Gate 私有 `aiAction`”；所有长计算在事务外，durable stage 可同 Run 恢复，未知在途 Provider 结果不重复调用。
 - Runtime 先保存完整、仅供审计回放的 `DecisionAuditSnapshot`，再生成精简 `PlayerModelProjection`；Provider 候选用 current-only compact tuple 传输，服务端以 descriptor/Codec 可逆展开全部语义，不裁剪当前手或候选。完整快照不得直接发送给模型，模型上下文中同一概念只有一种权威表达，不重复原始行动史、不要求重算 SPR，也不混用总底池与可争夺底池。候选频率/权重只是参考分布，首版 LLM 选择不承诺精确混合频率校准。
 - 所有进入 Player 或 Coach 模型的派生事实都必须可追溯到允许来源、决策截止点、Schema/算法/数据版本和适用假设，并区分 `available | unavailable | notApplicable` 及 `ruleFact | formulaFact | datasetBaseline | statisticalEvidence | heuristicJudgment | modelGeneratedText`。程序结果可复现不代表它就是客观真理；`wet/dry`、范围角色、心理和情绪等解释性结论必须保留证据等级或明确不可用。
@@ -210,3 +210,14 @@ AI 当前技术摘要按协调状态使用独立于调试详情页的轮询策�
 `Pages → settings/ → 原 queries / runtime.mutations → Settings、Health、Session Management HTTP`。Provider、Player、Health 和目录独立读取；Provider 检测只有显式 POST，预算草稿通过完整 Schema 后只提交变化字段。服务端结果继续由 Query 拥有，表单只保存编辑基线与字符串草稿。
 
 目录点击删除后才经 `runtime.sessionOptions` 读取唯一快照，再打开原 ConfirmationHost；准备意图按页面寿命及新确认目标失效。稳定 Host 保留原 freeze、取消读取、移除资源和 reset 列表生命周期，以协议返回的删除数量及失效 Run 数反馈结果。设置页没有 Session SSE 租用，清空不移除 Provider、Player 设置、Health 与人物目录；服务端、共享 Contracts、持久化和并发语义不变。
+
+
+## M8.1 Coach 认证与模型发送边界
+
+依赖为 `Coach → Contracts / Foundation`。`createCoachReviewBoundary` 先解析不含 auditTruth 的可信 `CoachDecisionSource`，再逐字段核对单个决策，再将独立深冻结的认证输入交给派生事实和分类端口；计算端口拿不到完整案例或事后读取回调。派生输出复验来源截止点、版本、基准场景、统计过滤器和候选金额；对手人物快照由可信决策输入绑定，合成事后事实不占用私有引用键。分类结果只能由该链认证，调用者不能提交任意 assessment 给冻结器补签。
+
+每个决策的过程解释独立校验和冻结。所有决策冻结后，`beginHindsight` 先关闭第一阶段发送，再由 Projector 调用专属同步 `readHindsightSource` 从受信内存取得完整 HandReviewCase；完整 Schema 与过程来源身份/版本/完成事件/决策清单逐字段对照均在 Projector 内部进行，完整案例不再是首道 Guard 前提。实际事实子集及逐池/牌型引用通过复验后才返回最小投影。准入失败保持失败、不恢复 Decision 发送；零决策也须显式进入事后准入，Composer 要求 `assertHindsightReady`，不能跳过完整来源校验。认证以模块私有 WeakSet/WeakMap 保存，JSON 克隆不会保留认证。
+
+`prepareCoachGeneration → generateCoachExplanation → Foundation Gateway → 本次 generation 的 Coach Adapter → Provider` 绑定固定 Prompt、单决策 Context、阶段 Schema/Validator、Run 与最终消息。公开 Runtime 引用仍为 `coach.output.review`，私有解释 Schema 使用独立阶段引用；整张范围图不进入模型输入。纠错由 Foundation 原有流程生成，但 Provider 原始 textProjection 先收敛为固定占位，错误只允许已知稳定 code 和根路径，不把未知字段名或拒绝值发回模型。
+
+报告 Composer 只复制已认证的确定性字段和阶段解释，把私有候选解释、牌型/逐池比较引用投影到公开事实。教学政策由 M8.5 的确定性端口提供并冻结；最终 Validator 对照完整决策清单和合成结果。M8.1 的算法端口仅在本地夹具中装配，没有真实 Coach Worker、HTTP、持久化或外部模型调用。2026-09-17 确认的 M8.2 来源接入将先一次加载并校验完整历史手牌、释放连接，再进行分析；现有同步事后回调只控制内存案例准入，不要求数据库延后读取，该生产加载尚未实现。旧 Foundation Coach UUID helper 与新报告规范字符串不是隐式转换关系；Agent Run 的 UUID 关联由 M8.6 显式设计。

@@ -99,7 +99,7 @@
 - `apps/server/src/bootstrap.ts`、`server-process-lifecycle.ts`：前者拥有 configured/diagnostic runtime 组合与 HTTP 资源生命周期，测试仅可在明确 dependency seam 替换 Provider transport；关闭先停止接受连接，再停止 Dispatcher/Worker，有界 drain 后强制断开残余 HTTP 连接，最后关闭数据库。后者拥有信号与运行期 fatal 处理，在任一 fatal 到达时先锁存非零退出码，再执行幂等关闭。
 - `apps/server/src/persistence/player-decision-reference-authority.ts`：M4.5 Owner-scoped 决策参考窄读；只从目标 Hand current checkpoint 与 actor `session_agents` 读取规则版本、hand number、config snapshot 和五项人物 style，完整 checkpoint/config 仅用于 current Codec 与镜像校验，返回值不含模型配置、人物描述、记忆、Run authority 或数据库能力。
 - `apps/server/src/agents/production-runtime-registry.ts`：唯一生产组合点；以代码内固定对象一次组合 Player/Coach 的唯一当前 Definition，不维护多版本集合或 current 指针，不读取环境、数据库或目录，也不暴露动态注册、替换或插件入口。`resolveExact()` 只用于校验持久版本是否等于当前定义版本，为首发后显式设计版本演进保留协议边界。
-- `apps/server/src/sessions/authoritative-state/decision-identity.ts`：M4.1 权威 Agent 身份协议；严格构造 Player 决策身份并按固定 UUIDv5 规则派生 Coach `decisionId`。无消费者的 Player/Coach 投影 binding 预建端口已删除。
+- `apps/server/src/sessions/authoritative-state/decision-identity.ts`：M4.1 权威 Agent 身份协议；严格构造 Player 决策身份；旧 Coach UUIDv5 helper 当前只有单元测试消费者，不用于 M8.1 报告身份。M8.1 报告使用 Contracts 的 `<handId>:<street>:<eventSeq>`；未来与 Agent Run UUID 列的关联由 M8.6 接线。无消费者的 Player/Coach 投影 binding 预建端口已删除。
 - `apps/server/src/persistence/command-ledger-repository.ts`：M2.4 命令账本 Repository；负责严格命令准备、UUID 规范化、SHA-256 语义摘要、一次性 prepared capability、绑定登记事务的 acquired capability、Owner-scoped 幂等登记和终态重放，不拥有事务或 Session 锁。
 - `apps/server/src/sessions/roster-preparation.ts`：M3.2 阵容事务前准备边界；当前目录分支返回模块认证的纯 Prepared roster，历史分支只返回来源 ID 与座位的最小 preflight，完整历史配置必须在 Owner/来源锁内重读；该模块不开始事务，也不授予写入资格。
 - `packages/contracts/src/index.ts`：公开协议唯一 Schema 边界；M5.3–M5.5 依次定义历史列表、固定统计，以及场次管理与 Agent 调用链的严格白名单 DTO，不依赖服务器私有类型。
@@ -286,3 +286,17 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/web/src/settings/SessionDirectory.tsx`：当前 cursor 的原 Session Management Query、纵向目录与公开账务；不持有结果副本、不租用 SSE。
 - `apps/web/src/ui/confirmation-host.tsx`：删除入口点击后读取唯一快照，页面退出或新确认意图使旧准备失效；稳定 Host 使用原删除/清空结果显示场次数和失效 Run 数。
 - `apps/web/test/settings.test.ts` / `settings-browser.tsx` / `settings-acceptance-browser.mjs` / `settings-vite.config.ts` / `settings.html`：纯适配及真实 Shell/Page/Query/runtime/Host 的受控传输旅程，独立 dev 与 build preview。
+
+
+## M8.1 Coach 协议与离线信息边界
+
+- `packages/contracts/src/index.ts`：公开 Coach 请求状态、四层报告、动作频率/尺度、基准三态、169 格范围图、公开事实、引用闭合、计数与教学分区；从现有包根导出。
+- `apps/server/src/agents/coach/review-case.ts`：分离无 auditTruth 的 CoachDecisionSource 与事后完整 HandReviewCase Schema，校验当前行动前输入、Owner/Session/Hand/Run/版本、证据截止点与对手人物快照绑定。来源由 M8.2 的真实 Builder 提供；此文件不读数据库。
+- `apps/server/src/agents/coach/decision-context.ts`：单决策模型投影、派生事实/私有候选协议及两个阶段的解释输出白名单。
+- `apps/server/src/agents/coach/frozen-analysis.ts`：`createCoachReviewBoundary` 的分类前来源/基准场景/统计过滤器/候选金额对照、计算/分类端口、过程深冻结与实例认证；全部过程完成后 beginHindsight 先关闭第一阶段发送，再准入完整内存案例（不约束数据库加载时序）；暴露 assertHindsightReady 供报告门禁使用。
+- `apps/server/src/agents/coach/hindsight-context.ts`：createHindsightFactProjector 在阶段门禁后才通过同步内存端口取得并缓存完整案例，核对安全来源一致性；最小结果须为实际事实子集，并复验牌面、逐池资格及牌型引用闭合。
+- `apps/server/src/agents/coach/model-adapter-boundary-guard.ts`：固定阶段 Context/Prompt、Schema/Validator 请求绑定与每 generation 的 Provider 装饰器；初次和纠错均检查最终消息，纠错只回灌占位说明与稳定错误码。
+- `apps/server/src/agents/coach/review-contract-validator.ts`：从认证过程与事后解释逐字段合成公开报告，私有引用映射为公开事实；按可信完整决策清单及冻结教学政策验证最终报告；包括零决策报告在内均要求完整事后来源已准入。
+- `packages/contracts/test/coach-contracts.test.ts`、`apps/server/test/unit/coach-boundaries.test.ts`、`coach-model-boundary.test.ts`、`coach-review-contract-validator.test.ts`、`apps/server/test/unit/coach-hindsight-admission.test.ts`：公开协议、延后完整内存案例准入、阶段/来源隔离、真实 Foundation + 假 Provider、完整报告与私有字段不外泄；夹具位于 `apps/server/test/fixtures/coach/boundaries.ts`。
+
+真实案例重建、策略覆盖、统计、分类阈值、Worker、HTTP、数据库与页面仍属于 M8.2–M8.7；M8.1 没有安装 Coach lane。

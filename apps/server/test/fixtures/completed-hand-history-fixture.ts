@@ -74,21 +74,33 @@ export function createDirectWinCompletedHandHistoryFacts(): CompletedHandHistory
 
 export function createShowdownCompletedHandHistoryFacts(
   allInRunout = false,
+  tableSize = 6,
+  reverseFutureDeck = false,
+  scenario: 'default' | 'reopen' | 'zeroHero' = 'default',
 ): CompletedHandHistoryFacts {
   const handId = '40000000-0000-4000-8000-000000000001'
   const initialPoker = initializePokerTable(
-    Array.from({ length: 6 }, (_, seatNumber) => ({
+    Array.from({ length: tableSize }, (_, seatNumber) => ({
       seatNumber,
       playerId: `00000000-0000-4000-8000-${(seatNumber + 1)
         .toString()
         .padStart(12, '0')}`,
       isUser: seatNumber === 0,
-      stack: allInRunout ? (seatNumber + 1) * 100 : 1_000,
+      stack:
+        scenario === 'reopen' && (seatNumber === 1 || seatNumber === 2)
+          ? 100 + seatNumber * 40
+          : scenario === 'zeroHero' && seatNumber === 0
+            ? 10
+            : allInRunout
+              ? (seatNumber + 1) * 100
+              : 1_000,
       status: 'active' as const,
       streetContribution: 0,
       totalContribution: 0,
     })),
-    randomSource,
+    scenario === 'zeroHero'
+      ? { nextInt: (maximum) => maximum - 1 }
+      : randomSource,
   )
   const started = startPokerHand(initialPoker, {
     handId,
@@ -109,24 +121,48 @@ export function createShowdownCompletedHandHistoryFacts(
     }),
     startedHand: started.startedHand,
   })
-  let state = started.state
+  let state =
+    reverseFutureDeck && started.state.hand !== null
+      ? {
+          ...started.state,
+          hand: {
+            ...started.state.hand,
+            remainingDeck: [...started.state.hand.remainingDeck].reverse(),
+          },
+        }
+      : started.state
   let actionCount = 0
   let completedHand = null
   const eventDrafts: PokerDomainEventDraft[] = []
-  while (completedHand === null && actionCount < 36) {
+  while (completedHand === null && actionCount < 64) {
     const actorSeatNumber = state.hand?.currentActorSeatNumber
     if (actorSeatNumber === undefined || actorSeatNumber === null) {
       throw new Error('Expected an action actor.')
     }
     const legalActions = getLegalActions(state)
     const actionIndex = actionCount++
-    const action = allInRunout
-      ? { type: 'allIn' as const }
-      : actionIndex === 1 || actionIndex === 3
-        ? { type: 'fold' as const }
-        : legalActions.some((candidate) => candidate.type === 'call')
-          ? { type: 'call' as const }
-          : { type: 'check' as const }
+    const action =
+      scenario === 'reopen' && actionIndex === 0
+        ? { type: 'raise' as const, targetStreetCommitment: 100 }
+        : scenario === 'reopen' &&
+            (actorSeatNumber === 1 || actorSeatNumber === 2)
+          ? { type: 'allIn' as const }
+          : scenario === 'reopen' &&
+              actorSeatNumber === 0 &&
+              actionIndex > 3 &&
+              state.hand?.street === 'preflop'
+            ? { type: 'raise' as const, targetStreetCommitment: 260 }
+            : scenario !== 'default'
+              ? legalActions.some((a) => a.type === 'call')
+                ? { type: 'call' as const }
+                : { type: 'check' as const }
+              : allInRunout
+                ? { type: 'allIn' as const }
+                : actionIndex === 1 || actionIndex === 3
+                  ? { type: 'fold' as const }
+                  : legalActions.some((candidate) => candidate.type === 'call')
+                    ? { type: 'call' as const }
+                    : { type: 'check' as const }
     const next = applyPokerAction(state, { actorSeatNumber, action })
     state = next.state
     eventDrafts.push(...next.eventDrafts)

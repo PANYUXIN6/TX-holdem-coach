@@ -144,7 +144,7 @@ function mapEvents(
   return Object.freeze(events)
 }
 
-function mapFacts(
+export function decodeCompletedHandHistoryFacts(
   rawRow: unknown,
   owner: ResolvedOwnerScope,
 ): CompletedHandHistoryFacts {
@@ -261,7 +261,7 @@ export function createCompletedHandHistoryFactsRepository(input: {
       const rows = await readCompletedHistoryRow(input.sql, input.owner, handId)
       if (rows.length === 0) return null
       if (rows.length !== 1) return corruption()
-      return mapFacts(rows[0], input.owner)
+      return decodeCompletedHandHistoryFacts(rows[0], input.owner)
     },
   })
 }

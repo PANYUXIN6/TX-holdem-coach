@@ -1,3 +1,12 @@
+import { isDeepStrictEqual } from 'node:util'
+import { DecisionAnalysisInputSchema } from '../../poker/decision-analysis-input-schema.js'
+import { getProjectedLegalActions } from '../../poker/betting-projection.js'
+import { toBettingProjectionState } from '../../poker/decision-analysis-input.js'
+import {
+  CoachStreetStartStateSchema,
+  projectCoachVisibleState,
+  projectCoachLegalActions,
+} from './analysis-input.js'
 import { z } from 'zod'
 import {
   CardSchema,
@@ -59,6 +68,8 @@ export const CoachHeroDecisionSchema = z
     street: CoachStreetSchema,
     logicalPosition: PublicLogicalPositionSchema,
     visibleState: CoachVisibleStateSchema,
+    analysisInput: DecisionAnalysisInputSchema,
+    streetStartState: CoachStreetStartStateSchema,
     legalActions: z.array(CoachLegalActionSchema).min(1),
     actualAction: PokerActionSchema,
     stacksAndContributions: z.array(CoachSeatStateSchema).min(6).max(9),
@@ -84,6 +95,28 @@ export const CoachHeroDecisionSchema = z
         code: 'custom',
         message: 'Invalid decision time or visible facts',
       })
+    try {
+      const input = d.analysisInput
+      if (
+        !isDeepStrictEqual(projectCoachVisibleState(input), d.visibleState) ||
+        !isDeepStrictEqual(projectCoachLegalActions(input), d.legalActions) ||
+        !isDeepStrictEqual(
+          getProjectedLegalActions(toBettingProjectionState(input)),
+          input.legalActions,
+        ) ||
+        input.street !== d.street ||
+        input.publicActions.some((action) => action.eventSeq >= d.eventSeq) ||
+        d.opponentEvidenceCutoff.asOfEventSeq !== d.eventSeq - 1 ||
+        (d.street === 'preflop') !==
+          (d.streetStartState.status === 'notApplicable') ||
+        (d.streetStartState.status === 'available' &&
+          (d.streetStartState.street !== d.street ||
+            d.streetStartState.eventSeq >= d.eventSeq))
+      )
+        fail()
+    } catch {
+      fail()
+    }
     const [, street, seq] = d.decisionId.split(':')
     if (
       street !== d.street ||

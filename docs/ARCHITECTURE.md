@@ -220,4 +220,12 @@ AI 当前技术摘要按协调状态使用独立于调试详情页的轮询策�
 
 `prepareCoachGeneration → generateCoachExplanation → Foundation Gateway → 本次 generation 的 Coach Adapter → Provider` 绑定固定 Prompt、单决策 Context、阶段 Schema/Validator、Run 与最终消息。公开 Runtime 引用仍为 `coach.output.review`，私有解释 Schema 使用独立阶段引用；整张范围图不进入模型输入。纠错由 Foundation 原有流程生成，但 Provider 原始 textProjection 先收敛为固定占位，错误只允许已知稳定 code 和根路径，不把未知字段名或拒绝值发回模型。
 
-报告 Composer 只复制已认证的确定性字段和阶段解释，把私有候选解释、牌型/逐池比较引用投影到公开事实。教学政策由 M8.5 的确定性端口提供并冻结；最终 Validator 对照完整决策清单和合成结果。M8.1 的算法端口仅在本地夹具中装配，没有真实 Coach Worker、HTTP、持久化或外部模型调用。2026-09-17 确认的 M8.2 来源接入将先一次加载并校验完整历史手牌、释放连接，再进行分析；现有同步事后回调只控制内存案例准入，不要求数据库延后读取，该生产加载尚未实现。旧 Foundation Coach UUID helper 与新报告规范字符串不是隐式转换关系；Agent Run 的 UUID 关联由 M8.6 显式设计。
+报告 Composer 只复制已认证的确定性字段和阶段解释，把私有候选解释、牌型/逐池比较引用投影到公开事实。教学政策由 M8.5 的确定性端口提供并冻结；最终 Validator 对照完整决策清单和合成结果。M8.1 的算法端口仅在本地夹具中装配，没有真实 Coach Worker、HTTP、持久化或外部模型调用。2026-09-17 实施的 M8.2 来源接入先一次加载并校验完整历史手牌、释放连接，再进行分析；现有同步事后回调只控制内存案例准入，不要求数据库延后读取，生产加载入口已提供，服务接线归 M8.6。旧 Foundation Coach UUID helper 与新报告规范字符串不是隐式转换关系；Agent Run 的 UUID 关联由 M8.6 显式设计。
+
+### M8.2 历史复盘读取与纯分析
+
+Coach 的读取组合从持久 Run 的 authority/Owner/绑定/租约/预算和固化政策认证开始，通过服务级独立 max=1 客户端执行短只读操作。完成手 Repository 在单条事实 statement 中加载 checkpoint/result/events/roster，事务结束归还连接后完成 current Codec 与镜像校验，再移除牌堆、烧牌与人物配置正文。已有 M5 历史 DTO 与 Reader 保持原接口。
+
+受信 `review-source-adapter` 私有持有完整事实；`review-case-builder` 每次仅取得一个行动前安全前缀，复用 poker 下注内核重建 bettingRound、带金额证明的行动历史与街初状态。来源经 M8.1 Guard 实例认证后，metrics/action outcomes 调用中性 poker 内核；私有结构留在冻结评价，模型与报告由白名单投影产生。全部过程冻结后，原同步 Projector 从同一内存来源准入完整案例，不再次访问 SQL。
+
+poker 的输入/结果 Schema 与单动作结果端口保持中性，Coach 不导入 Player Context/Guard/人物政策。专用读取资源取消时等待事务收敛，无法收敛则锁定客户端并通知 Coach 服务所有者销毁；本进程不重建。M8.6 仍负责服务启动/销毁、Worker 领取与续租、删除取消及提交前 fencing 复验。

@@ -1,3 +1,9 @@
+import { computeCoachActionOutcomes } from '../../src/agents/coach/action-outcomes.js'
+import type { PokerAction } from '@tx-holdem-coach/contracts'
+import {
+  syncFixtureAnalysis,
+  fixtureSupportedBaseline,
+} from '../fixtures/coach/boundaries.js'
 import { describe, it, expect } from 'vitest'
 import { fixtureBoundary } from '../fixtures/coach/boundaries.js'
 import {
@@ -160,6 +166,7 @@ describe('Coach producer and hindsight source admission', () => {
       second = structuredClone(source.heroDecisions[0]!)
     second.eventSeq = 18
     second.decisionId = second.decisionId.replace(':12', ':18')
+    syncFixtureAnalysis(second)
     source.heroDecisions.push(second)
     const b = fixtureBoundary(source),
       first = b.freezeProcess(
@@ -208,8 +215,8 @@ it('rejects a private alternative that is not legal in the certified decision', 
         ...ports.derive(input),
         candidates: [
           {
-            candidateId: 'illegal-bet',
-            action: { type: 'bet', targetStreetCommitment: 50 },
+            candidateId: 'illegal-raise',
+            action: { type: 'raise', targetStreetCommitment: 50 },
             raisesCurrentBet: true,
             betSize: {
               kind: 'potFraction',
@@ -391,10 +398,11 @@ it('checks candidate amounts, scale and all-in targets against the action-time c
     { action: 'bet', minimumTarget: 20, maximumTarget: 1010 },
     { action: 'allIn', minimumTarget: 1010, maximumTarget: 1010 },
   )
+  syncFixtureAnalysis(decision)
   const ports = fixturePorts(source)
   const candidate = {
     candidateId: 'bet',
-    action: { type: 'bet' as const, targetStreetCommitment: 50 },
+    action: { type: 'raise' as const, targetStreetCommitment: 50 },
     raisesCurrentBet: true,
     betSize: {
       kind: 'potFraction' as const,
@@ -414,9 +422,20 @@ it('checks candidate amounts, scale and all-in targets against the action-time c
       ...ports,
       ...fixturePorts(c),
       derive: (input) =>
-        ({ ...ports.derive(input), candidates: [value] }) as ReturnType<
-          typeof ports.derive
-        >,
+        ({
+          ...ports.derive(input),
+          baseline: fixtureSupportedBaseline(
+            input,
+            (value as { action: PokerAction }).action,
+          ),
+          actionOutcomes: computeCoachActionOutcomes(input, [
+            {
+              actionId: 'fixture',
+              action: (value as { action: PokerAction }).action,
+            },
+          ]),
+          candidates: [value],
+        }) as ReturnType<typeof ports.derive>,
     })
     return b.analyze(b.certifyDecision(decisionInput(c)))
   }
@@ -458,7 +477,9 @@ it('checks candidate amounts, scale and all-in targets against the action-time c
   wrongTarget.heroDecisions[0]!.legalActions.find(
     (a) => a.action === 'allIn',
   )!.minimumTarget = 1000
-  expect(() => run(allIn, wrongTarget)).toThrow('coach_illegal_candidate')
+  expect(() => run(allIn, wrongTarget)).toThrow(
+    'Invalid decision time or visible facts',
+  )
 })
 
 it('rejects mismatched statistical opportunity even before an evidence subject can be resolved', () => {
@@ -496,7 +517,7 @@ it('keeps short all-in calls and zero-contribution actions consistent', () => {
   for (const type of ['allIn', 'call', 'fold', 'check'] as const) {
     const source = reviewCase(),
       decision = source.heroDecisions[0]!
-    decision.visibleState.seats[0]!.stack = 100
+    decision.visibleState.seats[0]!.stack = type === 'call' ? 200 : 100
     decision.visibleState.seats[0]!.streetCommitment = 10
     const calling = type === 'allIn' || type === 'call'
     decision.visibleState.seats[1]!.streetCommitment = calling ? 200 : 10
@@ -506,11 +527,19 @@ it('keeps short all-in calls and zero-contribution actions consistent', () => {
       minimumTarget: type === 'allIn' ? 110 : null,
       maximumTarget: type === 'allIn' ? 110 : null,
     })
+    syncFixtureAnalysis(decision)
+    decision.actualAction = {
+      type: calling ? (type === 'allIn' ? 'allIn' : 'call') : 'check',
+    }
     const ports = fixturePorts(source)
     const b = createCoachReviewBoundary({
       ...ports,
       derive: (input) => ({
         ...ports.derive(input),
+        baseline: fixtureSupportedBaseline(input, { type }),
+        actionOutcomes: computeCoachActionOutcomes(input, [
+          { actionId: 'fixture', action: { type } },
+        ]),
         candidates: [
           {
             candidateId: 'candidate',
@@ -520,10 +549,10 @@ it('keeps short all-in calls and zero-contribution actions consistent', () => {
             evidenceRefs: ['board'],
             result: calling
               ? {
-                  targetStreetCommitment: 110,
-                  incrementalChips: 100,
-                  potAfter: 400,
-                  remainingStack: 0,
+                  targetStreetCommitment: type === 'call' ? 200 : 110,
+                  incrementalChips: type === 'call' ? 190 : 100,
+                  potAfter: type === 'call' ? 490 : 400,
+                  remainingStack: type === 'call' ? 10 : 0,
                 }
               : {
                   targetStreetCommitment: 10,

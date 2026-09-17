@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { createLegalCandidates } from '../../src/poker/decision-candidates.js'
 import {
   projectCandidateOutcomes,
+  projectActionOutcome,
   type LegalCandidateCatalogEntry,
 } from '../../src/poker/candidate-outcomes.js'
 import type { DecisionAnalysisInput } from '../../src/poker/decision-analysis-input.js'
@@ -274,5 +275,53 @@ describe('projectCandidateOutcomes', () => {
         reasonCode: 'noJointResponseModel',
       },
     })
+  })
+})
+
+describe('projectActionOutcome', () => {
+  test('projects an exact legal amount outside the Player catalog', () => {
+    const input = analysisInput(initialState())
+    expect(
+      catalog(initialState()).some((c) => c.targetStreetCommitment === 73),
+    ).toBe(false)
+    const outcome = projectActionOutcome({
+      analysisInput: input,
+      action: { type: 'raise', targetStreetCommitment: 73 },
+    })
+    expect(outcome).toMatchObject({
+      contributionDelta: 73,
+      targetStreetCommitment: { status: 'available', value: 73 },
+      potAfterAction: 103,
+      heroStackAfterAction: 1927,
+    })
+    expect(outcome).not.toHaveProperty('candidate')
+    expect(Object.isFrozen(outcome)).toBe(true)
+    expect(() =>
+      projectActionOutcome({
+        analysisInput: input,
+        action: { type: 'raise', targetStreetCommitment: 39 },
+      }),
+    ).toThrow()
+  })
+
+  test('matches every catalog outcome including returns and forced runout', () => {
+    for (const state of [
+      initialState(),
+      shortOpponentRiverState(),
+      forcedRunoutState(),
+    ]) {
+      const input = analysisInput(state)
+      for (const { candidate, ...expected } of projectCandidateOutcomes({
+        analysisInput: input,
+        candidateCatalog: catalog(state),
+      })) {
+        expect(
+          projectActionOutcome({
+            analysisInput: input,
+            action: candidate.action,
+          }),
+        ).toEqual(expected)
+      }
+    }
   })
 })

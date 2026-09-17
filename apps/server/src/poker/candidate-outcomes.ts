@@ -1,7 +1,6 @@
 import type { PokerCommand } from './commands.js'
 import { projectContestablePot } from './contestable-pot.js'
 import {
-  createCandidateActionProof,
   createLegalCandidates,
   type LegalCandidate,
   type LegalCandidateId,
@@ -19,6 +18,7 @@ import {
   type ExactRatio,
 } from './decision-analysis-types.js'
 import {
+  createCommittedActionProof,
   getProjectedLegalActions,
   projectActionContinuation,
   projectBettingTransition,
@@ -76,11 +76,10 @@ export type CandidateThresholdFact<TSourceRef> =
       readonly assumptionCodes: readonly []
     }
 
-export interface CandidateOutcomeData<TSourceRef> {
+export interface ActionOutcomeData<TSourceRef> {
   readonly candidateOutcomeSchemaVersion: 1
   readonly projectorVersion: 1
   readonly sourceRefs: readonly TSourceRef[]
-  readonly candidate: LegalCandidateCatalogEntry
   readonly amountToCall: number
   readonly contributionDelta: number
   readonly targetStreetCommitment:
@@ -145,6 +144,12 @@ export interface CandidateOutcomeData<TSourceRef> {
   readonly futureStreetValue: DerivedFact<never, TSourceRef>
   readonly impliedOdds: DerivedFact<never, TSourceRef>
   readonly foldEquity: DerivedFact<never, TSourceRef>
+}
+
+export interface CandidateOutcomeData<
+  TSourceRef,
+> extends ActionOutcomeData<TSourceRef> {
+  readonly candidate: LegalCandidateCatalogEntry
 }
 
 function outcomeSources(): readonly CoreFactSourceRef[] {
@@ -347,6 +352,29 @@ export function projectCandidateOutcomes(input: {
   }
   const freshCandidates = createLegalCandidates(state)
   assertCatalogMatches(input.candidateCatalog, freshCandidates)
+  return deepFreezeDecisionValue(
+    freshCandidates.map((candidate) => ({
+      ...projectActionOutcome({
+        analysisInput: input.analysisInput,
+        action: candidate.action,
+      }),
+      candidate: catalogShape(candidate) as LegalCandidateCatalogEntry,
+    })),
+  )
+}
+
+/** Pure projection only: the committed-action proof grants no command execution authority. */
+export function projectActionOutcome(input: {
+  readonly analysisInput: DecisionAnalysisInput
+  readonly action: PokerCommand['action']
+}): ActionOutcomeData<CoreFactSourceRef> {
+  const state = toBettingProjectionState(input.analysisInput)
+  if (
+    JSON.stringify(input.analysisInput.legalActions) !==
+    JSON.stringify(getProjectedLegalActions(state))
+  ) {
+    throw new RangeError('动作结果合法动作与当前下注状态不一致。')
+  }
   const sources = outcomeSources()
   const before = projectContestablePot({
     heroSeatNumber: input.analysisInput.heroSeatNumber,
@@ -355,277 +383,275 @@ export function projectCandidateOutcomes(input: {
     sourceRefs: sources,
   })
 
-  return deepFreezeDecisionValue(
-    freshCandidates.map((freshCandidate) => {
-      const transition = projectBettingTransition(
-        state,
-        createCandidateActionProof(state, freshCandidate),
-      )
-      const continuation = projectActionContinuation(
-        transition.state,
-        transition.actorSeatNumber,
-      )
-      const guaranteedReturn = guaranteedUncalledReturn(transition)
-      const amountActuallyAtRisk =
-        transition.contributionDelta - guaranteedReturn
-      const adjustedState = riskAdjustedState(transition, guaranteedReturn)
-      const heroAfter = transition.state.seats.find(
-        (seat) => seat.seatNumber === transition.actorSeatNumber,
-      )
-      if (heroAfter === undefined) throw new RangeError('候选结果缺少 Hero。')
-      const heroFolded = heroAfter.status === 'folded'
-      const after = heroFolded
-        ? null
-        : projectContestablePot({
-            heroSeatNumber: transition.actorSeatNumber,
-            pot: adjustedState.pot,
-            seats: adjustedState.seats,
+  const transition = projectBettingTransition(
+    state,
+    createCommittedActionProof(
+      {
+        actorSeatNumber: input.analysisInput.heroSeatNumber,
+        action: input.action,
+      },
+      getProjectedLegalActions(state),
+    ),
+  )
+  const target =
+    input.action.type === 'fold' || input.action.type === 'check'
+      ? null
+      : transition.targetStreetCommitmentAfter
+  const continuation = projectActionContinuation(
+    transition.state,
+    transition.actorSeatNumber,
+  )
+  const guaranteedReturn = guaranteedUncalledReturn(transition)
+  const amountActuallyAtRisk = transition.contributionDelta - guaranteedReturn
+  const adjustedState = riskAdjustedState(transition, guaranteedReturn)
+  const heroAfter = transition.state.seats.find(
+    (seat) => seat.seatNumber === transition.actorSeatNumber,
+  )
+  if (heroAfter === undefined) throw new RangeError('候选结果缺少 Hero。')
+  const heroFolded = heroAfter.status === 'folded'
+  const after = heroFolded
+    ? null
+    : projectContestablePot({
+        heroSeatNumber: transition.actorSeatNumber,
+        pot: adjustedState.pot,
+        seats: adjustedState.seats,
+        sourceRefs: sources,
+      })
+  const heroContestablePotAfterAction = after?.heroContestablePotBefore ?? 0
+  const contestableAmountAdded = heroFolded
+    ? 0
+    : heroContestablePotAfterAction - before.heroContestablePotBefore
+  const topology = {
+    responders: continuation.responderSeatNumbers,
+    canRaiseSeats: continuation.canRaiseSeatNumbers,
+  }
+  const nextState =
+    continuation.kind === 'sameStreet' || continuation.kind === 'nextStreet'
+      ? continuation.state
+      : null
+  const possibleActionTypes =
+    nextState === null
+      ? []
+      : [
+          ...new Set(
+            getProjectedLegalActions(nextState).map((action) => action.type),
+          ),
+        ]
+  const forcesRunout = continuation.forcesRunout
+  const canFaceFurtherAction =
+    heroAfter.status === 'active' &&
+    heroAfter.stack > 0 &&
+    topology.canRaiseSeats.length > 0
+  const nextStreetContestable = after ?? before
+  const projectedFlopSpr =
+    input.analysisInput.street !== 'preflop'
+      ? projectedSpr(
+          'notApplicable',
+          'wrongStreet',
+          nextStreetContestable,
+          sources,
+        )
+      : forcesRunout
+        ? projectedSpr(
+            'notApplicable',
+            'forcedRunout',
+            nextStreetContestable,
+            sources,
+          )
+        : continuation.kind === 'nextStreet'
+          ? projectedSpr(
+              'available',
+              'wrongStreet',
+              nextStreetContestable,
+              sources,
+            )
+          : projectedSpr(
+              'notApplicable',
+              continuation.kind === 'sameStreet'
+                ? 'bettingRoundRemainsOpen'
+                : 'handComplete',
+              nextStreetContestable,
+              sources,
+            )
+  const nextStreetSpr =
+    input.analysisInput.street === 'preflop'
+      ? projectedSpr(
+          'notApplicable',
+          'wrongStreet',
+          nextStreetContestable,
+          sources,
+        )
+      : forcesRunout
+        ? projectedSpr(
+            'notApplicable',
+            'forcedRunout',
+            nextStreetContestable,
+            sources,
+          )
+        : continuation.kind === 'nextStreet'
+          ? projectedSpr(
+              'available',
+              'wrongStreet',
+              nextStreetContestable,
+              sources,
+            )
+          : projectedSpr(
+              'notApplicable',
+              input.analysisInput.street === 'river'
+                ? 'noFutureDecisionStreet'
+                : continuation.kind === 'sameStreet'
+                  ? 'bettingRoundRemainsOpen'
+                  : 'handComplete',
+              nextStreetContestable,
+              sources,
+            )
+  const isCallingAction =
+    input.action.type === 'call' ||
+    (input.action.type === 'allIn' &&
+      transition.currentBetAfter === transition.currentBetBefore)
+  const minimumRequiredEquityForCall: CandidateThresholdFact<CoreFactSourceRef> =
+    isCallingAction
+      ? {
+          status: 'available',
+          value: createExactRatio(
+            amountActuallyAtRisk,
+            heroContestablePotAfterAction,
+          ),
+          epistemicKind: 'formulaFact',
+          sourceRefs: sources,
+          assumptionCodes: ['ignoresFutureAction'],
+        }
+      : {
+          status: 'notApplicable',
+          reasonCode: 'notCallingAction',
+          sourceRefs: sources,
+          assumptionCodes: [],
+        }
+  const isAggressive =
+    input.action.type === 'bet' ||
+    input.action.type === 'raise' ||
+    (input.action.type === 'allIn' &&
+      transition.currentBetAfter > transition.currentBetBefore)
+  const hasSidePotAmbiguity = before.potBreakdown.some(
+    (pot) =>
+      pot.eligibleSeatNumbers.join('|') !==
+      before.potBreakdown[0]?.eligibleSeatNumbers.join('|'),
+  )
+  const pureBluffBreakEvenFoldRate: CandidateThresholdFact<CoreFactSourceRef> =
+    !isAggressive
+      ? {
+          status: 'notApplicable',
+          reasonCode: 'notPureBluffCandidate',
+          sourceRefs: sources,
+          assumptionCodes: [],
+        }
+      : topology.responders.length !== 1 || hasSidePotAmbiguity
+        ? {
+            status: 'unavailable',
+            reasonCode: 'noJointResponseModel',
             sourceRefs: sources,
-          })
-      const heroContestablePotAfterAction = after?.heroContestablePotBefore ?? 0
-      const contestableAmountAdded = heroFolded
-        ? 0
-        : heroContestablePotAfterAction - before.heroContestablePotBefore
-      const topology = {
-        responders: continuation.responderSeatNumbers,
-        canRaiseSeats: continuation.canRaiseSeatNumbers,
-      }
-      const nextState =
-        continuation.kind === 'sameStreet' || continuation.kind === 'nextStreet'
-          ? continuation.state
-          : null
-      const possibleActionTypes =
-        nextState === null
-          ? []
-          : [
-              ...new Set(
-                getProjectedLegalActions(nextState).map(
-                  (action) => action.type,
-                ),
-              ),
-            ]
-      const forcesRunout = continuation.forcesRunout
-      const canFaceFurtherAction =
-        heroAfter.status === 'active' &&
-        heroAfter.stack > 0 &&
-        topology.canRaiseSeats.length > 0
-      const nextStreetContestable = after ?? before
-      const projectedFlopSpr =
-        input.analysisInput.street !== 'preflop'
-          ? projectedSpr(
-              'notApplicable',
-              'wrongStreet',
-              nextStreetContestable,
-              sources,
-            )
-          : forcesRunout
-            ? projectedSpr(
-                'notApplicable',
-                'forcedRunout',
-                nextStreetContestable,
-                sources,
-              )
-            : continuation.kind === 'nextStreet'
-              ? projectedSpr(
-                  'available',
-                  'wrongStreet',
-                  nextStreetContestable,
-                  sources,
-                )
-              : projectedSpr(
-                  'notApplicable',
-                  continuation.kind === 'sameStreet'
-                    ? 'bettingRoundRemainsOpen'
-                    : 'handComplete',
-                  nextStreetContestable,
-                  sources,
-                )
-      const nextStreetSpr =
-        input.analysisInput.street === 'preflop'
-          ? projectedSpr(
-              'notApplicable',
-              'wrongStreet',
-              nextStreetContestable,
-              sources,
-            )
-          : forcesRunout
-            ? projectedSpr(
-                'notApplicable',
-                'forcedRunout',
-                nextStreetContestable,
-                sources,
-              )
-            : continuation.kind === 'nextStreet'
-              ? projectedSpr(
-                  'available',
-                  'wrongStreet',
-                  nextStreetContestable,
-                  sources,
-                )
-              : projectedSpr(
-                  'notApplicable',
-                  input.analysisInput.street === 'river'
-                    ? 'noFutureDecisionStreet'
-                    : continuation.kind === 'sameStreet'
-                      ? 'bettingRoundRemainsOpen'
-                      : 'handComplete',
-                  nextStreetContestable,
-                  sources,
-                )
-      const isCallingAction =
-        freshCandidate.action.type === 'call' ||
-        (freshCandidate.action.type === 'allIn' &&
-          transition.currentBetAfter === transition.currentBetBefore)
-      const minimumRequiredEquityForCall: CandidateThresholdFact<CoreFactSourceRef> =
-        isCallingAction
+            assumptionCodes: ['noJointResponseModel'],
+          }
+        : {
+            status: 'available',
+            value: createExactRatio(
+              amountActuallyAtRisk,
+              transition.potBefore + amountActuallyAtRisk,
+            ),
+            epistemicKind: 'formulaFact',
+            sourceRefs: sources,
+            assumptionCodes: ['ignoresFutureAction'],
+          }
+  const unavailableRangeFact = {
+    status: 'unavailable' as const,
+    reasonCode: 'noVersionedOpponentRange' as const,
+    sourceRefs: sources,
+    assumptionCodes: ['noVersionedOpponentRange'] as const,
+  }
+  const unavailableResponseFact = {
+    status: 'unavailable' as const,
+    reasonCode: 'noJointResponseModel' as const,
+    sourceRefs: sources,
+    assumptionCodes: ['noJointResponseModel'] as const,
+  }
+
+  return deepFreezeDecisionValue({
+    candidateOutcomeSchemaVersion: 1 as const,
+    projectorVersion: 1 as const,
+    sourceRefs: [...sources],
+    amountToCall: transition.amountToCallBefore,
+    contributionDelta: transition.contributionDelta,
+    targetStreetCommitment:
+      target === null
+        ? {
+            status: 'notApplicable' as const,
+            reasonCode: 'noTarget' as const,
+          }
+        : {
+            status: 'available' as const,
+            value: target,
+          },
+    streetContributionAfter: transition.targetStreetCommitmentAfter,
+    totalContributionAfter: transition.totalContributionAfter,
+    guaranteedUncalledReturn: guaranteedReturn,
+    amountActuallyAtRisk,
+    contestableAmountAdded,
+    potAfterAction: transition.state.pot,
+    heroContestablePotAfterAction,
+    marginalContestablePot: {
+      amountActuallyAtRisk,
+      contestableAmountAdded,
+    },
+    actionScale: {
+      contributionDeltaToPotBefore: {
+        ratioKind: 'contributionDeltaToPotBefore' as const,
+        value: createExactRatio(
+          transition.contributionDelta,
+          transition.potBefore,
+        ),
+      },
+      targetStreetCommitmentToPotBefore:
+        target === null
           ? {
-              status: 'available',
-              value: createExactRatio(
-                amountActuallyAtRisk,
-                heroContestablePotAfterAction,
-              ),
-              epistemicKind: 'formulaFact',
-              sourceRefs: sources,
-              assumptionCodes: ['ignoresFutureAction'],
+              status: 'notApplicable' as const,
+              reasonCode: 'noTarget' as const,
             }
           : {
-              status: 'notApplicable',
-              reasonCode: 'notCallingAction',
-              sourceRefs: sources,
-              assumptionCodes: [],
-            }
-      const isAggressive =
-        freshCandidate.action.type === 'bet' ||
-        freshCandidate.action.type === 'raise' ||
-        (freshCandidate.action.type === 'allIn' &&
-          transition.currentBetAfter > transition.currentBetBefore)
-      const hasSidePotAmbiguity = before.potBreakdown.some(
-        (pot) =>
-          pot.eligibleSeatNumbers.join('|') !==
-          before.potBreakdown[0]?.eligibleSeatNumbers.join('|'),
-      )
-      const pureBluffBreakEvenFoldRate: CandidateThresholdFact<CoreFactSourceRef> =
-        !isAggressive
-          ? {
-              status: 'notApplicable',
-              reasonCode: 'notPureBluffCandidate',
-              sourceRefs: sources,
-              assumptionCodes: [],
-            }
-          : topology.responders.length !== 1 || hasSidePotAmbiguity
-            ? {
-                status: 'unavailable',
-                reasonCode: 'noJointResponseModel',
-                sourceRefs: sources,
-                assumptionCodes: ['noJointResponseModel'],
-              }
-            : {
-                status: 'available',
-                value: createExactRatio(
-                  amountActuallyAtRisk,
-                  transition.potBefore + amountActuallyAtRisk,
-                ),
-                epistemicKind: 'formulaFact',
-                sourceRefs: sources,
-                assumptionCodes: ['ignoresFutureAction'],
-              }
-      const unavailableRangeFact = {
-        status: 'unavailable' as const,
-        reasonCode: 'noVersionedOpponentRange' as const,
-        sourceRefs: sources,
-        assumptionCodes: ['noVersionedOpponentRange'] as const,
-      }
-      const unavailableResponseFact = {
-        status: 'unavailable' as const,
-        reasonCode: 'noJointResponseModel' as const,
-        sourceRefs: sources,
-        assumptionCodes: ['noJointResponseModel'] as const,
-      }
-
-      return {
-        candidateOutcomeSchemaVersion: 1 as const,
-        projectorVersion: 1 as const,
-        sourceRefs: [...sources],
-        candidate: catalogShape(freshCandidate) as LegalCandidateCatalogEntry,
-        amountToCall: transition.amountToCallBefore,
-        contributionDelta: transition.contributionDelta,
-        targetStreetCommitment:
-          freshCandidate.targetStreetCommitment === null
-            ? {
-                status: 'notApplicable' as const,
-                reasonCode: 'noTarget' as const,
-              }
-            : {
-                status: 'available' as const,
-                value: freshCandidate.targetStreetCommitment,
-              },
-        streetContributionAfter: transition.targetStreetCommitmentAfter,
-        totalContributionAfter: transition.totalContributionAfter,
-        guaranteedUncalledReturn: guaranteedReturn,
-        amountActuallyAtRisk,
-        contestableAmountAdded,
-        potAfterAction: transition.state.pot,
-        heroContestablePotAfterAction,
-        marginalContestablePot: {
-          amountActuallyAtRisk,
-          contestableAmountAdded,
-        },
-        actionScale: {
-          contributionDeltaToPotBefore: {
-            ratioKind: 'contributionDeltaToPotBefore' as const,
-            value: createExactRatio(
-              transition.contributionDelta,
-              transition.potBefore,
-            ),
-          },
-          targetStreetCommitmentToPotBefore:
-            freshCandidate.targetStreetCommitment === null
-              ? {
-                  status: 'notApplicable' as const,
-                  reasonCode: 'noTarget' as const,
-                }
-              : {
-                  status: 'available' as const,
-                  ratioKind: 'targetStreetCommitmentToPotBefore' as const,
-                  value: createExactRatio(
-                    freshCandidate.targetStreetCommitment,
-                    transition.potBefore,
-                  ),
-                },
-        },
-        heroStackAfterAction: heroAfter.stack,
-        effectiveStacksByOpponentAfterAction:
-          after?.effectiveStacksByOpponent ?? [],
-        isAllIn: heroAfter.status === 'allIn',
-        handEndsByFold: continuation.handEndsByFold,
-        forcesRunout,
-        remainingStreetsToDeal: forcesRunout
-          ? continuation.remainingStreetsToDeal
-          : 0,
-        furtherBettingPossible: continuation.furtherBettingPossible,
-        showdownForced: continuation.showdownForced,
-        responders: topology.responders,
-        canRaiseSeats: topology.canRaiseSeats,
-        heroActionCompletes: true as const,
-        bettingRoundClosesImmediately:
-          continuation.bettingRoundClosesImmediately,
-        canFaceFurtherAction,
-        legalSuccessorSpace: {
-          nextActorSeatNumber: nextState?.currentActorSeatNumber ?? null,
-          possibleActionTypes,
-          mayReturnToHero: canFaceFurtherAction,
-        },
-        projectedFlopSpr,
-        nextStreetSpr,
-        minimumRequiredEquityForCall,
-        pureBluffBreakEvenFoldRate,
-        rangeConditionalEquity: unavailableRangeFact,
-        opponentResponseProbability: unavailableResponseFact,
-        expectedValue: unavailableRangeFact,
-        futureStreetValue: unavailableRangeFact,
-        impliedOdds: unavailableRangeFact,
-        foldEquity: unavailableResponseFact,
-      }
-    }),
-  )
+              status: 'available' as const,
+              ratioKind: 'targetStreetCommitmentToPotBefore' as const,
+              value: createExactRatio(target, transition.potBefore),
+            },
+    },
+    heroStackAfterAction: heroAfter.stack,
+    effectiveStacksByOpponentAfterAction:
+      after?.effectiveStacksByOpponent ?? [],
+    isAllIn: heroAfter.status === 'allIn',
+    handEndsByFold: continuation.handEndsByFold,
+    forcesRunout,
+    remainingStreetsToDeal: forcesRunout
+      ? continuation.remainingStreetsToDeal
+      : 0,
+    furtherBettingPossible: continuation.furtherBettingPossible,
+    showdownForced: continuation.showdownForced,
+    responders: topology.responders,
+    canRaiseSeats: topology.canRaiseSeats,
+    heroActionCompletes: true as const,
+    bettingRoundClosesImmediately: continuation.bettingRoundClosesImmediately,
+    canFaceFurtherAction,
+    legalSuccessorSpace: {
+      nextActorSeatNumber: nextState?.currentActorSeatNumber ?? null,
+      possibleActionTypes,
+      mayReturnToHero: canFaceFurtherAction,
+    },
+    projectedFlopSpr,
+    nextStreetSpr,
+    minimumRequiredEquityForCall,
+    pureBluffBreakEvenFoldRate,
+    rangeConditionalEquity: unavailableRangeFact,
+    opponentResponseProbability: unavailableResponseFact,
+    expectedValue: unavailableRangeFact,
+    futureStreetValue: unavailableRangeFact,
+    impliedOdds: unavailableRangeFact,
+    foldEquity: unavailableResponseFact,
+  })
 }

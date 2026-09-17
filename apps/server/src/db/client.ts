@@ -10,10 +10,12 @@ export interface DatabaseClient {
 export function createDatabaseClient(
   databaseUrl: string,
   sqlFactory: typeof postgres = postgres,
+  options: { readonly max?: number } = {},
 ): DatabaseClient {
   const sql = sqlFactory(databaseUrl, {
     ssl: 'require',
     prepare: false,
+    ...options,
   })
 
   return {

@@ -1,3 +1,9 @@
+import {
+  projectCoachDecisionFacts,
+  COACH_METRIC_FACT_ALGORITHM_VERSION,
+} from './decision-fact-projector.js'
+import { assertComputedCoachMetrics } from './decision-metrics.js'
+import { assertComputedCoachActionOutcomes } from './action-outcomes.js'
 import { isDeepStrictEqual } from 'node:util'
 import { CoachAssessmentFieldsSchema } from '@tx-holdem-coach/contracts'
 import {
@@ -28,6 +34,13 @@ declare const certifiedInputBrand: unique symbol
 declare const assessmentBrand: unique symbol
 declare const processBrand: unique symbol
 declare const hindsightBrand: unique symbol
+const certifiedDecisionInputs = new WeakSet<object>()
+export function assertCertifiedCoachDecisionInput(
+  input: CertifiedCoachDecisionInput,
+): void {
+  if (!certifiedDecisionInputs.has(input))
+    throw new TypeError('coach_uncertified_input')
+}
 export type CertifiedCoachDecisionInput = Readonly<CoachDecisionInput> & {
   readonly [certifiedInputBrand]: true
 }
@@ -191,6 +204,7 @@ export function createCoachReviewBoundary(ports: {
     if (existing) return existing
     const input = freezeCoachData(parsed) as CertifiedCoachDecisionInput
     inputs.add(input)
+    certifiedDecisionInputs.add(input)
     inputById.set(decision.decisionId, input)
     return input
   }
@@ -203,13 +217,46 @@ export function createCoachReviewBoundary(ports: {
     if (existing) return existing
     const raw = derive(input)
     assertCoachPlainData(raw)
+    assertComputedCoachMetrics(raw.metrics)
+    assertComputedCoachActionOutcomes(raw.actionOutcomes)
     const derived = freezeCoachData(CoachDerivedFactsSchema.parse(raw))
+    for (const value of [derived.metrics, derived.actionOutcomes]) {
+      if (
+        !isDeepStrictEqual(value.binding, input.binding) ||
+        value.decisionId !== input.decision.decisionId ||
+        value.stateVersion !== input.decision.stateVersion ||
+        value.asOfEventSeq !==
+          input.decision.opponentEvidenceCutoff.asOfEventSeq
+      )
+        throw new TypeError('coach_metrics_binding')
+    }
+
     if (
       !isDeepStrictEqual(derived.versions, input.binding.versions) ||
       derived.asOfEventSeq !==
         input.decision.opponentEvidenceCutoff.asOfEventSeq
     )
       throw new TypeError('coach_derivation_binding')
+    // Public metric evidence is a projection of the authenticated private result,
+    // not an independently trusted output from derive. Producer membership is
+    // independent of status; unavailable facts have no value.metric to inspect.
+    const metricFacts = projectCoachDecisionFacts(input, derived.metrics)
+    for (const fact of derived.facts) {
+      const projected = metricFacts.find(
+        (expected) =>
+          expected.factId === fact.factId ||
+          (fact.status === 'available' &&
+            'metric' in fact.value &&
+            expected.factId === `metrics.${fact.value.metric}`),
+      )
+      if (
+        (fact.algorithmVersion === COACH_METRIC_FACT_ALGORITHM_VERSION ||
+          projected ||
+          fact.factId.startsWith('metrics.')) &&
+        !isDeepStrictEqual(fact, projected)
+      )
+        throw new TypeError('coach_metric_fact_mismatch')
+    }
     const { decision } = input
     const seats = decision.stacksAndContributions
     const hero = seats.find(
@@ -350,10 +397,7 @@ export function createCoachReviewBoundary(ports: {
     )
       throw new TypeError('coach_candidate_binding')
     const potBefore = seats.reduce((sum, seat) => sum + seat.totalCommitment, 0)
-    const currentBet = Math.max(
-      decision.street === 'preflop' ? decision.visibleState.nominalBigBlind : 0,
-      ...seats.map((s) => s.streetCommitment),
-    )
+    const currentBet = decision.analysisInput.bettingRound.currentBet
     for (const candidate of derived.candidates) {
       const legal = input.decision.legalActions.find(
         (legal) => legal.action === candidate.action.type,
@@ -413,6 +457,42 @@ export function createCoachReviewBoundary(ports: {
           candidate.raisesCurrentBet !== (candidate.betSize !== null))
       )
         throw new TypeError('coach_candidate_size')
+    }
+    for (const candidate of derived.candidates) {
+      const outcome = derived.actionOutcomes.outcomes.find((entry) =>
+        isDeepStrictEqual(entry.action, candidate.action),
+      )
+      if (
+        !outcome ||
+        !isDeepStrictEqual(candidate.result, {
+          targetStreetCommitment: outcome.result.streetContributionAfter,
+          incrementalChips: outcome.result.contributionDelta,
+          potAfter: outcome.result.potAfterAction,
+          remainingStack: outcome.result.heroStackAfterAction,
+        })
+      )
+        throw new TypeError('coach_candidate_outcome_mismatch')
+    }
+    for (const outcome of derived.actionOutcomes.outcomes) {
+      for (const reference of outcome.references) {
+        if (reference.kind !== 'baseline') continue
+        const action = derived.baseline.actions.find(
+          (action) => action.actionId === reference.actionId,
+        )
+        const target = outcome.result.streetContributionAfter
+        const raisesCurrentBet = target > currentBet
+        if (
+          !action ||
+          action.action !== outcome.action.type ||
+          (action.action === 'allIn' &&
+            (action.betSize !== null) !== raisesCurrentBet) ||
+          (action.betSize !== null &&
+            (potBefore <= 0 ||
+              Math.abs(action.betSize.value - target / potBefore) >
+                Number.EPSILON * Math.max(1, target / potBefore)))
+        )
+          throw new TypeError('coach_baseline_outcome_mismatch')
+      }
     }
     const rawAssessment = classify(input, derived)
     assertCoachPlainData(rawAssessment)

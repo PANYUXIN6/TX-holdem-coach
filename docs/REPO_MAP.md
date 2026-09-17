@@ -299,4 +299,18 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/server/src/agents/coach/review-contract-validator.ts`：从认证过程与事后解释逐字段合成公开报告，私有引用映射为公开事实；按可信完整决策清单及冻结教学政策验证最终报告；包括零决策报告在内均要求完整事后来源已准入。
 - `packages/contracts/test/coach-contracts.test.ts`、`apps/server/test/unit/coach-boundaries.test.ts`、`coach-model-boundary.test.ts`、`coach-review-contract-validator.test.ts`、`apps/server/test/unit/coach-hindsight-admission.test.ts`：公开协议、延后完整内存案例准入、阶段/来源隔离、真实 Foundation + 假 Provider、完整报告与私有字段不外泄；夹具位于 `apps/server/test/fixtures/coach/boundaries.ts`。
 
-真实案例重建、策略覆盖、统计、分类阈值、Worker、HTTP、数据库与页面仍属于 M8.2–M8.7；M8.1 没有安装 Coach lane。
+真实案例来源与确定性重建已由下述 M8.2 交付；策略覆盖、统计、分类阈值、Worker、HTTP、持久报告与页面仍属于 M8.3–M8.7。M8.1/M8.2 没有安装 Coach lane。
+
+## M8.2 完成手来源与确定性分析
+
+- `apps/server/src/persistence/coach-read-resource.ts`：服务级独立 max=1 读取客户端，短只读事务、可取消队列及有界强制关闭；不借用牌局池。
+- `apps/server/src/persistence/completed-hand-review-repository.ts`：Owner-scoped 单 statement 完整加载，复用 current Codec/完成手镜像及人物快照校验；移除牌堆、烧牌和配置正文后交付内部事实。
+- `apps/server/src/sessions/hand-history/completed-hand-review-source.ts`：内部来源契约与每个 Hero 行动前安全前缀的显式投影。
+- `apps/server/src/agents/foundation/run-read-authentication.ts` 与 `agent-run-lifecycle-repository.ts`：持久 Coach Run 的只读执行资格认证，复用 authority、Codec 与数据库时钟。
+- `apps/server/src/agents/coach/policy-versions.ts`：七类政策依赖的唯一固定 ID 映射，拒绝缺项、重复与未装配版本。
+- `apps/server/src/agents/coach/review-source-loader.ts` / `review-source-adapter.ts` / `review-case-builder.ts`：先认证持久 Run，再完整加载并归还连接；逐决策安全重放；事后来源从同一内存快照构造，取消或释放后不可访问。
+- `apps/server/src/agents/coach/analysis-input.ts` / `analysis-results.ts` / `decision-metrics.ts` / `decision-fact-projector.ts` / `action-outcomes.ts`：严格私有输入、完整指标、事实来源、白名单公开投影及实际/基准动作结果；Frozen 边界保留私有结果，模型和报告不序列化该结构。
+- `apps/server/src/poker/decision-analysis-input-schema.ts` / `decision-analysis-schema.ts` / `core-fact-source-schema.ts` / `action-outcome-schema.ts`：中性严格 Schema，Player 保留原来源绑定；`candidate-outcomes.ts` 新增任意合法动作投影，原 Player 目录检查保留。
+- `apps/server/test/unit/coach-completed-source.test.ts` / `coach-review-builder.test.ts` / `coach-deterministic-metrics.test.ts` / `coach-policy-versions.test.ts` / `coach-read-resource.test.ts`：来源、重放、计算、政策与取消边界；`apps/server/test/integration/database-m82-assertions.ts` 注册 database m82。
+
+M8.2 未安装 Coach Worker、HTTP、模型编排、分类器或持久报告 writer；生产服务生命周期、专属槽位及 Commit Gate 仍由 M8.6 接入。

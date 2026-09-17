@@ -817,11 +817,13 @@ Coach 投影：
 
 ### A7.1 构建复盘案例
 
+状态：与 [M8.2 设计稿](../specs/2026-09-16-m8-2-coach-review-case-deterministic-metrics-design.md)同步实施（2026-09-17），已完成真实 completed 来源、行动前正向重建与 M8.1 认证输入接入；验证范围见设计文档 §14。
+
 实现：
 
 - `HandReviewCaseBuilder` 只接受 `completed` 手牌，`aborted` 明确拒绝。
 - 为每个 Hero 决策构建稳定 `decisionId`、当时可见信息和合法动作。
-- 将 `auditTruth` 与决策时信息分区保存。
+- 分析前一次加载并校验目标手完整事实、释放数据库连接，受信来源适配器仅给 Builder 安全前缀；Builder 输出不含 auditTruth 的安全过程来源。完整审计案例由事后 Projector 在全手冻结后从同一内存构建并校验，核对绑定及决策清单，不二次读取目标手。
 
 验证：
 
@@ -853,6 +855,8 @@ Coach 投影：
 - 事后信息不能反向污染过程评价。
 
 ### A7.3 实现确定性 Metrics、Baseline 与 Evidence
+
+设计入口：[M8.2 案例与确定性指标设计稿](../specs/2026-09-16-m8-2-coach-review-case-deterministic-metrics-design.md)（2026-09-17，已实施）已交付 Metrics、共享单动作结果与私有证据保存；Baseline 仍归 M8.3，截止统计仍归 M8.4。本入口不表示 A7.3 已整体实现。
 
 实现：
 

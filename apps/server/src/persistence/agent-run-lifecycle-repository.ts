@@ -1,3 +1,5 @@
+import { createRunReadAuthenticator } from '../agents/foundation/run-read-authentication.js'
+import type { ReviewReadBudget } from '../sessions/hand-history/completed-hand-review-source.js'
 import type { TransactionSql } from 'postgres'
 import { z } from 'zod'
 import {
@@ -1438,4 +1440,48 @@ export function createAgentRunLifecycleRepository(): AgentRunLifecycleRepository
     },
   }
   return Object.freeze(repository)
+}
+
+/** Read-only Coach admission. Filtering uses the database clock and never locks the Run. */
+export function createCoachRunReadRepository(input: {
+  readonly resource: import('./coach-read-resource.js').CoachReadResource
+  readonly owner: ResolvedOwnerScope
+}) {
+  if (!isResolvedOwnerScope(input.owner))
+    throw new RepositoryInputValidationError()
+  return createRunReadAuthenticator<ReviewReadBudget>(
+    async (authority, sessionId, handId, budget) => {
+      if (
+        !z.uuid().safeParse(sessionId).success ||
+        !z.uuid().safeParse(handId).success
+      )
+        throw new RepositoryInputValidationError()
+      const rows = await input.resource.read(
+        (transaction) =>
+          transaction.unsafe(
+            `SELECT ${RUN_COLUMNS} FROM app_private.agent_runs AS run
+       WHERE run.id=$1::uuid AND run.owner_id=$2::uuid AND run.runtime='coach'
+       AND run.session_id=$3::uuid AND run.hand_id=$4::uuid
+       AND run.lifecycle IN ('leased', 'running') AND run.lease_owner=$5 AND run.fencing_token=$6
+       AND run.lease_expires_at > clock_timestamp() AND run.deadline_at > clock_timestamp()`,
+            [
+              authority.runId,
+              input.owner.databaseOwnerId,
+              sessionId,
+              handId,
+              authority.leaseOwner,
+              authority.fencingToken,
+            ],
+          ),
+        budget,
+      )
+      budget.signal.throwIfAborted()
+      if (rows.length !== 1)
+        throw new AgentRunTransitionError('agent_run_fencing_rejected')
+      const run = requireDecodedRow(rows[0], input.owner)
+      if (run.runtimeType !== 'coach')
+        throw new PersistenceDataCorruptionError('invalidAgentRunAudit')
+      return run
+    },
+  )
 }

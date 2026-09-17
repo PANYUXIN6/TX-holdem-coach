@@ -1,10 +1,10 @@
+import { createActionOutcomeSchema } from '../../poker/action-outcome-schema.js'
 import { createHash } from 'node:crypto'
 import { AgentPersonaIdSchema } from '@tx-holdem-coach/contracts'
 import { z } from 'zod'
 import { canonicalJson, type JsonValue } from '../../persisted-json.js'
 import { isLegalCandidateSemanticallyConsistent } from '../../poker/betting-projection.js'
 import { PokerCommandSchema } from '../../poker/commands.js'
-import { M45AssumptionCodeSchema } from '../../poker/decision-analysis-types.js'
 import { StrategyPackReferenceSchema } from '../../poker-strategy/strategy-pack.js'
 import { Sha256DigestSchema } from '../audit/audit-primitives.js'
 import {
@@ -32,21 +32,6 @@ const SafePositiveIntegerSchema = z
   .positive()
   .max(Number.MAX_SAFE_INTEGER)
 const BasisPointsSchema = z.number().int().min(0).max(10_000)
-const SeatNumberSchema = z.number().int().min(0).max(8)
-const ActionTypeSchema = z.enum([
-  'fold',
-  'check',
-  'call',
-  'bet',
-  'raise',
-  'allIn',
-])
-const ExactRatioSchema = z.strictObject({
-  numerator: SafeNonnegativeIntegerSchema,
-  denominator: SafePositiveIntegerSchema,
-  basisPoints: SafeNonnegativeIntegerSchema,
-})
-
 const PolicyCandidateShape = {
   candidateId: z.string().trim().min(1),
   action: PokerCommandSchema.shape.action,
@@ -189,140 +174,9 @@ const LegalCandidateSchema = z
     }
   })
 
-const CandidateSprProjectionSchema = z.discriminatedUnion('status', [
-  z.strictObject({
-    status: z.literal('available'),
-    value: z.array(
-      z.strictObject({
-        opponentSeatNumber: SeatNumberSchema,
-        effectiveStack: SafeNonnegativeIntegerSchema,
-        spr: ExactRatioSchema,
-      }),
-    ),
-    sourceRefs: z.array(FactSourceRefSchema),
-  }),
-  z.strictObject({
-    status: z.literal('notApplicable'),
-    reasonCode: z.enum([
-      'forcedRunout',
-      'bettingRoundRemainsOpen',
-      'handComplete',
-      'wrongStreet',
-      'noFutureDecisionStreet',
-    ]),
-    sourceRefs: z.array(FactSourceRefSchema),
-  }),
-])
-
-const CandidateThresholdFactSchema = z.discriminatedUnion('status', [
-  z.strictObject({
-    status: z.literal('available'),
-    value: ExactRatioSchema,
-    epistemicKind: z.literal('formulaFact'),
-    sourceRefs: z.array(FactSourceRefSchema),
-    assumptionCodes: z.tuple([z.literal('ignoresFutureAction')]),
-  }),
-  z.strictObject({
-    status: z.literal('unavailable'),
-    reasonCode: z.literal('noJointResponseModel'),
-    sourceRefs: z.array(FactSourceRefSchema),
-    assumptionCodes: z.tuple([z.literal('noJointResponseModel')]),
-  }),
-  z.strictObject({
-    status: z.literal('notApplicable'),
-    reasonCode: z.enum(['notCallingAction', 'notPureBluffCandidate']),
-    sourceRefs: z.array(FactSourceRefSchema),
-    assumptionCodes: z.tuple([]),
-  }),
-])
-
-const UnavailableOutcomeFactSchema = z.strictObject({
-  status: z.literal('unavailable'),
-  reasonCode: z.enum(['noVersionedOpponentRange', 'noJointResponseModel']),
-  sourceRefs: z.array(FactSourceRefSchema),
-  assumptionCodes: z.array(M45AssumptionCodeSchema),
-})
-
-export const CandidateOutcomeDataSchema = z.strictObject({
-  candidateOutcomeSchemaVersion: z.literal(1),
-  projectorVersion: z.literal(1),
-  sourceRefs: z.array(FactSourceRefSchema),
-  candidate: LegalCandidateSchema,
-  amountToCall: SafeNonnegativeIntegerSchema,
-  contributionDelta: SafeNonnegativeIntegerSchema,
-  targetStreetCommitment: z.discriminatedUnion('status', [
-    z.strictObject({
-      status: z.literal('available'),
-      value: SafeNonnegativeIntegerSchema,
-    }),
-    z.strictObject({
-      status: z.literal('notApplicable'),
-      reasonCode: z.literal('noTarget'),
-    }),
-  ]),
-  streetContributionAfter: SafeNonnegativeIntegerSchema,
-  totalContributionAfter: SafeNonnegativeIntegerSchema,
-  guaranteedUncalledReturn: SafeNonnegativeIntegerSchema,
-  amountActuallyAtRisk: SafeNonnegativeIntegerSchema,
-  contestableAmountAdded: SafeNonnegativeIntegerSchema,
-  potAfterAction: SafeNonnegativeIntegerSchema,
-  heroContestablePotAfterAction: SafeNonnegativeIntegerSchema,
-  marginalContestablePot: z.strictObject({
-    amountActuallyAtRisk: SafeNonnegativeIntegerSchema,
-    contestableAmountAdded: SafeNonnegativeIntegerSchema,
-  }),
-  actionScale: z.strictObject({
-    contributionDeltaToPotBefore: z.strictObject({
-      ratioKind: z.literal('contributionDeltaToPotBefore'),
-      value: ExactRatioSchema,
-    }),
-    targetStreetCommitmentToPotBefore: z.discriminatedUnion('status', [
-      z.strictObject({
-        status: z.literal('available'),
-        ratioKind: z.literal('targetStreetCommitmentToPotBefore'),
-        value: ExactRatioSchema,
-      }),
-      z.strictObject({
-        status: z.literal('notApplicable'),
-        reasonCode: z.literal('noTarget'),
-      }),
-    ]),
-  }),
-  heroStackAfterAction: SafeNonnegativeIntegerSchema,
-  effectiveStacksByOpponentAfterAction: z.array(
-    z.strictObject({
-      opponentSeatNumber: SeatNumberSchema,
-      currentEffectiveStack: SafeNonnegativeIntegerSchema,
-      maximumAdditionalMatchedContribution: SafeNonnegativeIntegerSchema,
-    }),
-  ),
-  isAllIn: z.boolean(),
-  handEndsByFold: z.boolean(),
-  forcesRunout: z.boolean(),
-  remainingStreetsToDeal: SafeNonnegativeIntegerSchema,
-  furtherBettingPossible: z.boolean(),
-  showdownForced: z.boolean(),
-  responders: z.array(SeatNumberSchema),
-  canRaiseSeats: z.array(SeatNumberSchema),
-  heroActionCompletes: z.literal(true),
-  bettingRoundClosesImmediately: z.boolean(),
-  canFaceFurtherAction: z.boolean(),
-  legalSuccessorSpace: z.strictObject({
-    nextActorSeatNumber: SeatNumberSchema.nullable(),
-    possibleActionTypes: z.array(ActionTypeSchema),
-    mayReturnToHero: z.boolean(),
-  }),
-  projectedFlopSpr: CandidateSprProjectionSchema,
-  nextStreetSpr: CandidateSprProjectionSchema,
-  minimumRequiredEquityForCall: CandidateThresholdFactSchema,
-  pureBluffBreakEvenFoldRate: CandidateThresholdFactSchema,
-  rangeConditionalEquity: UnavailableOutcomeFactSchema,
-  opponentResponseProbability: UnavailableOutcomeFactSchema,
-  expectedValue: UnavailableOutcomeFactSchema,
-  futureStreetValue: UnavailableOutcomeFactSchema,
-  impliedOdds: UnavailableOutcomeFactSchema,
-  foldEquity: UnavailableOutcomeFactSchema,
-})
+export const CandidateOutcomeDataSchema = createActionOutcomeSchema(
+  FactSourceRefSchema,
+).extend({ candidate: LegalCandidateSchema })
 
 function bound<Value extends z.ZodType>(data: Value) {
   return z.strictObject({

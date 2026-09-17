@@ -1,3 +1,7 @@
+import {
+  CoachDecisionMetricsSchema,
+  CoachActionOutcomesSchema,
+} from './analysis-results.js'
 import { z } from 'zod'
 import {
   CoachAssessmentFieldsSchema,
@@ -52,6 +56,8 @@ export const CoachCandidateSchema = z.strictObject({
   }),
 })
 export const CoachDerivedFactsSchema = z.strictObject({
+  metrics: CoachDecisionMetricsSchema,
+  actionOutcomes: CoachActionOutcomesSchema,
   versions: CoachVersionsSchema,
   asOfEventSeq: CoachSequence,
   facts: z.array(CoachPublicFactSchema),

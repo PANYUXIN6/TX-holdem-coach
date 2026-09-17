@@ -1,3 +1,5 @@
+import { computeCoachActionOutcomes } from '../../src/agents/coach/action-outcomes.js'
+import { syncFixtureAnalysis } from '../fixtures/coach/boundaries.js'
 import { describe, it, expect } from 'vitest'
 import { CoachReviewSchema, type CoachReview } from '@tx-holdem-coach/contracts'
 import { createCoachReviewContractValidator } from '../../src/agents/coach/review-contract-validator.js'
@@ -52,6 +54,7 @@ function completeReview() {
     second = structuredClone(source.heroDecisions[0]!)
   second.eventSeq = 18
   second.decisionId = second.decisionId.replace(':12', ':18')
+  syncFixtureAnalysis(second)
   second.opponentEvidenceCutoff.asOfEventSeq = 17
   source.heroDecisions.push(second)
   const boundary = fixtureBoundary(source)
@@ -226,6 +229,7 @@ it.each(['opponent-rank-private', 'actualNet', 'actualContinuation'])(
         totalCommitment: 20,
         status: 'active',
       })
+    syncFixtureAnalysis(d)
     source.auditTruth.actualHoleCards.push({
       seatNumber: 1,
       cards: [
@@ -317,6 +321,12 @@ it.each(['opponent-rank-private', 'actualNet', 'actualContinuation'])(
       derive: (input) => ({
         ...ports.derive(input),
         baseline,
+        actionOutcomes: computeCoachActionOutcomes(input, [
+          {
+            actionId: 'bet50',
+            action: { type: 'bet', targetStreetCommitment: 50 },
+          },
+        ]),
         candidates: [
           {
             candidateId: 'private-bet',
@@ -450,6 +460,7 @@ it('rejects a largest-EV projection across incompatible source versions', () => 
     second = structuredClone(source.heroDecisions[0]!)
   second.eventSeq = 18
   second.decisionId = second.decisionId.replace(':12', ':18')
+  syncFixtureAnalysis(second)
   source.heroDecisions.push(second)
   const ports = fixturePorts(source),
     boundary = createCoachReviewBoundary({

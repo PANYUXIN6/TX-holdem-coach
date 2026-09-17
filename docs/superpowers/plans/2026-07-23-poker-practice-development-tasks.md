@@ -1472,9 +1472,11 @@ M4 的详细实现顺序、数据约束和验收以 [Agent 大模块开发任务
 
 ### M8.2 实现复盘案例构建与确定性指标
 
+状态：已按[设计文档 §14](../specs/2026-09-16-m8-2-coach-review-case-deterministic-metrics-design.md#14-m82-实施记录2026-09-17)完成来源 Reader、案例重建与认证、指标投影、任意合法动作结果四个切片（2026-09-17）。继承 M8.1 报告与信息边界；策略、统计、分类及运行生命周期仍交接 M8.3–M8.6。验证范围见实施记录。
+
 产出：
 
-- `HandReviewCaseBuilder` 只从正常完成（`completed`）的内部手牌和权威历史事实构建复盘案例；`aborted` 手牌在入口处拒绝。
+- `HandReviewCaseBuilder` 只从正常完成（`completed`）的内部手牌和权威历史事实构建安全过程来源（不含 auditTruth）；`aborted` 手牌在入口处拒绝。M8.2 在分析前一次加载目标手完整事实并完成存储校验、释放连接，受信内存适配器向 Builder 提供安全前缀；完整审计案例由 M8.5 Projector 在全手过程冻结后从同一内存构建，不再次查询目标手。
 - `HandReviewCaseBuilder` 从目标手牌的开手检查点读取 `pokerRuleSetVersion`，不得使用 Coach 运行时 current 版本回填。
 - 为用户每个实际决策固化当时可见状态、合法动作、实际动作、筹码投入和对手证据截止点。
 - `compute_decision_metrics` 组合与 Player 同版本的共享纯 `SpotNormalizer`、`HandFeatureAnalyzer`、`ContestablePotProjector` 与 `DecisionMetricsEngine`，生成规则集版本、名义/实际盲注、大盲行动权、规范 spot、原子牌/牌面事实、行动响应拓扑、逐对手有效筹码、可争夺底池、金额语义、翻后 SPR、底池赔率、下注尺度和合法金额边界；不能使用事后牌修正过程评价，也不返回建议动作。

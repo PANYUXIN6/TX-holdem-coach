@@ -147,6 +147,9 @@ describe('Player runtime import boundary', () => {
         new Set([
           'src/poker/betting-projection.ts',
           'src/poker/betting.ts',
+          // M8.2 replays historical actions and projects arbitrary legal amounts without commit authority.
+          'src/poker/candidate-outcomes.ts',
+          'src/agents/coach/review-case-builder.ts',
           'src/sessions/authoritative-state/player-observation-builder.ts',
         ]),
       ],

@@ -1,3 +1,4 @@
+import { assertM82CoachReviewSource } from './database-m82-assertions.js'
 import { assertRosterPreview } from './roster-preview-assertions.js'
 import { assertDatabaseConnectionProtection } from './database-connection-assertions.js'
 import { assertM22DatabaseSchema } from './database-schema-assertions.js'
@@ -203,3 +204,10 @@ registerDatabaseMilestoneTest(
 )
 
 registerStaleDatabaseTestCleanup()
+
+registerDatabaseMilestoneTest(
+  'm82',
+  'M8.2 Coach completed source and read admission',
+  (sql, runtimeUrl, signal) =>
+    assertM82CoachReviewSource(sql, runtimeUrl, signal),
+)

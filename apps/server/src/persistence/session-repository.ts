@@ -134,7 +134,7 @@ export interface SessionAgentSnapshot {
   readonly configPayload: DeepReadonly<PersonaConfigPayload>
 }
 
-function parseSessionAgentSnapshot(
+export function parseSessionAgentSnapshot(
   row: SessionAgentSnapshotRow,
 ): SessionAgentSnapshot {
   if (!row.hasAgent) {

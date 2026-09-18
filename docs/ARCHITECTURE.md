@@ -1,6 +1,6 @@
 # 架构概览
 
-更新时间：2026-09-15（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.9 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
+更新时间：2026-09-18（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.9 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成；M8.1/M8.2 离线边界与 M8.3 范围计算基础已落地，Coach 运行时与生产范围覆盖尚未交付。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
 
 ## Workspace 边界
 
@@ -27,7 +27,7 @@
 
 ## 依赖方向
 
-共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M4 读取链为 `persistence authority → agents/player 窄端口 → 认证观察/reference → Player facade`；Player facade 只把无 UUID/brand/人物/SQL 的最小 DTO 交给 `poker/*` 纯分析，并把 `CoreFactSourceRef` 穷尽映射为 observation-bound 来源。`poker/betting.ts`、`hand-progression.ts`、settlement、M4.4 观察链和 M4.5 分析共同向下依赖共享下注/贡献内核，`poker/` 不反向依赖 Session、Agent 或 Persistence。静态 `poker-strategy/` 不读取数据库或网络。Foundation、ModelGateway 与 Contracts 均不导入 Player 观察业务模块；Provider Adapter 不读取数据库；生产 Player Commit Gate 仍由 M4.7 实现。
+共享协议只允许由两个应用依赖：`apps/web → packages/contracts ← apps/server`。私有人物模型配置、策略、数据库行与 Repository 类型不反向进入 Contracts。M4 读取链为 `persistence authority → agents/player 窄端口 → 认证观察/reference → Player facade`；Player facade 只把无 UUID/brand/人物/SQL 的最小 DTO 交给 `poker/*` 纯分析，并把 `CoreFactSourceRef` 穷尽映射为 observation-bound 来源。`poker/betting.ts`、`hand-progression.ts`、settlement、M4.4 观察链和 M4.5 分析共同向下依赖共享下注/贡献内核，`poker/` 不反向依赖 Session、Agent 或 Persistence。Player 专属 `poker-strategy/` 与独立 `poker-range/` 均为内存只读边界，不读取数据库或网络；范围计算向下依赖中性 poker 分析、牌型评价和逐池分奖。Foundation、ModelGateway 与 Contracts 均不导入 Player 观察业务模块；Provider Adapter 不读取数据库；生产 Player Commit Gate 仍由 M4.7 实现。
 
 ## 代码分析工具边界
 
@@ -59,7 +59,7 @@ M3.5 调用链固定为“回环 Host/精确 Origin/JSON/大小/查询门禁 →
 
 ## 已实现的非 Agent 主链与后续边界
 
-[非 Agent 运行时架构重基线](./superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)已确认；M1.R/M1.8/M1.9、M0.2、M2.1–M2.8、M3.1–M3.7 与 M5.1–M5.5 已实施，M3.8 按 M4 依赖后置，M6–M7 仍待完成：
+[非 Agent 运行时架构重基线](./superpowers/specs/2026-07-28-non-agent-runtime-architecture-rebaseline.md)已确认；M1.R/M1.8/M1.9、M0.2、M2.1–M2.8、M3.1–M3.7 与 M5.1–M5.5 已实施，M3.8 主体接线已由 M4.10 落地，专项收口仍待完成；M6.1–M6.6 与 M7.1–M7.9 已实现，真机及各实施记录明确列出的人工验收仍待完成：
 
 - `apps/server/src/poker/poker-engine.ts` 已成为 M1 唯一行为入口，通过 `initializePokerTable()` 封装初始按钮，通过 `startPokerHand()` 封装开手，通过 `applyPokerAction()` 封装 M1.7 内部终止和 M1.8 同步结算。
 - M1.9 的手牌结果模块已输出不可变 `CompletedHandResult`、最近完成手摘要和不含基础设施字段的事件草稿。
@@ -72,17 +72,17 @@ M3.5 调用链固定为“回环 Host/精确 Origin/JSON/大小/查询门禁 →
 
 M2.7–M4.5 已实现严格审计、通用 Context/Gateway、权威 Player 观察和确定性预处理。M4.6 已完成审计快照、最小模型包、第二/第三 Guard、bounded choice 与三阶段持久化；M4.7 Commit Gate、M4.8 失败收敛、M4.9 Memory 与 M4.10 生产启动接线已形成 Player live 主链：
 
-- 共享 Foundation 只机械认证 Runtime/Policy/Context/Prompt、执行代码预定 Capability 与同一 DeepSeek 的最多两次内容纠正；Player 已在业务边界实现 Context section、Prompt 正文、输出 Schema、语义 Validator、Runtime executor 与 Commit Gate，Coach 在 M8.1 已实现单决策 Context/Prompt、阶段 Schema/Validator 绑定与离线 Guard；真实业务算法、Runtime executor 与 Commit Gate 仍由后续里程碑实现。当前只保留 Coach 的 Route Policy 版本引用，其独立认证实例由 M8/A7 构造并注入，不提前保留无消费者的策略对象。
+- 共享 Foundation 只机械认证 Runtime/Policy/Context/Prompt、执行代码预定 Capability 与同一 DeepSeek 的最多两次内容纠正；Player 已在业务边界实现 Context section、Prompt 正文、输出 Schema、语义 Validator、Runtime executor 与 Commit Gate，Coach 在 M8.1 已实现单决策 Context/Prompt、阶段 Schema/Validator 绑定与离线 Guard；M8.2 确定性重建及 M8.3 范围计算已落地，Runtime executor 与 Commit Gate 仍由后续里程碑实现。当前只保留 Coach 的 Route Policy 版本引用，其独立认证实例由 M8/A7 构造并注入，不提前保留无消费者的策略对象。
 - Player Runtime 负责“赢”。当前已实现链路为“running Run → 同事务派生 actor seat/认证观察 → pinned StrategyPack 与固定 Capability Plan → 完整快照先落库 → 最小投影与第二/第三 Guard → 通用 Gateway → bounded choice → accepted Attempt/selected 原子交接 → 认证 ResultPort → Commit Gate 私有 `aiAction`”；所有长计算在事务外，durable stage 可同 Run 恢复，未知在途 Provider 结果不重复调用。
 - Runtime 先保存完整、仅供审计回放的 `DecisionAuditSnapshot`，再生成精简 `PlayerModelProjection`；Provider 候选用 current-only compact tuple 传输，服务端以 descriptor/Codec 可逆展开全部语义，不裁剪当前手或候选。完整快照不得直接发送给模型，模型上下文中同一概念只有一种权威表达，不重复原始行动史、不要求重算 SPR，也不混用总底池与可争夺底池。候选频率/权重只是参考分布，首版 LLM 选择不承诺精确混合频率校准。
 - 所有进入 Player 或 Coach 模型的派生事实都必须可追溯到允许来源、决策截止点、Schema/算法/数据版本和适用假设，并区分 `available | unavailable | notApplicable` 及 `ruleFact | formulaFact | datasetBaseline | statisticalEvidence | heuristicJudgment | modelGeneratedText`。程序结果可复现不代表它就是客观真理；`wet/dry`、范围角色、心理和情绪等解释性结论必须保留证据等级或明确不可用。
 - Coach 负责“教”，只对正常完成（`completed`）的内部手牌手动生成只读结构化复盘；`aborted` 手牌不是已结算事实，必须在复盘入口拒绝。
-- Player 与 Coach 只复用 Foundation 和版本化策略事实源；Context、Prompt、记忆、业务 Validator、信息投影和 Commit Gate 严格分离。
+- Player 与 Coach 复用 Foundation 与中性扑克计算原语；Player StrategyPack 和 Coach OpponentRangePack 分别拥有数据模型、来源及版本引用；Context、Prompt、记忆、业务 Validator、信息投影和 Commit Gate 严格分离。
 - Player 与 Coach 的模型都没有自主工具调用权；确定性流水线由各自 Runtime 固定编排。
 - Agent 使用的首版扑克规则指纹为 `nlhe-cash-6to9-10-20-v1`，固定对应 6–9 人、10/20 盲注、无前注、无 straddle、无抽水、单牌面一次 runout；项目永久不设计 `ante`/`anteModel`、`rakeModel` 或对应策略分支。M4.5 通过当前 `HandStartCheckpoint` 在开手时固化该值，Player 与 Coach 读取目标手牌绑定版本；首发前实际数据库没有旧载荷数据责任，因此不保留 V1 Codec 或迁移路径。
-- Coach 先由分类器冻结 `assessmentBasis`、`epistemicStatus`、可证明行为偏差、教学假设、严重度、基准支持情况和 EV 状态；`DecisionGradeProjector` 再按版本化政策区分最高频、受支持混合动作、低成本偏离、不支持动作、重大 EV 错误与无法评价。`TeachingProjectionPolicy` 只默认展开一个核心决策和最多两个次要决策，不删除完整报告，也不让 LLM 排名。referenceOnly/heuristic、受支持的低频混合动作和推测心理不能自动变成客观错误。看不到事后事实的 Analyzer 只解释冻结判断；`HindsightFactProjector` 再从权威完成手冻结牌型比较、实际后续、返还和逐池结算，Hindsight LLM 只负责教学表达。任何 Coach 失败均不得影响牌局状态。
-- 策略层不在线运行“简化 Solver”，而是查询带 `StrategyAbstractionProfile` 的版本化静态 `StrategyPack`；动作分组、执行频率、下注尺度、来源、覆盖和抽象损失分别保存，没有可追溯 Solver EV 时不能输出精确 EV。
-- 后置的 Coach 长期记忆采用“不可变逐决策 assessment → 版本化错误/牌面 taxonomy → 确定性漏洞聚合 → 日/周/月趋势与有时效画像快照 → 有界只读 Context”链路。发生最频繁、累计 EV 最贵和高严重度但 EV 不可用是三种不同排名；用户默认只看到一个当前重点、最多两个观察项和折叠的改善项。错误率以可评价机会为分母并单独展示 coverage；没有可比较 EV 时不得生成“最贵漏洞”。该能力不使用 RAG，LLM 不直接读写画像，且不属于首版 M8/A7。
+- Coach 过程事实先冻结对手范围假设、逐池联合权益、条件性跟注 EV、敏感性和信息不足原因。M8.5 后续教学政策只能给出范围条件下的稳定结论或独立规则不变量错误，不按最优动作频率或全手 EV 损失分级；默认展开一个核心决策和最多两个次要决策。看不到事后事实的 Analyzer 只解释冻结结果；Hindsight 再从权威完成手取得实际牌型、后续行动、返还和逐池结算，不反向修改过程范围或权益。任何 Coach 失败均不得影响牌局状态。
+- Player 查询静态 StrategyPack 的行动参考；Coach 使用独立版本化 OpponentRangePack 表达未知对手底牌分布和更新假设，运行时确定性计算多人权益。两者不在线运行“简化 Solver”，也不把范围权重解释为行动频率。Coach 只在跟注后贡献确定且无未来行动时给出条件性 EV，不宣称全局最优动作。
+- 后置的 Coach 长期记忆采用“不可变逐决策事实与条件结论 → 版本化规则/情境 taxonomy → 确定性聚合 → 日/周/月趋势与有时效画像 → 有界只读 Context”链路。频繁出现、规则严重度与范围敏感性应分别呈现，不按累计 EV 损失生成“最贵漏洞”。错误率只使用可评价机会并展示 coverage；没有可靠范围时保留信息不足。该能力不使用 RAG，LLM 不直接读写画像，且不属于首版 M8/A7。
 - “漏洞 → 练习 → 复测”是 M11/A11 独立后置模块：它才拥有课程/Spot 目录、训练 Session、评分、复测和改善退出。M8 的自然语言练习建议和 M10 的漏洞呈现都不能冒充已经建立训练闭环。
 - 当前身份仍为固定 `local-user` OwnerScope，服务为只监听回环地址的单个 Hono 进程；configured runtime 的 `bootstrap.ts` 已安装 live Player Worker 与 Dispatcher，缺少 DeepSeek Key 时仅在无 active Session 的 diagnostic-only 分支启动。Supabase Postgres 是唯一运行数据库和 Agent 队列事实源，不存在 SQLite 产品数据库或本地数据库持久卷。未来上线目标是常驻 Hono 服务连接容器外的 Supabase PostgreSQL；公网监听、Host/Origin、TLS 与真实身份必须先独立设计。之后可以替换队列唤醒和独立 Worker，但不得让浏览器或 Agent 绕过 Hono 直连数据库，也不预建 RAG、动态插件、Agent Cron 或 Agent 间协作。
 
@@ -91,6 +91,7 @@ M2.7–M4.5 已实现严格审计、通用 Context/Gateway、权威 Player 观�
 ```text
 apps/server/src/
 ├── poker-strategy/
+├── poker-range/
 └── agents/
     ├── foundation/
     ├── player/
@@ -214,13 +215,13 @@ AI 当前技术摘要按协调状态使用独立于调试详情页的轮询策�
 
 ## M8.1 Coach 认证与模型发送边界
 
-依赖为 `Coach → Contracts / Foundation`。`createCoachReviewBoundary` 先解析不含 auditTruth 的可信 `CoachDecisionSource`，再逐字段核对单个决策，再将独立深冻结的认证输入交给派生事实和分类端口；计算端口拿不到完整案例或事后读取回调。派生输出复验来源截止点、版本、基准场景、统计过滤器和候选金额；对手人物快照由可信决策输入绑定，合成事后事实不占用私有引用键。分类结果只能由该链认证，调用者不能提交任意 assessment 给冻结器补签。
+依赖为 `Coach → Contracts / Foundation`。`createCoachReviewBoundary` 先解析不含 auditTruth 的可信 `CoachDecisionSource`，再逐字段核对单个决策，再将独立深冻结的认证输入交给派生事实和分类端口；计算端口拿不到完整案例或事后读取回调。派生输出复验来源截止点、版本、范围来源、统计过滤器和实际动作/合法跟注比较动作的金额；对手人物快照由可信决策输入绑定，合成事后事实不占用私有引用键。分类结果只能由该链认证，调用者不能提交任意 assessment 给冻结器补签。
 
 每个决策的过程解释独立校验和冻结。所有决策冻结后，`beginHindsight` 先关闭第一阶段发送，再由 Projector 调用专属同步 `readHindsightSource` 从受信内存取得完整 HandReviewCase；完整 Schema 与过程来源身份/版本/完成事件/决策清单逐字段对照均在 Projector 内部进行，完整案例不再是首道 Guard 前提。实际事实子集及逐池/牌型引用通过复验后才返回最小投影。准入失败保持失败、不恢复 Decision 发送；零决策也须显式进入事后准入，Composer 要求 `assertHindsightReady`，不能跳过完整来源校验。认证以模块私有 WeakSet/WeakMap 保存，JSON 克隆不会保留认证。
 
 `prepareCoachGeneration → generateCoachExplanation → Foundation Gateway → 本次 generation 的 Coach Adapter → Provider` 绑定固定 Prompt、单决策 Context、阶段 Schema/Validator、Run 与最终消息。公开 Runtime 引用仍为 `coach.output.review`，私有解释 Schema 使用独立阶段引用；整张范围图不进入模型输入。纠错由 Foundation 原有流程生成，但 Provider 原始 textProjection 先收敛为固定占位，错误只允许已知稳定 code 和根路径，不把未知字段名或拒绝值发回模型。
 
-报告 Composer 只复制已认证的确定性字段和阶段解释，把私有候选解释、牌型/逐池比较引用投影到公开事实。教学政策由 M8.5 的确定性端口提供并冻结；最终 Validator 对照完整决策清单和合成结果。M8.1 的算法端口仅在本地夹具中装配，没有真实 Coach Worker、HTTP、持久化或外部模型调用。2026-09-17 实施的 M8.2 来源接入先一次加载并校验完整历史手牌、释放连接，再进行分析；现有同步事后回调只控制内存案例准入，不要求数据库延后读取，生产加载入口已提供，服务接线归 M8.6。旧 Foundation Coach UUID helper 与新报告规范字符串不是隐式转换关系；Agent Run 的 UUID 关联由 M8.6 显式设计。
+报告 Composer 只复制已认证的确定性字段和阶段解释，把私有动作解释、牌型/逐池比较引用投影到公开事实。教学政策由 M8.5 的确定性端口提供并冻结；最终 Validator 对照完整决策清单和合成结果。M8.2/M8.3 已提供真实确定性算法与认证 adapter，尚未安装真实 Coach Worker、HTTP、持久化或外部模型调用。2026-09-17 实施的 M8.2 来源接入先一次加载并校验完整历史手牌、释放连接，再进行分析；现有同步事后回调只控制内存案例准入，不要求数据库延后读取，生产加载入口已提供，服务接线归 M8.6。旧 Foundation Coach UUID helper 与新报告规范字符串不是隐式转换关系；Agent Run 的 UUID 关联由 M8.6 显式设计。
 
 ### M8.2 历史复盘读取与纯分析
 
@@ -229,3 +230,16 @@ Coach 的读取组合从持久 Run 的 authority/Owner/绑定/租约/预算和�
 受信 `review-source-adapter` 私有持有完整事实；`review-case-builder` 每次仅取得一个行动前安全前缀，复用 poker 下注内核重建 bettingRound、带金额证明的行动历史与街初状态。来源经 M8.1 Guard 实例认证后，metrics/action outcomes 调用中性 poker 内核；私有结构留在冻结评价，模型与报告由白名单投影产生。全部过程冻结后，原同步 Projector 从同一内存来源准入完整案例，不再次访问 SQL。
 
 poker 的输入/结果 Schema 与单动作结果端口保持中性，Coach 不导入 Player Context/Guard/人物政策。专用读取资源取消时等待事务收敛，无法收敛则锁定客户端并通知 Coach 服务所有者销毁；本进程不重建。M8.6 仍负责服务启动/销毁、Worker 领取与续租、删除取消及提交前 fencing 复验。
+
+
+## M8.3 对手范围、联合权益与逐池 EV
+
+边界以 [M8.3 当前设计](./superpowers/specs/2026-09-17-m8-3-versioned-strategy-repository-coach-projection-design.md)为准。Player 保留原 StrategyPack records、固定候选投影与专属审计引用；Coach 范围包独立描述未知对手底牌假设，不消费 Player 策略节点。两者均为只读静态数据，来源/版本失效不能通过另一种包回退。
+
+纯计算链为 `行动前 DecisionAnalysisInput + Repository 认证 OpponentRangePack → 场景匹配 → 169 类组合展开/blocker → 已发生行动更新 → 联合情景 → joint-equity → conditional-ev`。每个情景对全部必要对手使用同一牌堆；合法联合底牌按各范围权重乘积条件化，未来公共牌等概率。有限状态精确枚举，较大状态使用身份/情景/政策派生种子的 Monte Carlo；固定政策限制样本、提案和批次，批次让出事件循环并检查取消。
+
+真实 `settlement` 和模拟共用 `showdown-awards`。该原语只比较每个贡献层的 eligible seats，并返回赢家、平分和按钮之后顺时针奇数筹码；真实结算仍独占状态修改与筹码守恒。动作后投影提供当前贡献层、资格和全座位必然返还，只有终局确定后才代表最终池。条件性跟注 EV 使用逐池预期拿回减 Hero 本次新增风险；总回报误差按同次样本统计，保留池之间相关性，不把范围敏感性与抽样误差混为一项。
+
+`packages/contracts/src/coach-range.ts` 拥有严格的对手范围、169 图、联合权益、条件性 EV 与敏感性公开协议；完整组合和引擎对象保留服务端。`apps/server/src/agents/coach/range-analysis.ts` 的异步入口组合认证决策、固化 pack、动作后投影和计算；同步入口只接受真实空覆盖范围包。私有 WeakMap 将结果绑定至本次 input/metrics/outcomes/pack，冻结边界在派生事实准入时调用认证检查。`apps/server/src/agents/coach/range-fact-projector.ts` 显式生成公开数值和算法来源；Guard 复验固定事实 ID、来源与重投影结果，调用者或 LLM 不能提交任意数字补签。当前协议原位替换旧 action baseline，不保留 V1/V2 兼容链。Coach 固化九项版本引用：rangeModel/conclusion 替换旧 strategy/grade，equityComputation/settlement 分别标识联合计算与逐池结算政策，其余既有版本职责保留。
+
+生产范围内容仍需独立来源与授权评审；空覆盖稳定 unavailable。M8.4 历史统计选择、M8.5 教学政策、M8.6 Run 依赖固化/Worker/HTTP/提交门禁仍是后续接线，当前纯引擎与离线验证不代表完整 Coach Runtime 已上线。

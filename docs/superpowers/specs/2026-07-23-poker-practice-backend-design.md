@@ -1,5 +1,8 @@
 # 德州扑克 AI 练习工具：后端、牌局引擎与数据设计
 
+> Coach 实施状态（2026-09-18）：M8.3 A–F 已落地范围假设、多人联合权益、条件性跟注 EV 与认证协议；G 生产范围内容/来源/授权仍待人工审查，生产包为空。M8.4 统计、M8.5 编排、M8.6 持久化/API 与后续视图仍按计划实施。最新验证范围见[方向切换实施计划](../plans/2026-09-18-coach-range-transition-implementation.md)。
+
+
 - 状态：已确认，Agent Foundation、Player/Coach Runtime、移动端视觉重构、预设人物与 Supabase Postgres 迁移方案已纳入
 - 日期：2026-07-23
 - 最后更新：2026-09-07
@@ -47,7 +50,8 @@ Supabase 托管 PostgreSQL 是系统级唯一事实源，但 `app_private` 内�
 | 数据类别 | 权威存储 | 典型字段 | 使用规则 |
 | --- | --- | --- | --- |
 | 当前预设人物目录 | 服务端版本控制源码 | 公开人物摘要与服务端私有 Player Runtime 配置 | 列表接口只投影最小公开摘要；创建场次时在服务端复制私有配置，创建后以 `session_agents` 快照为准 |
-| Agent 策略参考数据 | 服务端版本控制数据集 | `datasetId`、`datasetVersion`、覆盖清单、来源、场景键和动作分布 | Player 与 Coach 共享事实源但使用不同投影；人工模板不得标记为 GTO，也不作为牌局引擎输入 |
+| Player 行动策略数据 | 服务端版本控制数据集 | `datasetId`、`datasetVersion`、覆盖清单、来源、场景键和动作分布 | 只服务 Player 候选与人物策略，不作为牌局引擎或 Coach 范围输入 |
+| Coach 对手范围数据 | 服务端版本控制数据集 | `datasetId`、`datasetVersion`、来源/授权、适用条件、169 类初始权重、行动更新规则和限制 | 只保存范围假设，不预存所有权益/EV；与 Player 策略使用独立 Schema 和 Repository |
 | 当前私有桌状态 | `session_snapshots.privateTableState` | `stateVersion`、纯 `PokerTableState`、已完成手数、累计买入、最近完成手摘要 | 是当前业务状态恢复的唯一输入；只有其中的 `poker` 进入纯引擎 |
 | 会话协调状态 | `sessions` | 生命周期状态、`stateVersion` 镜像、下一 `eventSeq`、`agentRunState`、有效 `decisionRequestId`、起止时间 | 只由会话服务用于并发、事件分配和 Agent 生命周期；版本镜像须与快照一致 |
 | 当前手行动历史 | `session_events` | `actionCommitted`、返还与完成事件及其 `eventSeq` | 是已提交行动顺序的唯一事实源；快照不复制行动数组 |
@@ -192,16 +196,16 @@ Player Runtime 负责扑克业务：
 
 - 只接受正常完成（`completed`）内部手牌的用户手动请求，明确拒绝 `aborted` 手牌，并以独立请求标识保证幂等。
 - 构建每个用户决策发生时的可见信息集，以及与过程评价隔离的最小事后事实。
-- 固定执行数学指标、策略基准和对手证据查询，不让模型决定是否跳过。
+- 固定执行数学指标、对手范围匹配/更新、多人联合权益、适用时的条件性 EV 和对手证据查询，不让模型决定是否跳过。
 - 先运行看不到事后事实的决策分析，再冻结结果并运行只能补充事后解释的第二阶段。
 - 校验并持久化严格结构化的 `CoachReview`、决策 assessment、证据快照和通用脱敏调用尝试。
-- 在 Analyzer 前使用确定性 `DecisionAssessmentClassifier` 生成并冻结标签、严重度、基准对比和 EV 状态。
+- 在 Analyzer 前使用确定性 `DecisionAssessmentClassifier` 冻结范围条件结论、证据基础、严重度和 EV 可用状态。
 
 Coach 复盘模块不得：
 
 - 调用牌局引擎推进状态，或使用玩家 Agent 的命令提交端口。
 - 修改 `session_snapshots`、`sessions`、`session_events`、命令账本或 `session_agents` 记忆。
-- 把未覆盖策略伪装成精确 GTO，或把非 100BB 参考标记为精确匹配。
+- 把未覆盖范围伪装成已匹配，把匹配模型描述成真实底牌或 GTO，或让 LLM 补范围、权益和 EV 数字。
 - 自动生成长期打法标签、情绪判断或用户画像。
 
 工具、上下文、两阶段隔离和报告契约以 [Coach Agent 专项设计](./2026-07-26-poker-coach-agent-design.md) 为准。
@@ -756,8 +760,8 @@ WHERE lifecycle_status = 'active';
 
 - 唯一 `coachReviewId`、幂等 `requestId`、`handId` 和 `sessionId`。
 - `pending | running | completed | failed` 生命周期。
-- `reviewContextVersion`、实际使用的策略数据集标识与版本。
-- 每个决策的确定性指标、基准匹配结果、对手证据及其 `asOfEventSeq` 截止点。
+- `reviewContextVersion`、实际使用的范围包标识与版本、范围投影/权益计算/结算投影和条件结论政策版本。
+- 每个决策的确定性指标、范围匹配、更新轨迹、联合权益、抽样误差、范围敏感性、对手证据及其 `asOfEventSeq` 截止点。
 - 冻结 ProcessAnalysis、Hindsight 和最终报告。
 - 通过共享对外 Schema 校验的结构化 `CoachReview`，或稳定失败分类。
 - 创建、开始和结束时间。
@@ -765,8 +769,8 @@ WHERE lifecycle_status = 'active';
 `coach_decision_assessments` 每个用户决策一条，保存确定性分类器生成并冻结的：
 
 - `assessment`、`decisionTags`、`severity`。
-- `baselineComparison`。
-- EV 状态、可空 BB 值、方法、来源版本和假设。
+- 四类范围条件结论、范围假设、逐池联合权益、抽样误差和范围敏感性。
+- 条件性跟注 EV 状态、可空金额、比较对象、适用门禁、方法、来源版本和假设；只有跟注后最终投入与摊牌路径确定时可用，不保存全手 EV 损失。
 - `classifierVersion` 与证据引用。
 
 业务唯一约束为 `(coachReviewId, decisionId)`。`decisionId` 由 `handId + street + authoritativeSequence` 稳定组成；每次重新复盘生成新 `coachReviewId`，历史记录永不覆盖。

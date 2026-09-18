@@ -1,15 +1,15 @@
 # M8.2 复盘案例构建与确定性指标设计
 
 - 日期：2026-09-16
-- 状态：A–D 已实施（2026-09-17）；实现与验收记录见 §14。M8.3–M8.6 下游能力仍按原边界交接。
-- 任务来源：[M8.2](../plans/2026-07-23-poker-practice-development-tasks.md#m82-实现复盘案例构建与确定性指标)、[A7.1 / A7.3](../plans/2026-07-26-agent-module-development-tasks.md#a71-构建复盘案例)。A7.3 的策略和统计分别归 M8.3、M8.4，本任务只交付案例、指标及候选结果。
+- 状态：A–D 已实施（2026-09-17）；实现与验收记录见 §14。案例重建、认证事实、确定性指标和单动作结果继续有效；旧 Coach baseline 候选接点已被 §14.3 的范围/权益方向取代，2026-09-18 已完成 M8.3 A–F 对这些接点的 current-only 迁移；最新验证见方向切换实施计划，历史测试仍只说明当时结果。
+- 任务来源：[M8.2](../plans/2026-07-23-poker-practice-development-tasks.md#m82-实现复盘案例构建与确定性指标)、[A7.1 / A7.3](../plans/2026-07-26-agent-module-development-tasks.md#a71-构建复盘案例)。A7.3 的范围分析和统计证据分别归 M8.3、M8.4，本任务只交付案例、指标及动作后状态。
 - 上位设计：[Coach Agent 专项设计](./2026-07-26-poker-coach-agent-design.md)拥有产品范围与确定性计算契约；[M8.1 协议与信息边界](./2026-09-15-m8-1-coach-contracts-information-boundaries-design.md)拥有共享报告、私有边界、认证与冻结契约。
 - 需求依据：[PRD §7.5、§9、§12](./2026-07-23-poker-practice-prd.md)、[M4.5 共享纯分析设计](./2026-08-23-m4-5-player-deterministic-decision-preprocessing-design.md)、[M5.1 完成手历史](./2026-09-03-m5-1-completed-hand-street-history-projection-design.md)。
-- 下游：M8.3/M8.4 消费认证决策和规范 spot；M8.5 消费完整私有指标、候选结果并执行分类；M8.6 拥有 Run、持久化、恢复、Commit Gate 和 API。
+- 下游：M8.3/M8.4 消费认证决策和规范 spot；M8.5 消费完整私有指标、实际动作和显式合法 call/跟注全下比较结果并执行分类；M8.6 拥有 Run、持久化、恢复、Commit Gate 和 API。
 
 ## 1. 结论与验收目标
 
-历史复盘以一个 `handId` 对应的正常完成手为单位，不是读取整个 Session 的所有手牌。先一次性加载该手的完整权威复盘事实、完成存储校验并释放数据库连接，再从本次私有内存快照通过共享下注内核按顺序重建行动前状态，为每个用户实际行动产生一个稳定决策。先经过 M8.1 认证边界，再调用与 Player 相同的扑克纯分析器。实际动作和策略候选的结果只由该行动前状态计算，不能查询实际后续来决定假设结果。
+历史复盘以一个 `handId` 对应的正常完成手为单位，不是读取整个 Session 的所有手牌。先一次性加载该手的完整权威复盘事实、完成存储校验并释放数据库连接，再从本次私有内存快照通过共享下注内核按顺序重建行动前状态，为每个用户实际行动产生一个稳定决策。先经过 M8.1 认证边界，再调用与 Player 相同的扑克纯分析器。实际动作和显式合法 call/跟注全下比较动作只由该行动前状态计算，不能查询实际后续来决定假设结果。
 
 完成后应证明：
 
@@ -20,11 +20,11 @@
 5. 指标保留完整私有结构、版本、来源、假设和三态；无范围/响应模型时不提供权益、clean outs 或 EV。
 6. 整条链只读；不创建 Coach Run，不发送模型请求，不修改牌局或调用扑克命令执行器。
 
-实现范围包含生产可用的只读来源 Repository、纯 Builder、认证输入补全、指标适配、任意合法动作结果投影及聚焦验证。策略数据、对手统计查询、分类阈值、教学排序、模型编排、报告 writer、HTTP、Worker 与 UI 由后续任务交付。确定性源码共享不等于共享 Player 的 Context、Guard、人物政策或候选选择权。
+实现范围包含生产可用的只读来源 Repository、纯 Builder、认证输入补全、指标适配、任意合法动作结果投影及聚焦验证。对手范围与多人权益已由 M8.3 A–F 接入；对手统计查询、分类阈值、教学排序、模型编排、报告 writer、HTTP、Worker 与 UI 仍由 M8.4+ 交付。确定性源码共享不等于共享 Player 的 Context、Guard、人物政策或候选选择权。
 
 ## 2. 现状证据与设计选择
 
-设计基于 `63be283` 及当前工作区内已完成的 M8.1 源码；这些文件和地图、任务清单存在未提交修改，实施时必须保留。已核对 [REPO_MAP](../../REPO_MAP.md)、[ARCHITECTURE](../../ARCHITECTURE.md) 与以下真实消费者。地图已经标明 M8.1 为离线协议、M8.2 为后续来源接入，本轮不把拟议结构写成已实现架构。
+历史设计起点（2026-09-16）基于 `63be283` 及当时工作区内已完成的 M8.1 源码；这些文件和地图、任务清单存在未提交修改，实施时必须保留。已核对 [REPO_MAP](../../REPO_MAP.md)、[ARCHITECTURE](../../ARCHITECTURE.md) 与以下真实消费者。当时地图标明 M8.1 为离线协议、M8.2 为后续来源接入；下表保留设计起点证据，当前实施状态见页首与 §14。
 
 | 仓库证据 | 影响与决定 |
 | --- | --- |
@@ -59,7 +59,7 @@ ResolvedOwnerScope + 已领取的 Coach RuntimeCommitAuthority
   → 受信来源适配器从快照投影各决策安全前缀
   → HandReviewCaseBuilder → CoachDecisionSource（无 auditTruth）
   → DecisionContextBoundaryGuard → CertifiedCoachDecisionInput
-  → Metrics / 基准 / 截止证据 / Action Outcomes
+  → Metrics / 范围分析 / 截止证据 / Action Outcomes
   → 分类 / 单决策解释 → 全部 ProcessAnalysis 冻结
   → beginHindsight：关闭 Decision 发送
       → Projector 调用同步 readHindsightSource（只访问已加载内存）
@@ -70,7 +70,7 @@ ResolvedOwnerScope + 已领取的 Coach RuntimeCommitAuthority
 
 目标手牌只加载一次，所有逐决策过程输入和事后投影都来自这一份不可变内存快照。分析期间不再查询目标手牌的 checkpoint/result/events/roster，不维持数据库事务、连接或导出的快照。Run 续租、执行权检查、M8.4 截止证据查询和 M8.6 持久化是各自独立的短操作，不属于再次加载目标手，也不能把整段模型等待包进事务。
 
-取消原分阶段数据库读取和 withSourceSnapshot/consume 方案。Repository 允许在过程冻结前读取完整持久载荷；受信来源适配器可以持有完整的已校验复盘事实，但只向 Builder 输出逐决策安全前缀，只向 Projector 提供受限的内存来源函数。完整事实、原始对象及能访问它们的闭包均不能交给 Metrics、Strategy、Opponent Evidence、Classifier 或模型。`readHindsightSource` 名称沿用 M8.1，表示事后案例的内存访问/构造，不表示 SQL 或第二次数据库读取。
+取消原分阶段数据库读取和 withSourceSnapshot/consume 方案。Repository 允许在过程冻结前读取完整持久载荷；受信来源适配器可以持有完整的已校验复盘事实，但只向 Builder 输出逐决策安全前缀，只向 Projector 提供受限的内存来源函数。完整事实、原始对象及能访问它们的闭包均不能交给 Metrics、Range Analysis、Opponent Evidence、Classifier 或模型。`readHindsightSource` 名称沿用 M8.1，表示事后案例的内存访问/构造，不表示 SQL 或第二次数据库读取。
 
 生产 Builder 入口先要求 §4.2 的持久 Run 认证结果。M8.2 交付只读认证及来源能力，不负责创建/领取 Run；M8.6 接入既有 Coordinator/Worker 时必须先创建并领取持久 Run，再调用该入口。离线夹具只装配测试端口，不能成为生产绕过 Run 认证的分支。
 
@@ -151,25 +151,27 @@ Builder 的生产执行绑定必须来自持久化 Run 的只读认证，不能�
 
 切片 A 为现有 [AgentRun lifecycle Repository](../../../apps/server/src/persistence/agent-run-lifecycle-repository.ts) 增加所需窄只读认证能力，复用 current RunConfiguration/ExecutionBudget Codec 与行镜像；现有 inspectSettlement 只返回状态，不足以供应固化配置，不能把它当成已完成实现。Foundation 端口承载中性 Run 认证结果，Coach 适配器负责政策映射，sessions/poker 不依赖 AgentRun。
 
-认证在 Builder、任何 Metrics/Strategy/Evidence/Classifier 或模型执行之前完成，必须满足：
+认证在 Builder、任何 Metrics/Range Analysis/Evidence/Classifier 或模型执行之前完成，必须满足：
 
 - Owner 与已解析 ResolvedOwnerScope 一致；runtimeType=coach；Run 的 Session/Hand 精确匹配本次 completed 来源，不接受 Player Run 或另一个 Hand 的 Run。
 - lifecycle 为 leased/running，leaseOwner/fencingToken 与当前认证 authority 一致；租约和 deadline 按数据库时钟未到期。不存在、queued、终态、旧 token、取消或过期立即拒绝，下游执行次数为零。
-- 持久 runConfiguration 的 runtime、runtimeDefinitionVersion 与行一致，预算通过 current Codec；只解析固化版本，不 resolveCurrent 回填。CoachVersions 的 metrics/strategy/opponentEvidence/classifier/grade/severity/teaching 从该 Run 的 dataDependencies 按下表固定 ID 逐项解析，context/prompt/capability/validator 等使用对应固化配置。缺失、重复或不可解析版本拒绝，不接受调用方补值。新 Run 的完整政策依赖由 M8.6 调用 Coordinator 时写入，既有不完整快照不能冒充可执行复盘。
+- 持久 runConfiguration 的 runtime、runtimeDefinitionVersion 与行一致，预算通过 current Codec；只解析固化版本，不 resolveCurrent 回填。CoachVersions 的 metrics/rangeModel/equityComputation/settlement/opponentEvidence/classifier/conclusion/severity/teaching 从该 Run 的 dataDependencies 按下表固定 ID 逐项解析，context/prompt/capability/validator 等使用对应固化配置。缺失、重复或不可解析版本拒绝，不接受调用方补值。新 Run 的完整政策依赖由 M8.6 调用 Coordinator 时写入，既有不完整快照不能冒充可执行复盘。
 
-**七类版本引用的固定映射**：切片 A 在 Coach 模块内定义一份只读常量映射，生产 Run 创建适配器和只读认证适配器共同使用；无需动态注册服务、配置页面或数据库表。本表定义待实现的生产 ID，不表示当前离线夹具已使用这些 ID。
+**九类版本引用的固定映射**：切片 A 在 Coach 模块内定义一份只读常量映射，生产 Run 创建适配器和只读认证适配器共同使用；无需动态注册服务、配置页面或数据库表。映射已由 `policy-versions.ts` 实现；未来生产 Run 创建仍须使用实际装配生产者，不以版本占位冒充 M8.4/M8.5 已完成。
 
 | CoachVersions 字段 | dataDependencies 精确 ID | 对应生产者 |
 | --- | --- | --- |
 | `metrics` | `coach.review.metrics` | M8.2 指标组合算法，首版版本 1 |
-| `strategy` | `coach.review.strategy` | M8.3 策略基准投影 |
+| `rangeModel` | `coach.review.range-model` | M8.3 对手范围匹配与更新，已替换历史 strategy 角色 |
+| `equityComputation` | `coach.review.equity-computation` | M8.3 联合权益计算政策 |
+| `settlement` | `coach.review.settlement-projection` | M8.3 共享逐池结算投影 |
 | `opponentEvidence` | `coach.review.opponent-evidence` | M8.4 截止证据生产者 |
 | `classifier` | `coach.review.classifier` | M8.5 确定性分类器 |
-| `grade` | `coach.review.grade-policy` | M8.5 决策等级政策 |
+| `conclusion` | `coach.review.conditional-conclusion-policy` | M8.5 条件结论政策 |
 | `severity` | `coach.review.severity-policy` | M8.5 严重度政策 |
 | `teaching` | `coach.review.teaching-policy` | M8.5 教学投影政策 |
 
-创建 Run 时，M8.6 从实际装配且可用的七个生产者取版本，按此映射写入各一条 `{ id, version }`；尚未实现或未装配的生产者不能填版本 1 占位。读取时按精确 ID 查找并原样形成对应版本引用，不依赖数组顺序、显示名称或前缀猜测。七项必须各出现一次，且实际执行的生产者必须支持该固化版本；禁止改成当前版本后继续同一 Run。策略数据包等其他已声明依赖仍单独固化，由各自生产者核对，不能冒充这七个角色的引用。M8.2 的离线组合测试可使用明确测试生产者与此映射验证往返，不据此宣称 M8.3–M8.5 已完成；M8.6 接入时不得复制另一份映射。
+创建 Run 时，M8.6 从实际装配且可用的九个生产者取版本，按此映射写入各一条 `{ id, version }`；尚未实现或未装配的生产者不能填版本 1 占位。读取时按精确 ID 查找并原样形成对应版本引用，不依赖数组顺序、显示名称或前缀猜测。九项必须各出现一次，且实际执行的生产者必须支持该固化版本；禁止改成当前版本后继续同一 Run。范围数据包作为另一条数据依赖单独固化，不能冒充九类算法/政策角色。M8.2 的离线组合测试可使用明确测试生产者与此映射验证往返，不据此宣称 M8.3–M8.5 已完成；M8.6 接入时不得复制另一份映射。
 
 认证结果沿现有模块私有实例认证方式交给生产 Builder，包含最小执行绑定和预算，不把数据库行或配置正文交给模型。新增该认证的原因是普通 UUID/Schema 仅证明字段合法，不能排除本次已确认的“不存在 Run 仍开始计算”路径；不新增持久 token、hash 或第二套租约。离线测试可在测试目录装配固定认证端口，但生产组合只使用 Repository 适配器，无跳过开关。
 
@@ -185,7 +187,7 @@ Builder 的生产执行绑定必须来自持久化 Run 的只读认证，不能�
 
 `opponentEvidenceSubjects` 仍是可信 Builder 在行动截止点认证的对手统计绑定列表。生产 Reader 来源完整且截止点可认证的仍竞争非 Hero agent（active 或 allIn）正常生成对应 subject；不因没有历史样本而删除该 subject。后续 Guard 不以“subjects 必须覆盖全部对手”替代来源检查，也不要求列表非空。M8.1 的合法 `[]` 继续表示不能认证任何对手统计，不能限缩为没有仍竞争对手；但该协议值不证明底层数据库完整，更不豁免 Reader 对缺失 AI 快照的拒绝。字段的合法性与某个损坏持久来源能否生产该字段是两件事。
 
-统计生产者只能使用可信输入中已有的 subjects，不能从当前人物目录、另一份快照或传入统计记录补填。合法空列表继续通过决策 Guard、指标和策略边界，M8.4 不查询或接纳任何对手统计，剥削结论保持证据不足；非空 subjects 的样本门槛与机会口径仍由 M8.4 判断。空 subjects 的边界测试使用可信入口明确签发的合法空列表，不通过删除必需 session_agents 行制造该输入，也不为当前 Reader 发明降级分支。
+统计生产者只能使用可信输入中已有的 subjects，不能从当前人物目录、另一份快照或传入统计记录补填。合法空列表继续通过决策 Guard、指标和范围边界，M8.4 不查询或接纳任何对手统计，剥削结论保持证据不足；非空 subjects 的样本门槛与机会口径仍由 M8.4 判断。空 subjects 的边界测试使用可信入口明确签发的合法空列表，不通过删除必需 session_agents 行制造该输入，也不为当前 Reader 发明降级分支。
 
 验收分别覆盖两个层次：
 
@@ -273,9 +275,9 @@ M8.1 同步门禁已支持上述内存接入，既有阶段隔离和完整案例
 
 指标/来源类型属于 Coach 与中性 poker 边界。可以复用/提取现有纯 Schema，但不导入 `agents/player` 的 binding 或源引用协议，不将 Player Schema 放宽为未知 JSON。
 
-`CoachDerivedFactsSchema` 增加服务端 `metrics` 与完整 `actionOutcomes` 槽位，使 M8.5 分类及 `FrozenDecisionAssessment` 实际保留这些数据。metrics 在纯计算完成后可独立返回；actionOutcomes 在实际动作/基准候选阶段生成。M8.2 不伪造生产 baseline/opponentEvidence/classifier 来凑整条 Runtime，只在组合测试注入明确 fixture；M8.3–M8.5 补齐真实生产者。
+`CoachDerivedFactsSchema` 增加服务端 `metrics` 与完整 `actionOutcomes` 槽位，使 M8.5 分类及 `FrozenDecisionAssessment` 实际保留这些数据。metrics 在纯计算完成后可独立返回；actionOutcomes 在实际动作/合法跟注投影阶段生成。M8.2 不伪造生产 rangeAnalysis/opponentEvidence/classifier 来凑整条 Runtime，只在组合测试注入明确 fixture；范围分析生产者已由 M8.3 A–F 接入；统计和分类生产者仍由 M8.4/M8.5 补齐。
 
-`CoachDecisionContextSchema` 及模型组装继续显式取已有最小事实与候选摘要，不能 spread 完整 derived。私有字段不进入公开 `CoachReview`。完整私有结果用于分类和验证，公开事实由独立 projector 转为 M8.1 白名单，公开候选解释不携带执行结果。M8.5 若需增加模型的安全原子事实表达，应在它自己的阶段协议内设计，不能直接序列化整个 core。
+`CoachDecisionContextSchema` 及模型组装继续显式取已有最小事实、范围分析摘要（不含完整范围图）及对手证据，不能 spread 完整 derived。私有字段不进入公开 `CoachReview`。完整私有结果用于分类和验证，公开事实由独立 projector 转为 M8.1 白名单，公开 alternatives 仅含解释及认证事实引用，不携带私有动作执行结果。M8.5 若需增加模型的安全原子事实表达，应在它自己的阶段协议内设计，不能直接序列化整个 core。
 
 ## 7. 指标语义与来源
 
@@ -283,39 +285,39 @@ M8.1 同步门禁已支持上述内存接入，既有阶段隔离和完整案例
 
 `computeCoachDecisionMetrics` 只接受认证安全输入，调用 `buildDecisionAnalysisCore`，不接收完整案例或 Repository。当前 `metrics` 引用固定为代码注册的 Coach 组合算法引用（首版 1），子算法版本取真实结果，不由调用方任意填写。版本不匹配即拒绝；未来检查点匹配还须比较全部子版本，M8.6 实现其持久 Codec。
 
-筹码均为安全整数，求和溢出拒绝；比例复用 `createExactRatio` 的约分分子/分母及整数基点取整。公开展示比值从同一精确结果投影，不另算近似算法。下注尺度为 `targetStreetCommitmentToPotBefore`，新增投入比例保留另一个私有字段，不能混为同一尺度；动作频率来自 M8.3，指标不产生频率。
+筹码均为安全整数，求和溢出拒绝；比例复用 `createExactRatio` 的约分分子/分母及整数基点取整。公开展示比值从同一精确结果投影，不另算近似算法。下注尺度为 `targetStreetCommitmentToPotBefore`，新增投入比例保留另一个私有字段，不能混为同一尺度；范围权重由 M8.3 独立产生，指标既不产生范围权重，也不产生 Player 行动频率。
 
 当前 pot odds 为实际可支付跟注新增投入 / 跟注后 Hero 可争夺底池，继承 `ignoresFutureAction` 假设；无须跟注为 `notApplicable/noCallRequired`。Hero 无资格赢得的边池不进分母。短码 allIn 作为跟注时用实际新增投入，不用名义差额。
 
-翻前当前 SPR 与街初 SPR 都为 `notApplicable`，公开不显示 SPR 数字。翻后按每个仍竞争对手的有效筹码 / Hero 可争夺底池计算，并保留共享核心已有的最大对手有效 SPR 汇总。街初使用街初筹码与资格计算；不能用首次轮到 Hero 时的状态代替街初。没有真实后续下注机会的假设候选用 `notApplicable/forcedRunout` 等已有原因，不输出貌似还可行动的下一街 SPR。
+翻前当前 SPR 与街初 SPR 都为 `notApplicable`，公开不显示 SPR 数字。翻后按每个仍竞争对手的有效筹码 / Hero 可争夺底池计算，并保留共享核心已有的最大对手有效 SPR 汇总。街初使用街初筹码与资格计算；不能用首次轮到 Hero 时的状态代替街初。没有真实后续下注机会的动作后投影用 `notApplicable/forcedRunout` 等已有原因，不输出貌似还可行动的下一街 SPR。
 
 ### 7.2 事实状态与证据等级
 
 - 规则/牌结构事实保留 `ruleFact`，公式计算保留 `formulaFact`；确定性不能把 heuristic 升级成数学事实。
 - clean outs、范围条件权益/EV、domination、fold equity、对手响应概率、隐含/反向隐含赔率单值和多街收益继承 unavailable 与原因，不用实际对手牌补算。
 - 结构性 outs、cardRemovalFacts、counterfeitRiskFacts、绝对 nuts 和 redraw 仅表示当前已知牌相对未知牌全集的结构事实；river 不枚举未来 outs。
-- 合法局面的策略无覆盖不等于局面无法规范化。前者由 M8.3 返回 unsupported，后者是来源/规范化失败，在模型前终止。
+- 合法局面的范围模型无覆盖不等于局面无法规范化。前者由 M8.3 返回 unavailable，后者是来源/规范化失败，在模型前终止。
 - 存在真实输入损坏时不以 unavailable 掩盖；三态用于指标适用性和知识边界。
 
 每条来源由中性 `CoreFactSourceRef` 显式映射到 Coach：输入字段绑定本决策身份和 cutoff；历史行动保留自己的 `eventSeq`；规则与算法保留各自版本。未知 path/kind 拒绝，不能退化为无来源文本。私有 manifest 保留字段路径与精确不可用原因；公开 projector 只发布允许的事件/规则/算法引用、公开值和稳定原因码。
 
 实际动作是 M8.1 允许的“被评价对象”，发生于 E，不能作为 E-1 前已经发生的历史证据。实际动作结果在私有 provenance 中单独绑定 action identity；公开 derived facts 不伪造 `eventSeq=E-1` 来引用动作 E，也不放入超 cutoff 的事件引用绕过 Guard。当前模型已单独收到 actualAction；需要解释其结果时引用安全状态、公式和私有 action outcome 的受控映射，不把结算或未来事件当作佐证。
 
-## 8. 实际动作与可比较候选
+## 8. 实际动作与合法跟注对比
 
 ### 8.1 共享核心的必要扩展
 
 M8.2 在 poker 内从当前 `projectCandidateOutcomes` 提取单动作结果计算。新入口接收 `DecisionAnalysisInput + PokerAction`，先从当前纯下注状态生成合法动作，并用既有 committed-action proof 路径验证动作类型、金额和行动权，再执行与原批量入口相同的结果逻辑。该 proof 只用于纯投影，不能赋予提交权限。
 
-结果核心与 Player 专有 `LegalCandidateId/targetKind` 解耦：共享结果描述金额、资格和拓扑，Player 包装继续附原固定目录元数据；Coach 包装附被评价实际动作或基准来源身份。原 Player 入口仍核对完整目录、顺序、身份和候选值，原有拒绝测试必须保留。不得通过放宽目录验证、把实际金额舍入到最近候选、或给真实动作伪造 `halfPot` 等来源来接入。
+结果核心与 Player 专有 `LegalCandidateId/targetKind` 解耦：共享结果描述金额、资格和拓扑，Player 包装继续附原固定目录元数据；Coach 包装附被评价实际动作或合法跟注用途引用。原 Player 入口仍核对完整目录、顺序、身份和候选值，原有拒绝测试必须保留。不得通过放宽目录验证、把实际金额舍入到最近候选、或给真实动作伪造 `halfPot` 等来源来接入。
 
-Coach 实际动作始终计算；基准候选由 M8.3 的频率/尺度映射提供，再走同一合法性检查。重复语义动作只计算一次，保留实际/基准各自引用；实际动作未被基准支持也不能遗漏。unsupported 基准时只保留实际动作结果，不生成 heuristic 推荐。基准金额落在合法区间外必须由 M8.3 明确记录映射/不可比较结果，不静默 clamp。
+`computeCoachActionOutcomes` 只接收认证决策输入，始终计算实际动作，并自动从该输入的合法动作加入 call；没有合法 call 时，仅在 allIn 合法且总可投入不超过当前下注额时加入跟注全下比较。调用方不传候选或请求动作列表。M8.3 消费这些结果，判断动作后的最终投入、逐池资格和摊牌路径是否确定。重复语义动作只计算一次并保留用途引用；不再由 M8.3 注入“最优动作”或行动频率候选，也不生成 Coach heuristic 推荐。每个投影动作仍走共享核心的合法性检查，不静默 clamp。
 
-M8.2 验证任意合法目标金额的纯端口；M8.3 拥有具体策略抽象和候选集合，M8.5 才将“metrics → 基准/证据 → outcomes → 分类”装配到固定工作流。Manifest 仍是原有三个只读 Capability，模型无自由调用权。
+M8.2 验证任意合法目标金额的共享纯端口；Coach 包装从认证决策自动选出实际动作和合法 call/跟注性质 allIn，M8.3 负责范围模型和联合权益，M8.5 装配“metrics → 范围/证据 → outcomes/计算 → 条件结论”。三个只读 Capability 保持数量，`coach.lookup-strategy-baseline` 原位替换为 `coach.analyze-opponent-ranges`，模型无自由调用权。
 
 ### 8.2 结果与摘要
 
-每个私有 action outcome 保留共享核心的金额、分层底池/资格相关结果、逐对手有效筹码、尺度、返还/真正风险、预计下一街 SPR、强制 runout、剩余街、响应者、可加注者、合法后继及范围相关不可用结果。
+每个私有 action outcome 保留共享核心的金额、分层底池/资格相关结果、逐对手有效筹码、尺度、返还/真正风险、预计下一街 SPR、强制 runout、剩余街、响应者、可加注者、合法后继及范围相关不可用结果。M8.3 current-only 扩展已把动作后的完整 `pots[] { potIndex, amount, eligibleSeatNumbers[] }` 暴露给认证消费者，供联合权益与逐池 EV 使用。
 
 必须区分：
 
@@ -325,7 +327,9 @@ M8.2 验证任意合法目标金额的纯端口；M8.3 拥有具体策略抽象�
 - `heroActionCompletes`、`bettingRoundClosesImmediately`、`canFaceFurtherAction`；完成本次行动不代表本轮关闭。
 - 实际动作的确定性立即后果与实际后续牌/对手动作；后者只属于 auditTruth。
 
-M8.1 `CoachCandidateSchema.result` 仍是轻量模型摘要：target、incrementalChips、potAfter、remainingStack 均采用返还前语义，不能直接拿 risk-adjusted 结果替换。完整结果单独保存并逐字段验证摘要镜像。`raisesCurrentBet` 来自共享 transition 的权威 currentBet；冻结边界应使用认证 `analysisInput.bettingRound.currentBet`，不另用座位最大投入猜测。candidateId 与策略 actionId 使用独立命名空间。
+冻结边界从认证 `analysisInput` 和共享 `projectActionOutcome` 核对每个动作及完整结果；`raisesCurrentBet` 使用权威 `bettingRound.currentBet`，不从座位最大投入推断。Coach 不再保留策略 actionId、baseline 引用或推荐候选摘要；用途为实际动作和合法跟注，同语义动作去重。公共报告仅投影允许的公式事实与逐池计算，不暴露私有后继状态。
+
+共享结果沿用 `showdownForced/furtherBettingPossible/responders/canRaiseSeats/amountActuallyAtRisk` 现名；新增 `pots` 与所有座位的 `guaranteedUncalledReturns`。终局投影先扣除全部已确定未跟注返还，再调用共享贡献层计算逐池金额和资格；非终局 `pots` 只描述动作后的当前层，不称最终池。条件 EV 只有在强制摊牌、无未来下注且 responders/canRaiseSeats 为空、最终贡献已确定时才能消费这些层。不得仅因 Hero 已全下就宣布终局。
 
 ## 9. 失败、只读性与后续持久化
 
@@ -337,10 +341,10 @@ M8.1 `CoachCandidateSchema.result` 仍是轻量模型摘要：target、increment
 | 缺事件、位置不一致、动作不合法、来源镜像失败 | 本地来源错误，整手失败，不输出部分报告。 |
 | 任一 AI participant 缺少同身份 session_agents 快照、必需人物字段或配置 payload | 来源损坏，Reader 拒绝整手，不返回成功来源，不调用 Builder/Guard/指标；不得省略该对手或返回空 subjects 继续。 |
 | 人物 payload 解码失败、重复绑定或绑定/镜像冲突 | 来源损坏，整手失败；不得清空 subjects 隐藏损坏。 |
-| 合法可信决策的 subjects 为空 | 继续 Guard、指标及策略处理；对手统计不可认证，剥削为证据不足，不允许生产者补填。此分支不能绕过 Reader 的快照完整性校验。 |
+| 合法可信决策的 subjects 为空 | 继续 Guard、指标及范围处理；对手统计不可认证，剥削为证据不足，不允许生产者补填。此分支不能绕过 Reader 的快照完整性校验。 |
 | subjects 非空但无历史样本或样本不足 | 保留 subjects 与决策，由 M8.4 返回证据不足，不判来源损坏。 |
 | 不可认证输入或跨 Run/Decision 指标 | 边界拒绝，不调用后续算法/分类/模型。 |
-| 策略/知识不支持 | 保留各自三态；不将该决策静默删除。 |
+| 范围/知识不支持 | 保留各自明确不可用状态；不将该决策静默删除。 |
 | 读取期间删除 | 首次 statement 得到完整旧视图或 notFound；加载后删除由 M8.6 取消 Run、清理内存并阻止迟到提交，不二次读取来源，不用旧快照重建资源。 |
 | Run 不存在、错绑定、queued/终态、旧 token、过期或政策缺失 | 在 Builder/任何过程执行之前拒绝；运行中执行权失效则终止任务，不再生成事后投影或提交。 |
 | 事件 board 自洽但不同于结果的对应前缀 | 安全 Reader 拒绝，不能进入 Builder/指标，也不能延后到完整审计。 |
@@ -358,13 +362,13 @@ Reader、Builder 和指标不写表、不更新 Session/Hand、不发 SSE，不�
 | A：严格来源与 Reader | 一次完整加载、独立受限读取客户端、持久 Run 只读认证、完整 Codec/镜像/roster 校验和私有内存快照；不改数据库 Schema/公共历史接口。 | §4–5；已有 codecs 和 Repository 模式。 | 单元拒绝路径；database m82 的真实持久 Run/completed 来源、跨 Owner/状态/损坏拒绝、首次读取删除并发和连接隔离。 |
 | B：案例与认证输入 | 逐事件重放、每个 Hero 决策、无 auditTruth 的 CoachDecisionSource、安全 analysisInput/街初状态、M8.1 Guard、同步内存事后接口与安全前缀隔离。 | A 的来源形状；M8.1。 | 引擎生成的代表手，行动前快照对照、时间/状态段、零决策与泄漏测试。 |
 | C：确定性指标与投影 | 共享 core、街初 SPR、完整版本/来源、私有 metrics 与公开投影。 | B；共享纯分析 API。 | 同输入 Player/core 一致性、边池/短盲/牌结构及三态。 |
-| D：动作结果与组合收口 | 共享单动作结果、保留 Player 目录边界、任意实际金额、冻结结果接入。 | B/C；基准候选用测试输入验收端口。 | 任意合法尺度与共享候选一致、非法拒绝、真实来源→认证→指标/outcomes 离线链及既有 Guard 回归。 |
+| D：动作结果与组合收口 | 共享单动作结果、保留 Player 目录边界、任意实际金额、冻结结果接入。 | B/C；实际动作与合法跟注用测试输入验收端口。 | 任意合法尺度与共享候选一致、非法拒绝、真实来源→认证→指标/outcomes 离线链及既有 Guard 回归。 |
 
 A 的 SQL 与 B 的纯重放可在来源契约固定后分开实现，最终按依赖合并验收；不因此安排多个远程测试进程。领域/Validator/投影按最窄失败测试推进；不写空实现填满接口。
 
 下游交接：
 
-- **M8.3**：继承认证输入、完整 spot、同版本规则与任意合法动作结果端口；解决空生产策略包、来源和尺度映射，不重建事件或位置。
+- **M8.3**：继承认证输入、完整 spot、同版本规则与任意合法动作结果端口；提供独立范围包、联合计算和动作后逐池资格，不重建事件或位置。
 - **M8.4**：继承 Session cutoff 与人物快照 identity；只查询截止前机会，整手指标要求该手完成事件也早于 cutoff，不把当前完整 result 当作统计样本。
 - **M8.5**：使用预加载的同一单手快照消费完整私有指标/actionOutcomes；全部模型调用在事务外，事后阶段不重读目标手，负责 classifier、最小模型事实、全手过程冻结后才构造完整案例并生成 Hindsight 单决策投影、真实 derive 编排和整手预算。不能从公开事实的简化副本重新估计指标。
 - **M8.6**：先通过 Coordinator 创建/领取带完整政策和预算的持久 Run，再调用本任务认证入口；负责 UUID Run 与 decisionId 的关联、严格持久 Codec、续租/取消、提交复验和删除竞争，以及独立读取客户端生命周期、强制关闭时销毁整个 Coach 服务并等待应用重启、专属 Worker 槽位与部署连接容量。不得把本任务只读完成等同于生产 Coach 生命周期可用。
@@ -382,14 +386,14 @@ A 的 SQL 与 B 的纯重放可在来源契约固定后分开实现，最终按�
 | action 与 return/completion 同版本段；中间有 Agent 协调事件 | 正确 cutoff、状态版本与终局段，不把协调事件当扑克推进。 |
 | 动作触发新街、全下自动发至 river | 该决策仍只见 before.board，无虚构未来决策；audit runout 保留真实来源。 |
 | 多人池、短码、主池/多边池、全下超额 | pot odds 排除无资格边池，逐对手有效筹码，返还/风险及强制 runout 正确。 |
-| 同一安全输入经 Coach 与 Player 的中性输入投影 | 忽略各自身份封装后，同版本 spot、handFeatures、pot、metrics 与公共候选结果严格一致。生产依赖不导入 Player。 |
+| 同一安全输入经 Coach 与 Player 的中性输入投影 | 忽略各自身份封装后，同版本 spot、handFeatures、pot、metrics 与相同合法动作的结果严格一致。生产依赖不导入 Player。 |
 | 用户选择合法但不在固定候选中的金额 | 保留精确金额并算完整结果；Player 固定目录增删/错序/改值仍拒绝。 |
 | Hero 零实际决策 | 空列表合法，盲注与自动过程不冒充决策。 |
 | 无需跟注、翻前、river、无范围/响应模型 | potOdds/current SPR/outs/EV 的三态和原因正确，不出现伪零权益。 |
 | K2s、重叠听牌、代表最佳五张与比较元组 | 原子特征复用共享实现；outs 去重，私有比较结果不进入公开报告。 |
 | 改变未来牌/对手底牌，保持过去合法且同步重算终局 | 相同早期安全前缀的认证输入与指标完全相同，audit 可以不同；损坏终局应另行拒绝。 |
 | 事件自洽但 result.board 前缀不同；行动前错牌/跨手/错位置/缺事件/伪造认证输入 | Reader 牌面镜像错误在 Builder/指标前失败，重放错误在 Guard/指标前失败；序列化/浅拷贝不能冒充认证实例。完整持久来源的错绑定/非法牌面在加载时失败；Projector 另行组装出的案例或投影错误在事后准入失败，不能完成报告。 |
-| 不存在/错绑定/过期/终态 Run；缺政策版本；伪造认证绑定 | Builder/任何过程执行前拒绝；用同一固定映射创建并读回七项版本，改变数组顺序不影响结果，缺项/重复或不可执行版本拒绝。 |
+| 不存在/错绑定/过期/终态 Run；缺政策版本；伪造认证绑定 | Builder/任何过程执行前拒绝；用同一固定映射创建并读回九项版本，改变数组顺序不影响结果，缺项/重复或不可执行版本拒绝。 |
 | 过程模型被屏障保持；取消后迟到返回 | 所有来源事务已结束且连接已归还；取消锁定边界，事后内存接口不提前、不重读数据库，不发布部分报告。 |
 | 强制关闭 Coach 读取客户端 | Coach 服务整体销毁且重复销毁安全；等待者与新请求拒绝、迟到结果丢弃，本进程不重建；全新应用实例才重新启用。牌局资源与持久历史保留。 |
 | 生产 Reader 替身→真实 Builder→真实 Metrics/Outcomes→M8.1 边界 | 不是只验证 Schema 或 mock 返回值；新增私有字段不进入 Provider 消息或公开 JSON。 |
@@ -402,7 +406,7 @@ A 的 SQL 与 B 的纯重放可在来源契约固定后分开实现，最终按�
 
 实施验收顺序：
 
-1. 直接相关的离线目标测试及 M8.1/共享候选回归。
+1. 直接相关的离线目标测试及 M8.1/Player 固定候选回归。
 2. `pnpm run verify`。
 3. 先询问用户远程数据库网络是否可用，再运行 `pnpm --filter @tx-holdem-coach/server run db:test:milestone -- --milestone=m82`。该命令只能在完成 milestone 注册后使用。
 
@@ -459,3 +463,9 @@ A 的 SQL 与 B 的纯重放可在来源契约固定后分开实现，最终按�
 指标 projector 与冻结边界现共享从 Coach metrics 版本生成的生产者标识，通过三态都保留的 algorithmVersion 识别指标产物，再要求规范 factId 与完整投影匹配。来源归属不再仅依赖 available.value.metric；未知或改名的指标在分类前拒绝。原有 available 语义核对与 metrics 命名空间校验保留。
 
 验证：Coach 与候选定向 71 项通过；最终 pnpm run verify 通过（Contracts 45、Server unit 1132、Server service 53、Web 142，共 1372 项，另有 12 个 Player 评估场景）。定向 oxlint 与 git diff --check 通过。本次未改持久化层，未重跑 database milestone/full，未执行 PostgreSQL E2E milestone/full。
+
+### 14.3 对手范围与多人 EV 交接修订（2026-09-17，仅文档）
+
+M8.2 的来源读取、行动前重建、认证 metrics、金额/返还/真正风险、响应者、可加注者、强制 runout 和贡献分层都继续作为 M8.3 的事实基础。旧的“策略基准候选 → action outcomes → baseline 完整性”接点不再是目标契约；2026-09-18 已改为“实际动作 + 从合法动作自动选出的 call/跟注全下比较 → 最终逐池金额/资格 → 多人联合权益与条件性 EV”。
+
+2026-09-17 本节交付仅为文档，当时 `versions.strategy`、baseline references 和对应 Guard 尚未迁移。2026-09-18 已完成 M8.3 A–F current-only 实施；代码和验证的最新状态见[方向切换实施计划](../plans/2026-09-18-coach-range-transition-implementation.md)，不追溯改写 §14–§14.2 的历史测试事实。

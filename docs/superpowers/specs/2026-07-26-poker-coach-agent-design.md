@@ -1,8 +1,8 @@
-# 德州扑克 Coach Agent：6–9 人复盘与策略基准设计
+# 德州扑克 Coach Agent：6–9 人范围假设与条件分析设计
 
-- 状态：已确认，已纳入项目正式需求与开发计划
+- 状态：信息边界与运行框架已确认；2026-09-17 产品分析方向已修订，全文已按范围模型统一，M8.3 A–F 已实施；G 和 M8.4+ 未完成
 - 日期：2026-07-26
-- 最后更新：2026-08-16
+- 最后更新：2026-09-17
 - 上位文档：[产品需求文档](./2026-07-23-poker-practice-prd.md)
 - 共同运行架构：[Agent Foundation 与受限 Runtime](./2026-07-26-agent-foundation-runtime-architecture.md)
 - 后端边界：[后端、牌局引擎与数据设计](./2026-07-23-poker-practice-backend-design.md)
@@ -12,21 +12,48 @@
 - Agent 专项任务：[Agent 大模块开发任务](../plans/2026-07-26-agent-module-development-tasks.md)
 - 6–9 人返工依据：[6–9 人局代码返工说明](../plans/2026-07-26-six-to-nine-player-code-refactor.md)
 
+## 0. 2026-09-17 范围模型修订（规范优先）
+
+本产品不依赖 Solver，也不把任何静态数据包装成 GTO 标准答案。Coach 的确定性分析改为：数据包保存可追溯的对手初始范围和行动更新规则；服务端根据当时可见信息，在运行时联合计算多人权益、逐池预期分配、计算误差和适用时的跟注 EV；LLM 只解释冻结结果。
+
+当前规范顺序为：本文本节定义产品和 Runtime 总边界，[M8.3 对手范围与多人权益设计](./2026-09-17-m8-3-versioned-strategy-repository-coach-projection-design.md)定义数据与算法细节，[M8.1 §14.5](./2026-09-15-m8-1-coach-contracts-information-boundaries-design.md#145-对手范围方向修订2026-09-17仅文档)与 [M8.2 §14.3](./2026-09-16-m8-2-coach-review-case-deterministic-metrics-design.md#143-对手范围与多人-ev-交接修订2026-09-17仅文档)说明已实现边界如何交接。本文各节均采用该方向，不以历史设计作为当前开发要求。
+
+保留的架构不变量：
+
+- 只复盘内部正常完成手，由用户手动请求；不改变牌局状态。
+- 每个用户决策先用当时可见信息分析并冻结，随后才允许最小事后事实解释；未来牌和真实对手底牌不能反向污染过程评价。
+- Spot、手牌结构、金额、范围、权益、EV、误差、分类和证据引用均由服务端确定性代码产生；模型无工具调用权，不能补数字或改写冻结事实。
+- 6–9 人桌、多人底池、主池/边池和平局是首版基本能力，不以单挑为默认模型。
+- 对手统计只作为范围判断的截止证据，不直接等同于完整范围。
+
+新的四项用户输出为：当时事实、对手范围假设、运行时计算结果、条件性解释；实际后续和真实底牌作为独立 Hindsight 附加说明。范围匹配只表示模型适用，不表示猜中对手，更不表示 GTO。
+
+以下旧设计整体废止：
+
+- Coach 读取 Player `StrategyPack`、100BB 最优动作节点、动作频率矩阵或 Solver EV；
+- `CoachStrategyBaseline`、`baselineComparison`、`exactStrategy/referenceStrategy/solverEv`；
+- `highestFrequency/supportedAlternative/majorEvMistake` 等频率型等级；
+- `evLoss`、`largestEvLossDecision`、全手累计 EV 损失和 GTO 文案资格。
+
+替代对象为 `OpponentRangePack`、`OpponentRangeAnalysis`、范围权重 169 图、`JointEquityAnalysis`、`ConditionalCallEv` 和 `RangeSensitivity`。跟注 EV 的边界是动作后最终投入和结算路径是否确定：多人全下、多人河牌最后跟注及主/边池均可支持；仍有人可能响应、加注或后续下注时完整动作 EV 不可用。
+
+2026-09-17 仅文档修订是历史状态；2026-09-18 用户已授权先统一文档再实施代码，已按[范围迁移实施计划](../plans/2026-09-18-coach-range-transition-implementation.md)完成 M8.3 A–F current-only 开发，不保留 V1/V2 兼容。生产范围内容 G 与 M8.4 及以后仍待实施/审查。
+
 ## 1. 文档目标
 
-本文定义面向本项目内部正常完成（`completed`）手牌的 Coach Agent。`aborted` 手牌不是已结算事实，不进入 Coach。Coach 的目标不是给出一个脱离依据的“正确答案”，而是向用户展示建议如何从策略基准、实际局面和对手证据逐步形成。
+本文定义面向本项目内部正常完成（`completed`）手牌的 Coach Agent。`aborted` 手牌不是已结算事实，不进入 Coach。Coach 的目标不是给出一个脱离依据的“正确答案”，而是向用户展示建议如何从可追溯范围假设、实际局面和对手证据逐步形成。
 
 Coach 与牌桌上的玩家 Agent 是两个独立模块：
 
 - 玩家 Agent 的目标是“赢”，只能看到自己在行动时依法可见的信息，输出经过校验的扑克命令，不允许自由调用工具。
 - Coach Agent 的目标是“教”，只在一手正常完成（`completed`）后由用户手动请求，读取复盘所需的完整事实，输出只读教学报告，不生成扑克命令，也不改变牌局状态。
 
-Coach 采用“确定性证据与分类流水线 + LLM 教学合成”，不采用由模型自由决定全部步骤的开放式工具循环。必须执行的 Spot 规范化、可见牌结构分析、当前与候选结果数学、基准查询、证据查询和决策分类由服务端编排器保证完成，模型不能跳过、重算或改写。
+Coach 采用“确定性证据与分类流水线 + LLM 教学合成”，不采用由模型自由决定全部步骤的开放式工具循环。必须执行的 Spot 规范化、可见牌结构分析、当前与候选结果数学、范围构建与联合计算、证据查询和决策分类由服务端编排器保证完成，模型不能跳过、重算或改写。
 
 教学合成使用一个确定性分类阶段和两个彼此隔离的模型阶段：
 
-1. 分类器根据用户当时可见信息和证据生成并冻结证据基础、认识状态、可证明行为偏差、教学假设、严重度、基准对比和可用的 EV 损失。
-2. 决策分析阶段只解释冻结分类、策略基准、局面约束和剥削证据，生成教学说明与替代路线。
+1. 分类器根据用户当时可见信息和证据生成并冻结证据基础、认识状态、可证明行为偏差、教学假设、严重度、范围条件结论、联合权益、误差、敏感性和条件性跟注 EV。
+2. 决策分析阶段只解释冻结分类、范围假设、局面约束和截止统计证据，生成教学说明与替代路线。
 3. `HindsightFactProjector` 先从完整权威牌局生成最小必要事后事实，事后解释阶段只接收该冻结投影与过程分析，只能补充解释，不能改写前两阶段结果。
 
 ## 2. 范围
@@ -39,15 +66,15 @@ Coach 采用“确定性证据与分类流水线 + LLM 教学合成”，不采�
 - 用户从应用内历史中选择一手 `completed` 手牌，手动请求复盘。
 - 对用户在该手牌中的每个决策点生成结构化分析。
 - 使用用户当时可见的信息评价决策，再由 `HindsightFactProjector` 读取 `completed` 手牌的完整底牌、实际公共牌和结算事实，向模型提供最小冻结投影以补充事后解释。
-- 100BB 翻前策略基准，以及少量明确列入覆盖清单的单挑翻牌持续下注场景。
-- 从版本化策略数据生成的简化动作抽象；首版查询静态 `StrategyPack`，不在线运行 Solver。
+- 经来源、授权与适用条件审查的有限覆盖 `OpponentRangePack`，保存起始范围和行动更新规则。
+- 运行时联合计算实际仍参与底池的全部对手权益、逐池预期、抽样误差、范围敏感性及符合门禁的跟注 EV。
 - SPR、底池赔率、有效筹码和下注尺度等确定性计算。
 - 基于决策发生前已有公开数据的对手统计证据。
-- 确定性的决策等级与教学降噪投影；前端渲染核心决策、折叠的逐街报告和可选的 13×13 翻前范围矩阵。
+- 确定性的范围条件结论与教学降噪投影；前端渲染核心决策、折叠的逐街报告和可选的 13×13 翻前范围矩阵。
 
 ### 2.2 首版不包含
 
-- 2–5 人桌、单挑和锦标赛策略。
+- 2–5 人桌和锦标赛；6–9 人桌中只剩一个对手的局面仍受支持。
 - 牌局进行中的实时提示。
 - 每手结束后自动生成复盘。
 - 用户粘贴外部 Hand History。
@@ -62,39 +89,19 @@ Coach 采用“确定性证据与分类流水线 + LLM 教学合成”，不采�
 
 结构化报告必须为每个用户决策点保留下列内容。教学投影可以压缩非核心决策的默认展示，但用户仍能展开查看；某一层没有可靠数据时，必须明确说明不可用，不得编造。
 
-### 3.1 策略基准层
+### 3.1 当时事实
 
-说明当前场景是否存在可追溯的 100BB 策略参考：
+展示 Hero 当时手牌、公共牌、实际动作、底池、跟注成本、有效筹码、SPR、合法动作和行动后状态。全部引用 M8.2 确定性结果；SPR 本身不足以推出唯一行动。
 
-- 基准支持哪些人数、位置、行动线、筹码深度、池类型、牌面和下注尺度。
-- 基准动作的执行频率与下注尺度。
-- 数据来源、版本和适用假设。
-- 当前场景与基准是完全匹配、仅可参考还是不支持。
+### 3.2 对手范围假设
 
-只有来源明确且确实由 Solver 或等价方法生成的数据才能称为 GTO 基准。人工编写或经过大量抽象的模板统一称为“教学策略基准”。
+每名必要对手展示起始范围、行动更新轨迹、来源、版本、匹配状态及限制。`matched | referenceOnly | unavailable` 表示模型适用性，不表示真实底牌。统计只能按版本化规则和样本门槛选择包中已发布的联合情景，或保留不调整；不能由 VPIP/PFR 反推精确逐组合概率。
 
-策略简化不是在运行时实现一个低精度 Solver，而是把离线 Solver、专业策略来源或人工教学基准经过验证后发布为版本化 `StrategyPack`。每条记录使用 `StrategyAbstractionProfile` 声明原始来源、覆盖范围、动作分组和信息损失，并将复杂下注树投影为 `fold | check | call | smallBet | mediumBet | largeBet | allIn` 等有限候选。`actionFrequency` 与 `betSizePotRatio` 始终为不同字段；没有可追溯 Solver EV 的策略包不能产生精确 EV。
+### 3.3 运行时结果与条件性解释
 
-### 3.2 局面约束层
+全部对手在同一副无重复牌中联合计算；主池、边池、平局和奇数筹码复用权威结算原语。每池输出权益、预期分配份额和拿回筹码，抽样误差与跨范围情景敏感性分开。
 
-展示当前决策点的客观数学事实及其对基准适用性的影响：
-
-- 实际有效筹码和 BB 数。
-- 街道开始时及行动前的 SPR。
-- 底池、跟注成本和底池赔率。
-- 下注或加注占底池比例。
-- 合法动作和金额边界。
-
-这一层不使用 `100BB 基准动作 + SPR 区间 = 唯一修正动作` 的硬编码转换。SPR 是局面描述，不足以单独推出 all-in、跟注或弃牌。
-
-### 3.3 剥削证据层
-
-只有对手在当前决策发生前已经存在、且样本量达到对应统计口径要求的数据才能用于提出偏离：
-
-- 展示统计名称、分子、分母、结果、过滤条件和置信度。
-- 区分 6–9 人桌、逻辑位置、单挑或多人池及具体机会类型。
-- 样本不足时明确显示“证据不足，不进行剥削偏离”。
-- 工具只返回证据，不直接返回应采取的剥削动作。
+只有合法跟注后最终贡献、返还、资格集合及摊牌路径已确定，且没有后续响应、加注或下注时，才输出 `conditionalCallEv`。多人全下及多人河牌最后跟注均可满足条件；其余局面仅可展示“假设直接摊牌”的权益，完整跟注 EV 为 `unavailable/futureActionsUnmodeled`。条件解释始终说明范围假设和比较对象是现在跟注相对弃牌。
 
 ### 3.4 事后解释
 
@@ -102,28 +109,26 @@ Coach 采用“确定性证据与分类流水线 + LLM 教学合成”，不采�
 
 例如，不能因为事后知道对手当时在诈唬，就直接断言用户弃牌错误；应先评价用户在当时信息集下的选择，再补充实际对手持牌带来的结果解释。
 
-### 3.5 决策等级
+### 3.5 范围条件结论
 
-`DecisionGradeProjector` 在 LLM 调用前根据冻结的策略支持情况、动作执行频率和可比较 EV，按版本化 `DecisionGradePolicy` 生成一个用户可读等级：
+`DecisionAssessmentClassifier` 在模型调用前按版本化政策生成四类结论：
 
-| `decisionGrade` | 教学含义 |
+| 条件结论 | 含义 |
 | --- | --- |
-| `highestFrequency` | 当前匹配基准中的最高频动作；只有 `exactStrategy` 才能在文案中称为 GTO 最高频 |
-| `supportedAlternative` | 基准以正频率支持但不是最高频的合理混合动作，不得判错 |
-| `lowCostDeviation` | 低频或不受支持，但可比较 EV 损失低于政策阈值的轻微不准确 |
-| `unsupportedAction` | 足够等级的基准不采用该动作，且不满足重大 EV 错误阈值 |
-| `majorEvMistake` | 可比较 EV 损失达到版本化重大错误阈值 |
-| `unrated` | 策略、EV 或匹配证据不足，无法可靠分级 |
+| `favorableAcrossModeledRanges` | 在已发布且有效的范围情景中，跟注相对弃牌的结论稳定有利 |
+| `unfavorableAcrossModeledRanges` | 同一比较在这些情景中稳定不利 |
+| `rangeSensitive` | 范围情景改变会改变结论 |
+| `insufficientEvidence` | 范围覆盖、计算精度或 EV 适用条件不足 |
 
-等级优先使用动作是否受支持，再使用可比较 EV 区分轻微偏离、普通错误和重大错误。零频率不自动等于重大错误，低频正频率动作不自动等于不准确；`referenceOnly` 或教学模板只能表述为“基准最高频/基准不支持”，不能冒充精确 GTO。等级不是新的漏洞标签，不进入 `DecisionMistakeTaxonomy`；LLM 不能创建、修改或重新排序等级。
+跨范围稳定要求至少两套已发布情景，且每套 95% 区间完全在零的同一侧；点估计异号为 rangeSensitive，区间跨零不得判稳定。单情景或精度不足保留 insufficientEvidence，并说明未评估范围不确定性或精度不足。它不是全局最优行动等级。规则型错误可由独立 `ruleInvariant` 政策判定，范围不足、敏感或未建模未来行动不能自动判重大错误。LLM 不能改写结论。
 
 ### 3.6 教学降噪
 
 完整 `CoachReview` 仍保存每个用户决策的证据与分析，`TeachingProjectionPolicy` 只决定默认呈现层级：
 
-- 每手默认展开一个 `coreDecisionId`，优先选择可比较 EV 最大的错误；EV 不可用时使用版本化严重度和稳定顺序，禁止 LLM 排名。
+- 每手默认展开一个 `coreDecisionId`，按版本化政策依据规则严重度、条件结论稳定性、证据完整性和稳定顺序选择，禁止 LLM 排名。
 - 最多保留两个 `secondaryDecisionIds`；其余正确或低教学价值决策压缩为可展开摘要。
-- 三层推导在结构化报告中始终存在，但只有核心决策默认完整展开；没有修正或剥削证据的层使用简短状态，不重复生成空泛说明。
+- 四部分分析在结构化报告中始终存在，但只有核心决策默认完整展开；没有修正或剥削证据的层使用简短状态，不重复生成空泛说明。
 - 默认只突出一条 `primaryLesson` 和一条 `primaryPracticeSuggestion`；完整 `keyLessons`、`practiceSuggestions` 各自仍最多三条并可展开。
 - 前端展示自然语言教学标题，不直接把内部 taxonomy 代码堆给用户。
 
@@ -142,13 +147,13 @@ HandReviewCaseBuilder 构建安全过程来源 CoachDecisionSource（不含 audi
     ↓
 ReviewOrchestrator 对每个用户决策点固定执行
     ├── normalize_decision_spot + compute_decision_metrics
-    ├── lookup_strategy_baseline
+    ├── analyze_opponent_ranges
     ├── project_candidate_outcomes
     └── get_opponent_evidence
     ↓
-DecisionAssessmentClassifier 按证据等级生成并冻结评价、行为偏差、严重度、基准对比与 EV 状态
+DecisionAssessmentClassifier 按证据等级生成并冻结评价、行为偏差、严重度、范围条件结论与 EV 可用状态
     ↓
-DecisionGradeProjector 按版本化政策生成决策等级
+冻结范围、联合权益、抽样误差和范围敏感性
     ↓
 CoachDecisionAnalyzer 在看不到 auditTruth 时解释冻结判断
     ↓
@@ -262,20 +267,20 @@ activeSeatsAtHandStart + buttonSeat
 
 - 前端不传入权威 `playerCount` 或 `dealerSeatIndex` 供后端采信。
 - Coach 从已持久化的手牌事实读取 `tableSize` 和 `logicalPosition`。
-- `tableSize` 在策略查询中是必填字段，不提供缺失时默认为 6 人的兼容行为。
+- `tableSize` 在范围匹配中是必填字段，不提供缺失时默认为 6 人的兼容行为。
 - 任何人数、座位和位置组合不一致都属于本地上下文错误，不允许降级为近似查询。
 
 ### 6.3 翻前范围梯度
 
-翻前基准按 `tableSize + logicalPosition + actionNode` 隔离。不得仅用 `UTG`、`CO` 等位置名称跨人数查询。
+翻前范围按 `tableSize + logicalPosition + normalizedPreflopLine` 及数据包适用条件隔离。不得仅用 `UTG`、`CO` 等位置名称跨人数查询。
 
 可以将“前位越多，开牌范围通常越紧”作为数据审查原则，但不把以下近似关系编码为系统不变量：
 
 - 6-max UTG 等同于 9-max 某个固定位置。
 - 8-max 与 9-max 使用完全相同的位置和范围。
-- 相邻位置的每种行动频率都必须严格单调。
+- 相邻位置的每种持牌组合权重都必须严格单调。
 
-最终频率以有来源、版本化的数据集为准。
+最终持牌权重以有来源、版本化的范围包为准。
 
 ## 7. 确定性工具层
 
@@ -283,7 +288,7 @@ activeSeatsAtHandStart + buttonSeat
 
 职责：对每个用户决策点标准化当时局面并计算数学事实，不输出建议动作。
 
-该步骤把与 Player 同版本的 `SpotNormalizer`、共享纯 `HandFeatureAnalyzer`、`ContestablePotProjector` 和 `DecisionMetricsEngine` 组合进既有 `coach.compute-decision-metrics`，只读取目标决策发生时可见的状态。策略基准返回后，`ReviewOrchestrator` 再固定调用共享纯 `CandidateOutcomeProjector` 计算实际动作和可比较候选的执行后结果。这些都是 Runtime 内部纯处理，不是新的 Capability；整条链不修改 M4.1 Manifest，也不暴露给模型自由调用。
+该步骤把与 Player 同版本的 `SpotNormalizer`、共享纯 `HandFeatureAnalyzer`、`ContestablePotProjector` 和 `DecisionMetricsEngine` 组合进既有 `coach.compute-decision-metrics`，只读取目标决策发生时可见的状态。`ReviewOrchestrator` 固定调用共享纯 `CandidateOutcomeProjector` 计算实际动作和合法跟注的执行后结果，供范围分析判断条件性 EV 门禁。这些都是 Runtime 内部纯处理，不是新的 Capability；整条链不修改 M4.1 Manifest，也不暴露给模型自由调用。
 
 输入：
 
@@ -318,122 +323,31 @@ rules.bigBlind
 - `structuralOuts` 不等于 clean outs、权益或 EV；没有显式版本化对手范围和算法时，后三者必须为 `unavailable`，不能由 LLM 补算。
 - `cardRemovalFacts[]` 只描述已知牌对未知组合空间的确定性移除；`counterfeitRiskFacts[]` 只描述未来牌改变 Hero 最佳五张或底牌使用方式的结构路径。战略 blocker 价值和实际 reverse outs 依赖已揭示对手持牌或版本化范围与算法，否则为 `unavailable`。
 - 绝对 nuts、redraw 和上述结构事实只描述可见牌结构，不推断对手范围条件下的 domination、安全牌或实际输赢。
-- 多人池、边池、limp、冷跟注、挤压、重新加注、不足额全下和实际尺度不得为了策略命中而静默折叠；无法规范化的 spot 在模型调用前失败。
+- 多人池、边池、limp、冷跟注、挤压、重新加注、不足额全下和实际尺度不得为了范围匹配而静默折叠；无法规范化的 spot 在模型调用前失败。
 - 候选结果投影不推进牌局；预计翻牌 SPR 与当前翻后 SPR 使用不同字段。最低所需权益或即时盈亏平衡弃牌率只有在参与人数和响应假设明确时可用，否则为 `unavailable`。
 - `heroActionCompletes`、`bettingRoundClosesImmediately` 与 `canFaceFurtherAction` 是不同事实；每个候选还必须明确 `responders[]` 和 `canRaiseSeats[]`。
 - 金额字段必须区分 `amountToCall`、`contributionDelta`、`targetStreetCommitment`、`streetContributionAfter`、`totalContributionAfter`；`targetStreetCommitment` 表示行动后本街总投入。
 - all-in 候选必须输出 `guaranteedUncalledReturn`、`amountActuallyAtRisk`、`contestableAmountAdded`、`forcesRunout`、`remainingStreetsToDeal`、`furtherBettingPossible` 和 `showdownForced`。强制 runout 时不存在后续街决策，`nextStreetSpr.status=notApplicable`。
 - `wet/dry`、`blank/scareCard`、`capped/uncapped`、`value/bluff/protection`、`bluffCatcher` 等只有在版本化规则或范围假设存在时才能作为派生判断，不能替代原子事实。
-- 没有显式版本化范围、响应模型或 Solver 时，不生成 clean outs、范围条件权益/胜率/EV、domination 概率、fold equity、对手响应概率、隐含/反向隐含赔率单值或多街反事实收益。
+- 没有范围包与算法时权益不可用；没有响应模型时 fold equity、对手响应概率、隐含/反向隐含赔率单值或多街反事实收益不可用。范围存在并不自动赋予这些能力。
 - 共享分析器只共享纯规则，不共享 Player Context 或 Coach audit truth；第一阶段只能使用决策时点可见事实。
 
-### 7.2 `lookup_strategy_baseline`
+### 7.2 `analyze_opponent_ranges`
 
-职责：查询版本化的策略参考，不负责把参考策略机械转换为当前筹码深度的策略。
+职责：读取独立 `OpponentRangeRepository` 的 pinned `OpponentRangePack`，构建并审计每名必要对手范围，运行多人联合权益和条件性跟注 EV。数据、算法和失败语义以 [M8.3 设计](./2026-09-17-m8-3-versioned-strategy-repository-coach-projection-design.md) 为准。
 
-使用按街道区分的输入 Schema。字段必须从已验证的 `normalizedSpot` 和手牌特征投影构造，不能由 Coach LLM 或报告生成器从自然语言重新识别位置、行动线或牌面。
+- 包保存来源/授权、覆盖清单、169 类每组合相对权重、行动更新倍率及最多三套联合情景，不预存所有权益或行动答案。
+- 范围按桌型、位置、实际筹码区间、行动线、参与拓扑、牌面和尺度匹配；歧义是数据错误，未覆盖明确 unavailable，不静默套用 100BB 或邻近场景。
+- 169 类展开为具体组合：对子 6、同花 4、非同花 12；排除 Hero/board blocker 后归一化。权重不是动作频率，169 格不要求合计 10000。
+- 更新规则的 `rangeNodeApplicability` 明确选择当前已匹配范围节点，不宣称历史行动前筹码/拓扑重建；历史事件自身的 street、action、当时 pot/增量尺度和当时可见 board 决定是否应用该节点规则。按截止前行动顺序更新权重；无规则时保留此前范围并记录未建模行动，不删除所有弱牌；必要对手无范围或空范围则联合权益 unavailable。
+- 在 500,000 次前置遍历预算内完整确认合法联合状态数不超过 200,000 时精确枚举；超过状态或计数预算则确定性 Monte Carlo。各对手独立提出组合后整组拒绝冲突，避免座位顺序偏差；未来公共牌来自同一剩余牌堆。
+- 首版计算政策固定最少 5,000、最多 25,000 接受样本，最多 500,000 提案，批量 250，目标 95% 区间半宽不超过 1 个百分点。种子绑定 decision、包、情景和政策；取消或接受样本不足不发布部分成功。
+- 每池按资格比较并分配平局/奇数筹码；只汇总 Hero 有资格池。`callEvVersusFold = expectedHeroReturn - amountActuallyAtRisk`，新增风险扣除必然返还，不重复扣沉没投入。
+- 输出 `OpponentRangeAnalysis`、`OpponentRangeChartSpec`、`JointEquityAnalysis`、`ConditionalCallEv`、`RangeSensitivity`，分别记录抽样误差和模型不确定性。
+- 任一发布联合情景有必要对手未覆盖时整个分析 unavailable，不能静默删除情景并宣称跨范围稳定。
+- Run 固定包标识/版本、范围投影、权益计算及结算投影政策；active 可新建和 pinned 读取，deprecated 仅既有 pinned，revoked/missing 稳定失败，不回退 Player 包。
 
-翻前输入至少包括：
-
-```text
-tableSize: 6 | 7 | 8 | 9
-pokerRuleSetVersion
-logicalPosition
-preflopActionHistory
-effectiveStackBb
-handClass
-```
-
-翻后输入至少包括：
-
-```text
-tableSize
-pokerRuleSetVersion
-heroPosition
-villainPositions
-preflopActionHistory
-playersInPot
-potType
-street
-board
-postflopActionHistory
-effectiveStackBb
-handCategory
-```
-
-输出：
-
-```text
-matchStatus: exact | referenceOnly | unsupported
-datasetId
-datasetVersion
-scenarioAssumptions
-actions[]
-rangeChartSpec?
-```
-
-匹配语义：
-
-- `exact`：实际场景与数据集的人数、位置、行动线、规则和 100BB 假设全部匹配。
-- `referenceOnly`：场景存在但实际有效筹码不是 100BB，或存在其他已经明确标记的非关键差异。报告只能将其作为 100BB 对照，不能声称是当前场景的精确频率。
-- `unsupported`：人数、位置、行动线、池类型、牌面或下注节点不在覆盖范围。
-
-首版数据范围：
-
-- 6–9 人桌的版本化翻前开池、面对开池、3-bet 和面对 3-bet 场景；实际覆盖以数据集清单为准，不宣称未列出的行动节点已经支持。
-- 少量明确枚举的单挑翻牌持续下注场景。
-- 翻后查询和模板执行代码在 6–9 人间复用，但策略结果仍使用各自的翻前范围、位置、行动线和入池人数上下文。
-- 不要求同一底牌和公共牌在 6 人与 9 人桌产生相同策略结果。
-
-#### 动作频率与下注尺度
-
-动作频率与下注尺度必须使用独立字段，禁止保存 `cbet 75%`、`raise_80%` 等含义不明确的字符串。
-
-```json
-{
-  "action": "bet",
-  "actionFrequency": 0.75,
-  "betSize": {
-    "kind": "potFraction",
-    "value": 0.33
-  }
-}
-```
-
-其含义是“下注执行频率 75%，下注尺度为底池的 33%”。
-
-“始终下注 75% 底池”表示为：
-
-```json
-{
-  "action": "bet",
-  "actionFrequency": 1,
-  "betSize": {
-    "kind": "potFraction",
-    "value": 0.75
-  }
-}
-```
-
-约束：
-
-- `actionFrequency` 是 `0..1` 的数值。
-- 同一策略节点内所有动作频率之和必须在统一数值容差内等于 1。
-- `check`、`call`、`fold` 等无下注尺度动作的 `betSize` 为 `null`。
-- 每个下注动作必须同时给出动作频率和明确尺度。
-- 范围矩阵以 169 种标准起手牌类别及每类动作频率表达，不使用 `Premium/Strong/Medium` 五档代替范围。
-
-#### 数据来源
-
-每个数据集必须保存：
-
-- 数据集标识和版本。
-- 来源与授权信息。
-- 桌型、人数、规则、筹码深度和允许的下注尺度。
-- 覆盖场景清单。
-- 构建或压缩方法。
-
-人工编写的模板不得标记为 GTO。没有可追溯来源的数据不得用于展示精确频率。
+范围数据的人工来源、授权、覆盖审查是独立生产门禁；fixture 通过不代表生产覆盖可用。
 
 ### 7.3 `get_opponent_evidence`
 
@@ -460,7 +374,7 @@ denominator
 value
 filters
 confidence
-usableForExploit
+usableForRangeScenarioSelection
 ```
 
 约束：
@@ -469,8 +383,8 @@ usableForExploit
 - 同一统计公式可以在 6–9 人桌复用，但聚合必须保留人数、逻辑位置和机会场景过滤。
 - `opponentSnapshotKey` 关联当时的人物标识、版本和场次配置快照，不能把不同版本的人物静默合并。
 - 每种统计具有独立、版本化的机会定义和最低样本规则。
-- 样本不足时 `usableForExploit=false`。
-- 工具不得返回 `exploitSuggestion`；偏离建议由 Coach 基于证据解释。
+- 样本不足时 `usableForRangeScenarioSelection=false`。
+- 工具不得返回动作建议；只按版本化选择规则选择已经发布的范围情景，保存规则、样本和截止引用。
 
 当前产品已规划 VPIP、PFR、3-bet、WTSD 和 W$SD。`foldToFlopCbet`、`riverCallFrequency` 等新增统计必须先定义分子、分母、过滤条件和样本门槛，再进入 Coach 工具。
 
@@ -482,20 +396,20 @@ usableForExploit
 | --- | --- |
 | `LogicalPositionResolver` | 根据权威座位和按钮计算 6–9 人逻辑位置 |
 | `HandReviewCaseBuilder` | 构建当时信息集及安全过程来源，不读取或构造事后事实 |
-| `SpotNormalizer` | 把决策时点可见状态规范化为与 Player 同版本的策略节点 |
+| `SpotNormalizer` | 把决策时点可见状态规范化为与 Player 同版本的规范 spot |
 | `ContestablePotProjector` | 按主池/边池资格和逐对手有效筹码计算 Hero 可争夺金额 |
-| `CandidateOutcomeProjector` | 计算实际动作与基准候选的执行后筹码结构，不推进牌局 |
+| `CandidateOutcomeProjector` | 计算实际动作与合法跟注的执行后筹码结构，不推进牌局 |
 | `DecisionContextBoundaryGuard` | 拒绝事后事实、隐藏牌、未来牌和跨用户数据进入决策阶段 |
 | `HindsightFactProjector` | 全手过程冻结后从预加载私有内存构造并校验完整案例、核对安全来源，冻结最小牌型比较、实际后续、返还和结算事实；不再读取数据库 |
 | `HindsightContextBoundaryGuard` | 只允许冻结过程分析和 `HindsightFactProjector` 输出进入 Hindsight |
 | `ReviewOrchestrator` | 保证每个用户决策点执行全部必需工具 |
-| `StrategyBaselineRepository` | 读取版本化策略数据与覆盖清单 |
-| `DecisionAssessmentClassifier` | 按证据基础和认识状态生成评价、可证明行为偏差、严重度、基准对比和 EV 状态 |
+| `OpponentRangeRepository` | 读取独立版本化范围假设与覆盖清单 |
+| `DecisionAssessmentClassifier` | 按证据基础和认识状态生成评价、可证明行为偏差、严重度、范围条件结论和 EV 可用状态 |
 | `ProcessAnalysisFreezer` | 在 Hindsight 前冻结分类结果和过程解释 |
 | `CoachReviewComposer` | 将冻结的过程评价与独立事后解释确定性合并 |
 | `CoachReviewValidator` | 校验报告结构、事实引用和决策点完整性 |
 | `CoachReviewRepository` | 保存复盘状态、报告、证据版本和审计记录 |
-| 前端 `RangeMatrix` | 根据 `rangeChartSpec` 渲染 13×13 范围矩阵 |
+| 前端 `RangeMatrix` | 根据 `opponentRangeChartSpec` 渲染 13×13 范围矩阵 |
 
 首版删除或延后：
 
@@ -512,75 +426,37 @@ Coach Runtime 最终返回严格的 `CoachReview` JSON，不返回由模型自�
 
 ```text
 CoachReview
-├── schemaVersion
-├── coachReviewId
-├── handId
+├── schemaVersion / coachReviewId / handId
 ├── overview
-├── decisionPrioritySummary
-│   ├── assessmentCountsByStreet[]
-│   ├── largestEvLossDecision: available | unavailable
-│   └── highSeverityUnknownEvDecisionIds[]
-├── teachingProjection
-│   ├── coreDecisionId: decisionId | null
-│   ├── secondaryDecisionIds[]
-│   ├── compactDecisionIds[]
-│   ├── primaryLesson: string | null
-│   ├── primaryPracticeSuggestion: string | null
-│   └── projectionPolicyVersion
+├── decisionPrioritySummary（条件结论计数、规则问题与证据不足）
+├── teachingProjection（core/secondary/compact decision IDs、政策版本）
 ├── decisionReviews[]
-│   ├── decisionId
-│   ├── street
-│   ├── boardContext
-│   ├── actualAction
-│   ├── assessment
-│   ├── assessmentBasis
-│   ├── epistemicStatus
-│   ├── decisionGrade
-│   ├── decisionGradePolicyVersion
-│   ├── primaryDeviationCode
-│   ├── observedDeviationTags[]
-│   ├── teachingHypotheses[]
-│   ├── severity
-│   ├── severityBasis
-│   ├── baselineComparison
-│   ├── evLoss
-│   ├── factManifest
-│   ├── baselineLayer
-│   ├── situationLayer
-│   ├── exploitLayer
-│   ├── alternatives
+│   ├── decisionId / street / boardContext / actualAction
+│   ├── facts / factManifest
+│   ├── opponentRangeAnalysis / opponentRangeChartSpec
+│   ├── jointEquityAnalysis / conditionalCallEv / rangeSensitivity
+│   ├── conditionalConclusion / conclusionPolicyVersion
+│   ├── assessmentBasis / epistemicStatus
+│   ├── primaryDeviationCode / observedDeviationTags / teachingHypotheses
+│   ├── severity / severityBasis / evidenceRefs
+│   ├── conditionalExplanation / alternatives
 │   └── hindsightExplanation
 ├── keyLessons
-├── practiceSuggestions
-└── rangeCharts[]
+└── practiceSuggestions
 ```
 
 约束：
 
-- 每个用户决策点恰好对应一条 `decisionReview`，顺序与权威行动序列一致。
-- `assessment`、`assessmentBasis`、`epistemicStatus`、`observedDeviationTags`、`teachingHypotheses`、`severity`、`baselineComparison` 和 `evLoss` 由 `DecisionAssessmentClassifier` 生成并冻结。
-- `assessmentBasis` 使用 `ruleInvariant | exactStrategy | referenceStrategy | solverEv | heuristicPolicy | insufficientEvidence`；`epistemicStatus` 使用 `objective | modelBased | heuristic | unrated`。这里的“modelBased”指策略/Solver 模型证据，不是 LLM 自由判断。
-- `factManifest` 由 Runtime 生成，记录本决策派生事实的来源、截止点、Schema/算法/数据版本、假设、可用性和 `epistemicKind: ruleFact | formulaFact | datasetBaseline | statisticalEvidence | heuristicJudgment | modelGeneratedText`；模型输出 Schema 不允许声明或修改该字段。
-- `assessment` 使用 `sound | questionable | likelyMistake | unrated`。
-- `decisionGrade` 使用 `highestFrequency | supportedAlternative | lowCostDeviation | unsupportedAction | majorEvMistake | unrated`，由 `DecisionGradeProjector` 根据冻结的频率支持、匹配等级和 EV 生成。它是展示等级而不是漏洞标签；只有 `exactStrategy` 可以生成含“GTO”的用户文案。
-- `primaryDeviationCode` 与 `observedDeviationTags[]` 使用版本化 `DecisionMistakeTaxonomyV1`，首版限于 `action_selection_error | sizing_error | range_construction_error | overfold | overcall | missed_value | unsupported_bluff | stack_depth_adaptation_error`。每个标签必须引用使其成立的规则、策略或 EV 证据；证据不足时不能仅凭 LLM 文本生成。
-- 每个 decision 最多有一个 `primaryDeviationCode`，用于互斥计数和 EV 归因；其他成立的标签只作辅助描述。没有另行版本化的归因政策时，同一 decision 的完整 EV 不能在多个标签下重复累计。
-- `severity` 使用 `low | medium | high | unavailable`，首版不提供没有确定性公式的 0–100 分。
-- `severityBasis` 使用 `evLoss | rulePolicy | unavailable`。EV 可比较时按版本化 BB 阈值分类；EV 不可用时，只有显式、版本化且可审计的规则政策才能给出规则型严重度，否则 `severity=unavailable`。
-- `evLoss` 必须携带 `exact | estimated | unavailable`、可空 BB 值、方法、来源版本和假设；没有 Solver/EV 数据时必须为 `unavailable`。
-- `baselineComparison` 至少携带 `matchStatus`、`actionSupported`、`sizeSupported` 和 `actualActionFrequency`；`baselineLayer` 允许明确显示不支持。
-- `referenceOnly` 或 heuristic 基准不能单独自动生成 `likelyMistake`；混合策略中低频但受支持的动作也不能仅因频率低判错。
-- `situationLayer` 必须引用确定性指标，不得自行重算筹码。
-- `exploitLayer` 必须引用证据结果；样本不足时明确不偏离。
-- 分类器结果与 `baselineLayer`、`situationLayer`、`exploitLayer`、`alternatives` 由看不到 `auditTruth` 的阶段生成并冻结。
-- `hindsightExplanation` 由第二阶段单独生成，不能覆盖或重新评价冻结的过程分析。
-- `alternatives` 是教学可选路线，不表述为“玩家 Agent 一定会这样做”。
-- `boardContext` 由 Runtime 写入当时可见的原子牌面事实；首版没有版本化 `BoardTaxonomy` 时不强行生成 wet/dry 等聚合类别。
-- `decisionPrioritySummary` 由 `CoachReviewComposer` 确定性生成。`assessmentCountsByStreet[]` 分别统计 `sound | questionable | likelyMistake | unrated`，不把 questionable 自动算作错误；`largestEvLossDecision` 只在本手至少一个决策具有可比较 EV 时可用；否则保持 `unavailable`。`highSeverityUnknownEvDecisionIds[]` 只允许包含 `severityBasis=rulePolicy` 且 EV 不可用的决策，不能称为最贵，也不能让 LLM 排名。
-- `teachingProjection` 由 `CoachReviewComposer` 按版本化 `TeachingProjectionPolicy` 确定性生成；默认恰好一个核心决策、最多两个次要决策，其余决策保持完整数据但进入折叠摘要。没有可评价决策时允许核心决策为空并明确数据不足。
-- `keyLessons` 和 `practiceSuggestions` 各最多 3 条。
-- `observedDeviationTags` 只能描述由当前证据证明的行为偏差，不自动更新长期用户画像或学习进度等级。`spr_misread`、`ignore_position`、恐惧、tilt、情绪化跟注等推测认知或动机的词只能作为明确的 `teachingHypotheses` 或留待画像专题，不能伪装成客观错误标签。
-- 不请求或保存模型隐藏思维链，只要求简洁、可审计的证据说明。
+- 每个用户决策恰好一条记录，顺序与权威行动一致。所有事实、范围、数值和分类由服务端冻结，模型只填解释。
+- `factManifest` 记录来源、截止点、Schema/算法/数据版本、假设和可用性；区分规则事实、公式事实、范围假设、统计证据、heuristic 判断及模型文字，确定性输出不自动成为客观真理。
+- 条件结论只使用 §3.5 四类；范围匹配、抽样精度与 EV 适用条件分别保存。缺失证据不补数字，不生成全手 EV 损失。
+- 规则型可观察偏差与范围条件结论分开。`primaryDeviationCode` 至多一个，辅助标签不重复计数；每个标签必须有明确版本化证据政策，不能依据未知范围或假设性替代路线证明价值损失、诈唬错误或尺度错误。
+- `severity` 仅由可审计规则政策产生 `low | medium | high | unavailable`，`severityBasis=rulePolicy | unavailable`；条件性 EV 不自动生成动作错误严重度。
+- 推测认知、恐惧、tilt 和动机只可作为显式 `teachingHypotheses`，不能进入可观察偏差或画像事实。
+- 四部分过程分析在看不到 `auditTruth` 时冻结；第二阶段只允许 `decisionId` 与 `hindsightExplanation`，不能改写过程。
+- 替代路线只提供带条件的教学说明，未建模响应时不得生成收益或最优行动承诺。
+- 教学投影按版本化政策选择一个核心、最多两个次要决策，其余可展开；没有可评价决策时核心可空，不按跨决策条件 EV 排名。
+- `keyLessons` 和 `practiceSuggestions` 各最多三条。不请求或保存隐藏思维链。
 
 ## 10. 工作流
 
@@ -593,13 +469,13 @@ Step 2：认证持久 Run，一次取齐目标手完整事实并完成存储校�
     ↓
 Step 3：SpotNormalizer、HandFeatureAnalyzer、ContestablePotProjector 与 DecisionMetricsEngine 计算规范 spot、原子可见牌结构、可争夺底池和当前数学
     ↓
-Step 4：lookup_strategy_baseline 查询翻前或已覆盖翻牌场景
+Step 4：get_opponent_evidence 读取截止统计，按版本化规则选择已发布范围情景
     ↓
-Step 5：CandidateOutcomeProjector 计算实际动作与可比较候选的执行后结果
+Step 5：CandidateOutcomeProjector 计算实际动作与合法跟注的执行后结果
     ↓
-Step 6：get_opponent_evidence 按当时数据截止点读取证据
+Step 6：analyze_opponent_ranges 构建范围、联合计算逐池权益、误差、条件性 EV 和敏感性
     ↓
-Step 7：DecisionAssessmentClassifier 按证据基础生成并冻结事实清单、评价、可证明行为偏差、严重度、基准对比和 EV 状态；DecisionGradeProjector 生成版本化决策等级
+Step 7：DecisionAssessmentClassifier 按证据基础生成并冻结事实清单、评价、可证明行为偏差、严重度、范围条件结论和 EV 可用状态；冻结四类条件结论
     ↓
 Step 8：CoachDecisionAnalyzer 在看不到 auditTruth 时解释冻结判断并生成过程分析
     ↓
@@ -630,13 +506,13 @@ pending | running | completed | failed
 
 建议的持久化职责：
 
-- `coach_reviews` 保存手牌关联、状态、`pokerRuleSetVersion`、上下文版本、策略数据集版本、`DecisionGradePolicy`/`TeachingProjectionPolicy` 版本、结构化报告、失败分类和时间。
+- `coach_reviews` 保存手牌关联、状态、`pokerRuleSetVersion`、上下文版本、范围包标识/版本、范围投影/权益计算/结算投影/条件结论/`TeachingProjectionPolicy` 版本、结构化报告、失败分类和时间。
 - 通用 `agent_runs`、`agent_attempts` 与 `agent_capability_invocations` 保存运行、供应商尝试和固定能力调用。
-- `coach_decision_assessments` 为每个用户决策保存一条冻结分类结果，包括 `decisionGrade`、`decisionGradePolicyVersion`、`primaryDeviationCode`、辅助标签、`mistakeTaxonomyVersion`、severity、`severityBasis`、`severityPolicyVersion`、EV 状态和证据引用；Repository 不重新分类。
+- `coach_decision_assessments` 为每个用户决策保存一条冻结分类结果，包括 条件结论、结论政策版本、范围假设、联合权益、抽样误差、敏感性、条件性跟注 EV、`primaryDeviationCode`、辅助标签、`mistakeTaxonomyVersion`、severity、`severityBasis`、`severityPolicyVersion`、EV 状态和证据引用；Repository 不重新分类。
 - `coachReviewId + decisionId` 是 `coach_decision_assessments` 的复合业务唯一键。
 - `decisionId` 由 `handId + street + authoritativeSequence` 稳定组成，支持同街多轮决策。
 - 每次重新复盘生成新的 `coachReviewId`，历史 assessment 永不覆盖。
-- 每次报告固化其实际使用的指标结果、策略基准版本和对手证据截止点，防止未来数据变化后无法解释旧报告。
+- 每次报告固化其实际使用的指标结果、范围包和算法版本和对手证据截止点，防止未来数据变化后无法解释旧报告。
 - 重新生成创建新的 `coachReviewId`，旧报告保持只读。
 - 删除整场数据时先取消在途 Coach AgentRun，再级联删除关联 Coach 报告和尝试。
 
@@ -644,7 +520,7 @@ Coach 复盘不写入牌局 `session_events`，不占用扑克 `eventSeq`，也�
 
 Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerScope、场次未进入删除流程、目标手牌仍为 `completed`、AgentRun 非终态、租约和 fencing token。Coach 可以复盘已结束场次，因此不要求 `lifecycleStatus = active`。删除或清空后的迟到响应必须无副作用失败，不得保存报告、重建运行或重新创建已删除资源。
 
-检查点复用前必须校验 Runtime、Context、Prompt、`pokerRuleSetVersion`、策略数据、分类器、`DecisionGradePolicy`、`TeachingProjectionPolicy`、Metric/Evidence Schema 和 `asOfEventSeq` 与当前运行固化版本完全一致。运行中出现新策略版本时继续使用旧运行固化版本；需要新标准时创建新的复盘。旧版本被撤销或损坏时明确失败，禁止混用版本。
+检查点复用前必须校验 Runtime、Context、Prompt、`pokerRuleSetVersion`、范围包、范围投影、权益计算与结算投影政策、分类器、条件结论政策、`TeachingProjectionPolicy`、Metric/Evidence Schema 和 `asOfEventSeq` 与当前运行固化版本完全一致。运行中出现新范围包版本时继续使用旧运行固化版本；需要新标准时创建新的复盘。旧版本被撤销或损坏时明确失败，禁止混用版本。
 
 ## 12. 供应商失败与校验
 
@@ -660,12 +536,12 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 - 决策数量和 `decisionId` 与 `HandReviewCase` 完全一致。
 - 报告引用的底池、筹码、SPR、赔率和尺度来自工具结果。
 - 不存在权威历史中没有的行动、底牌或公共牌。
-- `baselineLayer.matchStatus` 与查询结果一致。
-- 未达到样本门槛时不存在剥削动作建议。
+- 范围匹配状态与包和适用条件一致。
+- 未达到统计样本门槛时不调整范围情景。
 - 第一阶段上下文不包含 `auditTruth`，其输出在第二阶段开始前已经冻结。
-- 证据基础、认识状态、行为偏差、教学假设、严重度、基准对比和 EV 状态来自分类器，Analyzer 和 Hindsight 都不能覆盖。
-- 决策等级和教学投影来自版本化确定性政策，模型不能生成、覆盖或改变核心决策排序。
-- `evLoss.status` 非 `unavailable` 时必须存在可追溯方法、来源版本和假设。
+- 证据基础、认识状态、行为偏差、教学假设、严重度、范围条件结论和 EV 可用状态来自分类器，Analyzer 和 Hindsight 都不能覆盖。
+- 条件结论和教学投影来自版本化确定性政策，模型不能生成、覆盖或改变核心决策排序。
+- 条件性跟注 EV 可用时必须满足最终贡献和摊牌门禁，且保存范围、方法、误差与来源版本。
 - 第二阶段输出 Schema 只允许填写 `decisionId` 和 `hindsightExplanation`，不能返回或覆盖过程评价字段。
 - 不包含 API Key、隐藏推理或供应商私有字段。
 
@@ -677,17 +553,17 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 - `pending/running/completed/failed` 状态反馈和失败重试。
 - 按街道展示每个用户决策的四部分分析。
 - 默认完整展开 `teachingProjection.coreDecisionId`，最多提示两个次要决策，其余决策以可展开摘要呈现；用户仍可查看全部逐决策证据。
-- 明确区分“动作频率 75%”与“下注尺度 75% 底池”。
-- 展示策略数据来源、版本、匹配状态和场景假设。
-- `referenceOnly` 与 `unsupported` 使用显著文字提示，不能只依赖颜色。
-- 根据 `rangeChartSpec` 渲染 13×13 范围矩阵，支持高亮用户实际手牌。
+- 明确区分每组合相对权重、blocker 后归一化持牌质量、可用组合数和下注尺度。
+- 展示范围数据来源、版本、匹配状态和场景假设。
+- `referenceOnly` 与 `unavailable` 使用显著文字提示，不能只依赖颜色。
+- 根据 `opponentRangeChartSpec` 渲染 13×13 范围矩阵，绑定所分析对手 seat/位置，不高亮 Hero 实际手牌。
 - 在 360–430px 手机宽度下保持可阅读，不把逐街报告压成高密度仪表盘。
 - 默认只突出一条核心教训和一条练习建议，不直接展示内部 taxonomy 代码。
 
 前端不得：
 
 - 自行计算逻辑位置、SPR、底池赔率或下注尺度。
-- 自行决定策略基准匹配状态。
+- 自行决定范围匹配状态，或计算范围、权益、EV、误差和敏感性。
 - 接收并执行模型生成的 Python、HTML 或脚本。
 - 依赖隐藏 DOM 内容实现信息权限。
 
@@ -700,22 +576,20 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 - 验证 `tableSize`、座位集合和位置不一致时拒绝构建复盘。
 - 验证前端输入不能覆盖权威位置。
 
-### 14.2 策略基准
+### 14.2 范围假设与联合计算
 
-- 同名 UTG 在 6 人和 9 人桌查询不同的数据键。
-- 100BB 完整匹配返回 `exact`。
-- 非 100BB 但场景存在时返回 `referenceOnly`。
-- 未覆盖的人数、位置、行动线和翻牌节点返回 `unsupported`。
-- 缺少 `tableSize` 不默认 6 人，直接校验失败。
-- 动作频率与下注尺度使用不同字段。
-- 策略包声明 `StrategyAbstractionProfile`、动作分组、覆盖范围和来源；教学模板不会生成精确 EV 或 GTO 文案。
-- 每个策略节点动作频率之和在容差内等于 1。
-- 范围矩阵按 169 种标准起手牌类别表达。
+- 同名位置在 6–9 人桌按完整条件隔离；缺 tableSize 拒绝，不按 100BB 自动近似。
+- 校验来源/授权/覆盖、歧义、pinned 版本状态及未覆盖 unavailable。
+- 验证 169 类 6/4/12 展开、blocker、更新顺序、空范围失败和权重语义。
+- 每个联合样本无重复牌，交换同分布对手座位不产生顺序偏差；相同种子可复现，精确枚举与抽样代表结果相容。
+- 验证取消、提案预算、接受样本不足和区间输出；抽样误差与范围敏感性分别呈现。
+- 多人全下、河牌最后跟注、主池/多边池、平局、奇数筹码和必然返还与真实结算一致；未来仍有行动则跟注 EV unavailable。
+- 全链路拒绝模型新增或改写范围和数学；生产范围内容独立审查。
 
 ### 14.3 翻后复用
 
 - 6–9 人共享同一套指标计算和翻后查询实现。
-- 不断言 6 人与 9 人相同底牌、公共牌必然产生相同策略结果。
+- 不断言 6 人与 9 人相同底牌、公共牌必然产生相同范围分析结果。
 - 验证翻前行动线、位置范围和实际入池人数进入翻后查询上下文。
 - 单挑与多人池使用不同匹配键。
 - Player 与 Coach 对同一决策时点的安全可见事实使用同版本 SpotNormalizer、HandFeatureAnalyzer 和 CandidateOutcomeProjector，并产生一致的纯分析结果。
@@ -741,8 +615,8 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 - 工具不支持或样本不足时仍能生成诚实的教学报告。
 - 模型不能虚构数学结果或历史行动。
 - 模型不能新增行为偏差标签、教学假设、评价或修改严重度，也不能自行估算 EV。
-- referenceOnly/heuristic 不会单独触发 likelyMistake；受支持的低频混合动作不因频率低判错；无 EV 或版本化阈值时严重度 unavailable。
-- 决策等级能够区分最高频、受支持混合动作、低成本偏离、不支持动作、重大 EV 错误和无法评价；相同证据与政策版本结果可复现。
+- referenceOnly、范围敏感、抽样不足和未来行动未建模不触发重大错误；没有规则政策时严重度 unavailable。
+- 四类范围条件结论与规则型问题分别呈现；相同证据与政策版本结果可复现。
 - 教学投影默认只展开一个核心决策、最多两个次要决策，且不丢失完整逐决策报告。
 - 纠错和供应商失败不会改变牌局状态。
 - 最终失败只影响 Coach 请求并允许手动重试。
@@ -752,10 +626,10 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 ### 14.6 首版完成标准
 
 1. 用户可以手动请求任意 `completed` 内部手牌的 Coach 复盘；`aborted` 手牌明确拒绝。
-2. 6–9 人逻辑位置、翻前基准键和报告位置描述一致。
-3. 每个用户决策都保存且可查看策略基准、局面约束、剥削证据和独立事后解释；默认只完整展开核心决策。
-4. 动作执行频率与下注尺度不存在模糊表达。
-5. 非 100BB、未覆盖场景和样本不足都被明确标记。
+2. 6–9 人逻辑位置、翻前范围匹配键和报告位置描述一致。
+3. 每个用户决策都保存且可查看当时事实、对手范围、计算结果、条件解释和独立事后解释；默认只完整展开核心决策。
+4. 范围权重、组合质量、下注尺度、抽样误差与范围敏感性不存在模糊表达。
+5. 超出范围包筹码区间、未覆盖场景和样本不足都被明确标记。
 6. 报告基于规范 spot、结构化事实、确定性手牌特征、当前数学和候选结果投影，不要求模型计算局面分类、牌力、听牌、outs 或任何数学。
 7. 复盘失败、重试和重新生成不影响扑克状态。
 8. 前端可以在手机宽度下展示逐街报告和可选范围矩阵。
@@ -765,7 +639,7 @@ Coach Commit Gate 在保存报告的同一事务内复验场次存在、OwnerSco
 12. 多人/边池计算基于 Hero 可争夺金额和逐对手有效筹码，行动响应/关闭语义分字段表达。
 13. 每条评价公开证据基础与认识状态，可证明行为偏差和教学假设严格分离。
 14. 事后牌型比较按主池/每个边池的资格集合由 HindsightFactProjector 冻结，实际后续和结算事实同样先冻结，LLM 只负责解释。
-15. 每个可评价决策具有确定性 `decisionGrade`；默认教学投影突出一个核心决策而不是堆积错误标签。
+15. 每个可评价决策具有确定性范围条件结论；默认教学投影突出一个核心决策而不是堆积错误标签。
 
 ## 15. 后续设计：长期漏洞聚合与 Coach 记忆
 
@@ -787,39 +661,17 @@ Coach LLM（只解释，不写回事实或画像）
 
 这条链不使用 RAG、向量数据库或自然语言自动召回。Supabase PostgreSQL 保存结构化事实与版本化快照；LLM 不是记忆事实的生产者，也不能通过 Prompt 直接更新画像。
 
-### 15.1 决策错误 taxonomy
+### 15.1 可观察偏差与上下文
 
-首版 `DecisionAssessmentClassifier` 已使用有限、版本化、只描述可观察行为的 `DecisionMistakeTaxonomyV1`：
+M10/A10 只复用 M8 已由版本化政策证明的规则型偏差及冻结四类条件结论，不把范围假设当作用户真实持牌或全局行动答案。动作、尺度、过度跟弃、价值或诈唬类标签若缺少相应证据政策则不可用，不能从条件 EV 或 LLM 文本强制推导。
 
-- `action_selection_error`：实际动作不受足够等级的基准或规则证据支持。
-- `sizing_error`：动作类型可接受，但实际目标金额不在受支持尺度内。
-- `range_construction_error`：版本化范围数据能够证明组合归属或频率结构存在偏差。
-- `overfold`、`overcall`：只有机会节点、基准和证据阈值都明确时才能生成。
-- `missed_value`：存在受支持的价值候选，而实际路线放弃了可证明的价值机会。
-- `unsupported_bluff`：实际诈唬候选缺少所需的基准、范围或证据支持。
-- `stack_depth_adaptation_error`：版本化策略或公式能够证明实际动作没有适配有效筹码；不能用“没有理解 SPR”替代可观察偏差。
+街道、逻辑位置、底池类型、有效筹码和牌面原子事实为独立维度；`BoardTaxonomy` 必须版本化。认知、情绪和动机不进入确定性 taxonomy。语义变化创建新版本，不重写历史 assessment。
 
-街道、逻辑位置、底池类型、有效筹码档和牌面类别是独立上下文维度，不编码进错误名称。认知、情绪、恐惧、tilt 和动机仍只能是 `teachingHypotheses[]`，不能进入确定性 taxonomy。
+### 15.2 条件证据与严重度
 
-M10/A10 复用该基础 taxonomy，并且只能通过新版本增加或修改语义，不能重写历史 assessment。牌面先保存 `suitPattern`、`pairedness`、`straightWindows`、`rankConnectivity` 和 `streetDelta` 等原子事实。需要按牌面聚合时，由独立、版本化的 `BoardTaxonomy` 生成 `boardClassId`；`wet/dry`、`scareCard` 等词只有明确规则或范围假设时才能作为 heuristic 标签，不能由 LLM 从自然语言自由分类。
+分别聚合 `mostFrequentDeviations`、`stableConditionalFindings`、`rangeSensitiveFindings` 和 `highSeverityUnavailable`。后者必须来自规则政策。条件性跟注 EV 保留逐决策假设与误差，不跨决策求和为“最贵漏洞”，不计算全手或长期 EV 损失。
 
-### 15.2 EV、严重度与“最贵漏洞”
-
-`evLoss` 继续只允许 `exact | estimated | unavailable`：
-
-- `exact` 必须来自完全匹配且版本固定的 Solver/EV 数据。
-- `estimated` 必须来自版本化算法，保存方法、范围/响应假设、数据版本和置信区间。
-- 只有策略模板、referenceOnly 基准或 LLM 判断时必须为 `unavailable`。
-
-`severity` 由版本化 `SeverityPolicy` 生成并保存 `severityBasis`。优先使用可比较的 `evLossBb` 阈值；EV 不可用时只有明确的 `rulePolicy` 可以产生规则型严重度。阈值未定义、证据不足或方法不可比较时为 `unavailable`。Prompt 不包含“凭经验判断大错小错”的兜底指令。
-
-聚合输出必须分成三个互不冒充的榜单：
-
-- `largestEvLeaks`：只对方法、币种、假设和置信度满足可比条件的 EV 损失求和与排序。
-- `mostFrequentDeviations`：按机会分母、发生次数和发生率排序，不能称为“最贵”。
-- `highSeverityUnknownEv`：只保存 `severityBasis=rulePolicy` 且暂时无法定价的高优先级偏差，不伪造累计 EV，也不称为最贵。
-
-单手复盘可以在 EV 可用时确定性指出本手损失最大的决策。跨手牌的“最贵漏洞”必须由 `LeakAggregationService` 查询结构化 assessments 后计算，不能由 LLM 浏览若干报告后归纳。
+教学优先级只按版本化规则严重度、跨范围稳定性、重复率、证据置信度和稳定顺序产生，LLM 不排名。范围未覆盖、计算精度不足或后续行动未建模时如实保留 unavailable。
 
 ### 15.3 聚合范围与动态画像
 
@@ -835,14 +687,14 @@ logicalPosition
 potType
 effectiveStackBucket
 boardTaxonomyVersion + boardClassId（适用时）
-strategyDatasetVersion / assessmentMethod
+rangePackRef / equityComputationPolicyVersion / conclusionPolicyVersion
 ```
 
-每个聚合值至少携带机会次数、出现次数、发生率、可比 EV 样本数、精确与估算 EV 分项、时间窗口、最近发生时间和置信度。不同 Solver/估算方法、策略版本或不可比较假设不得静默合并。
+每个聚合值保存机会次数、出现次数、发生率、四类条件结论计数、范围和 EV 可用计数、时间窗口、最近发生时间和置信度。不同范围包、计算政策、分类器或不可比较假设不得静默合并。
 
-`largestEvLeaks` 只按互斥的 `primaryDeviationCode` 归因，防止一个决策因多个辅助标签重复累计完整 EV。未来如需拆分归因，必须发布独立 `EvAttributionPolicyVersion`，不能由 LLM 分配比例。
+可观察偏差按互斥主标签计数，辅助标签不增加机会或发生次数。
 
-同一个 `decisionId` 可能因重新复盘产生多个 `coachReviewId`。聚合器必须固化 `AssessmentSelectionPolicyVersion`，在兼容的策略、taxonomy 和评价方法内为每个决策选择至多一条 assessment；不得把重复复盘计成多次错误。使用“当前教学标准”重新聚合时创建新快照，不改写旧聚合快照。
+同一个 `decisionId` 可能因重新复盘产生多个 `coachReviewId`。聚合器必须固化 `AssessmentSelectionPolicyVersion`，在兼容的范围包、taxonomy 和评价方法内为每个决策选择至多一条 assessment；不得把重复复盘计成多次错误。使用“当前教学标准”重新聚合时创建新快照，不改写旧聚合快照。
 
 漏洞统计只消费决策发生时冻结的过程 assessment，不以 `heroNetChips`、对手事后亮牌或本手输赢重新评价当时决策。机会分母必须包含同一过滤条件下的全部可评价决策，而不是只统计已经打标签的错误样本。
 
@@ -854,40 +706,24 @@ strategyDatasetVersion / assessmentMethod
 
 重置长期记忆时删除派生聚合与画像，并写入 Owner-scoped `memoryResetBoundary`，使边界之前的 assessment 不会在下一次聚合时自动恢复；原始牌谱和逐手复盘仍保留。删除手牌或场次则按数据生命周期删除对应事实，并使后续聚合快照排除这些来源。
 
-### 15.4 错误率趋势与教学重点
+### 15.4 条件结论趋势与教学重点
 
-`LeakTrendSnapshot` 按用户时区生成日、周、月时间桶，并在每个 `asOf` 创建不可变快照。每个桶保存 `eligibleDecisionCount`、`ratedDecisionCount`、各决策等级计数、可比较 EV 样本、时间范围、是否为未结束周期、策略/分类/等级政策版本和置信度。不同桌型、街道、策略版本或评价方法不能静默合并。
+`LeakTrendSnapshot` 按用户时区保存日、周、月不可变快照，记录同一过滤条件下 eligible 机会数、规则可评价数、范围分析可用数、EV 可用数、四类条件结论计数和政策版本。
 
-错误率以“可评价决策机会”为分母，不以总手数为分母：
+- 规则问题率以规则可评价机会为分母。
+- 稳定有利/稳定不利/范围敏感率以具备对应条件比较的机会为分母；证据不足单独计数。
+- 范围覆盖率以范围可用数除 eligible 机会数；条件 EV 覆盖率以 EV 可用数除合法跟注比较机会数。
+- 分母为零返回 unavailable；样本不足只展示计数和覆盖，不宣称趋势。未结束周期显式标注。
+- 不同桌型、范围包、权益或结论政策不静默合并，不能把覆盖提高误称为用户进步。
 
-```text
-supportedRate
-  = (highestFrequency + supportedAlternative) / ratedDecisionCount
-inaccuracyRate
-  = lowCostDeviation / ratedDecisionCount
-mistakeRate
-  = unsupportedAction / ratedDecisionCount
-majorMistakeRate
-  = majorEvMistake / ratedDecisionCount
-coverageRate
-  = ratedDecisionCount / eligibleDecisionCount
-```
-
-可比较时另行展示 `evLossBbPer100ComparableDecisions = 100 × ΣevLossBb / comparableEvDecisionCount` 和 `evCoverageRate = comparableEvDecisionCount / ratedDecisionCount`，但不能与错误率合成一个不透明总分。任一分母为 0 时对应比率为 unavailable；样本不足时展示计数和 `coverageRate`，趋势结论保持 unavailable；当前未结束日/周/月不得直接与完整历史周期比较而不做明确标注。
-
-后台继续保存 `largestEvLeaks`、`mostFrequentDeviations` 和 `highSeverityUnknownEv`，用户默认只看到 `TeachingFocusProjection`：
-
-- `primaryFocus`：当前唯一重点；优先级由版本化 `TeachingPriorityPolicy` 根据可比较 EV、规则严重度、重复率、置信度和稳定顺序确定，LLM 不排名。
-- `watchlist`：最多两个尚未达到或不应取代当前重点的问题。
-- `improved`：已经进入 `improving | resolved` 的问题，默认折叠。
-- 每项只展示场景、机会数/发生数、比率与趋势、EV 可用性、证据置信度和一条建议，不把内部 taxonomy 代码作为教学标题。
+`TeachingFocusProjection` 默认一个当前重点、最多两个观察项，改善项折叠。选择依据为规则严重度、范围稳定性、重复率、置信度及稳定顺序。每项展示场景、分子分母、窗口、敏感性、覆盖与一条建议，不输出不透明总分或全局最优程度。
 
 ### 15.5 LLM 与 Prompt 边界
 
 Coach LLM 只能读取 `CoachMemoryProjection` 中与本次教学相关的少量聚合结果，用于解释“这个错误是否重复出现”并给出自然语言练习建议。它不能创建训练任务或复测结果，也不能：
 
 - 新增或修改错误标签、EV、严重度、排名、时间窗口或置信度。
-- 把 `mostFrequentDeviations` 表述成 `largestEvLeaks`。
+- 把常见偏差、范围敏感或覆盖不足描述为最大筹码损失。
 - 把教学假设写回正式画像。
 - 根据自然语言历史重新统计或生成用户心理结论。
 
@@ -903,11 +739,10 @@ M10/A10 只做到“发现并呈现长期漏洞”，不会根据漏洞创建可
 
 - 外部 Hand History 解析与格式兼容。
 - 理论问答、范围讨论和 `IntentRouter`。
-- 更多筹码深度的版本化策略数据。
-- 完整翻后 Solver 数据或第三方策略服务。
+- 更多筹码深度、行动线与人群的经审查范围假设及更新规则。
 - 锦标赛和 straddle；项目不规划前注或抽水模型。
 - 自动复盘和实时 Coach。
-- M11/A11 针对性训练与复测：从已确认漏洞和课程目录选择/生成同类 Spot，管理训练 Session、评分、复测与改善退出；不得夹带进 M8 或 M10。
+- M11/A11 针对性训练与复测：从已确认漏洞和经审查课程目录选择同类 Spot；每题绑定范围包、情景、适用条件、计算与评分政策，评分评估假设下的条件推理，敏感/证据不足题不伪造唯一正确动作；管理训练 Session、复测与改善退出；不得夹带进 M8 或 M10。
 - 明确标注“不是权益”的结构改善概率，以及明确标注“不是范围/概率”的合法胜平组合枚举。
 - 在写明响应假设后计算几何全下尺度；按机会口径扩展对手统计；仅在版本化范围存在时计算 blocker removal effect。
 - 候选重复尺度合并与可证明 dominance。

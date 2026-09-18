@@ -1,6 +1,6 @@
 # 仓库地图
 
-更新时间：2026-09-15（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.9 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
+更新时间：2026-09-18（M0–M2、M3.1–M3.7、M4.1–M4.10、M5.1–M5.5、M6.1–M6.6 与 M7.1–M7.9 已实现；M3.8 主体接线已由 M4.10 落地，专项收口仍待完成；M8.1/M8.2 离线边界与 M8.3 范围计算基础已落地，Coach 运行时与生产范围覆盖尚未交付。验证与未完成验收见[开发任务状态](superpowers/plans/2026-07-23-poker-practice-development-tasks.md)及各设计实施记录）
 
 ## 当前目录与职责
 
@@ -35,7 +35,7 @@
 - `docs/superpowers/specs/2026-08-30-m4-9-player-audit-replay-bounded-memory-design.md`：M4.9 正式设计源；strict Memory v1、live Run 单次物化、四步 Capability 编排、Memory 审计快照/≤2 KiB 模型投影、只读 Replay 和 live-only 提交门禁已实现。M4.10 的 live Worker claim 明确排除 historical reexecution。
 - `docs/superpowers/specs/2026-08-31-m4-10-session-integration-player-eval-design.md`：M4.10 正式事实源；以提交后 hint、持久轮询与启动修复连接 Session、Dispatcher、唯一 active StrategyPack、live Player Worker 和 M4.7 Commit Gate；还冻结 configured/diagnostic-only 启动分支、Eval 边界与 remote m410 验收。离线 Eval、m410 database milestone 与 PostgreSQL E2E milestone 均已通过；两套 full 未在本轮执行。
 - `docs/superpowers/specs/2026-07-23-poker-practice-agent-harness-design.md`：Player Agent Runtime 详细设计源；文件名保留历史兼容，正文已按决策预处理、有界候选选择、三道防火墙与专属 Commit Gate 更新。
-- `docs/superpowers/specs/2026-07-26-poker-coach-agent-design.md`：已确认的 Coach Agent 唯一详细设计源，约束手动复盘、两阶段信息隔离、确定性工具、策略抽象、决策分级、教学降噪、长期趋势/画像边界、后置训练闭环和验收。
+- `docs/superpowers/specs/2026-07-26-poker-coach-agent-design.md`：已确认的 Coach Agent 唯一详细设计源，约束手动复盘、两阶段信息隔离、确定性工具、对手范围假设、联合权益、条件性跟注 EV、决策分级、教学降噪、长期趋势/画像边界、后置训练闭环和验收。
 - `docs/superpowers/plans/`：开发任务的依赖顺序与验收清单。
 - `docs/superpowers/plans/2026-07-23-poker-practice-development-tasks.md`：项目总计划；M4 实现 Agent Foundation 与 Player Runtime，M8 实现 Coach Runtime，M9 统一收口，M10/M11 分别后置长期漏洞记忆与针对性练习复测。
 - `docs/superpowers/plans/2026-07-26-agent-module-development-tasks.md`：Agent 大模块 A0–A9 首版详细任务，以及后置 A10 长期漏洞记忆、A11 针对性练习复测的依赖、测试闭环和完成定义。
@@ -70,7 +70,7 @@
 - `apps/server/src/poker/betting-projection.ts`、`decision-candidates.ts`：共享纯下注投影内核及有限候选签发边界；从最小公开座位/下注轮事实生成合法动作、筹码转移、full raise/reopening、响应者、可加注座位和街道关闭结果。权威引擎、M4.4 观察链与 M4.5 结果投影消费同一内核；普通同形候选或 Executor clone 不能保留模块私有证明。
 - `apps/server/src/poker/contribution-layers.ts`、`contestable-pot.ts`、`settlement.ts`：共享贡献层是当前底池与终局派奖的唯一分层规则，folded 投入计入金额、只有 `active | allIn` 保留资格；M4.5 只投影 Hero 可争夺池、有效筹码和未跟注层事实，不访问牌力或派奖。
 - `apps/server/src/poker/decision-analysis-input.ts`、`decision-analysis-types.ts`、`decision-analysis-core.ts`、`decision-spot.ts`、`hand-features.ts`、`decision-metrics.ts`、`candidate-outcomes.ts`：M4.5 无 Player/SQL 知识的纯确定性分析核心；所有来源、不可用状态、版本、比例、候选目录与结果都可规范序列化并深冻结，未来牌、范围概率、在线 Solver 与 EV 不被伪造。
-- `apps/server/src/poker-strategy/`：只读静态 StrategyPack Schema、精确版本 Repository 与策略投影；dataset ID 可无损编码为 Run 审计引用，assumption/abstraction loss 使用封闭 v1 code 并拒绝未知或重复值。生产首包覆盖为空，所有节点明确 `unsupported`，测试包仅验证 `exact | referenceOnly` 合约，revoked 不可消费且 deprecated 只允许已固定 Run 延续。
+- `apps/server/src/poker-strategy/`：Player 专属只读静态 StrategyPack Schema、精确版本 Repository 与固定候选策略投影；保留按 spot/hand/assumption 匹配的 records 与封闭 abstraction loss code。生产首包覆盖为空，未覆盖返回 `unsupported`，测试包验证 `exact | referenceOnly` 契约；revoked 不可消费且 deprecated 只允许已固定 Run 延续。审计引用由 `apps/server/src/agents/player/player-strategy-pack-audit-reference.ts` 拥有。Coach 范围不复用该数据模型。
 - `apps/server/src/agents/player/player-decision-preprocessor.ts`、`player-decision-preprocessing-schema.ts`、`player-strategy-pack-audit-reference.ts`：M4.5 最终认证聚合、严格 current decoder 与 Run data dependency 桥接；聚合在签发私有认证前复验完整 binding、三阶段权重守恒、候选集合/顺序、直接来源和 canonical hash，已领取 Run 只从唯一固化引用以 `pinnedRun` 读取策略包。
 - `apps/server/src/agents/player/player-decision-audit.ts`、`player-model-projection.ts`、`player-model-input-limits.ts`、`player-decision-packet-leak-guard.ts`、`player-context-policy.ts`、`player-prompt-modules.ts`、`player-model-adapter-boundary-guard.ts`：M4.6 完整审计快照、32 项事实清单、最小模型投影、集中式模型输入限额、第二/第三 Guard、单 section Context 与静态 Prompt；Provider 可见候选使用 current-only 11 项 candidate / 14 项 outcome tuple，由 descriptor、strict Codec 与 Prompt legend 同步解码，只压缩表示而不删减语义事实。完整观察、UUID、审计 hash、authority 和 Memory 不进入模型请求。
 - `apps/server/src/agents/player/player-bounded-choice.ts`、`player-model-generation.ts`、`player-runtime-executor.ts`、`player-runtime-result-port.ts`、`player-decision-validator.ts`、`player-commit-gate.ts`：M4.6 的认证 candidate result 在 M4.7 只可交给 Validator/Commit Gate；Player 模块保留认证决策、Gate 协议与 ResultPort 适配，不导出可装配的私有事务入口。固定组合在 Session 命令边界完成持锁复验、原子成功面与提交后发布；M4.10 的 configured `bootstrap.ts` 只通过该链装配 live Player executor。
@@ -290,16 +290,16 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 
 ## M8.1 Coach 协议与离线信息边界
 
-- `packages/contracts/src/index.ts`：公开 Coach 请求状态、四层报告、动作频率/尺度、基准三态、169 格范围图、公开事实、引用闭合、计数与教学分区；从现有包根导出。
+- `packages/contracts/src/index.ts`：公开 Coach 请求状态、四层报告、范围条件结论、公开事实、引用闭合、计数与教学分区；`packages/contracts/src/coach-range.ts` 定义严格对手范围、169 类每组合相对权重图、联合权益、条件性跟注 EV 和敏感性协议；从现有包根导出。
 - `apps/server/src/agents/coach/review-case.ts`：分离无 auditTruth 的 CoachDecisionSource 与事后完整 HandReviewCase Schema，校验当前行动前输入、Owner/Session/Hand/Run/版本、证据截止点与对手人物快照绑定。来源由 M8.2 的真实 Builder 提供；此文件不读数据库。
 - `apps/server/src/agents/coach/decision-context.ts`：单决策模型投影、派生事实/私有候选协议及两个阶段的解释输出白名单。
-- `apps/server/src/agents/coach/frozen-analysis.ts`：`createCoachReviewBoundary` 的分类前来源/基准场景/统计过滤器/候选金额对照、计算/分类端口、过程深冻结与实例认证；全部过程完成后 beginHindsight 先关闭第一阶段发送，再准入完整内存案例（不约束数据库加载时序）；暴露 assertHindsightReady 供报告门禁使用。
+- `apps/server/src/agents/coach/frozen-analysis.ts`：`createCoachReviewBoundary` 的分类前来源/范围结果/统计过滤器/候选金额对照、计算/分类端口、过程深冻结与实例认证；全部过程完成后 beginHindsight 先关闭第一阶段发送，再准入完整内存案例（不约束数据库加载时序）；暴露 assertHindsightReady 供报告门禁使用。
 - `apps/server/src/agents/coach/hindsight-context.ts`：createHindsightFactProjector 在阶段门禁后才通过同步内存端口取得并缓存完整案例，核对安全来源一致性；最小结果须为实际事实子集，并复验牌面、逐池资格及牌型引用闭合。
 - `apps/server/src/agents/coach/model-adapter-boundary-guard.ts`：固定阶段 Context/Prompt、Schema/Validator 请求绑定与每 generation 的 Provider 装饰器；初次和纠错均检查最终消息，纠错只回灌占位说明与稳定错误码。
 - `apps/server/src/agents/coach/review-contract-validator.ts`：从认证过程与事后解释逐字段合成公开报告，私有引用映射为公开事实；按可信完整决策清单及冻结教学政策验证最终报告；包括零决策报告在内均要求完整事后来源已准入。
 - `packages/contracts/test/coach-contracts.test.ts`、`apps/server/test/unit/coach-boundaries.test.ts`、`coach-model-boundary.test.ts`、`coach-review-contract-validator.test.ts`、`apps/server/test/unit/coach-hindsight-admission.test.ts`：公开协议、延后完整内存案例准入、阶段/来源隔离、真实 Foundation + 假 Provider、完整报告与私有字段不外泄；夹具位于 `apps/server/test/fixtures/coach/boundaries.ts`。
 
-真实案例来源与确定性重建已由下述 M8.2 交付；策略覆盖、统计、分类阈值、Worker、HTTP、持久报告与页面仍属于 M8.3–M8.7。M8.1/M8.2 没有安装 Coach lane。
+真实案例来源与确定性重建已由下述 M8.2 交付，范围计算基础见 M8.3；生产范围内容仍待独立审查，历史统计、分类阈值、Worker、HTTP、持久报告与页面仍属于 M8.4–M8.7。当前没有安装 Coach lane。
 
 ## M8.2 完成手来源与确定性分析
 
@@ -307,10 +307,29 @@ M6.3 已接续 HTTP/SSE 唯一快照接收器、active 定位、场次 Query/Mut
 - `apps/server/src/persistence/completed-hand-review-repository.ts`：Owner-scoped 单 statement 完整加载，复用 current Codec/完成手镜像及人物快照校验；移除牌堆、烧牌和配置正文后交付内部事实。
 - `apps/server/src/sessions/hand-history/completed-hand-review-source.ts`：内部来源契约与每个 Hero 行动前安全前缀的显式投影。
 - `apps/server/src/agents/foundation/run-read-authentication.ts` 与 `agent-run-lifecycle-repository.ts`：持久 Coach Run 的只读执行资格认证，复用 authority、Codec 与数据库时钟。
-- `apps/server/src/agents/coach/policy-versions.ts`：七类政策依赖的唯一固定 ID 映射，拒绝缺项、重复与未装配版本。
+- `apps/server/src/agents/coach/policy-versions.ts`：九类政策依赖的唯一固定 ID 映射（rangeModel/conclusion 替换旧 strategy/grade，并增加 equityComputation/settlement），拒绝缺项、重复与未装配版本。
 - `apps/server/src/agents/coach/review-source-loader.ts` / `review-source-adapter.ts` / `review-case-builder.ts`：先认证持久 Run，再完整加载并归还连接；逐决策安全重放；事后来源从同一内存快照构造，取消或释放后不可访问。
-- `apps/server/src/agents/coach/analysis-input.ts` / `analysis-results.ts` / `decision-metrics.ts` / `decision-fact-projector.ts` / `action-outcomes.ts`：严格私有输入、完整指标、事实来源、白名单公开投影及实际/基准动作结果；Frozen 边界保留私有结果，模型和报告不序列化该结构。
+- `apps/server/src/agents/coach/analysis-input.ts` / `analysis-results.ts` / `decision-metrics.ts` / `decision-fact-projector.ts` / `action-outcomes.ts`：严格私有输入、完整指标、事实来源、白名单公开投影及实际动作、显式合法 call/跟注全下比较结果；Frozen 边界保留私有结果，模型和报告不序列化该结构。
 - `apps/server/src/poker/decision-analysis-input-schema.ts` / `decision-analysis-schema.ts` / `core-fact-source-schema.ts` / `action-outcome-schema.ts`：中性严格 Schema，Player 保留原来源绑定；`candidate-outcomes.ts` 新增任意合法动作投影，原 Player 目录检查保留。
 - `apps/server/test/unit/coach-completed-source.test.ts` / `coach-review-builder.test.ts` / `coach-deterministic-metrics.test.ts` / `coach-policy-versions.test.ts` / `coach-read-resource.test.ts`：来源、重放、计算、政策与取消边界；`apps/server/test/integration/database-m82-assertions.ts` 注册 database m82。
 
 M8.2 未安装 Coach Worker、HTTP、模型编排、分类器或持久报告 writer；生产服务生命周期、专属槽位及 Commit Gate 仍由 M8.6 接入。
+
+
+## M8.3 对手范围与联合权益（2026-09-18）
+
+当前设计源为 [M8.3 范围模型与联合计算](superpowers/specs/2026-09-17-m8-3-versioned-strategy-repository-coach-projection-design.md)。文件名保留历史名称，正文和当前实现均采用独立 OpponentRangePack；旧 Coach 共享策略节点不再是当前结构。
+
+- `apps/server/src/poker-range/opponent-range-pack.ts` / `opponent-range-repository.ts`：范围包、来源/授权、169 类每组合权重、规则、联合情景和覆盖校验；只读精确版本 Repository 负责 active/pinned 生命周期和实例认证，生产默认空覆盖。
+- `apps/server/src/poker-range/range-scenario.ts` / `range-analysis.ts`：从行动前中性输入构造对手场景，按桌型、位置、入池线、筹码和拓扑匹配初始范围，聚合每名对手的来源、差异、限制和联合情景；歧义拒绝，未覆盖或空范围明确 unavailable。
+- `apps/server/src/poker-range/combo-expander.ts` / `range-updater.ts`：169 类展开为 6/4/12 个具体组合，过滤已知牌，按截止行动应用版本化倍率并记录来源轨迹；无规则保留未建模行动，范围权重不表示行动频率。
+- `apps/server/src/poker/showdown-awards.ts`：贡献层、牌型评价与按钮位置的纯逐池分奖；`apps/server/src/poker/settlement.ts` 与权益模拟共用赢家、平分和奇数筹码语义。真实结算继续拥有返还、筹码入账和守恒检查。
+- `apps/server/src/poker/candidate-outcomes.ts` / `action-outcome-schema.ts`：动作后 `pots`、资格与全座位 `guaranteedUncalledReturns`；终局扣除返还后重分层，Hero 本次风险保留原契约。仍有未来下注时这些是当前层，不能当作最终 EV 输入。
+- `apps/server/src/poker-range/joint-equity.ts`：同一无冲突牌堆上的联合精确枚举或确定性 Monte Carlo，逐池资格与期望分配、总回报相关误差、固定政策与批次取消；精确权重在冲突条件化后按对数尺度归一，Monte Carlo 独立提案后整组拒绝。
+- `apps/server/src/poker-range/conditional-ev.ts`：终局与无后续响应门禁后的跟注相对弃牌 EV，以及至多三个已发布情景的范围敏感性。调用者负责认证跟注性质、范围来源与对应动作后池。
+- `apps/server/test/unit/opponent-range.test.ts` / `joint-equity.test.ts` / `conditional-call-ev.test.ts` / `showdown-awards.test.ts` / `candidate-outcomes.test.ts`：离线范围、联合分布、误差、取消、逐池资格和风险验证；既有 Player 策略与真实 settlement 测试保留。
+
+- `apps/server/src/agents/coach/range-analysis.ts`：异步 `analyzeCoachOpponentRanges` 组合认证决策、metrics、action outcomes、固化范围包和联合计算；同步 `analyzeUncoveredCoachRanges` 只处理真实空覆盖包。`assertCertifiedCoachRangeAnalysis` 以私有 WeakMap 绑定本次输入、指标、动作结果和包，冻结边界在接受派生事实前复验认证。
+- `apps/server/src/agents/coach/range-fact-projector.ts`：范围、权益、条件性 EV 和敏感性的显式公开数值与事实来源投影入口；Guard 通过固定 fact ID、算法来源和重投影一致性校验限制公开结果，不允许 LLM 补写数值。
+
+当前公开 current 协议已改为范围事实，不提供旧 action baseline 的兼容 reader。生产范围来源/授权评审、M8.4 统计、M8.5 教学分类和 M8.6 持久化/Worker/HTTP 不由这些纯模块替代；当前不宣称生产范围覆盖或完整 Coach Runtime 已交付。

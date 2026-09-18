@@ -1,12 +1,14 @@
 # M8.1 Coach 共享协议与信息边界设计
 
 - 日期：2026-09-15
-- 状态：已按用户开发指令实施 A–D；当前实施与验证记录见 §14。§13 保留设计阶段的历史交付记录。
+- 状态：A–D 的历史实现与验证记录见 §14；2026-09-17 产品方向已修订，旧 Coach 动作频率/GTO/EV-loss 协议不再是目标契约。2026-09-18 已完成 M8.3 A–F 对公开协议、认证及 Guard 的 current-only 迁移；G 和 M8.4+ 尚未完成，最新验证见方向切换实施计划。
 - 任务来源：[开发任务 M8.1](../plans/2026-07-23-poker-practice-development-tasks.md#m81-定义-coach-共享协议与信息边界)、[Agent 工作包 A7.2](../plans/2026-07-26-agent-module-development-tasks.md#a72-实现-coach-三道信息边界)。两份计划描述同一能力，不重复建设。
 - 上位设计：[Coach Agent 专项设计](./2026-07-26-poker-coach-agent-design.md)，拥有产品范围、四层教学模型、分类语义与两阶段隔离；[Agent Foundation 架构](./2026-07-26-agent-foundation-runtime-architecture.md)拥有运行基础设施。
 - 需求依据：[PRD §7.5、§9、§12](./2026-07-23-poker-practice-prd.md)、[Coach 文档入口](../../poker_agent_6to9_requirements.md)。
 - 前序交接：[M7.7 历史与本手流程](./2026-09-14-m7-7-history-current-hand-detail-design.md)、[M7.9 设置与数据管理](./2026-09-15-m7-9-settings-data-management-page-design.md)。M7 开发完成；既有真机待验收项仍归原任务，不作为本设计的前置阻塞。
 - 下游：M8.2–M8.7 继承本文的协议与信息边界。本文不替代各任务的算法、数据来源、运行预算、持久化或页面设计。
+
+> **2026-09-18 契约同步。** 本文正文已原位改为范围假设、多人联合权益、逐池预期、条件性跟注 EV、抽样误差和敏感性；单决策隔离、三道 Guard、认证冻结及受限纠错继续有效。§13 保留 2026-09-15 仅设计交付时的验证，§14 保留后续历史实现证据；其中“本轮”“后续”均指各记录当时，不代表当前缺口。新协议已随 M8.3 A–F 落地，新增验证另见方向切换实施计划。计算细节以 [M8.3](./2026-09-17-m8-3-versioned-strategy-repository-coach-projection-design.md)为准。
 
 ## 1. 设计结论与完成标准
 
@@ -17,27 +19,27 @@ M8.1 建立 Coach 的三个独立数据边界：浏览器可读取的严格报�
 本任务实施完成应证明：
 
 1. 共享协议可以完整表达请求状态、逐决策四层报告、确定性评价、证据不足、教学投影和 169 类范围矩阵，拒绝额外字段及内部矛盾。
-2. 动作频率和下注尺度具有不同字段、单位和校验；同一策略节点的频率闭合，超池下注不被误当作非法频率。
+2. 范围权重、概率、抽样误差、模型不确定性与金额具有独立字段和单位；逐池资格与条件 EV 引用闭合。
 3. 服务端能够对照可信案例清单，拒绝遗漏、增加、重复、错序或跨手牌的决策。
 4. 三道 Guard 都可离线执行，拒绝错误阶段、未来事实、原始审计对象、跨 Owner/Hand/Decision 绑定和未认证的冻结对象。
-5. 两个模型阶段只能填写各自允许的解释字段；模型不能返回或覆盖评价、指标、策略频率、EV、等级和教学排序。
+5. 两个模型阶段只能填写各自允许的解释字段；模型不能返回或覆盖评价、指标、范围权重、权益、EV、误差和条件结论和教学排序。
 6. 初次请求及纠错请求都经过最终发送边界；纠错不回灌模型任意原始文本。
 
-本轮设计只交付本文和任务入口。后续 M8.1 实施范围是 Schema、纯校验、认证/冻结与模型边界适配，不安装真实 Coach Worker、HTTP 路由、数据库表、策略包或前端页面，也不连接模型和远程数据库。
+2026-09-15 初始设计阶段只交付本文和任务入口；随后 M8.1 已完成 Schema、纯校验、认证/冻结与模型边界适配，M8.2/M8.3 A–F 已完成来源重建和范围计算接入。当前待交付的是 M8.3 G 生产范围内容及 M8.4+ 的统计、教学分类、真实 Coach Worker、HTTP、持久化和页面；离线边界与计算实现不代表生产 Coach 运行链已交付。
 
 ## 2. 仓库证据与责任落点
 
-设计起点为 `63be283`，工作区干净。已阅读 [REPO_MAP](../../REPO_MAP.md) 与 [ARCHITECTURE](../../ARCHITECTURE.md) 的 Coach、Foundation、策略、历史和 M7 相关内容，并用下列源码核对。未来能力不提前记为已实现架构。
+历史设计起点（2026-09-15）为 `63be283`，当时工作区干净。已阅读 [REPO_MAP](../../REPO_MAP.md) 与 [ARCHITECTURE](../../ARCHITECTURE.md) 的 Coach、Foundation、策略、历史和 M7 相关内容，并用下列源码核对。未来能力不提前记为已实现架构。
 
 | 现有证据 | 本次决定 |
 | --- | --- |
-| [共享 Contracts](../../../packages/contracts/src/index.ts)、[包入口](../../../packages/contracts/package.json) | 当前没有 Coach 报告协议；复用 Card、HandId、SessionId、座位、逻辑位置、扑克行动等公开原语。新协议继续从现有包根导出，不让浏览器导入服务器类型。 |
-| [Coach Definition](../../../apps/server/src/agents/coach/foundation-definition.ts) | 已声明 `decisionAnalysis` / `hindsight`、三个只读 Capability、`modelToolPolicy: none` 和独立 Route Policy 引用，尚无业务执行器。保留现有 Manifest。 |
+| [共享 Contracts](../../../packages/contracts/src/index.ts)、[包入口](../../../packages/contracts/package.json) | 历史设计起点尚无 Coach 报告协议；复用 Card、HandId、SessionId、座位、逻辑位置、扑克行动等公开原语。新协议继续从现有包根导出，不让浏览器导入服务器类型。 |
+| [Coach Definition](../../../apps/server/src/agents/coach/foundation-definition.ts) | 已声明 `decisionAnalysis` / `hindsight`、三个只读 Capability、`modelToolPolicy: none` 和独立 Route Policy 引用，尚无业务执行器。保留三个只读能力与 modelToolPolicy；历史能力已原位替换为 `coach.analyze-opponent-ranges`。 |
 | [纯分析输入](../../../apps/server/src/poker/decision-analysis-input.ts)、[指标](../../../apps/server/src/poker/decision-metrics.ts)、[派生事实类型](../../../apps/server/src/poker/decision-analysis-types.ts) | M8.2 直接组合纯分析器；M8.1 定义 Coach 自己的来源认证与投影，不经 Player Observation/Packet 转换。金额与有理数语义沿用现有核心。 |
-| [策略包](../../../apps/server/src/poker-strategy/strategy-pack.ts)、[Repository](../../../apps/server/src/poker-strategy/strategy-pack-repository.ts)、[纯投影](../../../apps/server/src/poker-strategy/strategy-projection.ts) | 实际事实源名为 `StrategyPackRepository`；计划中的 `StrategyDatasetRepository` 是职责称谓，不据此新增第二套仓库。内部频率为整数基点且合计 10000，公开 `actionFrequency` 由它转换。 |
-| 同一策略 Repository 的 `EMPTY_AUTHORIZED_STRATEGY_PACK` | 当前默认生产覆盖为空。Schema 成功样本只能作为测试夹具；M8.3 才负责可追溯覆盖与完整范围数据，M8.1 不宣称已经支持 100BB 精确策略。 |
+| [Player 策略包](../../../apps/server/src/poker-strategy/strategy-pack.ts) | 继续专属 Player；Coach 已建立独立 OpponentRangePack/Repository，不从行动频率推导持牌权重。 |
+| [现有 Coach 冻结器](../../../apps/server/src/agents/coach/frozen-analysis.ts) | 历史 baseline/candidates 完整性检查已原位迁移为范围、动作结果、权益/误差/条件 EV 的认证镜像验证；保留实例身份和时间边界。 |
 | [权威完成手事实](../../../apps/server/src/sessions/hand-history/completed-hand-history.ts)、[投影器](../../../apps/server/src/sessions/hand-history/completed-hand-history-projector.ts) | 已有 checkpoint、result、带 `eventSeq` 的私有事件和 Owner 绑定；公开历史不包含完整行动前状态，不能从 Web 历史 DTO 或结束状态倒推合法动作。M8.2 负责真实案例构建。 |
-| [Context](../../../apps/server/src/agents/foundation/context-envelope.ts)、[Prompt](../../../apps/server/src/agents/foundation/prompt-module.ts)、[Gateway](../../../apps/server/src/agents/foundation/model-gateway.ts) | Foundation 已有实例认证、序列化、预算与敏感值扫描；Gateway 的纠错会追加 `invalidText`，需要 Coach 适配器限制回灌内容，并在实际 Adapter 调用前复验。 |
+| [Context](../../../apps/server/src/agents/foundation/context-envelope.ts)、[Prompt](../../../apps/server/src/agents/foundation/prompt-module.ts)、[Gateway](../../../apps/server/src/agents/foundation/model-gateway.ts) | Foundation 已有实例认证、序列化、预算与敏感值扫描；Gateway 的纠错会追加 `invalidText`，当前 Coach 适配器已限制回灌内容，并在实际 Adapter 调用前复验；生产两阶段模型编排仍归 M8.5。 |
 | [Player Adapter Guard](../../../apps/server/src/agents/player/player-model-adapter-boundary-guard.ts) | 可以借鉴品牌类型、WeakSet 与请求绑定的模式；不得复用 Player 认证实例、投影、Schema 或私有身份结构。 |
 
 ### 2.1 文件与依赖方向
@@ -58,7 +60,7 @@ M8.1 建立 Coach 的三个独立数据边界：浏览器可读取的严格报�
 Web（M8.7） ───────────────→ packages/contracts
 Coach 私有 Schema/Guard ──→ packages/contracts
 Coach 安全输入适配（M8.2） → poker 纯分析核心
-Coach 策略投影（M8.3） ───→ poker-strategy
+Coach 范围投影（M8.3） ───→ poker-range → poker
 Coach 模型边界 ───────────→ Foundation → 现有 Provider Adapter
 权威历史读取（M8.2） ─────→ Coach 案例输入
 ```
@@ -78,7 +80,7 @@ Coach 模型边界 ───────────→ Foundation → 现有 Pr
 所有对象（含数组元素）使用 strict Schema，不使用 `passthrough`、任意 `record<string, unknown>`、`any` 或未约束 JSON 作为报告/模型上下文扩展口。未知枚举或版本明确拒绝，不默认回退为当前版本。
 
 - 新报告 `schemaVersion: 1`；私有案例 `reviewContextVersion: 1`；两阶段输入和输出各自有独立 Schema 引用。它们不构成全仓统一协议版本。
-- UUID 沿用既有 Schema；整数金额、事件序号、计数及版本进一步限定安全整数。频率和比例必须是有限数值，不接受字符串强转、NaN 或 Infinity。
+- UUID 沿用既有 Schema；整数金额、事件序号、计数及版本进一步限定安全整数。范围权重和比例必须是有限数值，不接受字符串强转、NaN 或 Infinity。
 - 缺失与不可用分开表达。必需层不能省略；不可用使用明确状态和稳定 `reasonCode`，不能以 `0`、空对象或空字符串冒充结果。
 - 文本按纯文本处理，单条说明/替代路线说明最多 2000 字符，概览最多 2000 字符，单条教训/建议最多 500 字符。没有 HTML、Python、脚本、自由 Markdown 报告或工具调用字段。请求总字节/Token 限制继续由 Foundation 和后续 Runtime 预算控制。
 - 完整报告不按模型 Token 预算截断 `decisionReviews`。容量不足时运行明确失败，不能把部分报告标成完成。
@@ -87,7 +89,7 @@ Coach 模型边界 ───────────→ Foundation → 现有 Pr
 
 | 层次 | 能证明什么 | 不能独立证明什么 |
 | --- | --- | --- |
-| 公共 `CoachReviewSchema` | 字段类型、状态分支、频率/尺度、ID 唯一性、内部引用、摘要计数与教学分区自洽 | 报告中的决策是否覆盖真实手牌，数值是否来自权威事实 |
+| 公共 `CoachReviewSchema` | 字段类型、状态分支、权重/概率/误差、ID 唯一性、内部引用、摘要计数与教学分区自洽 | 报告中的决策是否覆盖真实手牌，数值是否来自权威事实 |
 | Coach 私有纯 Validator | 与案例清单的数量、身份、顺序完全一致；与冻结过程/事实/版本完全一致 | 数据库权限、租约、删除竞争是否仍有效 |
 | M8.6 服务/Commit Gate | Owner、completed 资格、Run/租约/删除边界与原子提交 | 不重新计算或重分类已经冻结的报告 |
 
@@ -119,58 +121,33 @@ M8.1 定义 `CreateCoachReviewRequestSchema = { requestId }`；Hand ID 由未来
 
 `pending → running → completed/failed`，准入后的执行前失败允许 `pending → failed`；终态只读。该图是业务语义，M8.1 Schema 不冒充跨请求状态机。删除后的对象由 M8.6 返回不存在，不新增 `deleted` 状态来复活记录。
 
-## 5. 动作、基准与范围矩阵
+## 5. 范围假设与确定性计算协议
 
-### 5.1 频率与金额
+本节原位替换旧 CoachStrategyBaseline、动作频率矩阵和 Solver EV。current `schemaVersion: 1` 不增加历史 reader、转换器或 fallback。Player StrategyPack 保留其独立行动策略契约。
 
-策略动作条目为 `{ actionId, action, actionFrequency, betSize }`。`actionId` 在策略节点内唯一；`action` 为 `fold | check | call | bet | raise | allIn`，不把 `smallBet` 等策略抽象名称当作扑克命令。
+### 5.1 范围假设
 
-`actionFrequency` 为 `0..1`。统一导出 `COACH_ACTION_FREQUENCY_TOLERANCE = 1e-6`，节点检查 `abs(sum - 1) <= tolerance`；范围矩阵每个起手牌格独立使用相同校验。零频动作可以保留，但节点不能全部为零。
+`OpponentRangeAnalysis` 使用顶层 `status: available | unavailable` 判别联合。公共身份为 `decisionId`、`rangePackRef: { datasetId, datasetVersion }` 与 `provenance: { rangeProjectionVersion, equityComputationPolicyVersion, settlementProjectionVersion }`。可用分支含整体 `matchStatus: matched | referenceOnly`、来源/授权、限制和 `scenarios[]`；每情景含 `scenarioId/name/opponents[]`，每对手独立保存 matchStatus、seat/位置、初始范围、适用条件、差异、来源、有序更新引用和 blocker 后组合数量。归一化质量保存在对应范围图。整体 referenceOnly 允许同时包含 matched 对手，不把该对手图改成 referenceOnly。不可用分支仅保留公共身份和明确 reasonCode，不附伪零范围或概率。
 
-现有策略包仍以 `actionFrequencyBasisPoints / 10000` 生成公开频率，内部整数闭合规则不变；转换不自行归一化错误数据。此容差只容纳序列化数值误差，不充当最低支持频率、策略匹配阈值或严重度阈值。
+来源类型为 `projectCurated | professionalReference | empiricalStudy`，保存可公开来源和授权引用。必要对手按未决底池资格确定；缺失某名必要对手的可信范围时联合权益不可用，不跳过该对手或回退均匀分布。范围包与算法引用规则继承 M8.3 §4–6。九类政策角色固定为 metrics/rangeModel/equityComputation/settlement/opponentEvidence/classifier/conclusion/severity/teaching，ID 映射由 `policy-versions.ts` 唯一维护；持久 Run 另固化 `opponent-range-pack/<datasetId>@<datasetVersion>` 及计算、结算投影版本。
 
-`betSize` 首版使用 `null | { kind: 'potFraction', value, ratioKind: 'targetStreetCommitmentToPotBefore' }`：
+### 5.2 数值和计算结果
 
-- `value` 为正的有限数值，可大于 1；含义固定为“本街目标总投入 / 本次行动前总底池”。它与净新增筹码、加注增量和可争夺底池不同。
-- `fold/check/call` 必须为 `null`；`bet/raise` 必须为明确结构。
-- `allIn` 是否需要尺度由当前合法候选事实决定：增加当前最高下注的全下必须有尺度，跟注性质的短码全下为 `null`。公共 Schema 允许这两种形式，服务端 Validator 对照候选执行语义复验。
-- 对策略基准，比例分母属于该基准假设下的行动前底池；`referenceOnly` 不能套用当前筹码冒充当前精确尺度。真实动作另由 `actualAction` 和确定性金额事实表达。
-- M8.3 转换已有 `betSizePotRatio` 时，必须核实分子确为目标投入、分母确为对应基准行动前底池；字段形状合法不代表来源语义已得到证明。
+范围权重 `relativeComboWeightBasisPoints: 0..10000` 表示每个具体组合的相对质量，不要求 169 格合计 10000，不能写入 `actionFrequency`。概率、预期份额及误差使用有限数值与显式单位；金额期望允许小数，真实筹码仍为安全整数。所有数值由认证引擎产生。
 
-例如 `{ action: 'bet', actionFrequency: 0.75, betSize: { kind: 'potFraction', value: 0.33, ratioKind: 'targetStreetCommitmentToPotBefore' } }` 表示 75% 频率选择该下注尺度。`raise` 的 UI 标签应显示“本街总投入为行动前底池的 X%”，不能简写成“加注 X%”。
+`JointEquityAnalysis` 可用分支按情景保存方法、计算政策版本、种子、枚举状态数或提案/接受样本数、逐池独赢/并列/输牌概率、预期分配比例与预期拿回、总预期拿回及误差。每池绑定 `potIndex/amount/eligibleSeatNumbers`；只汇总 Hero 有资格池。精确枚举标记无抽样误差；Monte Carlo 保存标准误差和 95% 区间，禁止与范围假设不确定性合并。未覆盖、空范围和样本不足均为带原因的 unavailable。
 
-### 5.2 策略基准
+动作投影沿用共享 `showdownForced/furtherBettingPossible/responders/canRaiseSeats/amountActuallyAtRisk` 字段；新增 pots 与所有座位的 guaranteedUncalledReturns。终局先扣全部确定返还再分层；非终局 pots 仅为当前动作后层。
 
-`CoachStrategyBaseline` 按 `matchStatus` 分为：
+`ConditionalCallEv` 可用分支必须绑定合法 call 或跟注性质 allIn 的认证动作结果、情景和计算引用；仅在强制摊牌、无后续下注、无响应者/可加注者且最终投入/返还/逐池资格确定时可用。`callEvVersusFold = expectedHeroReturn - amountActuallyAtRisk`，允许负值，扣除本次必然返还，不重复扣除沉没投入。有未来行动时返回 `unavailable/futureActionsUnmodeled`；直接摊牌条件权益不能冒充完整动作 EV。
 
-- `exact/referenceOnly`：必需 `datasetId`、`datasetVersion`、`recordId`、`source`、`scenarioAssumptions`、`abstraction`、非空 `actions`、`differenceCodes`。
-- `unsupported`：必需 `reasonCode`，`actions: []`；`datasetReference` 可空，表示未找到数据集或找到数据集但场景未覆盖，不能伪造记录/来源。
+`RangeSensitivity` 保存各已发布联合情景结果、跨情景最小/最大值与 EV 符号稳定性。无替代情景明确未评估；每个情景的抽样区间独立保留。完整计算、枚举/抽样政策和结算规则继承 M8.3 §7–9，协议不自行引入第二套算法。
 
-`source` 包含 `kind: solver | professionalReference | teachingReference`、`name`、`version`、`authorizationRef`；公开授权引用只能是可公开的标识或说明，不能携带私有路径/凭据。`scenarioAssumptions` 至少显式表达规则版本、`tableSize`、逻辑位置、基准有效筹码 BB、街道、行动节点和单挑/多人池；`abstraction` 包含版本化 profile 引用与有限的损失/假设代码，不能开放任意属性袋。
+### 5.3 `OpponentRangeChartSpec`
 
-`exact` 要求无影响精确性的差异，`referenceOnly` 至少声明一项差异，`unsupported` 没有可用频率或范围图。**匹配状态与来源类型是两条独立轴**：精确匹配的人工模板仍是教学基准。GTO 文案需要 `assessmentBasis=exactStrategy`、`matchStatus=exact` 和可追溯 Solver/等价来源同时成立；专业参考或教学模板不能仅凭 `exact` 获得 GTO 标记。
+范围图是被分析对手的 13×13 确定性报告资产：`schemaVersion/chartId/decisionId/rangePackRef/provenance/scenarioId/seatNumber/logicalPosition/matchStatus/rankOrder/cells`。每格为 `handClass/relativeComboWeightBasisPoints/availableComboCount/normalizedMass`，恰有 169 个唯一规范类别，使用 AA/AKs/AKo、大牌在前；13 对子、78 同花、78 非同花。对子/同花/非同花未过滤时分别有 6/4/12 组合，blocker 和更新后的总质量归一化。
 
-### 5.3 `rangeChartSpec`
-
-范围图由策略数据生成，不由模型生成。首版只接受翻前 13×13：
-
-```text
-rangeChartSpec
-  schemaVersion: 1
-  chartId
-  decisionId
-  datasetId / datasetVersion / recordId
-  tableSize / logicalPosition / actionNode
-  matchStatus: exact | referenceOnly
-  rankOrder: [A,K,Q,J,T,9,8,7,6,5,4,3,2]
-  highlightedHandClass
-  actions[]: { actionId, action, betSize }
-  cells[]: { handClass, actionFrequencies[]: { actionId, actionFrequency } }
-```
-
-`cells` 恰好包含全部 169 个唯一规范类别：13 对子、78 同花、78 非同花；使用 `AA/AKs/AKo`，大牌在前。对角线对子、上三角同花、下三角非同花。每格的动作 ID 集与图例完全一致，各格频率和为 1；禁止漏格、重复格、非法类名和未定义动作。
-
-`highlightedHandClass` 必须存在且与对应用户底牌派生类别一致（后者由服务端验证）。图表、决策与 baseline 的身份/版本/匹配状态必须一致。整个报告的 `rangeCharts` 保存图对象，`baselineLayer.rangeChartId` 只引用它，避免重复存两份矩阵。无完整 169 类数据时不返回图，而不是将未覆盖格填零或用五档强弱替代。
+图绑定范围分析相同对手、情景、决策及版本，不高亮 Hero 手牌，不包含动作图例或行动频率。根 `rangeCharts` 保存完整图，`rangeLayer.rangeChartIds` 引用对应对手图；模型 Context 只接收冻结摘要，无需携带全部格子。没有可信完整数据时不填零伪造图。
 
 ## 6. `CoachReview` 与逐决策报告
 
@@ -182,51 +159,39 @@ rangeChartSpec
 | --- | --- | --- |
 | `decisionId/street/boardContext/actualAction` | 当时公共牌为 0/3/4/5 张；实际动作复用公开 `PokerAction`，下注/加注保留 `targetStreetCommitment` | M8.2 权威案例投影 |
 | `assessment` | `sound`、`questionable`、`likelyMistake`、`unrated` | M8.5 Classifier |
-| `assessmentBasis` | `ruleInvariant`、`exactStrategy`、`referenceStrategy`、`solverEv`、`heuristicPolicy`、`insufficientEvidence` | 同上 |
-| `epistemicStatus` | `objective`、`modelBased`、`heuristic`、`unrated`；`modelBased` 是策略模型证据 | 同上 |
-| `decisionGrade/decisionGradePolicyVersion` | 上位设计六种等级及正整数版本 | M8.5 GradeProjector |
+| `assessmentBasis` | `ruleInvariant`、`rangeModel`、`conditionalCallEv`、`heuristicPolicy`、`insufficientEvidence` | 同上 |
+| `epistemicStatus` | `objective`、`modelBased`、`heuristic`、`unrated`；`modelBased` 是范围假设下的计算证据 | 同上 |
+| `conditionalConclusion/conditionalConclusionPolicyVersion` | §6.2 条件结论及正整数政策版本 | M8.5 条件结论投影 |
 | `primaryDeviationCode` | 上位设计八种 taxonomy 码之一或 null | M8.5 Classifier |
 | `observedDeviationTags` | `{ code, evidenceRefs[] }[]`，码不重复，每项有有效证据 | 同上 |
 | `mistakeTaxonomyVersion` | 首版 1；主码非空时必须有同码证据标签 | 同上 |
 | `teachingHypotheses` | `{ explanation, evidenceRefs[] }[]`，明确是待验证教学假设 | 同上冻结假设，模型只解释 |
-| `severity/severityBasis/severityPolicyVersion` | `low/medium/high/unavailable`；依据为 `evLoss/rulePolicy/unavailable` | M8.5 SeverityPolicy |
-| `baselineComparison` | `matchStatus`、可空 `actionSupported/sizeSupported/actualActionFrequency` | M8.5 确定性比较 |
-| `evLoss` | §6.2 判别联合 | 确定性 EV 来源与分类器 |
+| `severity/severityBasis/severityPolicyVersion` | `low/medium/high/unavailable`；依据为 `rulePolicy/unavailable` | M8.5 SeverityPolicy |
+| `opponentRangeAnalysis/jointEquityAnalysis/conditionalCallEv/rangeSensitivity` | §5 的严格状态联合及同源引用 | M8.3 认证生产者 |
 | `factManifest/evidenceRefs` | §6.3 的公开事实、来源、版本和截止点；引用不指向私有比较元组或候选结果 | Runtime 的公开白名单投影 |
-| `baselineLayer/situationLayer/exploitLayer` | 三层数据、状态、带引用说明始终存在 | 冻结事实 + 第一阶段解释 |
+| `rangeLayer/situationLayer/exploitLayer` | 三层数据、状态、带引用说明始终存在 | 冻结事实 + 第一阶段解释 |
 | `alternatives` | `{ text, factRefs[] }[]` 教学说明；不含候选标识、候选结构或假设执行结果 | 第一阶段解释经私有候选校验后，由 Composer 投影 |
 | `hindsightExplanation` | 只引用最小事后事实及已冻结过程说明 | 第二阶段解释 |
 
 `boardContext` 首版为 `{ cards, factRefs }`，`cards` 为当时可见公共牌；其他原子牌面事实通过引用呈现，不凭空新增 wet/dry 分类。`PokerAction` 不等同于整个 `PlayerActionCommand`：报告不包含可提交的命令 ID、Session 版本或命令信封。
 
-此表只定义浏览器可读取的报告。§8.1 模型输出中的 `candidateId`、§8.2 冻结过程内的候选校验信息，以及服务端牌型比较表示属于私有协议，不能因字段同名而直接复用为公共 Schema。公开教学投影与私有审计事实的转换统一遵守 §6.3。
+此表只定义浏览器可读取的报告。§8.2 冻结过程内的私有动作结果校验信息，以及服务端牌型比较表示属于私有协议，不能因字段同名而直接复用为公共 Schema。公开教学投影与私有审计事实的转换统一遵守 §6.3。
 
 ### 6.2 评价的结构性不变量
 
-八种客观偏差码沿用上位设计：`action_selection_error | sizing_error | range_construction_error | overfold | overcall | missed_value | unsupported_bluff | stack_depth_adaptation_error`。`spr_misread`、`ignore_position`、tilt 或动机推断不属于该枚举。
+八种客观偏差码沿用上位设计：`action_selection_error | sizing_error | range_construction_error | overfold | overcall | missed_value | unsupported_bluff | stack_depth_adaptation_error`。标签必须由独立规则或已冻结证据证明，不能从输赢、单一范围或低频推断。
 
-`evLoss`：
+`conditionalConclusion` 为 `favorableAcrossModeledRanges | unfavorableAcrossModeledRanges | rangeSensitive | insufficientEvidence`，仅描述合法跟注对比在已发布情景中的稳定性，不是全局最优行动等级。缺少可用 EV、替代情景或计算精度不足时，不得声称跨范围稳定；M8.5 政策必须使用每情景区间，而非仅看点估计符号。
 
-- `exact/estimated`：`valueBb >= 0`、`method`、`sourceVersion`、`assumptions[]`、`evidenceRefs[]` 必填。`method` 是版本化可追溯方法引用，不是模型生成的解释；可比较性由服务端按方法、计量和假设核实。
-- `unavailable`：`valueBb: null`、`method: null`、`sourceVersion: null` 和明确 `reasonCode`。没有来源不能以 `estimated` 绕过。
-
-共享 Schema 拒绝自身即可确定的矛盾：
-
-1. `majorEvMistake` 配 `evLoss=unavailable`；`severityBasis=evLoss` 却没有可用 EV。
-2. `severity=unavailable` 与 `severityBasis` 不一致；规则严重度没有版本/规则证据。
-3. `unsupported` 基准附带非空频率、支持结论或范围图；无尺度动作附带尺度支持结论。
-4. `referenceStrategy/heuristicPolicy` 单独产生 `likelyMistake`；受支持低频动作仅因低频被判错。
-5. `supportedAlternative` 搭配不支持的实际动作，或没有正频率证据。
-
-需要真实证据和政策阈值的关系由私有 Validator 完成：最高频并列、实际尺度是否受支持、EV 是否可比较、重大错误阈值、标签是否被规则/策略/EV 证明。GTO 展示资格按 §5.2 确定性投影，模型文本由 M8.5 校验；不能声称纯 Schema 已证明文案语义。M8.1 不自创阈值，也不把 `questionable` 固定换算成某一个等级。
+共享 Schema 拒绝 unavailable 附带数字、范围/权益/EV 的情景或版本错配、无资格池计入回报、非法概率/区间和没有规则引用的规则严重度。私有 Validator 再与认证生产者逐字段核对范围、逐池结果、误差、敏感性、条件 EV 和冻结结论。规则严重度不依赖 EV 可用性；范围不足不能被判为重大错误。移除频率 decisionGrade、baselineComparison、evLoss 与全手 EV-loss 排名，不以新名称保留同义结构。
 
 ### 6.3 事实、四层说明与引用
 
 `factManifest` 是每个决策条目内的**可公开事实清单**，由 Composer 从私有冻结事实显式投影，不复用完整内部事实联合。每项包含 `factId`、`scope: decision | hindsight`、`status: available | unavailable | notApplicable`、`epistemicKind`、`sourceRefs[]`、`schemaVersion`、`algorithmVersion`（无算法时 null）、`dataVersion`（无数据集时 null）、`asOfEventSeq`、`assumptions[]`，以及状态对应的公开确定性值或原因。`asOfEventSeq` 是该项来源截止点：Decision 不超过决策截止点，Hindsight 不超过完成手的完成事件；二者不能混用。
 
-`epistemicKind` 使用上位设计六类：`ruleFact | formulaFact | datasetBaseline | statisticalEvidence | heuristicJudgment | modelGeneratedText`。公开来源引用只允许有限判别联合：权威事件（Session/Hand/事件序号）、规则版本、算法版本、策略记录、统计证据和本报告内的公开事实 ID；不容纳 SQL、私有状态路径、原始工具返回、私有候选/比较事实 ID 或供应商字段。
+`epistemicKind` 使用上位设计六类：`ruleFact | formulaFact | rangeAssumption | statisticalEvidence | heuristicJudgment | modelGeneratedText`。公开来源引用只允许有限判别联合：权威事件（Session/Hand/事件序号）、规则版本、算法版本、范围模型记录、统计证据和本报告内的公开事实 ID；不容纳 SQL、私有状态路径、原始工具返回、私有候选/比较事实 ID 或供应商字段。
 
-公开事实值按领域使用严格类型：整数筹码、有理数 `{ numerator, denominator }`、BB 数、计数、布尔、可公开 Card 列表、座位列表、用户可读牌型类别/说明，以及版本化策略/统计结构。有理数分母为正的安全整数，分子按事实区分非负或有符号；净收益允许负值，筹码余额不允许。`available` 必须带该事实类别对应的值；`unavailable/notApplicable` 必须带原因且没有值。
+公开事实值按领域使用严格类型：整数筹码、有理数 `{ numerator, denominator }`、BB 数、计数、布尔、可公开 Card 列表、座位列表、用户可读牌型类别/说明，以及版本化范围/统计结构。有理数分母为正的安全整数，分子按事实区分非负或有符号；净收益允许负值，筹码余额不允许。`available` 必须带该事实类别对应的值；`unavailable/notApplicable` 必须带原因且没有值。
 
 牌型比较元组、评估比较等级、合法候选集合及其结果联合只定义在 `apps/server` 私有类型中。公共 Schema 和序列化结果都不得包含这些结构，也不得通过改名、嵌套、编码到文本/引用、只保留教学子集等方式输出其等价表示。保留服务端确定性比较与候选校验能力，不向浏览器交付内部比较表示或可关联的候选结果集。
 
@@ -238,35 +203,35 @@ rangeChartSpec
 | 筹码与底池 | 行动前筹码/街投入/总投入，名义/实际盲注、逐对手有效筹码、总底池/可争夺底池、跟注成本、合法目标边界 |
 | 比例指标 | pot odds、当前与街道起点 SPR、行动尺度；每个比例带明确语义，不使用无名百分比。翻前 SPR 为 notApplicable，缺少可靠街道起点数据为 unavailable |
 | 可见牌结构 | Hero 起手牌类别、当时公共牌、成牌/听牌等用户可见原子事实；牌型只输出类别和说明，不携带比较元组、排序分值或踢脚牌比较序列 |
-| 教学结论 | 经服务端验证的策略适用性或可选路线说明，以及可公开规则/策略/算法来源；不带 candidateId，不附候选动作执行后的金额、底池、响应拓扑或 SPR 结果结构 |
-| 基准/统计/评价 | §5.2 的策略、下文对手证据以及 §6.1–6.2 的冻结结果；使用同一 Schema 定义，引用不复制另一份不一致数据 |
+| 教学结论 | 经服务端验证的范围适用性或条件性路线说明，以及可公开规则/范围/算法来源；不带 candidateId，不附候选动作执行后的金额、底池、响应拓扑或 SPR 结果结构 |
+| 范围/统计/评价 | §5 的范围与计算、下文对手证据以及 §6.1–6.2 的冻结结果；使用同一 Schema 定义，引用不复制另一份不一致数据 |
 | 事后事实 | 从 §8.2 私有结果投影实际逐池资格/获胜座位/分配、返还、实际后续和必要牌型类别/说明，只允许 hindsight scope；不直接输出 revealedHandRanks 或 showdownComparisonsByPot 的私有比较表示/引用 |
 
 每种公开事实由现有纯分析结果按上述目录投影，M8.1 实施时应补齐对应 strict Schema，不以泛型 JSON 占位或直接导出服务端结果类型。算法计算仍归 M8.2/M8.5；没有现有结果时必须明确不可用。内部完整 `normalizedSpot`、算法审计路径与牌堆等不因“可追溯”进入共享包。
 
-公开说明统一使用 `{ text, factRefs[] }`。`baselineLayer` 包含 `baseline`、`explanation`、可空 `rangeChartId`；`situationLayer` 包含确定性公开 `factRefs` 和 `explanation`；`exploitLayer` 包含 `status: evidenceSupported | insufficientEvidence`、`evidence[]`、`explanation` 和可空 `deviationExplanation`，后者也是公开说明。公开 `alternatives[]` 是说明数组，例如“可考虑过牌以控制底池”，不含 `candidateId`、`deviationCandidateIds`、候选动作对象或候选执行结果。`hindsightExplanation` 使用同一公开说明结构，允许引用可公开的 `hindsight` 事实。
+公开说明统一使用 `{ text, factRefs[] }`。`rangeLayer` 包含 `opponentRangeAnalysis`、`explanation`、`rangeChartIds`；`situationLayer` 包含确定性公开 `factRefs` 和 `explanation`；`exploitLayer` 包含 `status: evidenceSupported | insufficientEvidence`、`evidence[]`、`explanation` 和可空 `deviationExplanation`，后者也是公开说明。公开 `alternatives[]` 是说明数组，例如“可考虑过牌以控制底池”，不含 `candidateId`、`deviationCandidateIds`、候选动作对象或候选执行结果。`hindsightExplanation` 使用同一公开说明结构，允许引用可公开的 `hindsight` 事实。
 
-Composer 的转换顺序固定为：先在服务端用私有 `candidateId` 与冻结候选结果验证模型可选路线、数值断言和剥削证据，再生成公开教学说明，最后按公开 Schema parse。内部比较元组和候选结果仍供 Validator/审计使用；公开报告保留可读牌型或结算说明及教学解释。源于私有事实的引用必须在服务端映射为已有公开事实，或按上述“教学结论”投影为有公开来源的说明，映射关系仅服务端持有；不能直接复制私有 ID、输出空引用来跳过证据验证，或为保留引用而公开内部值。无法形成有证据支撑的公开说明时拒绝合成，不以删掉引用后继续发布来掩盖问题。
+Composer 的转换顺序固定为：先在服务端用冻结事实和认证动作结果验证模型条件性路线、数值断言和剥削证据，再生成公开教学说明，最后按公开 Schema parse。内部比较元组和候选结果仍供 Validator/审计使用；公开报告保留可读牌型或结算说明及教学解释。源于私有事实的引用必须在服务端映射为已有公开事实，或按上述“教学结论”投影为有公开来源的说明，映射关系仅服务端持有；不能直接复制私有 ID、输出空引用来跳过证据验证，或为保留引用而公开内部值。无法形成有证据支撑的公开说明时拒绝合成，不以删掉引用后继续发布来掩盖问题。
 
-§5 的策略 `actionId` 表达已发布策略节点/范围图中的动作频率，保留其既有作用；它不得复用运行时 `candidateId`，也不提供反向读取候选结果的映射。私有模型输出与公共 `alternatives` 是两套 strict Schema，不能共用同一个候选结果联合。
+私有动作结果引用只绑定实际动作及合法跟注对比，不存在策略 actionId 或“最优候选”映射。模型解释可用已有事实引用描述条件，不得制造新动作结果；公共 `alternatives` 仍只输出经验证的说明。
 
 `evidence[]` 的每条为 `evidenceId`、五种既有 `metric` 之一、整数 `numerator/denominator`、可空 `value`、`filters`、`confidence`、`usableForExploit`、`policyVersion`、`asOfEventSeq`；过滤器明确人数、位置、机会类型、池类型和人物快照标识，置信状态首版用 `insufficient | sufficient` 表达门槛是否满足，不虚构置信概率。分母为零时 value=null 且不可剥削，非零时值与分子/分母一致；具体机会定义和样本门槛归 M8.4。
 
 第一阶段私有引用只能解析到当前决策 `scope=decision` 的私有安全事实；公开投影后的引用则只能解析到当前决策的公开事实清单。Hindsight 新事实与第一阶段清单分开构建，完成白名单投影后才加入公开报告。每个公开 factId 必须唯一，所有公开引用都存在、属于当前决策且来源绑定有效；`modelGeneratedText` 不能成为分类或数学事实的证据。样本不足时公开 `deviationExplanation=null`，私有验证同样不允许任何无证据剥削候选，不能通过解释字段返回无证据偏离。
 
-本节实施验收同时追踪公共 Schema 和最终序列化结果：比较元组/等价评估等级、candidateId/别名和候选结果结构在任意嵌套层出现均拒绝；私有模型输出保留候选引用仍可通过自身校验，但经过 Composer 后只能得到不含上述结构、公开引用闭合的教学报告。实际结算和当前局面指标仍可展示，不能将假设候选结果改标为“实际事实”绕过投影。
+本节实施验收同时追踪公共 Schema 和最终序列化结果：比较元组/等价评估等级、candidateId/别名和候选结果结构在任意嵌套层出现均拒绝；私有模型输出仅允许现有安全事实引用，但经过 Composer 后只能得到不含上述结构、公开引用闭合的教学报告。实际结算和当前局面指标仍可展示，不能将假设候选结果改标为“实际事实”绕过投影。
 
 严格字段和引用能拒绝可机械识别的错误，但不能证明任意自然语言语义正确。M8.5 的业务 Validator 仍需约束数值/牌面断言和结果倒推；展示时定量结论使用冻结数据，不从文本解析新的指标。不能把关键词扫描宣称为完整语义防火墙。
 
 ### 6.4 教学投影与空决策
 
-`decisionPrioritySummary.assessmentCountsByStreet` 固定四街，按报告实际条目分别核算四种 assessment，未出现街为零。`largestEvLossDecision` 为 `available { decisionId, valueBb, method } | unavailable { reasonCode }`；跨不兼容 EV 方法时不能给出全手最大值。`highSeverityUnknownEvDecisionIds` 只能引用 `severity=high + severityBasis=rulePolicy + evLoss=unavailable` 的条目。
+`decisionPrioritySummary.assessmentCountsByStreet` 固定四街，按真实条目核算 assessment；另保存规则严重度与条件结论计数，均与逐决策冻结结果一致。移除 `largestEvLossDecision` 和 `highSeverityUnknownEvDecisionIds`；不得累计或跨决策排序条件性 EV。
 
 `teachingProjection` 包含上位设计规定的核心、最多两个次要、其余压缩决策 ID，以及主教训/主建议和政策版本。三组互斥、无重复，其并集覆盖全部决策；核心为空时次要为空、所有条目进入压缩组并在概览说明不可评价。`primaryLesson/primaryPracticeSuggestion` 非空时必须来自各自最多三条的根数组，不能是第二份不一致结论。
 
-默认排序由 M8.5 政策产生：可比较 EV、规则严重度、稳定权威顺序；M8.1 只验证结果与冻结政策输出一致，不实现排名算法。存在可评价决策时核心恰好一个；全为 `unrated` 时核心允许为空。
+默认排序由 M8.5 政策产生：规则严重度、证据充分性和条件结论的教学价值、稳定权威顺序；M8.1 只验证结果与冻结政策输出一致，不实现排名算法。存在可评价决策时核心恰好一个；全为 `unrated` 时核心允许为空。
 
-合法完成手可能没有任何用户自愿决策（例如盲注已全下或轮到用户前结束）。此时 `decisionReviews=[]`、四街计数为零、所有教学 ID 为空、核心教训/建议为 null、范围图为空、EV 排名不可用。后续 Runtime 生成明确“本手没有可评价的用户决策”的报告，无需模型调用；不能伪造一条决策来满足非空数组。
+合法完成手可能没有任何用户自愿决策（例如盲注已全下或轮到用户前结束）。此时 `decisionReviews=[]`、四街计数为零、所有教学 ID 为空、核心教训/建议为 null、范围图为空、条件结论计数为零。后续 Runtime 生成明确“本手没有可评价的用户决策”的报告，无需模型调用；不能伪造一条决策来满足非空数组。
 
 ## 7. 私有案例与时间边界
 
@@ -288,9 +253,9 @@ Composer 的转换顺序固定为：先在服务端用私有 `candidateId` 与�
 
 M8.1 给出 strict 私有输入和校验端口；M8.2 从 Owner-scoped 权威事实构建行动前状态，认证桌型/位置/牌面/动作/事件关系。Guard 不能仅靠字段名和牌数证明时间正确：一张合法格式的未来牌替换当前 flop 的某张牌仍要通过可信时点事实对照拒绝。
 
-`HandReviewCaseBuilder` 输出后、任何指标计算/策略查询/对手证据处理/分类之前，必须执行 `DecisionContextBoundaryGuard`。Builder 从安全过程来源中选出单个 `heroDecision` 和对应的可信行动前来源供 Guard 核对；Guard 不依赖 auditTruth，不接收已生成的 assessment，也不把整手来源交给分析生产者。安全输出为独立深冻结、运行期认证的 `CertifiedCoachDecisionInput`，只含当前决策绑定、可见状态、合法动作、被评价实际动作和截止点。
+`HandReviewCaseBuilder` 输出后、任何指标计算/范围分析/对手证据处理/分类之前，必须执行 `DecisionContextBoundaryGuard`。Builder 从安全过程来源中选出单个 `heroDecision` 和对应的可信行动前来源供 Guard 核对；Guard 不依赖 auditTruth，不接收已生成的 assessment，也不把整手来源交给分析生产者。安全输出为独立深冻结、运行期认证的 `CertifiedCoachDecisionInput`，只含当前决策绑定、可见状态、合法动作、被评价实际动作和截止点。
 
-完整 `HandReviewCase` 与 `auditTruth` 只由事后 Projector 边界持有。同步内存端口 `readHindsightSource` 仅注入该边界，在全手过程冻结前不得调用；它从已加载事实构造完整案例，不执行 SQL，此门禁不禁止存储边界提前加载/校验完整事实；端口是受信应用代码，不能由模型/HTTP 注册。读取结果包含完整绑定、完成事件、决策清单及 auditTruth，并与已冻结的过程来源逐字段对照，不能只返回无身份的审计值。Metrics/Strategy/Opponent Evidence 的 Coach 入口仅接受上述认证安全输入；Classifier 仅接受该输入及从它生成并绑定的安全派生结果。它们不得获得完整案例、指向它的对象/闭包、全量历史读取能力或返回事后事实的端口。对手证据只能经强制携带认证截止点的窄查询返回，不能让生产者拿完整历史后自行选择是否过滤。共享扑克纯分析器不必导入 Coach 品牌类型，由 Coach 适配器验证实例后显式构造纯分析输入。
+完整 `HandReviewCase` 与 `auditTruth` 只由事后 Projector 边界持有。同步内存端口 `readHindsightSource` 仅注入该边界，在全手过程冻结前不得调用；它从已加载事实构造完整案例，不执行 SQL，此门禁不禁止存储边界提前加载/校验完整事实；端口是受信应用代码，不能由模型/HTTP 注册。读取结果包含完整绑定、完成事件、决策清单及 auditTruth，并与已冻结的过程来源逐字段对照，不能只返回无身份的审计值。Metrics/Range Analysis/Opponent Evidence 的 Coach 入口仅接受上述认证安全输入；Classifier 仅接受该输入及从它生成并绑定的安全派生结果。它们不得获得完整案例、指向它的对象/闭包、全量历史读取能力或返回事后事实的端口。对手证据只能经强制携带认证截止点的窄查询返回，不能让生产者拿完整历史后自行选择是否过滤。共享扑克纯分析器不必导入 Coach 品牌类型，由 Coach 适配器验证实例后显式构造纯分析输入。
 
 ## 8. 两阶段输入与模型输出
 
@@ -302,36 +267,36 @@ M8.1 给出 strict 私有输入和校验端口；M8.2 从 Owner-scoped 权威事
 HandReviewCaseBuilder → CoachDecisionSource（无 auditTruth）
   → DecisionContextBoundaryGuard
   → CertifiedCoachDecisionInput
-  → Metrics / Strategy / Opponent Evidence（及确定性候选结果）
+  → Metrics / Range Analysis / Opponent Evidence（及实际动作/合法跟注比较结果）
   → DecisionAssessmentClassifier
   → 冻结 FrozenDecisionAssessment
   → CoachDecisionContext 准备与最终 Model Adapter Boundary Guard
   → CoachDecisionAnalyzer
 ```
 
-`FrozenDecisionAssessment` 包含私有身份/截止点/版本、认证安全输入、由它派生的全部证据、分类/等级/严重度与私有事实清单。Metrics、策略和证据结果均绑定同一认证输入及版本，Classifier 校验这种绑定而不接收完整 `HandReviewCase`；冻结器只接收这条链生成的结果，不能把调用者提供的任意分类对象冻结后认证。M8.1 定义输入/派生结果认证和冻结协议；M8.2–M8.5 在该入口下实现真实生产者。
+`FrozenDecisionAssessment` 包含私有身份/截止点/版本、认证安全输入、由它派生的全部证据、分类/条件结论/严重度与私有事实清单。Metrics、范围分析和证据结果均绑定同一认证输入及版本，Classifier 校验这种绑定而不接收完整 `HandReviewCase`；冻结器只接收这条链生成的结果，不能把调用者提供的任意分类对象冻结后认证。M8.1 定义输入/派生结果认证和冻结协议；M8.2–M8.5 在该入口下实现真实生产者。
 
-`CoachDecisionContext` 包含 `contextKind: decisionAnalysis`、本次 `decisionId`、单个安全决策投影、确定性事实、策略/对手证据与冻结 assessment。它由上述认证输入及其绑定的冻结结果准备，模型发送前继续复验来源一致性；这次复验不能替代分类前 Guard。OwnerScope、执行权限、Run token 和原始私有身份不序列化给模型；模型只需要当前 decisionId 及局部事实/候选引用。这里的事实清单和候选引用是服务端私有模型协议，不是 §6.3 的公共事实联合。
+`CoachDecisionContext` 包含 `contextKind: decisionAnalysis`、本次 `decisionId`、单个安全决策投影、确定性事实、范围/对手证据与冻结 assessment。它由上述认证输入及其绑定的冻结结果准备，模型发送前继续复验来源一致性；这次复验不能替代分类前 Guard。OwnerScope、执行权限、Run token 和原始私有身份不序列化给模型；模型只接收当前 decisionId、安全决策、受控事实及范围摘要，不接收候选集合或私有 actionOutcomes。私有解释通过 factRefs 引用认证事实，合法跟注比较沿同一事实引用边界投影。
 
 模型输出 `CoachDecisionExplanationSchema` 严格限定为：
 
 ```text
 decisionId
-baselineExplanation: { text, factRefs[] }
+rangeExplanation: { text, factRefs[] }
 situationExplanation: { text, factRefs[] }
 exploitExplanation: { text, factRefs[] }
-alternatives[]: { candidateId, explanation, factRefs[] }
+alternatives[]: { explanation, factRefs[] }
 keyLessons[]       // 每个决策最多 3 条候选教学文本
 practiceSuggestions[] // 每个决策最多 3 条自然语言建议
 ```
 
-这些字段是 Composer 的私有解释材料，不是公开 `CoachReview`，也不是公开三层事实对象。模型不回传 `assessment`、`boardContext`、`actionFrequency`、`evLoss`、`factManifest` 或完整 `baselineLayer`。私有 `alternatives[].candidateId` 供服务端验证路线来源，按 §6.3 投影成公开说明时不保留该标识或对应候选结果。全手最多三条教训/建议由 M8.5 按确定性教学投影从候选中选择，不能引入一个读取事后事实的总结模型重新评价过程。
+这些字段是 Composer 的私有解释材料，不是公开 `CoachReview`，也不是公开三层事实对象。模型不回传 `assessment`、`boardContext`、`relativeComboWeightBasisPoints`、`jointEquityAnalysis`、`conditionalCallEv`、`rangeSensitivity`、`factManifest` 或完整 `rangeLayer`。私有 alternatives 的引用只解析到认证事实和合法跟注对比；不得以文本新增概率、动作 EV 或推荐候选。全手最多三条教训/建议由 M8.5 按确定性教学投影从候选中选择，不能引入一个读取事后事实的总结模型重新评价过程。
 
 一次生成只对应一个决策；不携带同手其他决策的输入、结果或第一阶段的前次对话历史。纠错继续使用完全相同的当前决策输入。多决策的调用次数、并发和预算在 M8.5 安排，但任何优化都必须维持此隔离。
 
 ### 8.2 第二阶段：冻结过程与最小事后事实
 
-`ProcessAnalysisFreezer` 校验第一阶段输出与冻结 assessment、引用集合及候选集合一致，构造无外部可变引用的深冻结 `FrozenProcessAnalysis`。它保留原过程结论，不能让 Hindsight 持有分类器、可写回调、Repository 或可变 builder。
+`ProcessAnalysisFreezer` 校验第一阶段输出与冻结 assessment 及认证事实引用集合一致，构造无外部可变引用的深冻结 `FrozenProcessAnalysis`。它保留原过程结论，不能让 Hindsight 持有分类器、可写回调、Repository 或可变 builder。
 
 整手所有决策的第一阶段结果均通过校验并冻结后，才进入 Hindsight 阶段；每次 Hindsight 仍只绑定对应决策。`beginHindsight()` 先核对完整清单上的过程均已冻结，立即不可逆地关闭第一阶段，再调用 Projector 读取、解析并冻结完整案例。完整来源与安全来源的身份、版本、完成事件、顺序及决策内容必须完全一致；校验失败则本次边界失败，不恢复第一阶段或重新读取另一份源。`hindsightContext` 自动执行该准入并缓存同一完整案例的投影；过程未齐、伪造或跨边界过程不能触发读取。
 
@@ -355,18 +320,18 @@ Composer 在过程/事后结果均通过校验后，显式复制白名单字段�
 
 ### 9.1 `DecisionContextBoundaryGuard`
 
-该 Guard 是**分类前输入门禁**：紧接 `HandReviewCaseBuilder`、位于 Metrics/Strategy/Opponent Evidence 和 Classifier 之前。输入是 Builder 选出的单个待认证决策和可信行动前来源绑定，不是已冻结 assessment 或模型发送投影。Guard：
+该 Guard 是**分类前输入门禁**：紧接 `HandReviewCaseBuilder`、位于 Metrics/Range Analysis/Opponent Evidence 和 Classifier 之前。输入是 Builder 选出的单个待认证决策和可信行动前来源绑定，不是已冻结 assessment 或模型发送投影。Guard：
 
 1. 对嵌套字段 strict parse，核对来源实例；将原始 `HandReviewCase`、`auditTruth`、Player Packet、其他决策上下文或 assessment 当作安全输入传入时拒绝。
 2. 逐字段核对 Owner/Session/Hand/Decision/规则版本、行动前状态、公共牌、真实动作和证据截止点。比较所需来源仅为当前行动前事实及目标实际动作，不给 Guard 后的消费者保留读取完整来源的能力；来源较晚的条目拒绝，不静默裁剪。
 3. 验证行动与牌面均属于当前决策的许可信息，输出没有完整对手底牌、最终赢家/收益、后续行动、牌堆、事后引用或其他决策数据。
 4. 显式复制白名单形成独立深冻结的 `CertifiedCoachDecisionInput`，使用模块私有实例认证绑定来源；不保留原案例引用、可变共享数组、getter 或闭包读取口。只有成功的分类前 Guard 能签发该实例。
 
-Metrics/Strategy/Opponent Evidence 的 Coach 入口在执行前检查该实例；安全派生结果连同版本绑定到同一实例后才能进入 Classifier。普通对象、仅 TypeScript 强转、浅冻结、JSON 克隆或错决策实例都不能进入计算/分类。可信来源已得到认证不意味着任何后续结果都可信：派生结果仍要复验截止点、版本与来源，冻结 assessment 不能重新接收外部案例作为补充参数。
+Metrics/Range Analysis/Opponent Evidence 的 Coach 入口在执行前检查该实例；安全派生结果连同版本绑定到同一实例后才能进入 Classifier。普通对象、仅 TypeScript 强转、浅冻结、JSON 克隆或错决策实例都不能进入计算/分类。可信来源已得到认证不意味着任何后续结果都可信：派生结果仍要复验截止点、版本与来源，冻结 assessment 不能重新接收外部案例作为补充参数。
 
 模型准备继续从该实例及其派生的冻结结果构造 `CoachDecisionContext`，发送前由 §9.3 复验。这是同一认证链的末端检查，不能把 Guard 移到分类后，或只因待发送字段合法就给来源不明的 assessment 补签认证。
 
-本边界的实施验收必须包含两类证据：一是完整案例/未认证输入不能进入指标或分类入口；二是两份行动前可见事实、被评价动作、截止点、策略/算法/政策版本相同，仅未来 runout/结算不同的合法案例，经真实分类前 Guard 得到相同安全业务输入，再经确定性生产链得到相同 assessment。更换未来事实不得改变该输入或评价；伪造一个只附合法引用的不同 assessment 也不能获得该生产链的认证。M8.1 用有界纯生产夹具验证入口与认证接线，M8.2/M8.5 接入真实算法后重用该验收条件；不能仅检查最终消息没有未来字段就声称通过。
+本边界的实施验收必须包含两类证据：一是完整案例/未认证输入不能进入指标或分类入口；二是两份行动前可见事实、被评价动作、截止点、范围模型/算法/政策版本相同，仅未来 runout/结算不同的合法案例，经真实分类前 Guard 得到相同安全业务输入，再经确定性生产链得到相同 assessment。更换未来事实不得改变该输入或评价；伪造一个只附合法引用的不同 assessment 也不能获得该生产链的认证。M8.1 用有界纯生产夹具验证入口与认证接线，M8.2/M8.5 接入真实算法后重用该验收条件；不能仅检查最终消息没有未来字段就声称通过。
 
 ### 9.2 `HindsightContextBoundaryGuard`
 
@@ -381,7 +346,7 @@ Guard 属于 Coach，在 **每一次真实 Provider Adapter `generate` 调用前
 - 解码最终只读 JSON 段并重新执行阶段字段/来源校验；正文不能夹带第二个上下文、另一阶段结果或动态工具权限。
 - 禁止任意供应商参数透传；仍使用现有 `ProviderAttemptInput` 白名单、固定 `modelToolPolicy: none` 和敏感值 Scanner。
 
-实现优先采用**每次 generation 绑定的 Coach `ModelProviderAdapter` 装饰器**，内部转发到已有 DeepSeek Adapter，再注入现有 `createModelGateway({ adapter, registry })`。不要在共享 Adapter 上保存可被另一个并发请求覆盖的“当前决策”变量。真实 Route Policy/Worker 的装配由 M8.5 完成，本任务用真实 Foundation 与测试注册定义验证该接缝。
+当前实现采用**每次 generation 绑定的 Coach `ModelProviderAdapter` 装饰器**，内部转发到已有 DeepSeek Adapter，再注入现有 `createModelGateway({ adapter, registry })`。不要在共享 Adapter 上保存可被另一个并发请求覆盖的“当前决策”变量。真实 Route Policy/Worker 的装配由 M8.5 完成，本任务用真实 Foundation 与测试注册定义验证该接缝。
 
 ### 9.4 纠错回灌
 
@@ -413,21 +378,21 @@ Guard 的来源认证只证明“同一份已由上游验证的数据”，不�
 
 | 切片 | 结果与责任范围 | 前提/继承约束 | 完成证据 |
 | --- | --- | --- | --- |
-| A：公开 Contracts | 请求状态、报告、基准、数值、范围矩阵及内部关系校验 | §3–6；复用公开原语，无 Server 依赖 | 合法/unsupported/零决策报告通过；严格字段、频率、169 格、教学分区失败用例；包根构建通过 |
+| A：公开 Contracts | 请求状态、报告、范围假设、确定性数值、对手范围图及内部关系校验 | §3–6；复用公开原语，无 Server 依赖 | 合法/unavailable/零决策报告通过；严格字段、权重/误差、169 格、教学分区失败用例；包根构建通过 |
 | B：私有案例与完整性 | 稳定决策身份、时间边界、模型输出白名单、可信案例清单与报告对照 Validator | A；§7–8；真实历史 builder 属 M8.2 | 同街多决策身份不同；遗漏/增加/错序/跨手拒绝；第二阶段额外字段拒绝 |
 | C：阶段 Guard 与冻结 | Decision/Hindsight strict 输入、来源绑定与深冻结认证 | B；不把后续事实纳入早期决策 | 合法两个阶段通过；替换成合法格式的未来牌、跨来源、浅冻结与事后回写拒绝 |
 | D：最终模型接缝与集成 | Coach 请求绑定装饰器、纠错投影、两阶段离线组合及交接文档 | C；保留 Foundation/Player 行为，无生产 Worker | 真实 Foundation + 假 Provider 捕获每次发送载荷；阶段混用和纠错注入在转发前拒绝；目标测试与 verify 通过 |
 
-M8.1 可用固定的可信分类/事后事实夹具验证 Guard，但不把假分类器、假策略或空结果接到生产启动链。切片完成不代表 M8 全链路已经可用。
+M8.1 可用固定的可信分类/事后事实夹具验证 Guard，但不把假分类器、假范围模型或空结果接到生产启动链。切片完成不代表 M8 全链路已经可用。
 
 ### 11.1 M8 后续编排
 
 | 后续任务 | 本文提供的输入与约束 | 该任务必须交付的新增证据 |
 | --- | --- | --- |
 | M8.2 | 私有案例/截止点/安全事实与纯分析端口 | completed 权威重建、各人数/街次/边池、与 Player 同版本纯分析的一致性 |
-| M8.3 | 基准三态、来源与频率/尺度、rangeChartSpec | 实际授权策略覆盖和 169 类数据；处理当前空生产包及当前投影缺少教学来源信息的事实 |
+| M8.3 | 范围三态、逐池联合权益、条件 EV、误差/敏感性和对手范围图 | 授权范围包、6/4/12 组合展开、联合计算、共享分池及认证数值投影 |
 | M8.4 | 版本化统计证据与截止点 | 真实机会/样本门槛和截止查询，不混人物版本/场次配置 |
-| M8.5 | 模型输出白名单、冻结与三道 Guard | 分类/严重度/等级/教学政策、真实 Hindsight Projector、逐决策调用编排与预算 |
+| M8.5 | 模型输出白名单、冻结与三道 Guard | 分类/严重度/条件结论/教学政策、真实 Hindsight Projector、逐决策调用编排与预算 |
 | M8.6 | 请求/报告协议与只读结果 | Owner/幂等/状态机/Schema/Repository/删除竞争/Commit Gate 与 HTTP |
 | M8.7 | 完整报告、教学分区、范围图 | 手机端读取和展示；全部决策可展开，证据不足、过程/事后明确区分 |
 | M8.8 | 跨模块验收约束 | 真实生命周期与持久化下的完成报告、失败/重试/删除和边界集成 |
@@ -439,7 +404,7 @@ M8.1 可用固定的可信分类/事后事实夹具验证 Guard，但不把假�
 1. 当前 Coach Definition 只有 `maxAttempts=4`、三个 Capability 各一次和固定 Token/时间预算。逐决策隔离后不能将一整手默认当成两次调用；M8.5 必须按实际决策数、两阶段及纠错规划可执行预算，并用长手牌验收。Capability 可按固定三次批量执行整手纯计算，但模型输入仍逐决策隔离，不机械扩大 Manifest。不能静默截断决策或借用 Player 容量。
 2. 当前 Definition 的 `outputSchema` 引用是 `coach.output.review`，Gateway 当前核对的是该 Runtime 引用，具体 Schema 实例由调用方提供。保留这一外层引用；Coach Guard 另以阶段绑定两个私有解释 Schema/Validator 实例及其版本，最终 Runtime 结果仍用公开 `CoachReviewSchema` 校验。M8.1 的离线集成需证明此区分，M8.5 直接继承；不能把整个报告 Schema 交给模型，也不能只凭相同外层引用允许两个阶段互换。M8.6 审计需记录私有阶段 Schema 版本，不能仅记录外层引用就声称可以重放。
 3. 当前恢复引用为 `coach.recovery.process-restart-cancel`。上位设计允许经严格版本匹配复用检查点；具体重启行为与持久化接入归 M8.6，不把“Schema 已定义”描述成恢复已实现。
-4. 生产策略为空与 Coach 来源投影缺失是已知接入工作，归 M8.3；本任务不填造策略，也不把现有 Player 投影输出强转成 Coach 基准。
+4. 生产范围来源、授权与覆盖审查归 M8.3；fixture 不能冒充生产模型，未覆盖明确 unavailable。
 5. 实施核查发现 `sessions/authoritative-state/decision-identity.ts` 的旧 Coach helper 输出 UUIDv5，目前只有其单元测试调用；Foundation Run 的身份列仍是 UUID。本文 §4.1 的公开报告身份使用规范字符串，不调用或隐式回退到该 helper。M8.2 按本文构建报告决策身份；M8.6 在接入 Run/持久化时必须显式定义 UUID 运行身份与报告决策键的关联，不能把报告键直接写入 UUID 列。M8.1 不更改既有 Foundation helper、测试或数据库列。
 
 这些约束已有明确负责里程碑，不阻塞 M8.1 协议和 Guard 实施；对应后续设计必须解决后才能声称该阶段已完成。
@@ -450,11 +415,11 @@ M8.1 可用固定的可信分类/事后事实夹具验证 Guard，但不把假�
 
 | 证据组 | 关键样例与断言 |
 | --- | --- |
-| 公开报告冒烟 | 一份正常多决策报告，含 6 人/9 人的代表性身份、同街重复行动、基准/无基准状态；只使用夹具，不能据此宣称真实策略支持 |
-| 数值与基准 | 频率 0/1 合法，负值/>1/非法和拒绝；容差边界；超池尺度 >1 合法、非正尺度拒绝；fold 带尺度拒绝；分清基准假设与实际金额 |
-| 范围图 | 169 唯一类通过；漏格/重复格/非法 class/未定义 action/频率不闭合拒绝；高亮和 baseline 身份必须一致 |
+| 公开报告冒烟 | 一份正常多决策报告，含 6 人/9 人的代表性身份、同街重复行动、范围可用/不可用状态；只使用夹具，不能据此宣称生产范围覆盖 |
+| 数值与基准 | 每组合相对权重 0..10000；概率/区间与单位合法；逐池资格、返还与条件 EV 镜像一致；误差和范围不确定性分离 |
+| 范围图 | 169 唯一类通过；漏格/重复格/非法 class/错误组合数/质量不闭合拒绝；对手 seat、情景和范围版本必须一致 |
 | 报告完整性 | 对同一个可信 Hero 决策清单分别删除、增加、重复、换序和换 Hand；Schema 的自洽样本仍被服务端完整性 Validator 拒绝 |
-| 确定性字段保护 | Analyzer 返回 assessment/EV/频率；Hindsight 返回替代路线/三层/等级；均不能进入合成报告 |
+| 确定性字段保护 | Analyzer 返回 assessment/权益/EV/误差/权重；Hindsight 返回替代路线/三层/条件结论；均不能进入合成报告 |
 | 两阶段时间边界 | 当前 flop 合法；附加未来 turn，或用合法格式的未来牌替换 flop、注入决策后的公开行动/统计/最终赢家、混入同手后续决策均拒绝；Hindsight 只接受实际发生的认证事实 |
 | 冻结与身份 | 修改外部原对象不能修改冻结输入；浅冻结/伪品牌/JSON 克隆/跨 Owner/跨 Run/跨 Decision 对象不能通过认证；有效实例可完成解释合成 |
 | 最终发送与纠错 | 使用真实 Foundation Context/Prompt/Gateway 和可编程假 Provider 捕获实际消息；初次及纠错都只含本阶段白名单，恶意 textProjection 不被回灌；拒绝后底层 Provider 未收到污染载荷 |
@@ -470,15 +435,15 @@ M8.1 可用固定的可信分类/事后事实夹具验证 Guard，但不把假�
 
 设计阶段以引用、任务覆盖、内部一致性和文档 diff 为直接证据；额外执行现有 verify 只验证仓库回归基线，不能将其称为 M8.1 Guard 已通过或 Coach 已实现。
 
-## 13. 设计交付与下一步
+## 13. 历史设计交付记录（2026-09-15）
 
-本文细化既有需求中的协议字段、校验责任、单决策隔离、纠错回灌与实现切片；没有需要用户重新选择的产品范围问题。下一步是确认本文后实施 M8.1 的 A–D，后续里程碑依 §11 逐项设计和研发。
+初始设计细化了协议字段、校验责任、单决策隔离、纠错回灌与实现切片。当时下一步为实施 M8.1 A–D；此项随后已完成，历史实施见 §14。当前已实现范围和真实后续工作以页首及 §1 的 2026-09-18 状态为准。
 
 如实施证据要求改变公开字段语义、信息权限、决策完整性或跨阶段关系，先修订本文及受影响上位设计；局部文件拆分、命名、测试 helper 无需重复审批。
 
-本轮没有运行 Coach、连接模型或连接远程数据库。database milestone/full 与 PostgreSQL E2E milestone/full 均未执行；真实历史重建、分类准确性、预算可行性和生产两阶段执行留给已列明的后续任务验证。
+在该初始设计阶段，没有运行 Coach、连接模型或连接远程数据库，database milestone/full 与 PostgreSQL E2E milestone/full 均未执行。当时尚未验证真实历史重建、分类准确性、预算和生产两阶段执行；历史重建现已由 M8.2 实施，当前未交付的生产运行及教学分类仍由 M8.4+ 负责。
 
-### 13.1 本轮验证记录
+### 13.1 初始设计阶段验证记录（2026-09-15）
 
 - 新设计与开发计划共 79 个本地文件链接目标存在；文档表格、任务条目和 diff 已检查。
 - `pnpm run verify` 通过：地图 181 项、牌资源 55 项、离线 Player Eval 12 个场景；Contracts 38、Server unit 1065、Server service 53、Web 142 项测试通过，格式和类型检查通过。这些是既有测试，尚没有 M8.1 实现测试。
@@ -488,7 +453,9 @@ M8.1 可用固定的可信分类/事后事实夹具验证 Guard，但不把假�
 
 ## 14. M8.1 实施交接（2026-09-15）
 
-用户已要求进入开发阶段，A–D 按本文范围落地。
+以下保留 2026-09-15 至 2026-09-16 的原始实施与验证范围，旧策略/基准/候选和“未来 Builder”等表述只描述当时契约，不作为当前实现或未来交接要求。2026-09-18 的 current 协议及职责以本文正文和 M8.3 为准。
+
+用户当时已要求进入开发阶段，A–D 按当时设计范围落地。
 
 - A：Contracts 包根新增严格请求状态、报告、公开事实、基准、频率/尺度、范围图与跨字段验证。规则版本使用仓库现有指纹 `nlhe-cash-6to9-10-20-v1`；对手统计枚举沿用 `vpip/pfr/threeBet/wtsd/wsd`。
 - B/C：`createCoachReviewBoundary` 的 `source` 是未来 Builder 提供的不含 auditTruth 的可信安全决策来源，不能由 HTTP、模型或一般调用者自行认证。工厂捕获的派生/分类/事后投影端口属于受信应用代码；它们不是序列化协议或可动态注册的模型工具。`certifyDecision` 对照来源后签发安全输入；`analyze` 先复验派生事实，再调用分类器；`freezeProcess` 只接受同链认证结果；`beginHindsight`/`hindsightContext` 要求全手过程已冻结，关闭过程发送后才由 Projector 调用 `readHindsightSource` 并核对完整案例及实际事实。
@@ -537,3 +504,13 @@ M8.1 可用固定的可信分类/事后事实夹具验证 Guard，但不把假�
 按用户确认，历史单手牌局必须先加载完整事实、校验并释放数据库连接，再进行分析。受信存储/来源适配器可提前读取和私有持有完整底牌与实际后续公共牌，仍须移除 burn card、未发牌与完整牌堆；只有 Projector 在全手过程冻结后才把实际事后事实投影给 Hindsight。Metrics/策略/证据/分类器与过程模型仍只接收当时安全输入，不能持有完整来源或访问闭包。
 
 现有 CoachDecisionSource、同步 readHindsightSource、beginHindsight 以及三道 Guard 已能承接这种方式，不因本次设计同步修改功能代码或放宽断言。已有离线夹具本就可以先持有完整案例，再由受限回调在门禁后返回；它证明阶段隔离，不证明真实数据库一次加载。M8.2 实现真实加载与安全投影，M8.5 实现事后业务投影，M8.6 实现 Run/取消/资源释放。后续集成验收分别记录完整数据库加载在分析前完成、事后内存接口在全手冻结前零调用，不能混淆二者。
+
+### 14.5 对手范围方向修订（2026-09-17，仅文档）
+
+用户明确本产品不依赖 Solver，也不把预计算行动频率包装成 GTO 答案；生产数据应保存对手范围假设与更新规则，权益和适用 EV 在运行时计算。因而本轮确认：
+
+- 继续保留并复用三道 Guard、认证对象、单决策时间边界、过程冻结、Hindsight 准入、公开/私有 Schema 分离和模型不能改写确定性事实的实现。
+- 2026-09-18 current-only 实施已删除 Coach `StrategyBaseline`、行动频率范围图、GTO/solverEv 依据、频率型 DecisionGrade、`baselineComparison`、`evLoss` 和 `largestEvLossDecision`；不保留 V1/V2 或旧字段兼容。
+- 新协议围绕 `OpponentRangeAnalysis`、169 类范围权重图、`JointEquityAnalysis`、`ConditionalCallEv` 和 `RangeSensitivity`。范围图每格是持牌组合权重/可用组合/归一化质量，不是动作分布。
+- 模型继续只能解释冻结结果，不能生成或改写对手范围、权益、EV、Monte Carlo 误差或范围敏感性。
+- 本节记录 2026-09-17 目标修订；2026-09-18 已完成 M8.3 A–F 实施。§14.1–§14.3 数字保留为历史证据；最新测试及未执行范围见[方向切换实施计划](../plans/2026-09-18-coach-range-transition-implementation.md)。

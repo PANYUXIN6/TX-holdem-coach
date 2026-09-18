@@ -158,19 +158,23 @@ describe('remote PostgreSQL test boundaries', () => {
       /src\/agents\/player\/(?:player-decision-analysis-input|opponent-feature-projector)/,
     )
     expect(
-      persistenceDependencyClosure.filter((path) =>
-        /src\/(?:poker\/(?:hand-features|decision-metrics|decision-spot|candidate-outcomes)|agents\/player\/(?:player-decision-analysis-input|opponent-feature-projector))\.ts$/.test(
-          path,
-        ),
-      ),
-    ).toEqual([
-      'src/poker/candidate-outcomes.ts',
-      'src/poker/decision-metrics.ts',
-      'src/poker/hand-features.ts',
-      'src/poker/decision-spot.ts',
-      'src/agents/player/player-decision-analysis-input.ts',
-      'src/agents/player/opponent-feature-projector.ts',
-    ])
+      persistenceDependencyClosure
+        .filter((path) =>
+          /src\/(?:poker\/(?:hand-features|decision-metrics|decision-spot|candidate-outcomes)|agents\/player\/(?:player-decision-analysis-input|opponent-feature-projector))\.ts$/.test(
+            path,
+          ),
+        )
+        .sort(),
+    ).toEqual(
+      [
+        'src/poker/candidate-outcomes.ts',
+        'src/poker/decision-metrics.ts',
+        'src/poker/hand-features.ts',
+        'src/poker/decision-spot.ts',
+        'src/agents/player/player-decision-analysis-input.ts',
+        'src/agents/player/opponent-feature-projector.ts',
+      ].sort(),
+    )
   })
 
   test('keeps M5.5 database connection role literals valid offline', () => {

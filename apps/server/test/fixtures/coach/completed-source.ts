@@ -34,13 +34,15 @@ export function completedReviewRow(
   allIn = false,
   tableSize = 6,
   reverseFutureDeck = false,
-  scenario: 'default' | 'reopen' | 'zeroHero' = 'default',
+  scenario: 'default' | 'reopen' | 'zeroHero' | 'strategy' = 'default',
+  strategyStack = 2000,
 ) {
   const facts = createShowdownCompletedHandHistoryFacts(
     allIn,
     tableSize,
     reverseFutureDeck,
     scenario,
+    strategyStack,
   )
   const checkpoint = encodeCurrentHandStartCheckpoint(facts.checkpoint)
   const result = encodeCompletedHandResult(facts.result)

@@ -76,7 +76,8 @@ export function createShowdownCompletedHandHistoryFacts(
   allInRunout = false,
   tableSize = 6,
   reverseFutureDeck = false,
-  scenario: 'default' | 'reopen' | 'zeroHero' = 'default',
+  scenario: 'default' | 'reopen' | 'zeroHero' | 'strategy' = 'default',
+  strategyStack = 2000,
 ): CompletedHandHistoryFacts {
   const handId = '40000000-0000-4000-8000-000000000001'
   const initialPoker = initializePokerTable(
@@ -87,20 +88,24 @@ export function createShowdownCompletedHandHistoryFacts(
         .padStart(12, '0')}`,
       isUser: seatNumber === 0,
       stack:
-        scenario === 'reopen' && (seatNumber === 1 || seatNumber === 2)
-          ? 100 + seatNumber * 40
-          : scenario === 'zeroHero' && seatNumber === 0
-            ? 10
-            : allInRunout
-              ? (seatNumber + 1) * 100
-              : 1_000,
+        scenario === 'strategy'
+          ? strategyStack
+          : scenario === 'reopen' && (seatNumber === 1 || seatNumber === 2)
+            ? 100 + seatNumber * 40
+            : scenario === 'zeroHero' && seatNumber === 0
+              ? 10
+              : allInRunout
+                ? (seatNumber + 1) * 100
+                : 1_000,
       status: 'active' as const,
       streetContribution: 0,
       totalContribution: 0,
     })),
-    scenario === 'zeroHero'
-      ? { nextInt: (maximum) => maximum - 1 }
-      : randomSource,
+    scenario === 'strategy'
+      ? { nextInt: (maximum) => Math.min(tableSize - 3, maximum - 1) }
+      : scenario === 'zeroHero'
+        ? { nextInt: (maximum) => maximum - 1 }
+        : randomSource,
   )
   const started = startPokerHand(initialPoker, {
     handId,

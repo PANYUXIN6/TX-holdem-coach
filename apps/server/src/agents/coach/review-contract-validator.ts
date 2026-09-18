@@ -5,7 +5,6 @@ import {
   type CoachReview,
   type CoachDecisionReview,
   type CoachReviewId,
-  type Card,
 } from '@tx-holdem-coach/contracts'
 import {
   assertCertifiedCoachContext,
@@ -31,15 +30,6 @@ export interface CoachCompletedDecision {
   readonly process: FrozenProcessAnalysis
   readonly hindsightContext: CoachHindsightContext
   readonly hindsightOutput: unknown
-}
-function handClass(cards: readonly Card[]): string {
-  const order = 'AKQJT98765432',
-    [a, b] = [...cards].sort(
-      (a, b) => order.indexOf(a.rank) - order.indexOf(b.rank),
-    )
-  return a!.rank === b!.rank
-    ? a!.rank + b!.rank
-    : a!.rank + b!.rank + (a!.suit === b!.suit ? 's' : 'o')
 }
 function publicHindsight(
   context: CoachHindsightContext,
@@ -148,13 +138,6 @@ function composeDecision(
     boundary.manifest.completedEventSeq,
     p,
   )
-  const chart = derived.rangeChart
-  if (
-    chart &&
-    chart.highlightedHandClass !==
-      handClass(decision.visibleState.heroHoleCards)
-  )
-    throw new TypeError('coach_range_highlight')
   const boardRefs = derived.facts
     .filter(
       (f) =>
@@ -179,8 +162,9 @@ function composeDecision(
     assessment: assessment.assessment,
     assessmentBasis: assessment.assessmentBasis,
     epistemicStatus: assessment.epistemicStatus,
-    decisionGrade: assessment.decisionGrade,
-    decisionGradePolicyVersion: assessment.decisionGradePolicyVersion,
+    conditionalConclusion: assessment.conditionalConclusion,
+    conditionalConclusionPolicyVersion:
+      assessment.conditionalConclusionPolicyVersion,
     primaryDeviationCode: assessment.primaryDeviationCode,
     observedDeviationTags: assessment.observedDeviationTags,
     mistakeTaxonomyVersion: assessment.mistakeTaxonomyVersion,
@@ -188,14 +172,15 @@ function composeDecision(
     severity: assessment.severity,
     severityBasis: assessment.severityBasis,
     severityPolicyVersion: assessment.severityPolicyVersion,
-    baselineComparison: assessment.baselineComparison,
-    evLoss: assessment.evLoss,
+    jointEquityAnalysis: derived.rangeAnalysis.jointEquityAnalysis,
+    conditionalCallEv: derived.rangeAnalysis.conditionalCallEv,
+    rangeSensitivity: derived.rangeAnalysis.rangeSensitivity,
     evidenceRefs: assessment.evidenceRefs,
     factManifest: [...derived.facts, ...projected.facts],
-    baselineLayer: {
-      baseline: derived.baseline,
-      explanation: e.baselineExplanation,
-      rangeChartId: chart?.chartId ?? null,
+    rangeLayer: {
+      opponentRangeAnalysis: derived.rangeAnalysis.opponentRangeAnalysis,
+      explanation: e.rangeExplanation,
+      rangeChartIds: derived.rangeAnalysis.rangeCharts.map((c) => c.chartId),
     },
     situationLayer: {
       factRefs: derived.facts.map((f) => f.factId),
@@ -240,23 +225,6 @@ export function createCoachReviewContractValidator(input: {
   const presentation = input.projectTeaching(
     Object.freeze(input.decisions.map((d) => d.process)),
   )
-  const largest = presentation.decisionPrioritySummary.largestEvLossDecision
-  if (largest.status === 'available') {
-    const available = input.decisions
-      .map((d) => d.process.analysis.assessment.evLoss)
-      .filter((ev) => ev.status !== 'unavailable')
-    const first = available[0]
-    if (
-      !first ||
-      available.some(
-        (ev) =>
-          ev.method !== first.method ||
-          ev.sourceVersion !== first.sourceVersion ||
-          !isDeepStrictEqual(ev.assumptions, first.assumptions),
-      )
-    )
-      throw new TypeError('coach_incomparable_ev')
-  }
   const allLessons = input.decisions.flatMap(
       (d) => d.process.explanation.keyLessons,
     ),
@@ -281,10 +249,8 @@ export function createCoachReviewContractValidator(input: {
       decisionReviews: reviews,
       keyLessons: presentation.keyLessons,
       practiceSuggestions: presentation.practiceSuggestions,
-      rangeCharts: input.decisions.flatMap((d) =>
-        d.process.analysis.derived.rangeChart
-          ? [d.process.analysis.derived.rangeChart]
-          : [],
+      rangeCharts: input.decisions.flatMap(
+        (d) => d.process.analysis.derived.rangeAnalysis.rangeCharts,
       ),
     }),
   )

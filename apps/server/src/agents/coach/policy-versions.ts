@@ -4,10 +4,12 @@ import { CoachVersionsSchema, freezeCoachData } from './review-case.js'
 
 export const COACH_POLICY_DEPENDENCY_IDS = Object.freeze({
   metrics: 'coach.review.metrics',
-  strategy: 'coach.review.strategy',
+  rangeModel: 'coach.review.range-model',
+  equityComputation: 'coach.review.equity-computation',
+  settlement: 'coach.review.settlement-projection',
   opponentEvidence: 'coach.review.opponent-evidence',
   classifier: 'coach.review.classifier',
-  grade: 'coach.review.grade-policy',
+  conclusion: 'coach.review.conditional-conclusion-policy',
   severity: 'coach.review.severity-policy',
   teaching: 'coach.review.teaching-policy',
 } as const)

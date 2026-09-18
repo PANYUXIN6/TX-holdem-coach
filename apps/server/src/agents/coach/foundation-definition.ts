@@ -17,7 +17,7 @@ const coachCommitGate = Object.freeze({
 
 const coachCapabilityReferences = Object.freeze([
   { id: 'coach.compute-decision-metrics', version: 1 },
-  { id: 'coach.lookup-strategy-baseline', version: 1 },
+  { id: 'coach.analyze-opponent-ranges', version: 1 },
   { id: 'coach.get-opponent-evidence', version: 1 },
 ] as const satisfies readonly RuntimeComponentReference[])
 

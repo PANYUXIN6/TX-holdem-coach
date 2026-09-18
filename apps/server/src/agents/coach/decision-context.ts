@@ -7,11 +7,10 @@ import {
   CoachAssessmentFieldsSchema,
   CoachDecisionIdSchema,
   CoachExplanationSchema,
-  CoachStrategyBaselineSchema,
+  CoachRangeAnalysisSchema,
+  CoachRangeAnalysisFieldsSchema,
   CoachOpponentEvidenceSchema,
   CoachPublicFactSchema,
-  CoachRangeChartSpecSchema,
-  CoachBetSizeSchema,
   PokerActionSchema,
 } from '@tx-holdem-coach/contracts'
 import {
@@ -24,12 +23,11 @@ import {
 const reference = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/)
 export const CoachDecisionExplanationSchema = z.strictObject({
   decisionId: CoachDecisionIdSchema,
-  baselineExplanation: CoachExplanationSchema,
+  rangeExplanation: CoachExplanationSchema,
   situationExplanation: CoachExplanationSchema,
   exploitExplanation: CoachExplanationSchema,
   alternatives: z.array(
     z.strictObject({
-      candidateId: reference,
       explanation: z.string().trim().min(1).max(2000),
       factRefs: z.array(reference).min(1),
     }),
@@ -41,38 +39,24 @@ export const CoachHindsightExplanationSchema = z.strictObject({
   decisionId: CoachDecisionIdSchema,
   hindsightExplanation: CoachExplanationSchema,
 })
-// These deterministic hypothetical results stay private even after teaching projection.
-export const CoachCandidateSchema = z.strictObject({
-  candidateId: reference,
-  action: PokerActionSchema,
-  raisesCurrentBet: z.boolean(),
-  betSize: CoachBetSizeSchema,
-  evidenceRefs: z.array(reference).min(1),
-  result: z.strictObject({
-    targetStreetCommitment: CoachSequence,
-    incrementalChips: CoachSequence,
-    potAfter: CoachSequence,
-    remainingStack: CoachSequence,
-  }),
-})
 export const CoachDerivedFactsSchema = z.strictObject({
   metrics: CoachDecisionMetricsSchema,
   actionOutcomes: CoachActionOutcomesSchema,
   versions: CoachVersionsSchema,
   asOfEventSeq: CoachSequence,
   facts: z.array(CoachPublicFactSchema),
-  baseline: CoachStrategyBaselineSchema,
+  rangeAnalysis: CoachRangeAnalysisSchema,
   opponentEvidence: z.array(CoachOpponentEvidenceSchema),
-  candidates: z.array(CoachCandidateSchema),
-  rangeChart: CoachRangeChartSpecSchema.nullable(),
+})
+const CoachModelRangeAnalysisSchema = CoachRangeAnalysisFieldsSchema.omit({
+  rangeCharts: true,
 })
 const CoachModelDerivedFactsSchema = z.strictObject({
   versions: CoachVersionsSchema,
   asOfEventSeq: CoachSequence,
   facts: z.array(CoachPublicFactSchema),
-  baseline: CoachStrategyBaselineSchema,
+  rangeAnalysis: CoachModelRangeAnalysisSchema,
   opponentEvidence: z.array(CoachOpponentEvidenceSchema),
-  candidates: z.array(CoachCandidateSchema),
 })
 export const CoachDecisionContextSchema = z.strictObject({
   contextKind: z.literal('decisionAnalysis'),
@@ -124,30 +108,17 @@ export function validateDecisionExplanation(
   if (parsed.decisionId !== context.decisionId)
     throw new TypeError('coach_decision_mismatch')
   const facts = new Set(context.derived.facts.map((f) => f.factId))
-  const candidates = new Map(
-    context.derived.candidates.map((c) => [c.candidateId, c]),
-  )
   const check = (refs: string[]) => {
     if (refs.some((r) => !facts.has(r)))
       throw new TypeError('coach_fact_reference')
   }
   for (const e of [
-    parsed.baselineExplanation,
+    parsed.rangeExplanation,
     parsed.situationExplanation,
     parsed.exploitExplanation,
   ])
     check(e.factRefs)
-  if (
-    new Set(parsed.alternatives.map((a) => a.candidateId)).size !==
-    parsed.alternatives.length
-  )
-    throw new TypeError('coach_candidate_reference')
-  for (const a of parsed.alternatives) {
-    const c = candidates.get(a.candidateId)
-    if (!c || a.factRefs.some((ref) => !c.evidenceRefs.includes(ref)))
-      throw new TypeError('coach_candidate_reference')
-    check(a.factRefs)
-  }
+  for (const a of parsed.alternatives) check(a.factRefs)
   return parsed
 }
 export function validateHindsightExplanation(

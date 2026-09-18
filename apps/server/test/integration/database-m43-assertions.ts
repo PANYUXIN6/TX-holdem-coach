@@ -157,7 +157,7 @@ export async function assertM43ModelAttemptControl(
     })
     const capabilities = [
       { id: 'coach.compute-decision-metrics', version: 1 },
-      { id: 'coach.lookup-strategy-baseline', version: 1 },
+      { id: 'coach.analyze-opponent-ranges', version: 1 },
       { id: 'coach.get-opponent-evidence', version: 1 },
       { id: 'coach.compute-decision-metrics', version: 1 },
     ] as const

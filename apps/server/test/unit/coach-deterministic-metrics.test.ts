@@ -71,11 +71,19 @@ test('real loaded source → safe Builder → certified core and exact outcomes;
     expect(() => computeCoachDecisionMetrics({ ...certified })).toThrow(
       'coach_uncertified_input',
     )
-    const outcomes = computeCoachActionOutcomes(certified, [
-      { actionId: 'fixture', action: decision.actualAction },
-    ])
-    expect(outcomes.outcomes).toHaveLength(1)
-    expect(outcomes.outcomes[0]!.references).toHaveLength(2)
+    const outcomes = computeCoachActionOutcomes(certified)
+    expect(
+      outcomes.outcomes.some((o) =>
+        o.references.some((r) => r.kind === 'actual'),
+      ),
+    ).toBe(true)
+    expect(
+      outcomes.outcomes.every((o) =>
+        o.references.every(
+          (r) => r.kind === 'actual' || r.kind === 'callComparison',
+        ),
+      ),
+    ).toBe(true)
   }
   expect(adapter.readHindsightSource().auditTruth.actualBoard).toEqual(
     loaded.facts.result.board,

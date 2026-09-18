@@ -65,7 +65,7 @@ export const CoachDecisionMetricsSchema = z.strictObject({
       epistemicKind: z.enum([
         'ruleFact',
         'formulaFact',
-        'datasetBaseline',
+        'rangeAssumption',
         'statisticalEvidence',
         'heuristicJudgment',
       ]),
@@ -107,8 +107,7 @@ export const CoachActionOutcomesSchema = z.strictObject({
                 eventSeq: CoachSequence,
               }),
               z.strictObject({
-                kind: z.literal('baseline'),
-                actionId: z.string().min(1).max(160),
+                kind: z.literal('callComparison'),
               }),
             ]),
           )

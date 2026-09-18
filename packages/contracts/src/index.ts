@@ -1,3 +1,12 @@
+import {
+  OpponentRangeAnalysisSchema,
+  JointEquityAnalysisSchema,
+  ConditionalCallEvSchema,
+  RangeSensitivitySchema,
+  OpponentRangeChartSpecSchema,
+  CoachRangeAnalysisSchema,
+} from './coach-range.js'
+export * from './coach-range.js'
 import { z } from 'zod'
 
 export const SessionIdSchema = z.uuid()
@@ -2533,7 +2542,7 @@ export type CurrentPlayerRun = z.infer<typeof CurrentPlayerRunSchema>
 
 // M8.1: public Coach contracts. Private candidates and hand comparison tuples
 // belong exclusively to the server; every object below is a closed projection.
-export const COACH_ACTION_FREQUENCY_TOLERANCE = 1e-6
+export const COACH_NUMERIC_TOLERANCE = 1e-6
 export const CoachReviewIdSchema = z.uuid()
 export const CoachReviewRequestIdSchema = z.uuid()
 export const CoachStreetSchema = z.enum(['preflop', 'flop', 'turn', 'river'])
@@ -2558,6 +2567,16 @@ const CoachText = z.string().trim().min(1).max(2000)
 const CoachLesson = z.string().trim().min(1).max(500)
 export const CoachReasonCodeSchema = z.enum([
   'noComparableEv',
+  'noOpponents',
+  'uncoveredScenario',
+  'emptyRange',
+  'unmodeledAction',
+  'futureActionsUnmodeled',
+  'noAlternativeScenarios',
+  'noContestablePot',
+  'noLegalJointStates',
+  'insufficientAcceptedSamples',
+  'noLegalCall',
   'noDecisions',
   'insufficientEvidence',
   'noDataset',
@@ -2581,110 +2600,9 @@ export const CoachBetSizeSchema = z
     ratioKind: z.literal('targetStreetCommitmentToPotBefore'),
   })
   .nullable()
-const coachActionShape = {
-  actionId: CoachRef,
-  action: PokerActionTypeSchema,
-  betSize: CoachBetSizeSchema,
-}
-function coachSizeValid(value: { action: string; betSize: unknown }): boolean {
-  return ['fold', 'check', 'call'].includes(value.action)
-    ? value.betSize === null
-    : ['bet', 'raise'].includes(value.action)
-      ? value.betSize !== null
-      : true
-}
-export const CoachStrategyActionSchema = z
-  .strictObject({ ...coachActionShape, actionFrequency: CoachFrequency })
-  .refine(coachSizeValid, 'Invalid action size')
-const CoachChartActionSchema = z
-  .strictObject(coachActionShape)
-  .refine(coachSizeValid, 'Invalid action size')
 function coachUnique(values: readonly unknown[]): boolean {
   return new Set(values).size === values.length
 }
-function coachClosed(values: readonly number[]): boolean {
-  return (
-    Math.abs(values.reduce((a, b) => a + b, 0) - 1) <=
-    COACH_ACTION_FREQUENCY_TOLERANCE
-  )
-}
-const CoachStrategyActions = z
-  .array(CoachStrategyActionSchema)
-  .min(1)
-  .refine(
-    (a) =>
-      coachUnique(a.map((x) => x.actionId)) &&
-      coachClosed(a.map((x) => x.actionFrequency)),
-    'Strategy frequencies must close',
-  )
-export const CoachScenarioAssumptionsSchema = z.strictObject({
-  pokerRuleSetVersion: z.literal('nlhe-cash-6to9-10-20-v1'),
-  tableSize: z.number().int().min(6).max(9),
-  logicalPosition: PublicLogicalPositionSchema,
-  effectiveStackBb: z.number().positive(),
-  street: CoachStreetSchema,
-  actionNode: CoachRef,
-  potType: z.enum(['headsUp', 'multiway']),
-})
-const CoachDatasetReference = z.strictObject({
-  datasetId: CoachRef,
-  datasetVersion: CoachRef,
-})
-const coachBaselineShape = {
-  datasetId: CoachRef,
-  datasetVersion: CoachRef,
-  recordId: CoachRef,
-  source: z.strictObject({
-    kind: z.enum(['solver', 'professionalReference', 'teachingReference']),
-    name: CoachText,
-    version: CoachRef,
-    authorizationRef: CoachRef,
-  }),
-  scenarioAssumptions: CoachScenarioAssumptionsSchema,
-  abstraction: z.strictObject({
-    profileId: CoachRef,
-    profileVersion: CoachVersion,
-    lossCodes: z.array(
-      z.enum([
-        'stackBucket',
-        'sizeBucket',
-        'positionBucket',
-        'actionHistory',
-        'multiway',
-        'teachingTemplate',
-      ]),
-    ),
-  }),
-  actions: CoachStrategyActions,
-}
-const CoachDifferenceCode = z.enum([
-  'stackDepth',
-  'tableSize',
-  'position',
-  'actionHistory',
-  'betSize',
-  'potType',
-  'ruleVersion',
-  'abstraction',
-])
-export const CoachStrategyBaselineSchema = z.discriminatedUnion('matchStatus', [
-  z.strictObject({
-    ...coachBaselineShape,
-    matchStatus: z.literal('exact'),
-    differenceCodes: z.array(CoachDifferenceCode).length(0),
-  }),
-  z.strictObject({
-    ...coachBaselineShape,
-    matchStatus: z.literal('referenceOnly'),
-    differenceCodes: z.array(CoachDifferenceCode).min(1),
-  }),
-  z.strictObject({
-    matchStatus: z.literal('unsupported'),
-    reasonCode: CoachReasonCodeSchema,
-    actions: z.array(CoachStrategyActionSchema).length(0),
-    datasetReference: CoachDatasetReference.nullable(),
-  }),
-])
 export const COACH_RANGE_RANK_ORDER = Object.freeze([
   'A',
   'K',
@@ -2710,58 +2628,6 @@ const coachHandClasses = new Set(
 export const CoachHandClassSchema = z
   .string()
   .refine((v) => coachHandClasses.has(v), 'Invalid canonical hand class')
-export const CoachRangeChartSpecSchema = z
-  .strictObject({
-    schemaVersion: z.literal(1),
-    chartId: CoachRef,
-    decisionId: CoachDecisionIdSchema,
-    datasetId: CoachRef,
-    datasetVersion: CoachRef,
-    recordId: CoachRef,
-    tableSize: z.number().int().min(6).max(9),
-    logicalPosition: PublicLogicalPositionSchema,
-    actionNode: CoachRef,
-    matchStatus: z.enum(['exact', 'referenceOnly']),
-    rankOrder: z
-      .array(z.string())
-      .refine(
-        (v) => JSON.stringify(v) === JSON.stringify(COACH_RANGE_RANK_ORDER),
-      ),
-    highlightedHandClass: CoachHandClassSchema,
-    actions: z.array(CoachChartActionSchema).min(1),
-    cells: z
-      .array(
-        z.strictObject({
-          handClass: CoachHandClassSchema,
-          actionFrequencies: z
-            .array(
-              z.strictObject({
-                actionId: CoachRef,
-                actionFrequency: CoachFrequency,
-              }),
-            )
-            .min(1),
-        }),
-      )
-      .length(169),
-  })
-  .superRefine((chart, ctx) => {
-    const ids = chart.actions.map((a) => a.actionId)
-    if (!coachUnique(ids) || !coachUnique(chart.cells.map((c) => c.handClass)))
-      ctx.addIssue({ code: 'custom', message: 'Duplicate chart identity' })
-    for (const [i, cell] of chart.cells.entries())
-      if (
-        cell.actionFrequencies.length !== ids.length ||
-        !coachUnique(cell.actionFrequencies.map((a) => a.actionId)) ||
-        cell.actionFrequencies.some((a) => !ids.includes(a.actionId)) ||
-        !coachClosed(cell.actionFrequencies.map((a) => a.actionFrequency))
-      )
-        ctx.addIssue({
-          code: 'custom',
-          path: ['cells', i],
-          message: 'Invalid cell frequencies',
-        })
-  })
 export const CoachOpponentEvidenceSchema = z
   .strictObject({
     evidenceId: CoachRef,
@@ -2791,7 +2657,7 @@ export const CoachOpponentEvidenceSchema = z
           e.confidence === 'insufficient'
         : e.value !== null &&
           Math.abs(e.value - e.numerator / e.denominator) <=
-            COACH_ACTION_FREQUENCY_TOLERANCE) &&
+            COACH_NUMERIC_TOLERANCE) &&
       (!e.usableForExploit || e.confidence === 'sufficient'),
     'Invalid statistical evidence',
   )
@@ -2812,10 +2678,10 @@ export const CoachPublicSourceRefSchema = z.discriminatedUnion('kind', [
     version: CoachVersion,
   }),
   z.strictObject({
-    kind: z.literal('strategy'),
+    kind: z.literal('rangeModel'),
     datasetId: CoachRef,
     datasetVersion: CoachRef,
-    recordId: CoachRef,
+    recordId: CoachRef.nullable(),
   }),
   z.strictObject({
     kind: z.literal('statistics'),
@@ -2824,37 +2690,6 @@ export const CoachPublicSourceRefSchema = z.discriminatedUnion('kind', [
   }),
   z.strictObject({ kind: z.literal('fact'), factId: CoachRef }),
 ])
-export const CoachEvLossSchema = z.discriminatedUnion('status', [
-  z.strictObject({
-    status: z.enum(['exact', 'estimated']),
-    valueBb: z.number().nonnegative(),
-    method: CoachRef,
-    sourceVersion: CoachRef,
-    assumptions: z.array(CoachText),
-    evidenceRefs: z.array(CoachRef).min(1),
-  }),
-  z.strictObject({
-    status: z.literal('unavailable'),
-    valueBb: z.null(),
-    method: z.null(),
-    sourceVersion: z.null(),
-    reasonCode: CoachReasonCodeSchema,
-  }),
-])
-export const CoachBaselineComparisonSchema = z
-  .strictObject({
-    matchStatus: z.enum(['exact', 'referenceOnly', 'unsupported']),
-    actionSupported: z.boolean().nullable(),
-    sizeSupported: z.boolean().nullable(),
-    actualActionFrequency: CoachFrequency.nullable(),
-  })
-  .refine(
-    (v) =>
-      v.matchStatus !== 'unsupported' ||
-      (v.actionSupported === null &&
-        v.sizeSupported === null &&
-        v.actualActionFrequency === null),
-  )
 export const CoachDeviationCodeSchema = z.enum([
   'action_selection_error',
   'sizing_error',
@@ -2870,9 +2705,8 @@ export const CoachAssessmentFieldsSchema = z
     assessment: z.enum(['sound', 'questionable', 'likelyMistake', 'unrated']),
     assessmentBasis: z.enum([
       'ruleInvariant',
-      'exactStrategy',
-      'referenceStrategy',
-      'solverEv',
+      'rangeModel',
+      'conditionalCallEv',
       'heuristicPolicy',
       'insufficientEvidence',
     ]),
@@ -2882,15 +2716,13 @@ export const CoachAssessmentFieldsSchema = z
       'heuristic',
       'unrated',
     ]),
-    decisionGrade: z.enum([
-      'highestFrequency',
-      'supportedAlternative',
-      'lowCostDeviation',
-      'unsupportedAction',
-      'majorEvMistake',
-      'unrated',
+    conditionalConclusion: z.enum([
+      'favorableAcrossModeledRanges',
+      'unfavorableAcrossModeledRanges',
+      'rangeSensitive',
+      'insufficientEvidence',
     ]),
-    decisionGradePolicyVersion: CoachVersion,
+    conditionalConclusionPolicyVersion: CoachVersion,
     primaryDeviationCode: CoachDeviationCodeSchema.nullable(),
     observedDeviationTags: z.array(
       z.strictObject({
@@ -2906,43 +2738,26 @@ export const CoachAssessmentFieldsSchema = z
       }),
     ),
     severity: z.enum(['low', 'medium', 'high', 'unavailable']),
-    severityBasis: z.enum(['evLoss', 'rulePolicy', 'unavailable']),
+    severityBasis: z.enum(['rulePolicy', 'unavailable']),
     severityPolicyVersion: CoachVersion,
-    baselineComparison: CoachBaselineComparisonSchema,
-    evLoss: CoachEvLossSchema,
     evidenceRefs: z.array(CoachRef),
   })
   .superRefine((v, ctx) => {
     const fail = (message: string) => ctx.addIssue({ code: 'custom', message })
     if ((v.severity === 'unavailable') !== (v.severityBasis === 'unavailable'))
       fail('Severity basis mismatch')
-    if (
-      (v.decisionGrade === 'majorEvMistake' || v.severityBasis === 'evLoss') &&
-      v.evLoss.status === 'unavailable'
-    )
-      fail('EV required')
     if (v.severityBasis === 'rulePolicy' && v.evidenceRefs.length === 0)
       fail('Rule evidence required')
     if (
       v.assessment === 'likelyMistake' &&
-      ['referenceStrategy', 'heuristicPolicy', 'insufficientEvidence'].includes(
-        v.assessmentBasis,
-      )
+      [
+        'rangeModel',
+        'conditionalCallEv',
+        'heuristicPolicy',
+        'insufficientEvidence',
+      ].includes(v.assessmentBasis)
     )
       fail('Objective evidence required')
-    if (
-      v.decisionGrade === 'supportedAlternative' &&
-      (v.baselineComparison.actionSupported !== true ||
-        !(v.baselineComparison.actualActionFrequency! > 0))
-    )
-      fail('Supported positive frequency required')
-    if (
-      v.assessment === 'likelyMistake' &&
-      v.assessmentBasis === 'exactStrategy' &&
-      v.baselineComparison.actionSupported === true &&
-      v.baselineComparison.sizeSupported !== false
-    )
-      fail('Supported mixed action is not a strategy error')
     if (
       !coachUnique(v.observedDeviationTags.map((t) => t.code)) ||
       (v.primaryDeviationCode !== null &&
@@ -3070,8 +2885,20 @@ const CoachPublicValueSchema = z.discriminatedUnion('kind', [
   }),
   z.strictObject({ kind: z.literal('teachingConclusion'), text: CoachText }),
   z.strictObject({
-    kind: z.literal('baseline'),
-    baseline: CoachStrategyBaselineSchema,
+    kind: z.literal('opponentRangeAnalysis'),
+    opponentRangeAnalysis: OpponentRangeAnalysisSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('jointEquityAnalysis'),
+    jointEquityAnalysis: JointEquityAnalysisSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('conditionalCallEv'),
+    conditionalCallEv: ConditionalCallEvSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('rangeSensitivity'),
+    rangeSensitivity: RangeSensitivitySchema,
   }),
   z.strictObject({
     kind: z.literal('opponentEvidence'),
@@ -3112,7 +2939,7 @@ const coachFactShape = {
   epistemicKind: z.enum([
     'ruleFact',
     'formulaFact',
-    'datasetBaseline',
+    'rangeAssumption',
     'statisticalEvidence',
     'heuristicJudgment',
     'modelGeneratedText',
@@ -3148,7 +2975,10 @@ export const CoachPublicFactSchema = z
         'handClass',
         'handCategory',
         'teachingConclusion',
-        'baseline',
+        'opponentRangeAnalysis',
+        'jointEquityAnalysis',
+        'conditionalCallEv',
+        'rangeSensitivity',
         'opponentEvidence',
         'assessment',
         'potAward',
@@ -3185,10 +3015,13 @@ export const CoachDecisionReviewSchema = z
     }),
     actualAction: PokerActionSchema,
     factManifest: z.array(CoachPublicFactSchema),
-    baselineLayer: z.strictObject({
-      baseline: CoachStrategyBaselineSchema,
+    jointEquityAnalysis: JointEquityAnalysisSchema,
+    conditionalCallEv: ConditionalCallEvSchema,
+    rangeSensitivity: RangeSensitivitySchema,
+    rangeLayer: z.strictObject({
+      opponentRangeAnalysis: OpponentRangeAnalysisSchema,
       explanation: CoachExplanationSchema,
-      rangeChartId: CoachRef.nullable(),
+      rangeChartIds: z.array(CoachRef),
     }),
     situationLayer: z.strictObject({
       factRefs: z.array(CoachRef),
@@ -3278,10 +3111,8 @@ export const CoachDecisionReviewSchema = z
     checkRefs(v.evidenceRefs, true, true)
     for (const t of [...v.observedDeviationTags, ...v.teachingHypotheses])
       checkRefs(t.evidenceRefs, true, true)
-    if (v.evLoss.status !== 'unavailable')
-      checkRefs(v.evLoss.evidenceRefs, true, true)
     for (const e of [
-      v.baselineLayer.explanation,
+      v.rangeLayer.explanation,
       v.situationLayer.explanation,
       v.exploitLayer.explanation,
       ...v.alternatives,
@@ -3292,15 +3123,15 @@ export const CoachDecisionReviewSchema = z
       checkRefs(e.factRefs, true)
     checkRefs(v.situationLayer.factRefs, true, true)
     checkRefs(v.hindsightExplanation.factRefs, false)
-    const b = v.baselineLayer.baseline
+    const b = v.rangeLayer.opponentRangeAnalysis
     for (const fact of v.factManifest)
       if (fact.status === 'available') {
         const value = fact.value
         if (
-          value.kind === 'baseline' &&
-          JSON.stringify(value.baseline) !== JSON.stringify(b)
+          value.kind === 'opponentRangeAnalysis' &&
+          JSON.stringify(value.opponentRangeAnalysis) !== JSON.stringify(b)
         )
-          fail('Baseline fact mismatch')
+          fail('Range fact mismatch')
         if (
           value.kind === 'assessment' &&
           assessment.success &&
@@ -3326,25 +3157,43 @@ export const CoachDecisionReviewSchema = z
         )
           fail('Action fact mismatch')
       }
-    if (v.assessmentBasis === 'exactStrategy' && b.matchStatus !== 'exact')
-      fail('Exact assessment requires exact baseline')
     if (
-      v.assessmentBasis === 'referenceStrategy' &&
-      b.matchStatus !== 'referenceOnly'
+      [b, v.jointEquityAnalysis, v.conditionalCallEv, v.rangeSensitivity].some(
+        (x) => x.decisionId !== v.decisionId,
+      )
     )
-      fail('Reference assessment requires reference baseline')
-    if (b.matchStatus !== v.baselineComparison.matchStatus)
-      fail('Baseline mismatch')
-    if (
-      b.matchStatus === 'unsupported' &&
-      v.baselineLayer.rangeChartId !== null
-    )
-      fail('Unsupported range chart')
-    if (
-      ['fold', 'check', 'call'].includes(v.actualAction.type) &&
-      v.baselineComparison.sizeSupported !== null
-    )
-      fail('Action has no size')
+      fail('Range decision mismatch')
+    if (v.conditionalConclusion !== 'insufficientEvidence') {
+      const sensitivity = v.rangeSensitivity,
+        ev = v.conditionalCallEv
+      if (sensitivity.status !== 'available' || ev.status !== 'available')
+        fail('Missing conclusion evidence')
+      else {
+        if (
+          v.conditionalConclusion === 'rangeSensitive'
+            ? sensitivity.signStable !== false ||
+              !ev.scenarios.some((s) => s.callEvVersusFold < 0) ||
+              !ev.scenarios.some((s) => s.callEvVersusFold > 0)
+            : sensitivity.signStable !== true
+        )
+          fail('Conclusion sensitivity mismatch')
+        if (
+          v.conditionalConclusion === 'favorableAcrossModeledRanges' &&
+          ev.scenarios.some(
+            (s) => (s.confidenceInterval?.lower ?? s.callEvVersusFold) <= 0,
+          )
+        )
+          fail('Conclusion sign mismatch')
+        if (
+          v.conditionalConclusion === 'unfavorableAcrossModeledRanges' &&
+          ev.scenarios.some(
+            (s) => (s.confidenceInterval?.upper ?? s.callEvVersusFold) >= 0,
+          )
+        )
+          fail('Conclusion sign mismatch')
+      }
+    }
+
     if (
       v.exploitLayer.status === 'insufficientEvidence' &&
       v.exploitLayer.deviationExplanation !== null
@@ -3388,25 +3237,24 @@ export const CoachReviewSchema = z
     overview: CoachText,
     decisionPrioritySummary: z.strictObject({
       assessmentCountsByStreet: z.array(CoachStreetCountsSchema).length(4),
-      largestEvLossDecision: z.discriminatedUnion('status', [
-        z.strictObject({
-          status: z.literal('available'),
-          decisionId: CoachDecisionIdSchema,
-          valueBb: z.number().nonnegative(),
-          method: CoachRef,
-        }),
-        z.strictObject({
-          status: z.literal('unavailable'),
-          reasonCode: CoachReasonCodeSchema,
-        }),
-      ]),
-      highSeverityUnknownEvDecisionIds: z.array(CoachDecisionIdSchema),
+      severityCounts: z.strictObject({
+        low: CoachInteger,
+        medium: CoachInteger,
+        high: CoachInteger,
+        unavailable: CoachInteger,
+      }),
+      conditionalConclusionCounts: z.strictObject({
+        favorableAcrossModeledRanges: CoachInteger,
+        unfavorableAcrossModeledRanges: CoachInteger,
+        rangeSensitive: CoachInteger,
+        insufficientEvidence: CoachInteger,
+      }),
     }),
     teachingProjection: CoachTeachingProjectionSchema,
     decisionReviews: z.array(CoachDecisionReviewSchema),
     keyLessons: z.array(CoachLesson).max(3),
     practiceSuggestions: z.array(CoachLesson).max(3),
-    rangeCharts: z.array(CoachRangeChartSpecSchema),
+    rangeCharts: z.array(OpponentRangeChartSpecSchema),
   })
   .superRefine((r, ctx) => {
     const fail = (message: string) => ctx.addIssue({ code: 'custom', message })
@@ -3452,6 +3300,24 @@ export const CoachReviewSchema = z
         !r.practiceSuggestions.includes(p.primaryPracticeSuggestion))
     )
       fail('Primary teaching text mismatch')
+    for (const severity of ['low', 'medium', 'high', 'unavailable'] as const)
+      if (
+        r.decisionPrioritySummary.severityCounts[severity] !==
+        r.decisionReviews.filter((d) => d.severity === severity).length
+      )
+        fail('Severity count mismatch')
+    for (const conclusion of [
+      'favorableAcrossModeledRanges',
+      'unfavorableAcrossModeledRanges',
+      'rangeSensitive',
+      'insufficientEvidence',
+    ] as const)
+      if (
+        r.decisionPrioritySummary.conditionalConclusionCounts[conclusion] !==
+        r.decisionReviews.filter((d) => d.conditionalConclusion === conclusion)
+          .length
+      )
+        fail('Conclusion count mismatch')
     const counts = r.decisionPrioritySummary.assessmentCountsByStreet
     if (!coachUnique(counts.map((c) => c.street)))
       fail('Duplicate street counts')
@@ -3469,84 +3335,30 @@ export const CoachReviewSchema = z
           ).length
         )
           fail('Assessment count mismatch')
-    const high = r.decisionPrioritySummary.highSeverityUnknownEvDecisionIds
-    if (
-      !coachUnique(high) ||
-      high.some(
-        (id) =>
-          !r.decisionReviews.some(
-            (d) =>
-              d.decisionId === id &&
-              d.severity === 'high' &&
-              d.severityBasis === 'rulePolicy' &&
-              d.evLoss.status === 'unavailable',
-          ),
-      )
-    )
-      fail('Unknown EV priority mismatch')
-    const largest = r.decisionPrioritySummary.largestEvLossDecision
-    if (largest.status === 'available') {
-      const d = r.decisionReviews.find(
-        (d) => d.decisionId === largest.decisionId,
-      )
-      if (
-        !d ||
-        d.evLoss.status === 'unavailable' ||
-        d.evLoss.valueBb !== largest.valueBb ||
-        d.evLoss.method !== largest.method ||
-        r.decisionReviews.some(
-          (x) =>
-            x.evLoss.status !== 'unavailable' &&
-            (x.evLoss.method !== largest.method ||
-              x.evLoss.valueBb > largest.valueBb),
-        )
-      )
-        fail('EV priority mismatch')
-    }
     if (!coachUnique(r.rangeCharts.map((c) => c.chartId)))
       fail('Duplicate charts')
-    for (const c of r.rangeCharts) {
-      const d = r.decisionReviews.find((d) => d.decisionId === c.decisionId),
-        b = d?.baselineLayer.baseline
+    for (const d of r.decisionReviews) {
+      const charts = r.rangeCharts.filter((c) => c.decisionId === d.decisionId)
       if (
-        !d ||
-        d.street !== 'preflop' ||
-        d.baselineLayer.rangeChartId !== c.chartId ||
-        !b ||
-        b.matchStatus === 'unsupported' ||
-        b.matchStatus !== c.matchStatus ||
-        b.datasetId !== c.datasetId ||
-        b.datasetVersion !== c.datasetVersion ||
-        b.recordId !== c.recordId ||
-        b.scenarioAssumptions.tableSize !== c.tableSize ||
-        b.scenarioAssumptions.logicalPosition !== c.logicalPosition ||
-        b.scenarioAssumptions.actionNode !== c.actionNode ||
-        JSON.stringify(
-          b.actions.map(({ actionId, action, betSize }) => ({
-            actionId,
-            action,
-            betSize,
-          })),
-        ) !== JSON.stringify(c.actions)
+        !coachUnique(d.rangeLayer.rangeChartIds) ||
+        charts.length !== d.rangeLayer.rangeChartIds.length ||
+        charts.some((c) => !d.rangeLayer.rangeChartIds.includes(c.chartId))
       )
-        fail('Chart baseline mismatch')
+        fail('Chart reference mismatch')
+      const result = CoachRangeAnalysisSchema.safeParse({
+        opponentRangeAnalysis: d.rangeLayer.opponentRangeAnalysis,
+        jointEquityAnalysis: d.jointEquityAnalysis,
+        conditionalCallEv: d.conditionalCallEv,
+        rangeSensitivity: d.rangeSensitivity,
+        rangeCharts: charts,
+      })
+      if (!result.success) fail('Range analysis mismatch')
     }
-    if (
-      r.decisionReviews.some(
-        (d) =>
-          d.baselineLayer.rangeChartId !== null &&
-          !r.rangeCharts.some(
-            (c) =>
-              c.chartId === d.baselineLayer.rangeChartId &&
-              c.decisionId === d.decisionId,
-          ),
-      )
-    )
-      fail('Missing chart')
+    if (r.rangeCharts.some((c) => !ids.includes(c.decisionId)))
+      fail('Unknown chart decision')
     if (
       ids.length === 0 &&
       (r.rangeCharts.length > 0 ||
-        largest.status !== 'unavailable' ||
         p.primaryLesson !== null ||
         p.primaryPracticeSuggestion !== null)
     )
@@ -3614,7 +3426,6 @@ export const CoachReviewRequestStateSchema = z
   })
 export type CoachReview = z.infer<typeof CoachReviewSchema>
 export type CoachDecisionReview = z.infer<typeof CoachDecisionReviewSchema>
-export type CoachStrategyBaseline = z.infer<typeof CoachStrategyBaselineSchema>
 export type CoachPublicFact = z.infer<typeof CoachPublicFactSchema>
 export type CoachReviewRequestState = z.infer<
   typeof CoachReviewRequestStateSchema

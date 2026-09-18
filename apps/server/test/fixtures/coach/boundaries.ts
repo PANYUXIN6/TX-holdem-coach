@@ -1,5 +1,6 @@
-import type { PokerAction } from '@tx-holdem-coach/contracts'
-import type { CoachDerivedFacts } from '../../../src/agents/coach/decision-context.js'
+import { makeOpponentRangePack } from '../opponent-range-pack.js'
+import { createStaticOpponentRangeRepository } from '../../../src/poker-range/opponent-range-repository.js'
+import { analyzeUncoveredCoachRanges } from '../../../src/agents/coach/range-analysis.js'
 import { assignLogicalPositions } from '../../../src/poker/positioning.js'
 import {
   computeCoachDecisionMetrics,
@@ -93,10 +94,18 @@ export function reviewCase(): HandReviewCase {
       pokerRuleSetVersion: 'nlhe-cash-6to9-10-20-v1',
       versions: {
         metrics: COACH_METRICS_VERSION,
-        strategy: reference,
+        rangeModel: { id: 'coach.review.range-model', version: 1 },
+        equityComputation: {
+          id: 'coach.review.equity-computation',
+          version: 1,
+        },
+        settlement: { id: 'coach.review.settlement-projection', version: 1 },
         opponentEvidence: reference,
         classifier: reference,
-        grade: reference,
+        conclusion: {
+          id: 'coach.review.conditional-conclusion-policy',
+          version: 1,
+        },
         severity: reference,
         teaching: reference,
       },
@@ -212,8 +221,8 @@ export const assessment = () => ({
   assessment: 'unrated' as const,
   assessmentBasis: 'insufficientEvidence' as const,
   epistemicStatus: 'unrated' as const,
-  decisionGrade: 'unrated' as const,
-  decisionGradePolicyVersion: 1,
+  conditionalConclusion: 'insufficientEvidence' as const,
+  conditionalConclusionPolicyVersion: 1,
   primaryDeviationCode: null,
   observedDeviationTags: [],
   mistakeTaxonomyVersion: 1 as const,
@@ -221,97 +230,17 @@ export const assessment = () => ({
   severity: 'unavailable' as const,
   severityBasis: 'unavailable' as const,
   severityPolicyVersion: 1,
-  baselineComparison: {
-    matchStatus: 'unsupported' as const,
-    actionSupported: null,
-    sizeSupported: null,
-    actualActionFrequency: null,
-  },
-  evLoss: {
-    status: 'unavailable' as const,
-    valueBb: null,
-    method: null,
-    sourceVersion: null,
-    reasonCode: 'evUnavailable' as const,
-  },
   evidenceRefs: ['board'],
 })
 export const decisionExplanation = (decisionId = `${handId}:flop:12`) => ({
   decisionId,
-  baselineExplanation: { text: '策略证据不足', factRefs: ['board'] },
+  rangeExplanation: { text: '策略证据不足', factRefs: ['board'] },
   situationExplanation: { text: '只分析当前公共牌', factRefs: ['board'] },
   exploitExplanation: { text: '对手样本不足', factRefs: ['board'] },
   alternatives: [],
   keyLessons: [],
   practiceSuggestions: [],
 })
-
-/** Explicit supported test dataset; never attach baseline references to unsupported data. */
-export function fixtureSupportedBaseline(
-  input: CoachDecisionInput,
-  action: PokerAction,
-  actionId = 'fixture',
-): CoachDerivedFacts['baseline'] {
-  const d = input.decision,
-    hero = d.visibleState.seats.find(
-      (s) => s.seatNumber === d.visibleState.heroSeat,
-    )!
-  const opponents = d.visibleState.seats.filter(
-    (s) =>
-      s.seatNumber !== hero.seatNumber &&
-      (s.status === 'active' || s.status === 'allIn'),
-  )
-  const target =
-    'targetStreetCommitment' in action
-      ? action.targetStreetCommitment
-      : action.type === 'allIn'
-        ? hero.streetCommitment + hero.stack
-        : hero.streetCommitment
-  const sized =
-    action.type === 'bet' ||
-    action.type === 'raise' ||
-    (action.type === 'allIn' &&
-      target > d.analysisInput.bettingRound.currentBet)
-  return {
-    matchStatus: 'exact',
-    datasetId: 'fixture',
-    datasetVersion: '1',
-    recordId: 'fixture',
-    source: {
-      kind: 'teachingReference',
-      name: '测试',
-      version: '1',
-      authorizationRef: 'fixture',
-    },
-    scenarioAssumptions: {
-      pokerRuleSetVersion: input.binding.pokerRuleSetVersion,
-      tableSize: input.tableSize,
-      logicalPosition: d.logicalPosition,
-      effectiveStackBb:
-        Math.max(0, ...opponents.map((s) => Math.min(hero.stack, s.stack))) /
-        d.visibleState.nominalBigBlind,
-      street: d.street,
-      actionNode: 'fixture',
-      potType: opponents.length === 1 ? 'headsUp' : 'multiway',
-    },
-    abstraction: { profileId: 'fixture', profileVersion: 1, lossCodes: [] },
-    differenceCodes: [],
-    actions: [
-      {
-        actionId,
-        action: action.type,
-        actionFrequency: 1,
-        betSize: sized
-          ? {
-              kind: 'potFraction',
-              ratioKind: 'targetStreetCommitmentToPotBefore',
-              value: target / d.analysisInput.pot,
-            }
-          : null,
-      },
-    ],
-  }
-}
 
 export function fixturePorts(
   c = reviewCase(),
@@ -325,29 +254,33 @@ export function fixturePorts(
       heroDecisions: c.heroDecisions,
     },
     readHindsightSource: () => c,
-    derive: (input) => ({
-      metrics: computeCoachDecisionMetrics(input),
-      actionOutcomes: computeCoachActionOutcomes(input),
-      versions: input.binding.versions,
-      asOfEventSeq: input.decision.opponentEvidenceCutoff.asOfEventSeq,
-      facts: [boardFact(input)],
-      baseline: {
-        matchStatus: 'unsupported',
-        reasonCode: 'noDataset',
-        actions: [],
-        datasetReference: null,
-      },
-      opponentEvidence: [],
-      candidates: [],
-      rangeChart: null,
-    }),
-    classify: (_input, derived) => ({
-      ...assessment(),
-      baselineComparison: {
-        ...assessment().baselineComparison,
-        matchStatus: derived.baseline.matchStatus,
-      },
-    }),
+    derive: (input) => {
+      const metrics = computeCoachDecisionMetrics(input)
+      const actionOutcomes = computeCoachActionOutcomes(input)
+      return {
+        metrics,
+        actionOutcomes,
+        rangeAnalysis: analyzeUncoveredCoachRanges({
+          input,
+          metrics,
+          actionOutcomes,
+          pack: createStaticOpponentRangeRepository([
+            makeOpponentRangePack(),
+          ]).read({
+            reference: { datasetId: 'test-opponent-ranges', datasetVersion: 1 },
+            usage: 'pinnedRun',
+          }),
+          dataDependencies: [
+            { id: 'opponent-range-pack/test-opponent-ranges', version: 1 },
+          ],
+        }),
+        versions: input.binding.versions,
+        asOfEventSeq: input.decision.opponentEvidenceCutoff.asOfEventSeq,
+        facts: [boardFact(input)],
+        opponentEvidence: [],
+      }
+    },
+    classify: () => assessment(),
     projectHindsight: (source) => ({
       revealedHandRanks: [],
       runoutTransitions: source.auditTruth.runoutTransitions,

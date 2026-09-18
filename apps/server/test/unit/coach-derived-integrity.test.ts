@@ -1,12 +1,9 @@
+import { projectCoachRangeFacts } from '../../src/agents/coach/range-fact-projector.js'
+import { computeCoachActionOutcomes } from '../../src/agents/coach/action-outcomes.js'
 import { expect, test, vi } from 'vitest'
 import { createCoachReviewBoundary } from '../../src/agents/coach/frozen-analysis.js'
 import { projectCoachDecisionFacts } from '../../src/agents/coach/decision-fact-projector.js'
-import { computeCoachActionOutcomes } from '../../src/agents/coach/action-outcomes.js'
-import {
-  fixturePorts,
-  decisionInput,
-  fixtureSupportedBaseline,
-} from '../fixtures/coach/boundaries.js'
+import { fixturePorts, decisionInput } from '../fixtures/coach/boundaries.js'
 
 test.each([
   'value',
@@ -111,59 +108,112 @@ test('projects each metric from its own provenance and accepts the unmodified pr
   ).toHaveLength(3)
 })
 
-test('rejects baseline references under unsupported before classification', () => {
-  const ports = fixturePorts(),
-    classify = vi.fn(ports.classify)
+test.each(['clone', 'otherInput', 'outcomes', 'numericFact'] as const)(
+  'rejects unauthenticated or mismatched range projection: %s',
+  (mode) => {
+    const ports = fixturePorts()
+    const classify = vi.fn(ports.classify)
+    const boundary = createCoachReviewBoundary({
+      ...ports,
+      classify,
+      derive: (input) => {
+        const derived = ports.derive(input)
+        if (mode === 'clone')
+          return {
+            ...derived,
+            rangeAnalysis: structuredClone(derived.rangeAnalysis),
+          }
+        if (mode === 'otherInput') {
+          const other = createCoachReviewBoundary(fixturePorts())
+          const otherInput = other.certifyDecision(decisionInput())
+          return {
+            ...derived,
+            rangeAnalysis: ports.derive(otherInput).rangeAnalysis,
+          }
+        }
+        if (mode === 'outcomes')
+          return {
+            ...derived,
+            actionOutcomes: computeCoachActionOutcomes(input),
+          }
+        return {
+          ...derived,
+          facts: [
+            ...derived.facts,
+            {
+              ...derived.facts[0]!,
+              factId: 'rangeFact',
+              value: {
+                kind: 'opponentRangeAnalysis' as const,
+                opponentRangeAnalysis: {
+                  ...derived.rangeAnalysis.opponentRangeAnalysis,
+                  reasonCode: 'fabricatedReason',
+                },
+              },
+              status: 'available' as const,
+            },
+          ],
+        }
+      },
+    })
+    expect(() =>
+      boundary.analyze(boundary.certifyDecision(decisionInput())),
+    ).toThrow()
+    expect(classify).not.toHaveBeenCalled()
+  },
+)
+
+test('rejects a favorable conclusion when range evidence is unavailable', () => {
+  const ports = fixturePorts()
   const boundary = createCoachReviewBoundary({
     ...ports,
-    classify,
-    derive: (input) => ({
-      ...ports.derive(input),
-      actionOutcomes: computeCoachActionOutcomes(input, [
-        { actionId: 'ghost-baseline', action: input.decision.actualAction },
-      ]),
+    classify: (input, derived) => ({
+      ...ports.classify(input, derived),
+      conditionalConclusion: 'favorableAcrossModeledRanges',
     }),
   })
   expect(() =>
     boundary.analyze(boundary.certifyDecision(decisionInput())),
-  ).toThrow('coach_baseline_outcome_mismatch')
-  expect(classify).not.toHaveBeenCalled()
+  ).toThrow('coach_conclusion_evidence')
 })
 
-test.each(['valid', 'unknownId', 'wrongAction', 'wrongSize'] as const)(
-  'binds supported baseline outcome identity and semantics: %s',
-  (mode) => {
+test('projects authenticated range facts and rejects unavailable renaming or source changes', () => {
+  for (const mode of ['valid', 'renamed', 'source'] as const) {
     const ports = fixturePorts(),
       classify = vi.fn(ports.classify)
     const boundary = createCoachReviewBoundary({
       ...ports,
       classify,
       derive: (input) => {
-        const action = { type: 'bet' as const, targetStreetCommitment: 60 }
-        return {
-          ...ports.derive(input),
-          baseline: fixtureSupportedBaseline(
+        const derived = ports.derive(input)
+        const facts = structuredClone([
+          ...projectCoachRangeFacts(
             input,
-            mode === 'wrongAction'
-              ? { type: 'check' }
-              : mode === 'wrongSize'
-                ? { type: 'bet', targetStreetCommitment: 80 }
-                : action,
+            derived.metrics,
+            derived.actionOutcomes,
+            derived.rangeAnalysis,
           ),
-          actionOutcomes: computeCoachActionOutcomes(input, [
-            { actionId: mode === 'unknownId' ? 'ghost' : 'fixture', action },
-          ]),
-        }
+        ])
+        expect(facts).toHaveLength(4)
+        expect(
+          facts.every((f) => f.status === 'unavailable' && !('value' in f)),
+        ).toBe(true)
+        if (mode === 'renamed') facts[0]!.factId = 'renamedRange'
+        if (mode === 'source')
+          facts[0]!.sourceRefs = [
+            { kind: 'algorithm', algorithmId: 'invented', version: 1 },
+          ]
+        return { ...derived, facts: [...derived.facts, ...facts] }
       },
     })
-    const analyze = () =>
+    const run = () =>
       boundary.analyze(boundary.certifyDecision(decisionInput()))
     if (mode === 'valid') {
-      expect(analyze().derived.actionOutcomes.outcomes).toHaveLength(2)
+      expect(run().derived.facts).toHaveLength(5)
       expect(classify).toHaveBeenCalledOnce()
     } else {
-      expect(analyze).toThrow('coach_baseline_outcome_mismatch')
+      expect(run).toThrow('coach_range_fact_mismatch')
       expect(classify).not.toHaveBeenCalled()
     }
-  },
-)
+  }
+})

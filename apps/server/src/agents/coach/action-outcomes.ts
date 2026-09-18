@@ -19,10 +19,6 @@ export function assertComputedCoachActionOutcomes(
 }
 export function computeCoachActionOutcomes(
   input: CertifiedCoachDecisionInput,
-  baselines: readonly {
-    readonly actionId: string
-    readonly action: PokerAction
-  }[] = [],
 ): CoachActionOutcomes {
   assertCertifiedCoachDecisionInput(input)
   const outcomes: CoachActionOutcomes['outcomes'] = []
@@ -31,16 +27,23 @@ export function computeCoachActionOutcomes(
       action: input.decision.actualAction,
       reference: { kind: 'actual' as const, eventSeq: input.decision.eventSeq },
     },
-    ...baselines.map((baseline) => ({
-      action: baseline.action,
-      reference: { kind: 'baseline' as const, actionId: baseline.actionId },
-    })),
-  ]
-  if (
-    new Set(baselines.map((baseline) => baseline.actionId)).size !==
-    baselines.length
-  )
-    throw new TypeError('coach_duplicate_baseline_action')
+  ] as {
+    action: PokerAction
+    reference: { kind: 'actual'; eventSeq: number } | { kind: 'callComparison' }
+  }[]
+  const hero = input.decision.stacksAndContributions.find(
+    (s) => s.seatNumber === input.decision.visibleState.heroSeat,
+  )!
+  const legalCall = input.decision.legalActions.some((a) => a.action === 'call')
+  const callingAllIn =
+    input.decision.legalActions.some((a) => a.action === 'allIn') &&
+    hero.streetCommitment + hero.stack <=
+      input.decision.analysisInput.bettingRound.currentBet
+  if (legalCall || callingAllIn)
+    actions.push({
+      action: { type: legalCall ? 'call' : 'allIn' },
+      reference: { kind: 'callComparison' },
+    })
   for (const entry of actions) {
     const action = PokerActionSchema.parse(entry.action)
     const existing = outcomes.find(

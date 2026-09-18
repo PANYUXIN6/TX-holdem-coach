@@ -121,7 +121,7 @@ export function prepareCoachGeneration(input: {
   })
   const instructions =
     kind === 'decisionAnalysis'
-      ? '只解释当前单个决策的冻结评价。禁止使用后续牌面、结算或其他决策；只返回 baselineExplanation、situationExplanation、exploitExplanation、alternatives、keyLessons、practiceSuggestions 与 decisionId。不得修改分类、策略、EV、等级或排序。'
+      ? '只解释当前单个决策的冻结评价。禁止使用后续牌面、结算或其他决策；只返回 rangeExplanation、situationExplanation、exploitExplanation、alternatives、keyLessons、practiceSuggestions 与 decisionId。不得修改分类、策略、EV、等级或排序。'
       : '只解释当前决策已冻结过程与实际事后事实。只返回 decisionId 和 hindsightExplanation；不得重评过程、推算未发公共牌、改变评价或生成替代路线。'
   const modules = definition.promptModules.map((module, index) =>
     createPromptModuleDefinition({

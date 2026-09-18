@@ -31,10 +31,12 @@ export const CoachVersionReferenceSchema = z.strictObject({
 })
 export const CoachVersionsSchema = z.strictObject({
   metrics: CoachVersionReferenceSchema,
-  strategy: CoachVersionReferenceSchema,
+  rangeModel: CoachVersionReferenceSchema,
+  equityComputation: CoachVersionReferenceSchema,
+  settlement: CoachVersionReferenceSchema,
   opponentEvidence: CoachVersionReferenceSchema,
   classifier: CoachVersionReferenceSchema,
-  grade: CoachVersionReferenceSchema,
+  conclusion: CoachVersionReferenceSchema,
   severity: CoachVersionReferenceSchema,
   teaching: CoachVersionReferenceSchema,
 })

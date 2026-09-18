@@ -1,4 +1,3 @@
-import { computeCoachActionOutcomes } from '../../src/agents/coach/action-outcomes.js'
 import { syncFixtureAnalysis } from '../fixtures/coach/boundaries.js'
 import { describe, it, expect } from 'vitest'
 import { CoachReviewSchema, type CoachReview } from '@tx-holdem-coach/contracts'
@@ -18,6 +17,18 @@ function teaching(processes: readonly FrozenProcessAnalysis[]) {
       ? '证据不足，逐决策说明当前事实。'
       : '本手没有可评价的用户决策',
     decisionPrioritySummary: {
+      severityCounts: {
+        low: 0,
+        medium: 0,
+        high: 0,
+        unavailable: processes.length,
+      },
+      conditionalConclusionCounts: {
+        favorableAcrossModeledRanges: 0,
+        unfavorableAcrossModeledRanges: 0,
+        rangeSensitive: 0,
+        insufficientEvidence: processes.length,
+      },
       assessmentCountsByStreet: (
         ['preflop', 'flop', 'turn', 'river'] as const
       ).map((street) => ({
@@ -29,11 +40,6 @@ function teaching(processes: readonly FrozenProcessAnalysis[]) {
           (p) => p.analysis.input.decision.street === street,
         ).length,
       })),
-      largestEvLossDecision: {
-        status: 'unavailable' as const,
-        reasonCode: 'noComparableEv' as const,
-      },
-      highSeverityUnknownEvDecisionIds: [],
     },
     teachingProjection: {
       coreDecisionId: null,
@@ -144,6 +150,8 @@ describe('Coach complete frozen review contract', () => {
     report.decisionReviews.pop()
     report.teachingProjection.compactDecisionIds.pop()
     report.decisionPrioritySummary.assessmentCountsByStreet[1]!.unrated = 1
+    report.decisionPrioritySummary.severityCounts.unavailable = 1
+    report.decisionPrioritySummary.conditionalConclusionCounts.insufficientEvidence = 1
     expect(CoachReviewSchema.safeParse(report).success).toBe(true)
     expect(() => validator.validate(report)).toThrow(
       'coach_frozen_report_mismatch',
@@ -205,7 +213,6 @@ describe('Coach complete frozen review contract', () => {
 
 import { createCoachReviewBoundary } from '../../src/agents/coach/frozen-analysis.js'
 import { fixturePorts } from '../fixtures/coach/boundaries.js'
-import { type CoachStrategyBaseline } from '@tx-holdem-coach/contracts'
 
 it.each(['opponent-rank-private', 'actualNet', 'actualContinuation'])(
   'preserves private fact %s when projecting a nine-seat rated review',
@@ -271,94 +278,13 @@ it.each(['opponent-rank-private', 'actualNet', 'actualContinuation'])(
       },
     ]
     const ports = fixturePorts(source)
-    const baseline: CoachStrategyBaseline = {
-      matchStatus: 'exact',
-      datasetId: 'fixture',
-      datasetVersion: '1',
-      recordId: 'flop',
-      source: {
-        kind: 'teachingReference',
-        name: '九人桌契约夹具',
-        version: '1',
-        authorizationRef: 'fixture-only',
-      },
-      scenarioAssumptions: {
-        pokerRuleSetVersion: source.binding.pokerRuleSetVersion,
-        tableSize: 9,
-        logicalPosition: 'BTN',
-        effectiveStackBb: 50,
-        street: 'flop',
-        actionNode: 'checked-to',
-        potType: 'multiway',
-      },
-      abstraction: {
-        profileId: 'fixture',
-        profileVersion: 1,
-        lossCodes: ['teachingTemplate'],
-      },
-      differenceCodes: [],
-      actions: [
-        {
-          actionId: 'check',
-          action: 'check',
-          actionFrequency: 0.8,
-          betSize: null,
-        },
-        {
-          actionId: 'bet50',
-          action: 'bet',
-          actionFrequency: 0.2,
-          betSize: {
-            kind: 'potFraction',
-            value: 50 / 180,
-            ratioKind: 'targetStreetCommitmentToPotBefore',
-          },
-        },
-      ],
-    }
     const b = createCoachReviewBoundary({
       ...ports,
-      derive: (input) => ({
-        ...ports.derive(input),
-        baseline,
-        actionOutcomes: computeCoachActionOutcomes(input, [
-          {
-            actionId: 'bet50',
-            action: { type: 'bet', targetStreetCommitment: 50 },
-          },
-        ]),
-        candidates: [
-          {
-            candidateId: 'private-bet',
-            action: { type: 'bet', targetStreetCommitment: 50 },
-            raisesCurrentBet: true,
-            betSize: {
-              kind: 'potFraction',
-              value: 50 / 180,
-              ratioKind: 'targetStreetCommitmentToPotBefore',
-            },
-            evidenceRefs: ['board'],
-            result: {
-              targetStreetCommitment: 50,
-              incrementalChips: 50,
-              potAfter: 230,
-              remainingStack: 950,
-            },
-          },
-        ],
-      }),
       classify: (input, derived) => ({
         ...ports.classify(input, derived),
         assessment: 'sound',
-        assessmentBasis: 'exactStrategy',
-        epistemicStatus: 'modelBased',
-        decisionGrade: 'highestFrequency',
-        baselineComparison: {
-          matchStatus: 'exact',
-          actionSupported: true,
-          sizeSupported: null,
-          actualActionFrequency: 0.8,
-        },
+        assessmentBasis: 'ruleInvariant',
+        epistemicStatus: 'objective',
       }),
       projectHindsight: (source, input) => ({
         ...ports.projectHindsight(source, input),
@@ -370,7 +296,6 @@ it.each(['opponent-rank-private', 'actualNet', 'actualContinuation'])(
       ...decisionExplanation(),
       alternatives: [
         {
-          candidateId: 'private-bet',
           explanation: '也可以选择下注',
           factRefs: ['board'],
         },
@@ -454,63 +379,3 @@ it.each(['opponent-rank-private', 'actualNet', 'actualContinuation'])(
     expect(() => validator.validate(changed)).toThrow()
   },
 )
-
-it('rejects a largest-EV projection across incompatible source versions', () => {
-  const source = reviewCase(),
-    second = structuredClone(source.heroDecisions[0]!)
-  second.eventSeq = 18
-  second.decisionId = second.decisionId.replace(':12', ':18')
-  syncFixtureAnalysis(second)
-  source.heroDecisions.push(second)
-  const ports = fixturePorts(source),
-    boundary = createCoachReviewBoundary({
-      ...ports,
-      classify: (input, derived) => ({
-        ...ports.classify(input, derived),
-        evLoss: {
-          status: 'estimated',
-          valueBb: 2,
-          method: 'fixture-ev',
-          sourceVersion: input.decision.eventSeq === 12 ? 'v1' : 'v2',
-          assumptions: ['fixture-only'],
-          evidenceRefs: ['board'],
-        },
-      }),
-    })
-  const processes = source.heroDecisions.map((d, i) =>
-    boundary.freezeProcess(
-      boundary.analyze(boundary.certifyDecision(decisionInput(source, i))),
-      decisionExplanation(d.decisionId),
-    ),
-  )
-  const decisions = processes.map((process) => ({
-    process,
-    hindsightContext: boundary.hindsightContext(process),
-    hindsightOutput: {
-      decisionId: process.analysis.input.decision.decisionId,
-      hindsightExplanation: { text: '结算', factRefs: ['award'] },
-    },
-  }))
-  expect(() =>
-    createCoachReviewContractValidator({
-      boundary,
-      coachReviewId: runId,
-      decisions,
-      projectTeaching: (processes) => {
-        const result = teaching(processes)
-        return {
-          ...result,
-          decisionPrioritySummary: {
-            ...result.decisionPrioritySummary,
-            largestEvLossDecision: {
-              status: 'available',
-              decisionId: source.heroDecisions[0]!.decisionId,
-              valueBb: 2,
-              method: 'fixture-ev',
-            },
-          },
-        }
-      },
-    }),
-  ).toThrow('coach_incomparable_ev')
-})

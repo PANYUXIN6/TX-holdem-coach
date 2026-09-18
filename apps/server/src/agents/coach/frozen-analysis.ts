@@ -1,4 +1,10 @@
 import {
+  projectCoachRangeFacts,
+  COACH_RANGE_FACT_ALGORITHM_VERSION,
+  COACH_RANGE_FACT_KINDS,
+} from './range-fact-projector.js'
+import { assertCertifiedCoachRangeAnalysis } from './range-analysis.js'
+import {
   projectCoachDecisionFacts,
   COACH_METRIC_FACT_ALGORITHM_VERSION,
 } from './decision-fact-projector.js'
@@ -169,9 +175,15 @@ export function createCoachReviewBoundary(ports: {
           versions: analysis.derived.versions,
           asOfEventSeq: analysis.derived.asOfEventSeq,
           facts: analysis.derived.facts,
-          baseline: analysis.derived.baseline,
+          rangeAnalysis: {
+            opponentRangeAnalysis:
+              analysis.derived.rangeAnalysis.opponentRangeAnalysis,
+            jointEquityAnalysis:
+              analysis.derived.rangeAnalysis.jointEquityAnalysis,
+            conditionalCallEv: analysis.derived.rangeAnalysis.conditionalCallEv,
+            rangeSensitivity: analysis.derived.rangeAnalysis.rangeSensitivity,
+          },
           opponentEvidence: analysis.derived.opponentEvidence,
-          candidates: analysis.derived.candidates,
         },
         assessment: analysis.assessment,
       }),
@@ -219,6 +231,18 @@ export function createCoachReviewBoundary(ports: {
     assertCoachPlainData(raw)
     assertComputedCoachMetrics(raw.metrics)
     assertComputedCoachActionOutcomes(raw.actionOutcomes)
+    assertCertifiedCoachRangeAnalysis(
+      raw.rangeAnalysis,
+      input,
+      raw.metrics,
+      raw.actionOutcomes,
+    )
+    const rangeFacts = projectCoachRangeFacts(
+      input,
+      raw.metrics,
+      raw.actionOutcomes,
+      raw.rangeAnalysis,
+    )
     const derived = freezeCoachData(CoachDerivedFactsSchema.parse(raw))
     for (const value of [derived.metrics, derived.actionOutcomes]) {
       if (
@@ -257,45 +281,30 @@ export function createCoachReviewBoundary(ports: {
       )
         throw new TypeError('coach_metric_fact_mismatch')
     }
-    const { decision } = input
-    const seats = decision.stacksAndContributions
-    const hero = seats.find(
-      (s) => s.seatNumber === decision.visibleState.heroSeat,
-    )!
-    const opponents = seats.filter(
+    for (const fact of derived.facts) {
+      const kind = fact.status === 'available' ? fact.value.kind : fact.kind
+      const projected = rangeFacts.find(
+        (expected) => expected.factId === fact.factId,
+      )
+      const isRangeFact =
+        COACH_RANGE_FACT_KINDS.some((k) => k === kind) ||
+        fact.factId.startsWith('range.') ||
+        fact.algorithmVersion === COACH_RANGE_FACT_ALGORITHM_VERSION ||
+        fact.sourceRefs.some(
+          (source) =>
+            source.kind === 'algorithm' &&
+            source.algorithmId === 'coach.range-fact-projection',
+        )
+      if (isRangeFact && !isDeepStrictEqual(fact, projected))
+        throw new TypeError('coach_range_fact_mismatch')
+    }
+    const decision = input.decision
+    const opponents = decision.stacksAndContributions.filter(
       (s) =>
-        s.seatNumber !== hero.seatNumber &&
+        s.seatNumber !== decision.visibleState.heroSeat &&
         (s.status === 'active' || s.status === 'allIn'),
     )
     const potType = opponents.length > 1 ? 'multiway' : 'headsUp'
-    const baseline = derived.baseline
-    if (baseline.matchStatus !== 'unsupported') {
-      const assumptions = baseline.scenarioAssumptions
-      // Match the maximum current opponent-effective stack convention in decision-metrics.
-      const effectiveStackBb =
-        Math.max(0, ...opponents.map((s) => Math.min(hero.stack, s.stack))) /
-        decision.visibleState.nominalBigBlind
-      const mismatches = [
-        [assumptions.tableSize !== input.tableSize, 'tableSize'],
-        [assumptions.logicalPosition !== decision.logicalPosition, 'position'],
-        [
-          assumptions.pokerRuleSetVersion !== input.binding.pokerRuleSetVersion,
-          'ruleVersion',
-        ],
-        [assumptions.potType !== potType, 'potType'],
-        [assumptions.effectiveStackBb !== effectiveStackBb, 'stackDepth'],
-      ] as const
-      if (
-        assumptions.street !== decision.street ||
-        mismatches.some(
-          ([different, code]) =>
-            different &&
-            (baseline.matchStatus === 'exact' ||
-              !baseline.differenceCodes.includes(code)),
-        )
-      )
-        throw new TypeError('coach_baseline_binding')
-    }
     const facts = new Map(derived.facts.map((f) => [f.factId, f]))
     if (
       facts.size !== derived.facts.length ||
@@ -385,115 +394,6 @@ export function createCoachReviewBoundary(ports: {
         )
           throw new TypeError('coach_action_fact_mismatch')
       }
-    const baselineIds = derived.baseline.actions.map((a) => a.actionId)
-    if (
-      new Set(derived.candidates.map((c) => c.candidateId)).size !==
-        derived.candidates.length ||
-      derived.candidates.some(
-        (c) =>
-          baselineIds.includes(c.candidateId) ||
-          c.evidenceRefs.some((ref) => !facts.has(ref)),
-      )
-    )
-      throw new TypeError('coach_candidate_binding')
-    const potBefore = seats.reduce((sum, seat) => sum + seat.totalCommitment, 0)
-    const currentBet = decision.analysisInput.bettingRound.currentBet
-    for (const candidate of derived.candidates) {
-      const legal = input.decision.legalActions.find(
-        (legal) => legal.action === candidate.action.type,
-      )
-      if (!legal) throw new TypeError('coach_illegal_candidate')
-      if (
-        'targetStreetCommitment' in candidate.action &&
-        (legal.minimumTarget === null ||
-          legal.maximumTarget === null ||
-          candidate.action.targetStreetCommitment < legal.minimumTarget ||
-          candidate.action.targetStreetCommitment > legal.maximumTarget)
-      )
-        throw new TypeError('coach_illegal_candidate')
-      const type = candidate.action.type
-      const target =
-        'targetStreetCommitment' in candidate.action
-          ? candidate.action.targetStreetCommitment
-          : type === 'allIn'
-            ? hero.streetCommitment + hero.stack
-            : type === 'call'
-              ? Math.min(currentBet, hero.streetCommitment + hero.stack)
-              : hero.streetCommitment
-      if (
-        type === 'allIn' &&
-        (legal.minimumTarget === null ||
-          legal.maximumTarget === null ||
-          target < legal.minimumTarget ||
-          target > legal.maximumTarget)
-      )
-        throw new TypeError('coach_illegal_candidate')
-      const incrementalChips = target - hero.streetCommitment
-      const raisesCurrentBet = target > currentBet
-      if (
-        incrementalChips < 0 ||
-        incrementalChips > hero.stack ||
-        candidate.raisesCurrentBet !== raisesCurrentBet ||
-        !isDeepStrictEqual(candidate.result, {
-          targetStreetCommitment: target,
-          incrementalChips,
-          potAfter: potBefore + incrementalChips,
-          remainingStack: hero.stack - incrementalChips,
-        })
-      )
-        throw new TypeError('coach_candidate_result')
-      if (
-        candidate.betSize !== null &&
-        (potBefore <= 0 ||
-          Math.abs(candidate.betSize.value - target / potBefore) >
-            Number.EPSILON * Math.max(1, target / potBefore))
-      )
-        throw new TypeError('coach_candidate_size')
-      if (
-        (['fold', 'check', 'call'].includes(type) &&
-          candidate.betSize !== null) ||
-        (['bet', 'raise'].includes(type) && candidate.betSize === null) ||
-        (type === 'allIn' &&
-          candidate.raisesCurrentBet !== (candidate.betSize !== null))
-      )
-        throw new TypeError('coach_candidate_size')
-    }
-    for (const candidate of derived.candidates) {
-      const outcome = derived.actionOutcomes.outcomes.find((entry) =>
-        isDeepStrictEqual(entry.action, candidate.action),
-      )
-      if (
-        !outcome ||
-        !isDeepStrictEqual(candidate.result, {
-          targetStreetCommitment: outcome.result.streetContributionAfter,
-          incrementalChips: outcome.result.contributionDelta,
-          potAfter: outcome.result.potAfterAction,
-          remainingStack: outcome.result.heroStackAfterAction,
-        })
-      )
-        throw new TypeError('coach_candidate_outcome_mismatch')
-    }
-    for (const outcome of derived.actionOutcomes.outcomes) {
-      for (const reference of outcome.references) {
-        if (reference.kind !== 'baseline') continue
-        const action = derived.baseline.actions.find(
-          (action) => action.actionId === reference.actionId,
-        )
-        const target = outcome.result.streetContributionAfter
-        const raisesCurrentBet = target > currentBet
-        if (
-          !action ||
-          action.action !== outcome.action.type ||
-          (action.action === 'allIn' &&
-            (action.betSize !== null) !== raisesCurrentBet) ||
-          (action.betSize !== null &&
-            (potBefore <= 0 ||
-              Math.abs(action.betSize.value - target / potBefore) >
-                Number.EPSILON * Math.max(1, target / potBefore)))
-        )
-          throw new TypeError('coach_baseline_outcome_mismatch')
-      }
-    }
     const rawAssessment = classify(input, derived)
     assertCoachPlainData(rawAssessment)
     const assessment = CoachAssessmentFieldsSchema.parse(rawAssessment)
@@ -501,9 +401,6 @@ export function createCoachReviewBoundary(ports: {
       ...assessment.evidenceRefs,
       ...assessment.observedDeviationTags.flatMap((t) => t.evidenceRefs),
       ...assessment.teachingHypotheses.flatMap((t) => t.evidenceRefs),
-      ...(assessment.evLoss.status === 'unavailable'
-        ? []
-        : assessment.evLoss.evidenceRefs),
     ]
     if (
       evidenceRefs.some(
@@ -511,13 +408,41 @@ export function createCoachReviewBoundary(ports: {
           !facts.has(ref) ||
           facts.get(ref)!.epistemicKind === 'modelGeneratedText',
       ) ||
-      assessment.decisionGradePolicyVersion !==
-        input.binding.versions.grade.version ||
+      assessment.conditionalConclusionPolicyVersion !==
+        input.binding.versions.conclusion.version ||
       assessment.severityPolicyVersion !==
-        input.binding.versions.severity.version ||
-      assessment.baselineComparison.matchStatus !== derived.baseline.matchStatus
+        input.binding.versions.severity.version
     )
       throw new TypeError('coach_assessment_binding')
+    const conclusion = assessment.conditionalConclusion
+    if (conclusion !== 'insufficientEvidence') {
+      const sensitivity = derived.rangeAnalysis.rangeSensitivity
+      const ev = derived.rangeAnalysis.conditionalCallEv
+      if (sensitivity.status !== 'available' || ev.status !== 'available')
+        throw new TypeError('coach_conclusion_evidence')
+      if (
+        conclusion === 'rangeSensitive'
+          ? sensitivity.signStable !== false ||
+            !ev.scenarios.some((s) => s.callEvVersusFold < 0) ||
+            !ev.scenarios.some((s) => s.callEvVersusFold > 0)
+          : sensitivity.signStable !== true
+      )
+        throw new TypeError('coach_conclusion_evidence')
+      if (
+        conclusion === 'favorableAcrossModeledRanges' &&
+        ev.scenarios.some(
+          (s) => (s.confidenceInterval?.lower ?? s.callEvVersusFold) <= 0,
+        )
+      )
+        throw new TypeError('coach_conclusion_evidence')
+      if (
+        conclusion === 'unfavorableAcrossModeledRanges' &&
+        ev.scenarios.some(
+          (s) => (s.confidenceInterval?.upper ?? s.callEvVersusFold) >= 0,
+        )
+      )
+        throw new TypeError('coach_conclusion_evidence')
+    }
     const analysis = freezeCoachData({
       input,
       derived,

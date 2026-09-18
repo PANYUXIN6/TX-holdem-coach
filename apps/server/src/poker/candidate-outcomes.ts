@@ -1,3 +1,4 @@
+import { projectContributionLayers } from './contribution-layers.js'
 import type { PokerCommand } from './commands.js'
 import { projectContestablePot } from './contestable-pot.js'
 import {
@@ -87,6 +88,16 @@ export interface ActionOutcomeData<TSourceRef> {
     | { readonly status: 'notApplicable'; readonly reasonCode: 'noTarget' }
   readonly streetContributionAfter: number
   readonly totalContributionAfter: number
+  /** Current layers after guaranteed returns; final only when no betting remains. */
+  readonly pots: readonly {
+    readonly potIndex: number
+    readonly amount: number
+    readonly eligibleSeatNumbers: readonly number[]
+  }[]
+  readonly guaranteedUncalledReturns: readonly {
+    readonly seatNumber: number
+    readonly amount: number
+  }[]
   readonly guaranteedUncalledReturn: number
   readonly amountActuallyAtRisk: number
   readonly contestableAmountAdded: number
@@ -305,6 +316,55 @@ function riskAdjustedState(
           }
         : { ...seat },
     ),
+  }
+}
+
+function projectOutcomePots(state: BettingProjectionState, terminal: boolean) {
+  const participants = new Set(state.participantSeatNumbers)
+  const seats = state.seats.filter((seat) => participants.has(seat.seatNumber))
+  const projection = projectContributionLayers({ pot: state.pot, seats })
+  const candidate = projection.uncalledContributionCandidate
+  const guaranteedUncalledReturns: { seatNumber: number; amount: number }[] = []
+  if (candidate !== null) {
+    const seat = seats.find((seat) => seat.seatNumber === candidate.seatNumber)!
+    const maximumOtherReach = Math.max(
+      0,
+      ...seats
+        .filter((other) => other.seatNumber !== seat.seatNumber)
+        .map(
+          (other) =>
+            other.totalContribution +
+            (!terminal && other.status === 'active' ? other.stack : 0),
+        ),
+    )
+    const amount = Math.max(0, seat.totalContribution - maximumOtherReach)
+    if (amount > 0) {
+      if (amount > seat.streetContribution)
+        throw new RangeError('未跟注返还不得超过本街投入。')
+      guaranteedUncalledReturns.push({ seatNumber: seat.seatNumber, amount })
+    }
+  }
+  const layers =
+    guaranteedUncalledReturns.length === 0
+      ? projection.layers
+      : projectContributionLayers({
+          pot: state.pot - guaranteedUncalledReturns[0]!.amount,
+          seats: seats.map((seat) => ({
+            ...seat,
+            totalContribution:
+              seat.totalContribution -
+              (seat.seatNumber === guaranteedUncalledReturns[0]!.seatNumber
+                ? guaranteedUncalledReturns[0]!.amount
+                : 0),
+          })),
+        }).layers
+  return {
+    pots: layers.map((layer, potIndex) => ({
+      potIndex,
+      amount: layer.amount,
+      eligibleSeatNumbers: layer.eligibleSeatNumbers,
+    })),
+    guaranteedUncalledReturns,
   }
 }
 
@@ -593,6 +653,10 @@ export function projectActionOutcome(input: {
           },
     streetContributionAfter: transition.targetStreetCommitmentAfter,
     totalContributionAfter: transition.totalContributionAfter,
+    ...projectOutcomePots(
+      transition.state,
+      continuation.showdownForced || continuation.handEndsByFold,
+    ),
     guaranteedUncalledReturn: guaranteedReturn,
     amountActuallyAtRisk,
     contestableAmountAdded,

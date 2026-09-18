@@ -1,7 +1,7 @@
 import type { Card } from '@tx-holdem-coach/contracts'
 import { projectContributionLayers } from './contribution-layers.js'
 import { handEvaluator, type HandEvaluation } from './hand-evaluator.js'
-import { clockwiseParticipantSeatNumbersAfter } from './positioning.js'
+import { projectShowdownAwards } from './showdown-awards.js'
 import { createPokerTableState, type PokerTableState } from './state.js'
 
 export type SettlementTerminationReason = 'showdown' | 'complete'
@@ -93,20 +93,6 @@ function participantSeatNumbers(hand: Hand): readonly number[] {
 
 function isEligible(seat: Seat): boolean {
   return seat.status === 'active' || seat.status === 'allIn'
-}
-
-function compareGrades(
-  left: HandEvaluation['comparisonGrade'],
-  right: HandEvaluation['comparisonGrade'],
-): number {
-  for (let index = 0; index < left.length; index += 1) {
-    const difference = (left[index] as number) - (right[index] as number)
-    if (difference !== 0) {
-      return difference
-    }
-  }
-
-  return 0
 }
 
 function assertTerminalState(state: PokerTableState): Hand {
@@ -233,45 +219,6 @@ function determineEvaluations(
   return evaluations
 }
 
-function determineWinners(
-  eligibleSeatNumbers: readonly number[],
-  evaluations: ReadonlyMap<number, HandEvaluation>,
-): readonly number[] {
-  if (evaluations.size === 0) {
-    return eligibleSeatNumbers
-  }
-
-  let bestEvaluation: HandEvaluation | null = null
-  let winners: number[] = []
-
-  for (const seatNumber of eligibleSeatNumbers) {
-    const evaluation = evaluations.get(seatNumber)
-    if (evaluation === undefined) {
-      throw new RangeError('有资格参与底池的座位缺少牌型评估。')
-    }
-
-    if (
-      bestEvaluation === null ||
-      compareGrades(
-        evaluation.comparisonGrade,
-        bestEvaluation.comparisonGrade,
-      ) > 0
-    ) {
-      bestEvaluation = evaluation
-      winners = [seatNumber]
-    } else if (
-      compareGrades(
-        evaluation.comparisonGrade,
-        bestEvaluation.comparisonGrade,
-      ) === 0
-    ) {
-      winners.push(seatNumber)
-    }
-  }
-
-  return winners
-}
-
 export function settleTerminalHand(state: PokerTableState): SettlementResult {
   const hand = assertTerminalState(state)
   const handContext = createHandContext(state, hand)
@@ -320,50 +267,19 @@ export function settleTerminalHand(state: PokerTableState): SettlementResult {
     pot: remainingPot,
     seats: mutableSeats.filter((seat) => participantSet.has(seat.seatNumber)),
   })
-  const participantSeatNumbersInClockwiseOrder =
-    clockwiseParticipantSeatNumbersAfter(
-      state.buttonSeatNumber,
-      participantSeatNumbers(hand),
-    )
-  const pots: SettledPot[] = []
-
-  for (const layer of contributionProjection.layers) {
-    const winningSeatNumbers = determineWinners(
-      layer.eligibleSeatNumbers,
-      evaluations,
-    )
-    const baseAmount = Math.floor(layer.amount / winningSeatNumbers.length)
-    const remainder = layer.amount % winningSeatNumbers.length
-    const orderedWinners = participantSeatNumbersInClockwiseOrder.filter(
-      (seatNumber) => winningSeatNumbers.includes(seatNumber),
-    )
-    const awards = orderedWinners.map((seatNumber, index) => {
-      const oddChipAmount = index < remainder ? 1 : 0
-      const award = {
-        seatNumber,
-        baseAmount,
-        oddChipAmount,
-        amount: baseAmount + oddChipAmount,
-      } as const
+  const pots = projectShowdownAwards({
+    layers: contributionProjection.layers,
+    evaluations,
+    buttonSeatNumber: state.buttonSeatNumber,
+  })
+  for (const pot of pots) {
+    for (const award of pot.awards) {
       const seat = mutableSeats.find(
-        (candidate) => candidate.seatNumber === seatNumber,
+        (candidate) => candidate.seatNumber === award.seatNumber,
       )
-      if (seat === undefined) {
-        throw new RangeError('赢家座位不存在。')
-      }
+      if (seat === undefined) throw new RangeError('赢家座位不存在。')
       seat.stack += award.amount
-      return award
-    })
-
-    pots.push({
-      potIndex: pots.length,
-      kind: pots.length === 0 ? 'main' : 'side',
-      amount: layer.amount,
-      contributingSeatNumbers: layer.contributingSeatNumbers,
-      eligibleSeatNumbers: layer.eligibleSeatNumbers,
-      winningSeatNumbers,
-      awards,
-    })
+    }
   }
 
   if (pots.reduce((total, pot) => total + pot.amount, 0) !== remainingPot) {

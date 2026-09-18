@@ -325,3 +325,33 @@ describe('projectActionOutcome', () => {
     }
   })
 })
+
+test('terminal outcome removes an opponent uncalled excess before projecting final pots', () => {
+  const state = forcedRunoutState()
+  const seats = state.seats.map((seat) =>
+    seat.seatNumber === 4
+      ? {
+          ...seat,
+          totalContribution: 40,
+          streetContribution: 40,
+        }
+      : seat,
+  )
+  const result = projectActionOutcome({
+    analysisInput: analysisInput({
+      ...state,
+      pot: 120,
+      seats,
+      bettingRound: { ...state.bettingRound, currentBet: 40 },
+    }),
+    action: { type: 'allIn' },
+  })
+  expect(result.showdownForced).toBe(true)
+  expect(result.guaranteedUncalledReturns).toEqual([
+    { seatNumber: 4, amount: 20 },
+  ])
+  expect(result.pots).toEqual([
+    { potIndex: 0, amount: 120, eligibleSeatNumbers: [0, 1, 2, 3, 4, 5] },
+  ])
+  expect(result.amountActuallyAtRisk).toBe(20)
+})

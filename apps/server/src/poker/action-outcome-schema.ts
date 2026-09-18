@@ -90,6 +90,19 @@ export function createActionOutcomeSchema<TSource extends z.ZodType>(
     ]),
     streetContributionAfter: SafeNonnegativeIntegerSchema,
     totalContributionAfter: SafeNonnegativeIntegerSchema,
+    pots: z.array(
+      z.strictObject({
+        potIndex: SafeNonnegativeIntegerSchema,
+        amount: SafeNonnegativeIntegerSchema.positive(),
+        eligibleSeatNumbers: z.array(SeatNumberSchema).min(1),
+      }),
+    ),
+    guaranteedUncalledReturns: z.array(
+      z.strictObject({
+        seatNumber: SeatNumberSchema,
+        amount: SafeNonnegativeIntegerSchema.positive(),
+      }),
+    ),
     guaranteedUncalledReturn: SafeNonnegativeIntegerSchema,
     amountActuallyAtRisk: SafeNonnegativeIntegerSchema,
     contestableAmountAdded: SafeNonnegativeIntegerSchema,
